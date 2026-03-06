@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Edit {{ asset.asset_tag }} - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Edit Asset: {{ asset.asset_tag }}</h1>
+            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Back
+            </a>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="asset_tag" class="form-label">Asset Tag *</label>
+                            <input type="text" class="form-control" id="asset_tag" name="asset_tag" value="{{ asset.asset_tag }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="name" class="form-label">Asset Name *</label>
+                            <input type="text" class="form-control" id="name" name="name" value="{{ asset.name }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="category" class="form-label">Category *</label>
+                            <select class="form-select" id="category" name="category" required>
+                                <option value="Laptop" {% if asset.category == 'Laptop' %}selected{% endif %}>Laptop</option>
+                                <option value="Desktop" {% if asset.category == 'Desktop' %}selected{% endif %}>Desktop</option>
+                                <option value="Monitor" {% if asset.category == 'Monitor' %}selected{% endif %}>Monitor</option>
+                                <option value="Keyboard" {% if asset.category == 'Keyboard' %}selected{% endif %}>Keyboard</option>
+                                <option value="Mouse" {% if asset.category == 'Mouse' %}selected{% endif %}>Mouse</option>
+                                <option value="Server" {% if asset.category == 'Server' %}selected{% endif %}>Server</option>
+                                <option value="Network Equipment" {% if asset.category == 'Network Equipment' %}selected{% endif %}>Network Equipment</option>
+                                <option value="Printer" {% if asset.category == 'Printer' %}selected{% endif %}>Printer</option>
+                                <option value="Phone" {% if asset.category == 'Phone' %}selected{% endif %}>Phone</option>
+                                <option value="Tablet" {% if asset.category == 'Tablet' %}selected{% endif %}>Tablet</option>
+                                <option value="Other" {% if asset.category == 'Other' %}selected{% endif %}>Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="status" class="form-label">Status *</label>
+                            <select class="form-select" id="status" name="status" required>
+                                <option value="Available" {% if asset.status == 'Available' %}selected{% endif %}>Available</option>
+                                <option value="In Use" {% if asset.status == 'In Use' %}selected{% endif %}>In Use</option>
+                                <option value="In Repair" {% if asset.status == 'In Repair' %}selected{% endif %}>In Repair</option>
+                                <option value="Retired" {% if asset.status == 'Retired' %}selected{% endif %}>Retired</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="manufacturer" class="form-label">Manufacturer</label>
+                            <input type="text" class="form-control" id="manufacturer" name="manufacturer" value="{{ asset.manufacturer or '' }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="model" class="form-label">Model</label>
+                            <input type="text" class="form-control" id="model" name="model" value="{{ asset.model or '' }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="serial_number" class="form-label">Serial Number</label>
+                            <input type="text" class="form-control" id="serial_number" name="serial_number" value="{{ asset.serial_number or '' }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="location" class="form-label">Location</label>
+                            <input type="text" class="form-control" id="location" name="location" value="{{ asset.location or '' }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="rustdesk_id" class="form-label">RustDesk ID</label>
+                            <input type="text" class="form-control" id="rustdesk_id" name="rustdesk_id" value="{{ asset.rustdesk_id or '' }}" placeholder="e.g. 123 456 789">
+                            <small class="text-muted">Used for remote support via RustDesk</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="purchase_date" class="form-label">Purchase Date</label>
+                            <input type="date" class="form-control" id="purchase_date" name="purchase_date" value="{{ asset.purchase_date.strftime('%Y-%m-%d') if asset.purchase_date else '' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="purchase_cost" class="form-label">Purchase Cost ($)</label>
+                            <input type="number" step="0.01" class="form-control" id="purchase_cost" name="purchase_cost" value="{{ asset.purchase_cost if asset.purchase_cost else '' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="warranty_expiry" class="form-label">Warranty Expiry</label>
+                            <input type="date" class="form-control" id="warranty_expiry" name="warranty_expiry" value="{{ asset.warranty_expiry.strftime('%Y-%m-%d') if asset.warranty_expiry else '' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="expected_life_years" class="form-label">Expected Life (years)</label>
+                            <select class="form-select" id="expected_life_years" name="expected_life_years">
+                                <option value="3" {% if asset.expected_life_years == 3 %}selected{% endif %}>3 years</option>
+                                <option value="4" {% if asset.expected_life_years == 4 %}selected{% endif %}>4 years</option>
+                                <option value="5" {% if asset.expected_life_years == 5 %}selected{% endif %}>5 years</option>
+                                <option value="7" {% if asset.expected_life_years == 7 %}selected{% endif %}>7 years</option>
+                                <option value="10" {% if asset.expected_life_years == 10 %}selected{% endif %}>10 years</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="replacement_date" class="form-label">Replacement Date</label>
+                            <input type="date" class="form-control" id="replacement_date" name="replacement_date" value="{{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else '' }}">
+                            <small class="text-muted">Auto-calculated based on purchase date + life expectancy</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="condition" class="form-label">Condition</label>
+                            <select class="form-select" id="condition" name="condition">
+                                <option value="Excellent" {% if asset.condition == 'Excellent' %}selected{% endif %}>Excellent</option>
+                                <option value="Good" {% if asset.condition == 'Good' or not asset.condition %}selected{% endif %}>Good</option>
+                                <option value="Fair" {% if asset.condition == 'Fair' %}selected{% endif %}>Fair</option>
+                                <option value="Poor" {% if asset.condition == 'Poor' %}selected{% endif %}>Poor</option>
+                            </select>
+                        </div>
+                        <div class="col-md-12">
+                            <label for="photo" class="form-label">Asset Photo</label>
+                            {% if asset.photo %}
+                            <div class="mb-2">
+                                <img src="{{ url_for('static', filename='uploads/' + asset.photo) }}" alt="Current photo" style="max-width: 200px; max-height: 200px;" class="img-thumbnail">
+                                <p class="text-muted small">Upload a new photo to replace the current one</p>
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" id="photo" name="photo" accept="image/*">
+                            <small class="text-muted">Accepted formats: JPG, PNG, GIF (Max 16MB)</small>
+                        </div>
+                        <div class="col-md-12">
+                            <label for="notes" class="form-label">Notes</label>
+                            <textarea class="form-control" id="notes" name="notes" rows="3">{{ asset.notes or '' }}</textarea>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i> Update Asset
+                        </button>
+                        <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

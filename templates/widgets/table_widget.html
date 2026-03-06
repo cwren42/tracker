@@ -1,0 +1,115 @@
+{% if widget_id == 'recent_assets' %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-list-ul"></i> Recent Assets</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Asset Tag</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Status</th>
+                        <th>Added</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in data.recent_assets %}
+                    <tr onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'" style="cursor: pointer;">
+                        <td><span class="badge bg-secondary">{{ asset.asset_tag }}</span></td>
+                        <td>{{ asset.name }}</td>
+                        <td>{{ asset.category }}</td>
+                        <td>
+                            {% if asset.status == 'Available' %}
+                                <span class="badge bg-success">{{ asset.status }}</span>
+                            {% elif asset.status == 'In Use' %}
+                                <span class="badge bg-info">{{ asset.status }}</span>
+                            {% elif asset.status == 'In Repair' %}
+                                <span class="badge bg-warning">{{ asset.status }}</span>
+                            {% else %}
+                                <span class="badge bg-secondary">{{ asset.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td><small class="text-muted">{{ asset.created_at.strftime('%Y-%m-%d') if asset.created_at else 'N/A' }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
+    </div>
+</div>
+
+{% elif widget_id == 'department_table' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-table"></i> Department Asset Summary</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Department</th>
+                        <th class="text-end">Asset Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for dept in data.dept_counts %}
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets') }}?department={{ dept[0] or 'Unassigned' }}'">
+                        <td>{{ dept[0] or 'Unassigned' }}</td>
+                        <td class="text-end"><span class="badge bg-info">{{ dept[1] }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+        {% elif widget_id == 'license_seat_table' %}
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-table"></i> License Seat Utilization</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Software</th>
+                                <th>Vendor</th>
+                                <th>Total Seats</th>
+                                <th>Assigned</th>
+                                <th>Available</th>
+                                <th>Utilization</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for lic in data.license_utilization %}
+                            <tr>
+                                <td><strong>{{ lic.software }}</strong></td>
+                                <td>{{ lic.vendor or '-' }}</td>
+                                <td>{{ lic.total }}</td>
+                                <td>{{ lic.assigned }}</td>
+                                <td>{{ lic.available }}</td>
+                                <td>
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar {% if lic.utilization >= 100 %}bg-danger{% elif lic.utilization >= 80 %}bg-warning{% else %}bg-success{% endif %}"
+                                             style="width: {{ lic.utilization }}%">
+                                            {{ '%.0f'|format(lic.utilization) }}%
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+{% endif %}

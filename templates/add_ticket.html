@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}New Ticket - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1><i class="bi bi-plus-circle"></i> New Ticket</h1>
+  <a class="btn btn-secondary" href="{{ url_for('tickets') }}">
+    <i class="bi bi-arrow-left"></i> Back
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="subject">Subject *</label>
+          <input class="form-control" id="subject" name="subject" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="priority">Priority</label>
+          <select class="form-select" id="priority" name="priority">
+            <option value="Low">Low</option>
+            <option value="Normal" selected>Normal</option>
+            <option value="High">High</option>
+            <option value="Urgent">Urgent</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="asset_id">Asset (optional)</label>
+          <select class="form-select" id="asset_id" name="asset_id">
+            <option value="">-</option>
+            {% for a in assets %}
+              <option value="{{ a.id }}">{{ a.asset_tag }} - {{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label" for="reporter_name">Reporter Name</label>
+          <input class="form-control" id="reporter_name" name="reporter_name">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="reporter_email">Reporter Email</label>
+          <input class="form-control" id="reporter_email" name="reporter_email">
+        </div>
+
+        <div class="col-12">
+          <label class="form-label" for="description">Description *</label>
+          <textarea class="form-control" id="description" name="description" rows="6" required></textarea>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <button class="btn btn-primary" type="submit">
+          <i class="bi bi-check-circle"></i> Create Ticket
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

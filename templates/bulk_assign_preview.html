@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Confirm Bulk Assignment{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2><i class="bi bi-file-earmark-spreadsheet"></i> Confirm Bulk Assignment</h2>
+    
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Summary</h5>
+                    <p><strong class="text-success">Valid Assignments:</strong> {{ valid_count }}</p>
+                    {% if error_count > 0 %}
+                    <p><strong class="text-danger">Errors:</strong> {{ error_count }}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card bg-light">
+                <div class="card-body">
+                    <h5 class="card-title">Next Steps</h5>
+                    <p class="mb-0">Review the assignments below and click "Confirm Assignment" to proceed.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {% if error_count > 0 %}
+    <div class="alert alert-warning mt-4">
+        <i class="bi bi-exclamation-triangle"></i> <strong>Note:</strong> Only valid assignments (shown in green) will be processed. Errors will be skipped.
+    </div>
+    {% endif %}
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">Assignment Preview</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Employee (CSV)</th>
+                            <th>→ Matched Employee</th>
+                            <th>Asset Name (CSV)</th>
+                            <th>→ Matched Asset</th>
+                            <th>Current Assignment</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in preview_data %}
+                        <tr class="{% if item.status == 'valid' %}table-success{% else %}table-danger{% endif %}">
+                            <td>
+                                {% if item.status == 'valid' %}
+                                <span class="badge bg-success"><i class="bi bi-check-circle"></i> Valid</span>
+                                {% else %}
+                                <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Error</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ item.csv_employee }}</td>
+                            <td>
+                                {% if item.employee_name %}
+                                <strong>{{ item.employee_name }}</strong><br>
+                                <small class="text-muted">{{ item.employee_dept }}</small>
+                                {% else %}
+                                <span class="text-danger">Not found</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ item.csv_asset }}</td>
+                            <td>
+                                {% if item.asset_name %}
+                                <strong>{{ item.asset_name }}</strong><br>
+                                <small class="text-muted">Tag: {{ item.asset_tag }}</small>
+                                {% else %}
+                                <span class="text-danger">Not found</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.asset_current %}
+                                <small>{{ item.asset_current }}</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <form method="POST" action="{{ url_for('bulk_assign_csv') }}" class="mt-4">
+        <input type="hidden" name="confirm" value="1">
+        
+        <button type="submit" class="btn btn-success btn-lg" {% if valid_count == 0 %}disabled{% endif %}>
+            <i class="bi bi-check-circle"></i> Confirm Assignment ({{ valid_count }} assets)
+        </button>
+        <a href="{{ url_for('bulk_assign_csv') }}" class="btn btn-secondary btn-lg">Cancel</a>
+        
+        {% if error_count > 0 %}
+        <p class="text-muted mt-2 mb-0">
+            <small><i class="bi bi-info-circle"></i> {{ error_count }} error(s) will be skipped</small>
+        </p>
+        {% endif %}
+    </form>
+</div>
+{% endblock %}

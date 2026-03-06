@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Add Software License{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <h1 class="h2">
+                <i class="bi bi-plus-circle text-primary"></i> Add Software License
+            </h1>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('add_license') }}">
+                <div class="row">
+                    <!-- Software Information -->
+                    <div class="col-md-6">
+                        <h5 class="mb-3">Software Information</h5>
+                        
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Software Name</strong> <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" name="software_name" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Vendor</label>
+                            <input type="text" class="form-control" name="vendor" 
+                                   placeholder="e.g., Microsoft, Adobe, Oracle">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">License Type</label>
+                            <select class="form-select" name="license_type">
+                                <option value="">Select Type</option>
+                                <option value="Per User">Per User</option>
+                                <option value="Per Device">Per Device</option>
+                                <option value="Site License">Site License</option>
+                                <option value="Subscription">Subscription</option>
+                                <option value="Perpetual">Perpetual</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Total Licenses</label>
+                            <input type="number" class="form-control" name="total_licenses" 
+                                   value="1" min="1" required>
+                            <small class="form-text text-muted">Number of licenses purchased</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">License Key</label>
+                            <textarea class="form-control" name="license_key" rows="3" 
+                                      placeholder="Enter license key or activation code"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Dates and Costs -->
+                    <div class="col-md-6">
+                        <h5 class="mb-3">Dates & Costs</h5>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Purchase Date</label>
+                            <input type="date" class="form-control" name="purchase_date">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Expiry Date</label>
+                            <input type="date" class="form-control" name="expiry_date">
+                            <small class="form-text text-muted">For subscriptions or time-limited licenses</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Renewal Date</label>
+                            <input type="date" class="form-control" name="renewal_date">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Purchase Cost</label>
+                            <div class="input-group">
+                                <span class="input-group-text">$</span>
+                                <input type="number" step="0.01" class="form-control" name="purchase_cost" placeholder="0.00">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Annual Cost</label>
+                            <div class="input-group">
+                                <span class="input-group-text">$</span>
+                                <input type="number" step="0.01" class="form-control" name="annual_cost" placeholder="0.00">
+                            </div>
+                            <small class="form-text text-muted">For subscription-based licenses</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status">
+                                <option value="Active" selected>Active</option>
+                                <option value="Expired">Expired</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Notes -->
+                    <div class="col-12">
+                        <div class="mb-3">
+                            <label class="form-label">Notes</label>
+                            <textarea class="form-control" name="notes" rows="3" 
+                                      placeholder="Additional information about this license"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle"></i> Add License
+                    </button>
+                    <a href="{{ url_for('licenses') }}" class="btn btn-secondary">
+                        <i class="bi bi-x-circle"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

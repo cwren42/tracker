@@ -1,0 +1,40 @@
+# Databases (contain sensitive data)
+*.db
+*.db.bak*
+tracker.db
+assets.db
+users.db
+
+# Logs
+*.log
+access.log
+error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Screenshots / uploads
+screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*~

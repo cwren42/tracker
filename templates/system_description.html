@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}System Description - SOC 2{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-file-earmark-text"></i> System Description</h1>
+    <div>
+        <a href="{{ url_for('export_system_description') }}" class="btn btn-success">
+            <i class="bi bi-download"></i> Export to Word
+        </a>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <i class="bi bi-info-circle"></i> 
+    <strong>SOC 2 System Description</strong> - This document describes your company, services, infrastructure, and security controls for SOC 2 audit compliance.
+    Sections marked with <span class="badge bg-success">Auto</span> have been pre-populated from your tracker data.
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card sticky-top" style="top: 80px;">
+            <div class="card-header bg-primary text-white">
+                <h6 class="mb-0">Navigation</h6>
+            </div>
+            <div class="list-group list-group-flush" style="max-height: 70vh; overflow-y: auto;">
+                {% for section in sections %}
+                <a href="#section-{{ section.id }}" class="list-group-item list-group-item-action">
+                    <small class="text-muted">{{ section.section_order + 1 }}.</small>
+                    {{ section.section_title }}
+                    {% if section.auto_populated %}
+                    <span class="badge bg-success badge-sm">Auto</span>
+                    {% endif %}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-9">
+        {% for section in sections %}
+        <div class="card mb-3" id="section-{{ section.id }}">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <small class="text-muted">{{ section.section_order + 1 }}.</small>
+                    {{ section.section_title }}
+                    {% if section.auto_populated %}
+                    <span class="badge bg-success">Auto-populated</span>
+                    {% endif %}
+                </h5>
+                <a href="{{ url_for('edit_system_description_section', section_id=section.id) }}" class="btn btn-sm btn-primary">
+                    <i class="bi bi-pencil"></i> Edit
+                </a>
+            </div>
+            <div class="card-body">
+                {% if section.content %}
+                <div class="system-description-content">
+                    {{ section.content|replace('\n', '<br>')|safe }}
+                </div>
+                {% else %}
+                <p class="text-muted fst-italic">This section needs to be completed.</p>
+                {% endif %}
+                
+                {% if section.template_content and not section.content %}
+                <hr>
+                <details>
+                    <summary class="text-muted small"><i class="bi bi-lightbulb"></i> Template Guidance</summary>
+                    <div class="mt-2 small text-muted">
+                        {{ section.template_content|replace('\n', '<br>')|safe }}
+                    </div>
+                </details>
+                {% endif %}
+            </div>
+            <div class="card-footer text-muted small">
+                Category: {{ section.category|replace('_', ' ')|title }}
+                {% if section.updated_by %}
+                | Last updated by {{ section.updated_by }} on {{ section.updated_at.strftime('%Y-%m-%d %H:%M') }}
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<style>
+.system-description-content {
+    white-space: pre-wrap;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+}
+</style>
+
+{% endblock %}

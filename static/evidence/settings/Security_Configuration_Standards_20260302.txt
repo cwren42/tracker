@@ -1,0 +1,890 @@
+================================================================================
+                    CIRQUE CORPORATION
+           SECURITY CONFIGURATION STANDARDS BASELINE
+                     Effective Date: March 2, 2026
+================================================================================
+
+Document Control:
+-----------------
+Document Owner: Chris Wren, IT Manager
+Approved By: David Park, CTO
+Last Review: March 2, 2026
+Next Review: March 2, 2027 (Annual)
+Version: 3.0
+
+Purpose:
+--------
+This document defines the baseline security configuration standards for all
+Cirque Corporation IT systems. These standards are maintained by the IT team
+and applied to all systems to ensure consistent security posture. Standards
+are reviewed annually or when business needs change.
+
+Scope:
+------
+This baseline applies to:
+- All production servers (Windows Server, Linux)
+- All employee workstations (Windows, macOS, Linux)
+- All mobile devices (Android, iOS)
+- All network security devices (firewalls, VPN)
+- All cloud infrastructure (Azure VMs, Azure services)
+- All security tools and monitoring systems
+
+Configuration standards are based on Center for Internet Security (CIS)
+benchmarks and industry best practices, customized for Cirque's environment.
+
+
+================================================================================
+SECTION 1: WINDOWS SERVER BASELINE CONFIGURATION
+================================================================================
+
+Standard Image: Windows Server 2022 Datacenter - CIS Level 1 Hardened
+Applies To: DB-PROD-01, DB-DEV-01, FILE-SERVER-01, APP-PROD-01, WIN-BACKUP-01, 
+            WEB-WIN-01, Azure VMs (WEB-PROD-02, DB-AZURE-01)
+
+1.1 USER AUTHENTICATION & ACCESS CONTROL
+-----------------------------------------
+✓ Password Policy:
+  - Minimum password length: 14 characters
+  - Password complexity: Enabled (uppercase, lowercase, numbers, symbols)
+  - Password history: 24 passwords remembered
+  - Maximum password age: 90 days
+  - Minimum password age: 1 day
+  - Account lockout threshold: 5 invalid attempts
+  - Account lockout duration: 30 minutes
+  - Reset lockout counter after: 30 minutes
+
+✓ Multi-Factor Authentication (MFA):
+  - MFA required for all administrative access
+  - MFA required for remote access (RDP, VPN)
+  - Azure AD conditional access policies enforced
+
+✓ User Account Control (UAC):
+  - UAC enabled and set to highest level
+  - Admin accounts require elevation
+  - Standard user accounts for daily operations
+
+✓ Local Administrator Accounts:
+  - Built-in Administrator account renamed and disabled
+  - Separate named administrator accounts created
+  - Administrator accounts restricted to specific individuals
+
+1.2 WINDOWS DEFENDER ANTIVIRUS
+-------------------------------
+✓ Real-time protection: ENABLED
+✓ Cloud-delivered protection: ENABLED  
+✓ Automatic sample submission: ENABLED
+✓ Potentially unwanted application (PUA) protection: ENABLED
+✓ Scan schedule: Daily quick scan at 2:00 AM, weekly full scan Sunday 3:00 AM
+✓ Definition updates: Automatic, checked every 4 hours
+✓ Quarantine retention: 90 days
+✓ Exclusions: None (unless approved by IT Manager)
+
+1.3 WINDOWS FIREWALL
+--------------------
+✓ Domain Profile: ENABLED
+✓ Private Profile: ENABLED
+✓ Public Profile: ENABLED
+✓ Inbound connections: Block by default
+✓ Outbound connections: Allow by default
+✓ Logging: Enabled for dropped packets and successful connections
+✓ Log file size: 16384 KB
+✓ Remote Desktop (RDP) access: Allowed only from management subnet
+✓ SMB ports restricted to internal networks only
+
+1.4 PATCHING & UPDATES
+----------------------
+✓ Windows Update: Configured via WSUS (Windows Update Server)
+✓ Update schedule: Critical/Security updates - Install within 7 days
+✓ Quality updates: Install within 14 days
+✓ Feature updates: Delayed 180 days, tested in dev environment first
+✓ Automatic restart: Scheduled for Sunday 4:00 AM maintenance window
+✓ Update verification: Automated compliance monitoring via Intune
+
+1.5 SERVICES & FEATURES
+-----------------------
+✓ Disabled Services:
+  - Print Spooler (if not needed)
+  - Remote Registry
+  - Server Message Block v1 (SMBv1)
+  - Windows Remote Management (unless specifically needed)
+  - Telnet Client/Server
+  - FTP Server
+  - Simple TCP/IP Services
+
+✓ Removed Features:
+  - PowerShell v2
+  - Windows Media Player
+  - Internet Explorer 11
+  - SMB 1.0/CIFS File Sharing Support
+
+1.6 AUDIT & LOGGING
+-------------------
+✓ Advanced Audit Policy Configuration:
+  - Logon/Logoff events: Success and Failure
+  - Account Management: Success and Failure
+  - Object Access: Failure
+  - Policy Change: Success and Failure
+  - Privilege Use: Failure
+  - System events: Success and Failure
+  - Detailed Tracking: Success (process creation)
+
+✓ Log Settings:
+  - Security log size: 1 GB minimum
+  - Application log size: 512 MB
+  - System log size: 512 MB
+  - Log retention: Overwrite events older than 90 days (archived to Azure)
+
+✓ PowerShell Logging:
+  - Module logging: ENABLED
+  - Script block logging: ENABLED
+  - Transcription: ENABLED
+  - Transcripts stored in: C:\PSTranscripts
+
+1.7 REMOTE ACCESS
+-----------------
+✓ Remote Desktop Protocol (RDP):
+  - Network Level Authentication (NLA): REQUIRED
+  - Encryption level: High (128-bit)
+  - Idle session timeout: 15 minutes
+  - Max connections: Limited to 2 concurrent per admin
+  - Restricted to management network (10.0.1.0/24)
+
+✓ WinRM/PowerShell Remoting:
+  - HTTPS only (HTTP disabled)
+  - Certificate-based authentication
+  - TrustedHosts: Not used (domain-joined only)
+
+1.8 FILE SYSTEM & REGISTRY
+--------------------------
+✓ NTFS Permissions:
+  - C:\Windows - SYSTEM and Administrators only
+  - C:\Program Files - Read for Users, Full for Administrators
+  - User data directories - Restricted per user
+  - Inheritance disabled on sensitive folders
+
+✓ Registry Permissions:
+  - HKLM\Software - Read for Users, Full for Administrators
+  - HKLM\System - SYSTEM only
+  - Run keys audited and monitored
+
+✓ BitLocker Encryption:
+  - System drives: ENABLED with TPM + PIN
+  - Data drives: ENABLED with password
+  - Recovery keys escrowed to Azure AD
+
+1.9 TIME SYNCHRONIZATION
+------------------------
+✓ NTP Server: time.windows.com (primary), pool.ntp.org (secondary)
+✓ Time zone: UTC (servers), Local time zones for workstations
+✓ Synchronization interval: Every hour
+
+1.10 HARDENING CHECKLIST
+------------------------
+✓ Anonymous SID enumeration: DISABLED
+✓ Anonymous share enumeration: DISABLED  
+✓ AutoRun/AutoPlay: DISABLED
+✓ Guest account: DISABLED
+✓ Null session pipes: RESTRICTED
+✓ LM and NTLMv1 authentication: DISABLED
+✓ Digitally sign communications: ENABLED
+✓ Do not store LAN Manager hash: ENABLED
+✓ Send unencrypted password to third-party SMB: DISABLED
+
+
+================================================================================
+SECTION 2: LINUX SERVER BASELINE CONFIGURATION
+================================================================================
+
+Standard Image: Ubuntu 22.04 LTS Server - CIS Level 1 Hardened
+Applies To: WEB-LINUX-01, WEB-LINUX-02, WEB-LINUX-03, DEV-LINUX-01,
+            STAGING-LINUX-01, BACKUP-LINUX-01, DB-LINUX-01, API-LINUX-01,
+            MONITOR-LINUX-01, LOG-SERVER-01, CI-CD-01, TEST-LINUX-01
+
+2.1 USER AUTHENTICATION & ACCESS CONTROL
+-----------------------------------------
+✓ Password Policy (via PAM):
+  - Minimum length: 14 characters
+  - Complexity: minlen=14 dcredit=-1 ucredit=-1 ocredit=-1 lcredit=-1
+  - Password history: 24 passwords remembered (remember=24)
+  - Maximum age: 90 days
+  - Minimum age: 1 day
+  - Warning: 7 days before expiration
+  - Inactive period: 30 days
+  - Account lockout: 5 failed attempts, 30 minute lockout (faillock)
+
+✓ SSH Access:
+  - SSH Protocol 2 only (Protocol 1 disabled)
+  - Root login: DISABLED (PermitRootLogin no)
+  - Password authentication: DISABLED (PasswordAuthentication no)
+  - Public key authentication: ENABLED (authorized_keys only)
+  - Empty passwords: NOT PERMITTED (PermitEmptyPasswords no)
+  - X11 forwarding: DISABLED (X11Forwarding no)
+  - Max auth tries: 3
+  - Login grace time: 30 seconds
+  - Client alive interval: 300 seconds (5 minutes)
+  - Client alive count max: 2
+  - SSH keys: Ed25519 or RSA 4096-bit minimum
+  - Allowed users: Specific named accounts only (AllowUsers directive)
+
+✓ Sudo Configuration:
+  - Sudo restricted to specific users in 'sudo' group
+  - Sudo requires password re-authentication every 15 minutes
+  - Sudo logs all commands to /var/log/sudo.log
+  - Using sudoers.d for role-based access (no direct /etc/sudoers edits)
+
+✓ User Accounts:
+  - No shared accounts (individual accounts per person)
+  - Service accounts have /sbin/nologin shell
+  - Unused accounts disabled after 30 days
+  - UID 0 only for root account
+
+2.2 SYSTEM HARDENING
+--------------------
+✓ Kernel Parameters (sysctl):
+  - IP forwarding disabled: net.ipv4.ip_forward=0 (unless router)
+  - Send redirects disabled: net.ipv4.conf.all.send_redirects=0
+  - Accept source routing disabled: net.ipv4.conf.all.accept_source_route=0
+  - Accept ICMP redirects disabled: net.ipv4.conf.all.accept_redirects=0
+  - Secure ICMP redirects disabled: net.ipv4.conf.all.secure_redirects=0
+  - Log martians: net.ipv4.conf.all.log_martians=1
+  - Ignore broadcast requests: net.ipv4.icmp_echo_ignore_broadcasts=1
+  - Bad error message protection: net.ipv4.icmp_ignore_bogus_error_responses=1
+  - Reverse path filtering: net.ipv4.conf.all.rp_filter=1
+  - TCP SYN cookies: net.ipv4.tcp_syncookies=1
+  - IPv6 disabled (if not used): net.ipv6.conf.all.disable_ipv6=1
+
+✓ Filesystem Security:
+  - Separate partitions: /tmp, /var, /var/log, /var/tmp, /home
+  - /tmp mounted with noexec,nodev,nosuid
+  - /var/tmp mounted with noexec,nodev,nosuid  
+  - /dev/shm mounted with noexec,nodev,nosuid
+  - Sticky bit set on world-writable directories
+  - SUID/SGID binaries reviewed and minimized
+  - Unused filesystems disabled: cramfs, freevxfs, jffs2, hfs, hfsplus, udf
+
+✓ Boot Security:
+  - GRUB bootloader password protected
+  - Single user mode requires root password
+  - Boot partition mounted read-only after boot
+
+2.3 FIREWALL (UFW/iptables)
+---------------------------
+✓ UFW (Uncomplicated Firewall): ENABLED
+✓ Default policy: Deny incoming, allow outgoing
+✓ Allowed services:
+  - SSH (port 22): From management network only (10.0.1.0/24)
+  - HTTP (port 80): From anywhere (web servers only)
+  - HTTPS (port 443): From anywhere (web servers only)
+  - Application-specific ports: Restricted to specific source IPs
+✓ Rate limiting enabled on SSH (limit 10 connections per 30 seconds)
+✓ Logging: Full logging enabled to /var/log/ufw.log
+
+2.4 PATCHING & UPDATES
+----------------------
+✓ APT Configuration:
+  - Automatic security updates: ENABLED (unattended-upgrades)
+  - Update frequency: Daily at 2:00 AM
+  - Automatic reboot: DISABLED (manual reboot during maintenance window)
+  - Reboot notification: Email to it@cirque.com
+  - Package sources: Official Ubuntu repositories + approved PPAs only
+  - Automatic cleanup: Old packages removed after 30 days
+
+✓ Kernel Updates:
+  - Live patching enabled for critical kernels (Canonical Livepatch)
+  - Kernel version: Latest stable LTS kernel
+  - Reboot scheduling: Coordinated during maintenance windows
+
+2.5 SERVICES & DAEMONS
+----------------------
+✓ Disabled Services:
+  - avahi-daemon (unless specifically needed)
+  - cups (print service)
+  - rpcbind
+  - rsync daemon (rsync command still available)
+  - nis (Network Information Service)
+  - snmp (unless monitoring required)
+  - telnet
+  - FTP servers (use SFTP instead)
+  - X Window System (GUI) on servers
+
+✓ Enabled Services:
+  - SSH (OpenSSH server)
+  - Cron (for scheduled tasks)
+  - Systemd-timesyncd or NTP
+  - Fail2ban (intrusion prevention)
+  - Auditd (security auditing)
+  - rsyslog (logging)
+  - UFW (firewall)
+
+2.6 AUDIT & LOGGING
+-------------------
+✓ Auditd Configuration:
+  - Max log file size: 100 MB
+  - Number of logs to keep: 10
+  - Action on log full: rotate
+  - Log format: enriched
+  - Flush: incremental_async
+  - Audit rules monitored:
+    * User/group modifications (/etc/passwd, /etc/group, /etc/shadow)
+    * Network configuration changes
+    * System calls (execve, open, unlink)
+    * File access (sensitive files)
+    * Kernel module loading/unloading
+    * Time changes
+    * MAC policy modifications
+    * Sudo usage
+    * SSH key access
+
+✓ Rsyslog Configuration:
+  - Remote logging: Enabled to LOG-SERVER-01 (10.0.2.15)
+  - Log format: RFC5424 with TLS encryption
+  - Local retention: 90 days
+  - Centralized retention: 1 year
+  - Logs monitored: auth, syslog, kernel, cron, daemon
+
+✓ Fail2ban:
+  - SSH protection: ENABLED (ban after 5 failures for 1 hour)
+  - HTTP authentication: ENABLED (ban after 10 failures)
+  - Ban time: 3600 seconds (1 hour)
+  - Find time: 600 seconds (10 minutes)
+  - Email alerts: it@cirque.com
+
+2.7 TIME SYNCHRONIZATION
+------------------------
+✓ NTP Client: systemd-timesyncd or chrony
+✓ NTP Servers: pool.ntp.org (multiple servers)
+✓ Timezone: UTC for all servers
+✓ Hardware clock: Set to UTC
+
+2.8 FILE INTEGRITY MONITORING
+------------------------------
+✓ AIDE (Advanced Intrusion Detection Environment): ENABLED
+✓ Database initialization: Completed
+✓ Scan schedule: Daily at 3:00 AM
+✓ Monitored directories:
+  - /bin, /sbin, /usr/bin, /usr/sbin
+  - /etc
+  - /lib, /lib64, /usr/lib
+  - /boot
+✓ Change detection alerts: Email to security@cirque.com
+
+2.9 MANDATORY ACCESS CONTROL
+-----------------------------
+✓ AppArmor: ENABLED (Ubuntu default)
+✓ Profiles: Enforcing mode for all supported applications
+✓ Custom profiles: Created for critical applications
+✓ Unconfined processes: Reviewed monthly
+
+2.10 ENCRYPTION
+---------------
+✓ Disk encryption: LUKS full disk encryption on data partitions
+✓ SSH: Ed25519 keys, 4096-bit RSA minimum
+✓ TLS certificates: 2048-bit minimum, SHA256 signature
+✓ HTTPS only for web services (HTTP redirects to HTTPS)
+
+
+================================================================================
+SECTION 3: WORKSTATION BASELINE CONFIGURATION
+================================================================================
+
+3.1 WINDOWS 10/11 WORKSTATION STANDARDS
+----------------------------------------
+Applies To: All employee Windows laptops and desktops (32 Windows workstations)
+Managed via: Microsoft Intune
+
+✓ Operating System:
+  - Windows 11 Pro (preferred) or Windows 10 Pro 22H2 minimum
+  - Windows 11 23H2 for new deployments
+  - Automatic feature updates delayed 60 days for testing
+
+✓ Authentication:
+  - Azure AD joined (cloud-managed)
+  - Windows Hello for Business: REQUIRED
+  - PIN: Minimum 6 digits, complexity required
+  - Biometrics: Fingerprint or facial recognition enabled where available
+  - Microsoft Authenticator: Required for MFA
+
+✓ BitLocker Encryption:
+  - Full disk encryption: REQUIRED on all devices
+  - TPM + PIN protection
+  - Recovery keys escrowed to Azure AD
+  - USB/external drives: BitLocker To Go required
+
+✓ Microsoft Defender for Endpoint:
+  - Real-time protection: ENABLED
+  - Cloud-delivered protection: ENABLED
+  - Automatic sample submission: ENABLED
+  - Tamper protection: ENABLED
+  - PUA protection: ENABLED
+  - Attack surface reduction rules: ENABLED
+  - Controlled folder access: ENABLED for Documents, Pictures, Desktop
+
+✓ Firewall:
+  - Domain profile: ENABLED
+  - Public profile: ENABLED, block all inbound
+  - Private profile: ENABLED
+
+✓ Application Control:
+  - Microsoft Store apps: Allowed
+  - Win32 applications: Only signed applications or approved by IT
+  - Windows Defender Application Control (WDAC): Audit mode, enforced for high-risk users
+
+✓ Browser Settings (Microsoft Edge):
+  - SmartScreen: ENABLED
+  - Tracking prevention: Balanced
+  - Password manager: ENABLED (synced to Azure AD)
+  - Extensions: IT-approved list only
+  - Safe Browsing: ENABLED
+  - Downloads: Scan all downloads
+
+✓ Update Policy:
+  - Quality updates: Install within 7 days
+  - Feature updates: Delayed 60 days
+  - Driver updates: Automatic
+  - Restart: Outside business hours (6 PM - 8 AM)
+  - Active hours: 8 AM - 6 PM
+
+✓ Compliance Requirements:
+  - Password: 14+ characters, complexity required, 90 day expiration
+  - Inactivity timeout: 15 minutes screen lock
+  - Failed login lockout: 5 attempts
+  - Company Portal app: Required
+  - Microsoft Office: Latest version, automatic updates
+  - OneDrive sync: Required for Documents folder backup
+
+3.2 MACOS WORKSTATION STANDARDS
+--------------------------------
+Applies To: All employee Mac devices (13 macOS workstations)
+Managed via: Microsoft Intune (Basic), manual compliance checks
+
+✓ Operating System:
+  - macOS Sonoma 14.x or macOS Ventura 13.x minimum
+  - Automatic updates: ENABLED
+  - Security updates: Install within 14 days
+
+✓ Authentication:
+  - Strong password: 14+ characters, complexity required
+  - FileVault: ENABLED (full disk encryption)
+  - Touch ID: ENABLED where available
+  - iCloud account: Personal accounts allowed, no company data storage
+
+✓ Firewall & Security:
+  - macOS Firewall: ENABLED
+  - Stealth mode: ENABLED
+  - Gatekeeper: ENABLED (only App Store and identified developers)
+  - System Integrity Protection (SIP): ENABLED (not disabled)
+  - XProtect (malware scanning): ENABLED (updated automatically)
+
+✓ Screen Lock:
+  - Require password: Immediately after sleep/screen saver
+  - Screen saver timeout: 15 minutes
+  - Disable automatic login: YES
+
+✓ Software Restrictions:
+  - Install from: Mac App Store + identified developers
+  - Unknown sources: Blocked by default, IT approval required
+  - Kernel extensions: Approval required
+
+✓ Backup & Sync:
+  - OneDrive: Required for company data
+  - Time Machine: Recommended for local backup
+  - iCloud Drive: Not for company confidential data
+
+3.3 LINUX WORKSTATION STANDARDS (Ubuntu Desktop)
+-------------------------------------------------
+Applies To: Developer workstations and specialized use cases (2 Linux workstations)
+
+✓ Operating System: Ubuntu 22.04 LTS Desktop
+✓ Full disk encryption: LUKS enabled during installation
+✓ Firewall: UFW enabled, default deny incoming
+✓ Automatic updates: Enabled for security updates only
+✓ Password: 14+ characters, complexity, 90 day expiration
+✓ Screen lock: 15 minute timeout
+✓ Root access: sudo only, no direct root login
+✓ Antivirus: ClamAV installed and updated (optional for Linux, but recommended)
+
+3.4 MOBILE DEVICE STANDARDS (Android/iOS)
+------------------------------------------
+Applies To: Company-issued mobile devices and BYOD (5 mobile devices in Intune)
+Managed via: Microsoft Intune MDM
+
+✓ Operating System:
+  - iOS: iOS 16.x or later
+  - Android: Android 12 or later (2 years old maximum)
+
+✓ Authentication:
+  - Device passcode: 6+ digits or 8+ alphanumeric
+  - Biometric unlock: Face ID, Touch ID, or fingerprint (if available)
+  - Azure AD authentication: Required for company apps
+
+✓ Encryption:
+  - Full device encryption: REQUIRED (enforced by Intune)
+  - iOS: Encrypted by default
+  - Android: Encryption enforced
+
+✓ Security:
+  - Jailbreak/Root detection: Device blocked if detected
+  - App protection policies: Applied to Outlook, Teams, OneDrive
+  - Copy/paste restrictions: Between managed and unmanaged apps
+  - Screen capture: Disabled for managed apps
+
+✓ Compliance:
+  - Up-to-date OS version required
+  - Threat detection enabled (Microsoft Defender for Endpoint on Mobile)
+  - Device health attestation: PASS required
+  - Non-compliant devices: Blocked from company resources after 7 days
+
+
+================================================================================
+SECTION 4: NETWORK SECURITY DEVICE CONFIGURATION
+================================================================================
+
+4.1 FIREWALL BASELINE (Azure Firewall / pfSense)
+-------------------------------------------------
+✓ Default Policy: Deny all, explicitly allow required traffic
+✓ Rule Management:
+  - Rules documented with business justification
+  - Unused rules removed quarterly
+  - Rules reviewed annually by IT Manager and CTO
+
+✓ Logging:
+  - All denied traffic logged
+  - All allowed traffic logged (summary level)
+  - Logs retained 90 days locally, 1 year in Azure
+  - Logs forwarded to SIEM (Azure Sentinel)
+
+✓ Security Features:
+  - Intrusion Prevention System (IPS): ENABLED
+  - SSL/TLS inspection: ENABLED for outbound traffic
+  - Malware scanning: ENABLED
+  - DNS filtering: ENABLED (block malicious domains)
+  - Geo-blocking: High-risk countries blocked (adjustable)
+
+✓ Management Access:
+  - HTTPS only (no HTTP)
+  - MFA required for administrators
+  - Management interface: Restricted to management network
+
+✓ High Availability:
+  - Active/passive failover configured
+  - Config sync: Automatic between cluster members
+  - Health checks: Every 30 seconds
+
+4.2 VPN CONFIGURATION
+---------------------
+✓ Protocol: IKEv2/IPsec or OpenVPN (TLS 1.3)
+✓ Encryption: AES-256-GCM
+✓ Authentication:
+  - MFA required (Azure AD + Authenticator app)
+  - Certificate-based device authentication
+  - User + device authentication (both required)
+
+✓ Split Tunneling: DISABLED (all traffic through VPN)
+✓ Idle timeout: 12 hours
+✓ Logging: All connections logged with user, source IP, duration
+
+4.3 WIRELESS (Wi-Fi) SECURITY
+------------------------------
+✓ Encryption: WPA3-Enterprise (or WPA2-Enterprise minimum)
+✓ Authentication: 802.1X with RADIUS (Azure AD integration)
+✓ SSID: Company SSID non-broadcast (not hidden - security through obscurity ineffective)
+✓ Guest Wi-Fi: Separate VLAN, internet only, no internal network access
+✓ MAC filtering: Not used (easily spoofed, maintenance burden)
+✓ Rogue AP detection: Enabled (quarterly scans)
+
+4.4 INTRUSION DETECTION/PREVENTION (IDS/IPS)
+--------------------------------------------
+✓ Solution: Azure Firewall Premium with IDS/IPS
+✓ Mode: Prevention (block malicious traffic)
+✓ Signature updates: Automatic, daily
+✓ Alert threshold: All critical and high severity alerts
+✓ Monitoring: 24/7 via Azure Security Center
+✓ Response: Automated blocking + manual investigation for critical alerts
+
+
+================================================================================
+SECTION 5: CLOUD INFRASTRUCTURE (AZURE) CONFIGURATION
+================================================================================
+
+5.1 AZURE VIRTUAL MACHINES
+---------------------------
+✓ Base Images: CIS-hardened images from Azure Marketplace
+✓ Managed Disks: Encryption at rest enabled (Azure Disk Encryption)
+✓ Networking: Network Security Groups (NSGs) with least-privilege rules
+✓ Monitoring: Azure Monitor agent installed on all VMs
+✓ Antivirus: Microsoft Defender for Cloud (formerly Azure Defender)
+✓ Vulnerability scanning: Qualys integration enabled
+✓ Patch management: Azure Update Management, automatic installation
+✓ Backup: Azure Backup, daily snapshots, 30-day retention
+✓ Tags: Environment, Owner, Application, CostCenter (required)
+
+5.2 AZURE ACTIVE DIRECTORY
+---------------------------
+✓ Password Protection: Custom banned password list enabled
+✓ MFA: Required for all users
+✓ Conditional Access:
+  - Block legacy authentication protocols
+  - Require compliant devices for access
+  - Block access from high-risk countries
+  - Require MFA for privileged accounts
+
+✓ Privileged Identity Management (PIM):
+  - Just-in-time admin access
+  - Approval required for privileged roles
+  - Time-limited role assignments
+  - MFA required for role activation
+
+✓ Identity Protection:
+  - Risk-based conditional access enabled
+  - User risk policy: High risk users require password change
+  - Sign-in risk policy: High risk sign-ins blocked
+
+5.3 AZURE STORAGE ACCOUNTS
+---------------------------
+✓ Encryption: Microsoft-managed keys (AES-256)
+✓ HTTPS required: Secure transfer required enabled
+✓ Public access: Disabled by default
+✓ SAS tokens: Time-limited, IP-restricted, least-privilege
+✓ Firewalls: Restricted to Azure services and specific IPs
+✓ Soft delete: Enabled (7-day retention for blob recovery)
+✓ Versioning: Enabled for critical data
+✓ Immutable storage: Enabled for compliance data (legal hold)
+
+5.4 AZURE NETWORKING
+---------------------
+✓ Network Security Groups (NSGs):
+  - Default deny all inbound
+  - Explicit allow rules documented
+  - Flow logs enabled, sent to Log Analytics
+
+✓ DDoS Protection: Standard tier enabled
+✓ Private Endpoints: Used for Azure services (Storage, SQL)
+✓ Virtual Network: Subnets segregated by function (DMZ, App, DB, Management)
+
+
+================================================================================
+SECTION 6: SECURITY MONITORING & ALERTING
+================================================================================
+
+6.1 CRITICAL FILE CONFIGURATION MONITORING
+-------------------------------------------
+✓ Windows Servers:
+  - File Integrity Monitoring via Azure Security Center
+  - Registry keys monitored: Run keys, services, security settings
+  - Files monitored: System files, critical configs
+  - Alert on unauthorized changes: Email + Teams notification
+
+✓ Linux Servers:
+  - AIDE (Advanced Intrusion Detection Environment) installed
+  - Daily scans at 3:00 AM
+  - Files monitored: /etc, /bin, /sbin, /usr/bin, /boot
+  - Changes detected: Email alert to security@cirque.com
+
+6.2 CONFIGURATION DRIFT DETECTION
+----------------------------------
+✓ Azure VMs: Azure Policy guest configuration
+✓ Physical servers: Manual quarterly review
+✓ Workstations: Intune compliance policies (continuous)
+✓ Deviations: Flagged for remediation within 48 hours
+
+6.3 VULNERABILITY SCANNING
+---------------------------
+✓ Frequency: Weekly automated scans
+✓ Tool: Microsoft Defender for Cloud + Qualys
+✓ Scope: All servers, VMs, network devices
+✓ Remediation SLA:
+  - Critical vulnerabilities: 7 days
+  - High vulnerabilities: 30 days
+  - Medium vulnerabilities: 90 days
+  - Low vulnerabilities: Next maintenance window
+
+✓ Compliance: Monthly vulnerability report to CTO
+
+
+================================================================================
+SECTION 7: CONFIGURATION CHANGE MANAGEMENT
+================================================================================
+
+7.1 CHANGE CONTROL PROCESS
+---------------------------
+✓ All baseline configuration changes require:
+  1. Change request submitted (IT ticketing system)
+  2. Risk assessment completed
+  3. Testing in dev/staging environment
+  4. Approval from IT Manager (standard) or CTO (critical systems)
+  5. Implementation during maintenance window
+  6. Verification and rollback plan documented
+  7. Post-implementation review
+
+✓ Emergency Changes:
+  - Documented retroactively within 24 hours
+  - Reviewed in next change advisory board meeting
+
+7.2 CONFIGURATION BACKUP
+-------------------------
+✓ Network devices: Automated config backup nightly to SharePoint
+✓ Servers: Configuration documented in Git repository (infrastructure as code)
+✓ Azure: Azure Resource Manager (ARM) templates versioned in Git
+✓ Retention: 90 days online, 1 year archive
+
+7.3 BASELINE REVIEW SCHEDULE
+-----------------------------
+✓ Annual Review: March (every year)
+✓ Triggered Reviews:
+  - Major OS/platform upgrades
+  - Security incidents
+  - New compliance requirements
+  - Significant infrastructure changes
+  - New CIS benchmark releases
+
+✓ Review Participants: IT Manager, CTO, Security Analyst, System Administrators
+
+
+================================================================================
+SECTION 8: EXCEPTIONS & DEVIATIONS
+================================================================================
+
+8.1 EXCEPTION PROCESS
+----------------------
+Systems that cannot meet baseline standards must:
+1. Document the specific deviation
+2. Provide business justification
+3. Document compensating controls
+4. Obtain approval from CTO
+5. Review exception annually
+
+Current Approved Exceptions:
+----------------------------
+Exception #1: Legacy Dev Server (DEV-LEGACY-01)
+- Deviation: Running Windows Server 2019 (not 2022)
+- Justification: Application compatibility issues with vendor software
+- Compensating Controls: 
+  * Isolated network segment
+  * No external access
+  * Enhanced monitoring
+  * Scheduled for replacement Q3 2026
+- Approved By: David Park, CTO - January 15, 2026
+- Next Review: July 15, 2026
+
+[No other active exceptions as of March 2, 2026]
+
+
+================================================================================
+SECTION 9: COMPLIANCE & AUDIT
+================================================================================
+
+9.1 COMPLIANCE VERIFICATION
+----------------------------
+✓ Automated Compliance Checks:
+  - Windows: Intune compliance policies
+  - Linux: Custom compliance scripts via Ansible
+  - Azure: Azure Policy compliance dashboard
+  - Frequency: Continuous (real-time)
+
+✓ Manual Audits:
+  - Quarterly spot checks: 10% of systems randomly selected
+  - Annual full audit: 100% of in-scope systems
+  - Findings tracked in IT ticketing system
+
+9.2 METRICS & REPORTING
+------------------------
+✓ Monthly Reports to CTO:
+  - Compliance percentage by system type
+  - Non-compliant systems and remediation status
+  - Configuration change summary
+  - Vulnerability scan results
+  - Exception status
+
+✓ Key Metrics:
+  - Target compliance rate: 95% or higher
+  - Current compliance rate (as of March 2, 2026):
+    * Windows servers: 100% (6/6)
+    * Linux servers: 100% (12/12)
+    * Azure VMs: 100% (4/4)
+    * Windows workstations: 97% (31/32) - 1 device pending update
+    * macOS workstations: 92% (12/13) - 1 device non-compliant BitLocker
+    * Mobile devices: 100% (5/5)
+    * Overall: 97.3% (70/72 devices compliant)
+
+9.3 SOC 2 ALIGNMENT
+-------------------
+This configuration baseline addresses SOC 2 criteria:
+✓ CC 7.1 - Vulnerability Protection
+✓ CC 6.1 - Logical and Physical Access Controls
+✓ CC 6.6 - Encryption
+✓ CC 7.2 - System Monitoring
+✓ CC 8.1 - Change Management
+
+
+================================================================================
+SECTION 10: TRAINING & AWARENESS
+================================================================================
+
+10.1 ADMINISTRATOR TRAINING
+---------------------------
+✓ New IT staff: Baseline training within 30 days of hire
+✓ Annual refresher: All IT staff
+✓ CIS benchmark training: Available via online resources
+✓ Update notifications: Email when baselines change
+
+10.2 DOCUMENTATION
+------------------
+✓ Detailed implementation guides: Maintained in IT knowledge base
+✓ Configuration checklist: Available for manual deployments
+✓ Troubleshooting guide: Common issues and resolutions
+✓ Location: SharePoint > IT Documentation > Security Standards
+
+
+================================================================================
+REVISION HISTORY
+================================================================================
+
+Version 3.0 - March 2, 2026
+- Annual review completed
+- Updated Windows Server baseline to 2022 (from 2019)
+- Updated Ubuntu baseline to 22.04 LTS (from 20.04)
+- Added Azure-specific configurations
+- Enhanced mobile device management sections
+- Added file integrity monitoring requirements
+- Aligned with latest CIS benchmarks (Windows Server 2022, Ubuntu 22.04)
+- Added compliance metrics and current compliance status
+- Approved by: David Park, CTO
+
+Version 2.1 - September 15, 2025
+- Added BitLocker requirements for workstations
+- Enhanced SSH hardening on Linux servers
+- Added fail2ban configuration
+- Updated firewall rulesets
+
+Version 2.0 - March 10, 2025
+- Major revision for CIS benchmark alignment
+- Added Azure cloud infrastructure standards
+- Implemented Intune MDM for workstations
+- Enhanced logging and monitoring requirements
+
+Version 1.0 - January 5, 2024
+- Initial baseline documented
+
+
+================================================================================
+APPROVALS
+================================================================================
+
+Prepared By:
+Chris Wren, IT Manager
+Date: March 2, 2026
+
+Technical Review:
+Kevin Nguyen, Senior Systems Administrator  
+Date: March 2, 2026
+
+Approved By:
+David Park, Chief Technology Officer
+Date: March 2, 2026
+
+Next Scheduled Review: March 2, 2027 (Annual)
+
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================

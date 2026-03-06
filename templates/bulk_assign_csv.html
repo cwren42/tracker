@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Assign from CSV{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2><i class="bi bi-file-earmark-spreadsheet"></i> Bulk Assign Assets from CSV</h2>
+    
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Current Status</h5>
+                    <p><strong>Unassigned Assets:</strong> {{ unassigned_count }}</p>
+                    <p><strong>Total Employees:</strong> {{ employee_count }}</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">CSV Format</h5>
+                    <p>Your CSV should have these columns (flexible names):</p>
+                    <ul>
+                        <li><strong>Employee Name</strong> (or "User Name", "Name") - Full name of employee</li>
+                        <li><strong>Asset Name</strong> (or "Device Name", "Computer Name", "Asset") - Device/computer name</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">Example CSV Format</h5>
+        </div>
+        <div class="card-body">
+            <pre class="bg-light p-3"><code>Employee Name,Asset Name
+Aaron Smith,AARON-XPS
+Adam Hales,ADAM-T480
+Alan Liu,ALAN-MACBOOK
+Brian Monson,BDM-X1CARBON</code></pre>
+            <p class="mb-0 text-muted"><small>The system will match employee names (case-insensitive) and find assets by device name or asset tag.</small></p>
+        </div>
+    </div>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">Upload Assignment CSV</h5>
+        </div>
+        <div class="card-body">
+            <form method="POST" enctype="multipart/form-data">
+                <div class="mb-3">
+                    <label for="file" class="form-label">Select CSV File</label>
+                    <input type="file" class="form-control" id="file" name="file" accept=".csv" required>
+                </div>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> <strong>What this will do:</strong>
+                    <ul class="mb-0 mt-2">
+                        <li>Match each employee name to an employee in the system</li>
+                        <li>Find the corresponding asset by device name (asset name)</li>
+                        <li>Assign the asset to the employee and set status to "In Use"</li>
+                        <li>Show you a summary of successful assignments and any errors</li>
+                    </ul>
+                </div>
+                
+                <button type="submit" class="btn btn-primary" onclick="return confirm('This will assign assets to employees based on your CSV. Continue?')">
+                    <i class="bi bi-upload"></i> Upload and Assign
+                </button>
+                <a href="{{ url_for('assets') }}" class="btn btn-secondary">Cancel</a>
+            </form>
+        </div>
+    </div>
+    
+    <div class="alert alert-warning mt-4">
+        <i class="bi bi-exclamation-triangle"></i> <strong>Important:</strong>
+        <ul class="mb-0">
+            <li>Employee names must match exactly (case-insensitive)</li>
+            <li>Assets are matched by Device Name (or Asset Tag as fallback)</li>
+            <li>All matching assets will be assigned and set to "In Use" status</li>
+            <li>Empty rows in the CSV will be automatically skipped</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

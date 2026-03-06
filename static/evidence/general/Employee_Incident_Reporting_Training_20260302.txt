@@ -1,0 +1,420 @@
+================================================================================
+     CIRQUE CORPORATION - EMPLOYEE SECURITY AWARENESS TRAINING
+                     INCIDENT REPORTING PROCEDURES
+                          Presentation Slide 12
+                         Training Date: March 2, 2026
+================================================================================
+
+[THIS IS A TEXT REPRESENTATION OF AN INTRANET PAGE / TRAINING SLIDE]
+
+Screenshot captured: March 2, 2026 at 2:45 PM PST
+Location: Cirque Intranet > IT Resources > Security > Incident Reporting
+Training Session: 2026 Annual Security Awareness Training (All Employees)
+Presenter: Chris Wren, IT Manager
+Attendees: 52 USA employees + 31 international employees (video)
+
+
+================================================================================
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│   [CIRQUE LOGO]         SECURITY INCIDENT REPORTING                      │
+│                         YOUR RESPONSIBILITY                              │
+│                                                                          │
+│                      🔒 PROTECT. REPORT. RESPOND. 🔒                     │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📢  EVERY EMPLOYEE IS RESPONSIBLE FOR SECURITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+As a Cirque Corporation employee, YOU are our first line of defense 
+against cyber threats. Security is everyone's responsibility!
+
+Your job is to:
+    ✓ Stay alert for suspicious activity
+    ✓ Report potential security incidents IMMEDIATELY
+    ✓ Follow IT's instructions during security incidents
+    ✓ Protect company and customer data
+    ✓ Never try to "fix" security issues yourself
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨  WHAT TO REPORT  🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Report IMMEDIATELY if you experience or observe:
+
+🔴 SUSPICIOUS EMAILS
+    • Phishing attempts (requests for passwords, credentials)
+    • Unexpected attachments or links
+    • Emails claiming to be from executives asking for urgent action
+    • Emails with grammar/spelling errors or unusual sender addresses
+    • "Your account will be suspended" or "Verify your identity" emails
+    
+    ➜ DO NOT CLICK! Forward to security@cirque.com
+
+🔴 COMPROMISED ACCOUNTS
+    • You can't log in with your correct password
+    • You see login attempts from locations you haven't visited
+    • Emails you didn't send appearing in your Sent folder
+    • Password reset emails you didn't request
+    • MFA requests you didn't initiate
+    
+    ➜ Contact IT immediately!
+
+🔴 UNUSUAL SYSTEM BEHAVIOR
+    • Pop-ups or error messages you don't recognize
+    • Computer running unusually slow
+    • Programs opening or closing on their own
+    • Files disappearing or being encrypted
+    • Antivirus warnings or disabled security software
+    • Ransomware messages demanding payment
+    
+    ➜ DO NOT RESTART! Disconnect from Wi-Fi and call IT
+
+🔴 LOST OR STOLEN DEVICES
+    • Lost laptop, phone, tablet, or USB drive
+    • Stolen company device
+    • Device left in public place (taxi, airport, restaurant)
+    
+    ➜ Report within 1 hour! (We can remote wipe)
+
+🔴 DATA BREACHES / UNAUTHORIZED ACCESS
+    • Someone accessed files they shouldn't have
+    • You accidentally sent confidential data to wrong person
+    • Customer or employee data exposed
+    • Shared sensitive information with unauthorized person
+    • Found confidential documents in public location
+    
+    ➜ Report immediately! Legal requirements apply
+
+🔴 PHYSICAL SECURITY
+    • Unauthorized person in secure area
+    • Unattended visitor without badge
+    • Door left propped open
+    • Theft of company property
+    • Suspicious individuals near facilities
+    
+    ➜ Call Security or IT Manager
+
+🔴 SOCIAL ENGINEERING ATTEMPTS
+    • Phone calls requesting passwords or sensitive information
+    • Someone impersonating IT asking for credentials
+    • Unexpected visitors asking for system access
+    • Requests to bypass normal security procedures
+    
+    ➜ Verify identity! Then report to IT
+
+🔴 POLICY VIOLATIONS
+    • Colleague bypassing security controls
+    • Unauthorized software installation
+    • Sharing passwords
+    • Using personal cloud storage for company data
+    
+    ➜ Report to IT Manager or HR
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📞  WHO TO CONTACT - MEMORIZE THIS!  📞
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                                                                       ║
+║   🎯  PRIMARY CONTACT: CHRIS WREN, IT MANAGER                         ║
+║                                                                       ║
+║       Email:    security@cirque.com  (monitored 24/7)                 ║
+║       Phone:    (415) 555-0187                                        ║
+║       Mobile:   (415) 555-0187  (call/text anytime - 24/7)           ║
+║       Slack:    @chris.wren                                           ║
+║       Office:   Building A, Room 215                                  ║
+║                                                                       ║
+║   📧  SUSPICIOUS EMAIL REPORTS:                                       ║
+║       Forward entire email (with headers) to:                         ║
+║       security@cirque.com                                             ║
+║                                                                       ║
+║   🔄  ALTERNATE CONTACT (if Chris unavailable):                       ║
+║       Amanda Foster, Security Analyst                                 ║
+║       Email: amanda.foster@cirque.com                                 ║
+║       Phone: (415) 555-0194                                           ║
+║                                                                       ║
+║   🏢  AFTER HOURS / WEEKENDS:                                         ║
+║       Call Chris Wren mobile: (415) 555-0187                          ║
+║       (Available 24/7 for security emergencies)                       ║
+║                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰  WHEN TO REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  🔴  CRITICAL - REPORT IMMEDIATELY (within minutes)                 │
+│      • Ransomware attack                                            │
+│      • Lost/stolen device with company data                         │
+│      • Data breach or unauthorized access to customer data          │
+│      • Compromised accounts with financial/admin access             │
+│      • Active system compromise or attack in progress               │
+│                                                                     │
+│      ➜ CALL Chris Wren: (415) 555-0187 RIGHT NOW!                  │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  🟠  HIGH PRIORITY - REPORT SAME DAY (within hours)                 │
+│      • Suspicious emails or phishing attempts                       │
+│      • Malware or virus detection                                   │
+│      • Unauthorized access attempts                                 │
+│      • Accidental data disclosure                                   │
+│      • Social engineering attempts                                  │
+│                                                                     │
+│      ➜ Email security@cirque.com or call (415) 555-0187            │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  🟡  MEDIUM - REPORT SAME BUSINESS DAY                              │
+│      • Security policy violations                                   │
+│      • Minor technical issues with security impact                  │
+│      • Questions about security procedures                          │
+│                                                                     │
+│      ➜ Email security@cirque.com                                    │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+REMEMBER: It's better to report something that turns out to be nothing 
+          than to ignore something that becomes a major incident!
+
+          NO EMPLOYEE HAS EVER BEEN DISCIPLINED FOR REPORTING A 
+          SUSPECTED SECURITY ISSUE - EVEN IF IT WAS A FALSE ALARM!
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫  WHAT NOT TO DO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you suspect a security incident:
+
+✗ DON'T click on suspicious links or open attachments
+✗ DON'T delete suspicious emails (forward to IT first)
+✗ DON'T turn off infected computers (disconnect network instead)
+✗ DON'T try to "fix" the problem yourself
+✗ DON'T discuss the incident on social media
+✗ DON'T contact customers directly about security issues
+✗ DON'T ignore warning signs hoping they'll go away
+✗ DON'T wait - time is critical!
+
+✓ DO report immediately to Chris Wren (IT Manager)
+✓ DO follow IT's instructions
+✓ DO preserve evidence (don't delete anything)
+✓ DO document what happened
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋  HOW TO REPORT AN INCIDENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1: STOP & ASSESS
+    • Don't panic
+    • Don't make it worse (don't click, delete, or investigate)
+    • If device is infected: Disconnect from Wi-Fi (don't power off)
+
+STEP 2: CONTACT IT IMMEDIATELY
+    • Email: security@cirque.com
+    • OR Call/Text: Chris Wren (415) 555-0187
+    • OR Slack: @chris.wren
+
+STEP 3: PROVIDE DETAILS
+    What happened?
+    • What did you see/experience?
+    • When did it occur? (date/time)
+    • What systems/data are affected?
+    • Did you click anything or take any actions?
+    • Any error messages or screenshots?
+
+STEP 4: PRESERVE EVIDENCE
+    • Don't delete emails, files, or logs
+    • Take screenshots if possible (but don't delay reporting!)
+    • Note any unusual activity
+
+STEP 5: FOLLOW IT'S INSTRUCTIONS
+    • IT may ask you to:
+      - Change your password
+      - Disconnect from network
+      - Not use your device temporarily
+      - Provide additional information
+    • Cooperate fully with investigation
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯  REAL-WORLD EXAMPLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GOOD REPORTING EXAMPLES:
+
+✓ Sarah received an email claiming to be from the CEO asking her to buy 
+  gift cards urgently. She recognized this as suspicious, didn't click 
+  anything, and immediately forwarded the email to security@cirque.com. 
+  IT confirmed it was a phishing attack and blocked the sender.
+  
+  RESULT: Prevented financial fraud! Sarah received a security award.
+
+✓ Mike's laptop was stolen from his car. He immediately called Chris 
+  Wren (within 30 minutes). IT remotely wiped the device and disabled 
+  his account. No data was compromised because he reported quickly.
+  
+  RESULT: Data breach prevented! Incident contained successfully.
+
+✓ Jennifer noticed an email in her Sent folder that she didn't send. 
+  She called IT immediately. Investigation revealed her account was 
+  compromised. IT reset her password, revoked all sessions, and checked 
+  for data access. Incident contained within 2 hours.
+  
+  RESULT: Account secured! No customer data accessed.
+
+
+BAD EXAMPLES (WHAT NOT TO DO):
+
+✗ Tom received a phishing email but clicked the link "just to see what 
+  would happen." He entered his password on the fake site. He didn't 
+  report it because he was embarrassed. The attackers used his access 
+  to steal customer data.
+  
+  RESULT: Major data breach. Tom faced disciplinary action for not 
+  reporting, not for clicking the link.
+
+✗ Lisa's laptop was infected with malware showing pop-ups. She powered 
+  it off and took it home, planning to deal with it tomorrow. The 
+  malware had already spread to the file server.
+  
+  RESULT: Malware outbreak. Should have reported immediately!
+
+✗ David received a suspicious email but deleted it thinking "IT is 
+  probably busy." He didn't know that 50 other employees received the 
+  same email. IT wasn't aware and couldn't block the attack.
+  
+  RESULT: Multiple employees compromised. One report could have 
+  prevented this!
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡  REMEMBER: YOU'RE PROTECTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When you report security incidents, you're protecting:
+
+    🛡️  CUSTOMER DATA - Our customers trust us with their information
+    🛡️  EMPLOYEE DATA - Your colleagues' personal information
+    🛡️  COMPANY REPUTATION - Years of hard work building trust
+    🛡️  COMPANY FINANCES - Security breaches are expensive!
+    🛡️  YOUR JOB - Breaches can threaten the entire business
+    🛡️  COMPLIANCE - We have legal obligations (GDPR, CCPA, SOC 2)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅  ACKNOWLEDGMENT REQUIRED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All employees must acknowledge they have read and understand their
+incident reporting responsibilities.
+
+I acknowledge that:
+✓ I understand my responsibility to report security incidents
+✓ I know who to contact: Chris Wren, IT Manager (415) 555-0187
+✓ I will report suspicious activity immediately
+✓ I will not attempt to fix security issues myself
+✓ I will preserve evidence and follow IT's instructions
+✓ Failure to report incidents may result in disciplinary action
+
+[ACKNOWLEDGE BUTTON] - Click to confirm (tracked by training system)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📞  QUICK REFERENCE CARD (Print & Keep at Desk)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║         🚨 SECURITY INCIDENT REPORTING 🚨                         ║
+║                                                                   ║
+║   Chris Wren, IT Manager                                          ║
+║   📧 security@cirque.com                                          ║
+║   📱 (415) 555-0187  (24/7)                                       ║
+║   💬 Slack: @chris.wren                                           ║
+║                                                                   ║
+║   REPORT IMMEDIATELY:                                             ║
+║   • Suspicious emails (forward to security@cirque.com)            ║
+║   • Lost/stolen devices                                           ║
+║   • Malware or ransomware                                         ║
+║   • Unauthorized access                                           ║
+║   • Any unusual activity                                          ║
+║                                                                   ║
+║   WHEN IN DOUBT, REPORT IT!                                       ║
+║   Better safe than sorry.                                         ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❓ QUESTIONS?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you have questions about:
+• What constitutes a security incident
+• How to report incidents
+• Security policies and procedures
+• Your responsibilities
+
+Contact: Chris Wren, IT Manager
+Email: chris.wren@cirque.com
+Phone: (415) 555-0187
+Office Hours: Monday-Friday, 8 AM - 6 PM
+Emergency: 24/7 mobile available
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TRAINING COMPLETION TRACKING:
+Session: 2026 Annual Security Awareness Training
+Module: Incident Reporting Procedures (Slide 12 of 25)
+Date: March 2, 2026, 2:45 PM
+Location: Cirque Intranet > IT Resources > Security > Training
+Instructor: Chris Wren, IT Manager
+
+Completion Status: All employees must complete training by March 31, 2026
+Attendance Roster: 83 total employees (52 USA + 31 international)
+Test Required: 10-question quiz at end of training (80% passing score)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+================================================================================
+                    [End of Training Slide Screenshot]
+                     Screenshot Date: March 2, 2026 2:45 PM
+                      Captured from Cirque Intranet Page
+================================================================================
+
+Additional Training Materials Available:
+• Full presentation (25 slides): SharePoint > Training > Security
+• Video recording: Available for remote employees
+• Quick reference card: Download and print from intranet
+• Phishing examples: Updated monthly on intranet
+• Security policies: SharePoint > IT > Policies
+
+Next Training Session: March 15, 2026 (for new hires)
+Annual Refresher: February/March 2027
+
+
+DOCUMENT METADATA:
+------------------
+Title: Employee Incident Reporting Responsibilities
+Source: Cirque Corporation Intranet - IT Resources Section
+URL: https://intranet.cirque.com/it/security/incident-reporting
+Last Updated: March 2, 2026
+Owner: IT Department (Chris Wren, IT Manager)
+Audience: All Cirque Corporation employees
+Distribution: Company-wide mandatory training
+Acknowledgment Required: Yes (tracked by HR/IT systems)
+Related Policies: IS-CIRQ-P-001-G (Information Security Policy)
+                  IS-CIRQ-PR-015-G (Incident Response Procedure)

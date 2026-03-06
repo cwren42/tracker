@@ -1,0 +1,1206 @@
+================================================================================
+                    SECURITY INCIDENT RESOLUTION REPORT
+                         Cirque Corporation
+================================================================================
+
+INCIDENT DETAILS
+================================================================================
+Incident ID:              INC-2026-00142
+Incident Type:            Phishing Attack with Credential Compromise
+Classification:           SEVERITY 2 - HIGH
+Status:                   CLOSED - RESOLVED
+Date Opened:              February 18, 2026 at 09:47 AM PST
+Date Closed:              February 19, 2026 at 02:15 PM PST
+Total Response Time:      28 hours 28 minutes
+
+Reported By:              Jennifer Martinez, Sales Manager
+Primary Responder:        Amanda Foster, Security Analyst
+Incident Manager:         Chris Wren, IT Manager
+Additional Responders:    Kevin Nguyen (Sr. Systems Administrator)
+                         David Park (CTO) - Executive Sponsor
+
+
+EXECUTIVE SUMMARY
+================================================================================
+On February 18, 2026 at 9:47 AM, employee Jennifer Martinez reported clicking
+a suspicious link in what appeared to be a legitimate Office 365 notification.
+Investigation confirmed a sophisticated phishing attack that successfully
+compromised her credentials. Immediate containment actions prevented data
+exfiltration. The incident affected 1 user account with potential exposure of
+162 customer email addresses. Total impact: HIGH severity. Incident fully
+resolved with no data breach. Root cause: sophisticated spear-phishing email
+bypassed email filtering due to newly registered domain. All affected systems
+secured, credentials reset, enhanced monitoring implemented.
+
+
+INCIDENT TIMELINE - CHRONOLOGICAL EVENT LOG
+================================================================================
+
+February 18, 2026 - Day 1 (Detection & Initial Response)
+--------------------------------------------------------------------------------
+09:15 AM    - Phishing email received by Jennifer Martinez 
+              (jmartinez@cirque.com) with subject: "Action Required: 
+              Verify Your Office 365 Account"
+              
+09:23 AM    - Jennifer clicked link in email, entered Office 365 credentials
+              on fake login page at: hxxps://office365-verify[.]site/login
+              
+09:24 AM    - Suspicious login detected by Azure AD Identity Protection from 
+              IP address 185.220.101.47 (Location: Romania)
+              Automated alert sent to security@cirque.com
+              
+09:25 AM    - Attacker attempted to access Jennifer's mailbox
+              Multiple emails accessed in Sent Items and Contacts folders
+              
+09:26 AM    - Azure AD Conditional Access blocked download attempt due to
+              unusual location and device not registered in Intune MDM
+              
+09:47 AM    - Jennifer called IT Helpdesk (415-555-0180) reporting:
+              "I clicked a link in an Office 365 email and now I'm getting
+              MFA notifications I didn't request. Something is wrong."
+              
+09:48 AM    - Helpdesk escalated to Security Analyst Amanda Foster
+              Incident ticket INC-2026-00142 created in system
+              
+09:50 AM    - Amanda Foster contacted Jennifer via phone
+              Confirmed credential entry on suspicious site
+              Classified as SEVERITY 2 - HIGH (active account compromise)
+              
+09:52 AM    - CONTAINMENT INITIATED
+              Amanda disabled Jennifer's account in Azure AD
+              All active sessions terminated (3 sessions found: 
+              1 legitimate Windows laptop, 1 legitimate mobile phone,
+              1 SUSPICIOUS from Romania IP 185.220.101.47)
+              
+09:55 AM    - Chris Wren (IT Manager) notified of Severity 2 incident
+              David Park (CTO) notified per escalation matrix
+              
+10:00 AM    - Emergency password reset initiated
+              New temporary password: [REDACTED - stored in password vault]
+              MFA re-registration required before access restored
+              
+10:15 AM    - FORENSIC INVESTIGATION STARTED
+              Amanda began detailed mailbox audit log analysis
+              Kevin Nguyen began network traffic analysis
+              
+10:30 AM    - Investigation Meeting via Teams
+              Attendees: Chris Wren, Amanda Foster, Kevin Nguyen, David Park
+              Decision: Full investigation before restoring access
+              Timeline: Complete analysis by end of day
+              
+11:00 AM    - Email Analysis completed by Amanda Foster
+              Original phishing email identified and quarantined
+              Sender: noreply@microsoft-online[.]services (spoofed)
+              Sending IP: 104.21.78.92 (Cloudflare proxy - actual source hidden)
+              Email headers showed SPF: PASS (legitimate Cloudflare)
+              DKIM: FAIL (signature mismatch)
+              DMARC: NONE (no policy enforced by sender domain)
+              
+11:15 AM    - Phishing domain analysis:
+              Domain: office365-verify[.]site
+              Registered: February 17, 2026 (1 day before attack)
+              Registrar: NameCheap (privacy protection enabled)
+              Hosting: Cloudflare CDN (obscures actual server location)
+              SSL Certificate: Let's Encrypt (valid, issued Feb 17)
+              Domain Status: ACTIVE (still live)
+              
+11:30 AM    - Mailbox Access Audit Results:
+              Total emails accessed by attacker: 23 emails
+              Folders accessed: Sent Items (15 emails), Contacts (1 contact 
+              list), Inbox (7 emails)
+              Time window: 09:24 AM - 09:26 AM (2 minutes before block)
+              Data viewed: 162 customer email addresses from contact list
+              Sales proposals viewed: 3 documents (non-confidential 
+              marketing materials)
+              
+11:45 AM    - Download/Exfiltration Analysis:
+              Azure AD Conditional Access logs reviewed
+              FINDING: All download attempts BLOCKED by Conditional Access
+              Reason: Unregistered device + suspicious location
+              CONFIRMED: No data exfiltrated from mailbox
+              
+12:00 PM    - Network Traffic Analysis (Kevin Nguyen):
+              Reviewed Azure Firewall logs and Microsoft Defender for 
+              Endpoint logs from Jennifer's laptop
+              Jennifer's device NOT compromised (only credentials stolen)
+              No malware detected on laptop
+              Last scan: February 18 at 9:00 AM - Clean
+              
+01:30 PM    - Similar Email Detection Scan:
+              Searched all mailboxes for emails from sender domain
+              FINDING: 8 additional employees received same phishing email
+              Recipients: Sales team members (targeting sales department)
+              Status: 7 deleted without clicking, 1 (Jennifer) clicked link
+              
+02:00 PM    - Threat Intelligence Research:
+              Searched VirusTotal, AbuseIPDB, PhishTank databases
+              Phishing domain office365-verify[.]site: Not yet reported
+              Similar campaigns targeting Office 365 users confirmed
+              Attack vector matches known "Evilginx2" phishing-as-a-service
+              
+02:30 PM    - Submitted reports to:
+              PhishTank: Phishing URL confirmed and added to database
+              Microsoft Security: Reported via security.microsoft.com
+              Domain registrar: Abuse complaint filed with NameCheap
+              Cloudflare: Abuse report filed for hosting provider
+              
+03:00 PM    - Enhanced Monitoring Implemented:
+              Jennifer's account flagged for intensive monitoring (30 days)
+              Alert rules created for any access from new locations/devices
+              All sales team accounts added to watchlist
+              
+04:00 PM    - END OF DAY STATUS UPDATE to CTO David Park:
+              Incident contained, no data exfiltration confirmed
+              Investigation 80% complete
+              Account will remain disabled overnight for safety
+              Plan: Complete analysis tomorrow, restore access after 
+              additional security measures
+
+February 19, 2026 - Day 2 (Eradication & Recovery)
+--------------------------------------------------------------------------------
+08:00 AM    - Morning status review by incident response team
+              Overnight monitoring: No additional suspicious activity detected
+              Phishing domain status check: Still active (Cloudflare 
+              investigating, typical 24-48 hour response time)
+              
+09:00 AM    - ERADICATION PHASE STARTED
+              Updated email filtering rules in Microsoft Defender for Office 365:
+              * Blocked sender domain: microsoft-online[.]services
+              * Blocked destination domain: office365-verify[.]site
+              * Enhanced phishing detection for newly registered domains (<7 days)
+              * Increased DMARC enforcement sensitivity
+              
+09:30 AM    - Security Enhancements Implemented:
+              1. Enabled Azure AD Identity Protection - High Risk Sign-In 
+                 policy (block + require password change)
+              2. Enabled Azure AD Identity Protection - High Risk User 
+                 policy (require MFA re-registration)
+              3. Created Conditional Access policy: Block legacy 
+                 authentication for all sales team
+              4. Enhanced Conditional Access: Require compliant device for 
+                 email access outside corporate network
+              
+10:00 AM    - Jennifer Martinez Security Briefing:
+              In-person meeting with Amanda Foster and Chris Wren
+              Reviewed incident timeline and lessons learned
+              Demonstrated how to identify phishing indicators:
+              * Check sender email address carefully
+              * Hover over links before clicking
+              * Verify URL matches legitimate Microsoft domains
+              * Never enter credentials from email link
+              * Use bookmarks for accessing Office 365
+              Additional training scheduled: March 5, 2026
+              
+10:30 AM    - RECOVERY PHASE STARTED
+              Jennifer's account re-enabled in Azure AD
+              New permanent password set (strong 24-character passphrase)
+              MFA re-registered: New Microsoft Authenticator on verified device
+              All previous app passwords revoked
+              All OAuth tokens revoked and re-issued
+              
+11:00 AM    - Jennifer successfully logged in with new credentials
+              Verified access to:
+              * Email (Outlook Online and Desktop)
+              * OneDrive
+              * SharePoint
+              * Teams
+              All functionality confirmed working normally
+              
+11:30 AM    - Post-Recovery Monitoring Check:
+              Azure AD sign-in logs: Normal activity only
+              Microsoft Defender: No alerts
+              Email access pattern: Normal (accessing from registered laptop)
+              Risk level: LOW (returned to baseline)
+              
+12:00 PM    - Sales Team Security Awareness Session:
+              Emergency training session conducted by Amanda Foster
+              Attendees: 12 sales team members including Jennifer
+              Duration: 30 minutes
+              Topics covered:
+              * Recent phishing incident details (anonymized)
+              * How to identify Office 365 phishing emails
+              * Proper reporting procedures
+              * Demonstration of fake login page vs. real Microsoft login
+              * Q&A session
+              Attendance: 100% (all sales team present)
+              
+01:00 PM    - 72-Hour Enhanced Monitoring Setup:
+              Created custom alert rules in Azure Sentinel:
+              * Alert on any access from new IP addresses (Jennifer's account)
+              * Alert on any bulk email sending (>50 emails/hour)
+              * Alert on any contact list exports
+              * Alert on any OAuth app installations
+              Monitoring team: Amanda Foster (primary), Kevin Nguyen (backup)
+              
+02:00 PM    - Final Verification and Documentation:
+              All containment measures successful
+              All eradication steps completed
+              Account fully recovered and secured
+              Enhanced monitoring active
+              No ongoing suspicious activity
+              No data breach occurred
+              
+02:15 PM    - INCIDENT CLOSED
+              Final approval: Chris Wren (IT Manager), David Park (CTO)
+              Status changed to: CLOSED - RESOLVED
+
+
+IMPACT ANALYSIS
+================================================================================
+
+Systems Affected:
+--------------------------------------------------------------------------------
+- 1 User Account: Jennifer Martinez (jmartinez@cirque.com)
+- 1 Mailbox: Exchange Online mailbox accessed for 2 minutes
+- 0 Devices Compromised: No malware installed, only credentials stolen
+- 0 Servers Compromised: No server access occurred
+- 0 Network Intrusion: Attacker only accessed cloud services via stolen creds
+
+Data Exposure:
+--------------------------------------------------------------------------------
+Data Viewed by Attacker (confirmed via audit logs):
+- 162 customer email addresses (from Contacts folder export)
+- 23 email messages (15 sent items, 7 inbox items)
+- 3 sales proposal documents (general marketing materials, non-confidential)
+
+Data Exfiltrated:
+- NONE - All download attempts blocked by Azure AD Conditional Access
+- CONFIRMED via audit log review: No successful data exports
+
+Personally Identifiable Information (PII):
+- Customer email addresses: 162 contacts (NAME + EMAIL only, no SSN/credit 
+  card/phone numbers/addresses)
+- Classification: Low-sensitivity PII
+- Regulatory Notification: NOT REQUIRED (no breach of sensitive PII per 
+  GDPR/CCPA thresholds, no exfiltration confirmed)
+
+Confidential Data:
+- Sales proposals viewed: PUBLIC marketing materials only
+- No trade secrets, financial data, or restricted information accessed
+
+Business Impact:
+--------------------------------------------------------------------------------
+- User Downtime: Jennifer Martinez - 26 hours out of office access
+  (9:52 AM Feb 18 to 11:00 AM Feb 19)
+- Revenue Impact: None (no lost sales, no customer notification required)
+- Reputation Impact: None (incident contained internally)
+- Customer Impact: None (no customer data compromised or exfiltrated)
+- Regulatory Impact: None (no breach notification thresholds met)
+
+Financial Impact:
+--------------------------------------------------------------------------------
+- Incident Response Labor: 32 hours total staff time
+  * Amanda Foster (Security Analyst): 16 hours @ $85/hr = $1,360
+  * Kevin Nguyen (Sr. Sys Admin): 8 hours @ $75/hr = $600
+  * Chris Wren (IT Manager): 6 hours @ $95/hr = $570
+  * David Park (CTO): 2 hours @ $150/hr = $300
+- External Costs: $0 (no forensics firm, no legal counsel required)
+- User Productivity Loss: 26 hours @ $45/hr (Jennifer's salary) = $1,170
+- Emergency Training: 12 employees × 0.5 hours @ avg $50/hr = $300
+- Total Incident Cost: $4,300
+
+Risk Assessment:
+--------------------------------------------------------------------------------
+Pre-Incident Risk Level:     MEDIUM (email phishing protection in place but 
+                             not comprehensive)
+Post-Incident Risk Level:    LOW (enhanced protections implemented)
+Residual Risk:               LOW (monitoring and training enhanced)
+
+
+INCIDENT CONTAINMENT ACTIONS
+================================================================================
+
+Immediate Containment (Within 10 minutes of detection):
+--------------------------------------------------------------------------------
+TIMESTAMP: February 18, 2026 at 09:52 AM (5 minutes after user report)
+
+1. Account Disabled
+   - Jennifer Martinez's Azure AD account disabled immediately
+   - Method: Azure AD portal > Users > Jennifer Martinez > Block sign-in
+   - Result: All active sessions terminated within 30 seconds
+   - Confirmation: Azure AD sign-in logs show no successful logins after 09:52 AM
+
+2. Session Termination
+   - All active sessions revoked via Azure AD
+   - Sessions terminated:
+     * Laptop (Windows 11 - Building A) - LEGITIMATE
+     * Mobile phone (iPhone 13 - iOS 16) - LEGITIMATE  
+     * Unknown device (Romania IP 185.220.101.47) - ATTACKER
+   - Method: Azure AD > Users > Jennifer Martinez > Revoke sessions
+   - Result: Attacker immediately locked out
+
+3. Password Invalidated
+   - Emergency password reset forced for Jennifer's account
+   - Old password: [REDACTED] - immediately invalidated
+   - Temporary password: [REDACTED] - stored in password vault
+   - Method: Azure AD password reset + "User must change password at next login"
+   - Result: Stolen credentials no longer valid
+
+4. MFA Re-registration Required
+   - All existing MFA methods removed from account
+   - Microsoft Authenticator app registration cleared
+   - Phone number verification cleared
+   - Method: Azure AD > Users > Jennifer Martinez > Authentication methods > 
+     Delete all
+   - Result: Even if attacker had password, MFA required before access
+
+Short-Term Containment (Within 2 hours):
+--------------------------------------------------------------------------------
+TIMESTAMP: February 18, 2026 at 11:00 AM - 12:00 PM
+
+5. Email Quarantine
+   - Original phishing email quarantined from Jennifer's mailbox
+   - All similar emails quarantined from 8 other recipients (sales team)
+   - Method: Microsoft Defender for Office 365 > Threat Explorer > 
+     Quarantine messages
+   - Result: 9 total malicious emails removed from circulation
+
+6. Domain Blocking
+   - Phishing domain blocked at email gateway level
+   - Blocked domains:
+     * office365-verify[.]site (phishing landing page)
+     * microsoft-online[.]services (spoofed sender domain)
+   - Method: Microsoft Defender for Office 365 > Tenant Allow/Block Lists > 
+     Block URLs
+   - Result: Future emails from these domains automatically rejected
+
+7. IP Address Blocking
+   - Attacker IP address blocked at Azure Firewall
+   - Blocked IP: 185.220.101.47 (Romanian exit node)
+   - Method: Azure Firewall > Network Rules > Add deny rule
+   - Result: Any future connection attempts from this IP blocked
+
+8. Enhanced Alert Rules
+   - Custom alert created for Jennifer's account
+   - Alert triggers: Any new login location, any new device, any bulk actions
+   - Method: Azure Sentinel > Analytics Rules > Create scheduled query rule
+   - Result: Real-time notifications for any suspicious activity
+
+Long-Term Containment (Within 24 hours):
+--------------------------------------------------------------------------------
+TIMESTAMP: February 19, 2026 at 09:00 AM
+
+9. Conditional Access Policy Updated
+   - New policy: Require compliant device for email access from external 
+     networks
+   - Applied to: All sales team (12 users)
+   - Method: Azure AD > Conditional Access > New policy
+   - Result: Prevents credential-based attacks from unmanaged devices
+
+10. Identity Protection Policies Enabled
+    - High Risk Sign-In Policy: Enabled (Block access + Require password change)
+    - High Risk User Policy: Enabled (Block access + Require MFA re-registration)
+    - Method: Azure AD Identity Protection > Policies
+    - Result: Automatic blocking of suspicious sign-in attempts
+
+Verification of Containment Effectiveness:
+--------------------------------------------------------------------------------
+✓ No successful logins from attacker IP after 09:52 AM (confirmed via logs)
+✓ No data exfiltration detected (confirmed via Azure AD audit logs)
+✓ No lateral movement to other accounts (confirmed via network logs)
+✓ No malware installation (confirmed via Microsoft Defender scan)
+✓ Phishing domain reported and added to blocklists (PhishTank, Microsoft)
+✓ All similar emails removed from environment (9 emails quarantined)
+
+
+INCIDENT RESOLUTION STEPS
+================================================================================
+
+Phase 1: Eradication (Removing Threat)
+--------------------------------------------------------------------------------
+COMPLETED: February 19, 2026 at 09:30 AM
+
+1. Email Filtering Rules Updated
+   STATUS: ✓ COMPLETE
+   - Enhanced phishing detection for newly registered domains (<7 days old)
+   - Increased DMARC enforcement (reject on DMARC=fail)
+   - Enhanced link scanning for all external emails
+   - Blocked 2 domains permanently: office365-verify[.]site, 
+     microsoft-online[.]services
+   VALIDATION: Test email sent from similar new domain - correctly blocked
+
+2. Compromised Credentials Eliminated
+   STATUS: ✓ COMPLETE
+   - Old password invalidated: February 18 at 09:52 AM
+   - New strong password created: 24-character passphrase with special characters
+   - Password strength score: 5/5 (Azure AD Password Protection)
+   - Old MFA methods removed: February 18 at 10:00 AM
+   - New MFA re-registered: February 19 at 10:30 AM (Microsoft Authenticator)
+   VALIDATION: Old credentials tested - login rejected (correct behavior)
+
+3. OAuth Tokens Revoked
+   STATUS: ✓ COMPLETE
+   - All OAuth refresh tokens revoked for Jennifer's account
+   - All active app passwords deleted (2 found: Outlook 2016, mobile email)
+   - All third-party app permissions reviewed and re-authorized
+   VALIDATION: No orphaned sessions found in Azure AD logs
+
+4. Threat Actor Access Removed
+   STATUS: ✓ COMPLETE
+   - Attacker IP 185.220.101.47 blocked at firewall (permanent rule)
+   - Phishing domain office365-verify[.]site reported to authorities
+   - Domain status: Under investigation by hosting provider (Cloudflare)
+   - Update 2/20/2026: Domain taken offline by Cloudflare abuse team
+   VALIDATION: Phishing URL now returns "Error 1016: Origin DNS error"
+
+Phase 2: Recovery (Restoring Normal Operations)
+--------------------------------------------------------------------------------
+COMPLETED: February 19, 2026 at 11:00 AM
+
+5. Account Access Restored
+   STATUS: ✓ COMPLETE
+   - Jennifer's Azure AD account re-enabled: February 19 at 10:30 AM
+   - New credentials configured: Strong password + Microsoft Authenticator MFA
+   - First successful login: February 19 at 11:00 AM from Jennifer's laptop
+   - Login location verified: Building A, San Francisco (expected location)
+   - Device verified: Registered in Intune MDM (Jennifer's work laptop)
+   VALIDATION: User confirmed full access to email, OneDrive, SharePoint, Teams
+
+6. Mailbox Functionality Verified
+   STATUS: ✓ COMPLETE
+   - Sent 3 test emails - delivered successfully
+   - Received 5 test emails - received successfully
+   - Calendar access tested - working correctly
+   - Contacts list verified - all 162 contacts present (no deletion by attacker)
+   - OneDrive files checked - no unauthorized changes detected
+   VALIDATION: All mailbox features functioning normally
+
+7. Device Security Validated
+   STATUS: ✓ COMPLETE
+   - Jennifer's laptop scanned with Microsoft Defender for Endpoint
+   - Scan type: Full scan (all files and registry)
+   - Scan result: No threats detected
+   - Last virus definition update: February 19, 2026 at 8:00 AM (current)
+   - Intune compliance check: COMPLIANT (all policies met)
+   VALIDATION: Device confirmed clean and secure
+
+8. User Training Completed
+   STATUS: ✓ COMPLETE
+   - Jennifer attended one-on-one security briefing: February 19 at 10:00 AM
+   - Sales team emergency training session: February 19 at 12:00 PM
+   - Topics covered: Phishing identification, secure password practices, 
+     incident reporting
+   - Follow-up training scheduled: March 5, 2026 (company-wide security awareness)
+   - Acknowledgment signed by Jennifer: Understands incident and prevention
+   VALIDATION: User demonstrated understanding of phishing indicators in 
+   post-training quiz (8/8 correct)
+
+Phase 3: Post-Recovery Monitoring (Ongoing)
+--------------------------------------------------------------------------------
+STATUS: IN PROGRESS (30-day enhanced monitoring)
+
+9. Enhanced Monitoring Active
+   - Monitoring period: February 19 - March 21, 2026 (30 days)
+   - Alert rules configured:
+     * New IP address login (any location not previously seen)
+     * New device registration (any device not in Intune)
+     * Bulk email sending (>50 emails/hour)
+     * Contact list export (any export activity)
+     * High-risk sign-in events (from Azure AD Identity Protection)
+   - Monitoring team: Amanda Foster (primary), Kevin Nguyen (backup)
+   - Daily review: 9:00 AM status check by Security Analyst
+   - Weekly summary: Report to IT Manager every Monday
+
+10. Incident Metrics Tracking
+    - Mean Time to Detect (MTTD): 22 minutes (from email sent to detection)
+    - Mean Time to Respond (MTTR): 5 minutes (from detection to containment)
+    - Mean Time to Recover (MTTR): 26 hours (from containment to full recovery)
+    - User downtime: 26 hours
+    - Data loss: NONE (no exfiltration)
+    - Effectiveness rating: HIGH (quick detection, successful containment, 
+      no data loss)
+
+
+ROOT CAUSE ANALYSIS
+================================================================================
+
+Incident Root Cause:
+--------------------------------------------------------------------------------
+SOPHISTICATED PHISHING EMAIL BYPASSED EMAIL FILTERING DUE TO NEWLY REGISTERED 
+DOMAIN AND CLOUDFLARE PROXY OBSCURING THREAT INDICATORS
+
+Primary Root Cause (Technical):
+The phishing email successfully reached Jennifer's inbox because:
+
+1. Newly Registered Domain (1 day old)
+   - Domain registered February 17, 2026: office365-verify[.]site
+   - Microsoft Defender for Office 365 threat intelligence had not yet 
+     categorized this domain as malicious (zero-day phishing domain)
+   - Default email filtering rules did not flag newly registered domains 
+     (<7 days old) as suspicious
+   - Result: Email passed through spam filtering
+
+2. Cloudflare CDN Provided Legitimacy Indicators
+   - Email sent through Cloudflare proxy IP: 104.21.78.92
+   - SPF check: PASSED (Cloudflare IP was legitimate sending server)
+   - SSL certificate: Valid Let's Encrypt certificate (issued Feb 17)
+   - Domain reputation: No negative history (too new to have bad reputation)
+   - Result: Email appeared legitimate to automated scanning tools
+
+3. Sophisticated Social Engineering
+   - Email subject: "Action Required: Verify Your Office 365 Account"
+   - Sender display name: "Microsoft Online Services" (spoofed, but convincing)
+   - Email content: Professional formatting matching Microsoft's style
+   - Urgency tactic: "Your account will be suspended in 24 hours"
+   - Call to action: "Click here to verify now" (created panic response)
+   - Landing page: Exact replica of real Microsoft Office 365 login page
+   - Result: User bypassed usual caution due to urgency and legitimacy appearance
+
+Secondary Root Cause (Human Factor):
+Jennifer Martinez clicked the phishing link because:
+
+1. Lack of Recent Security Awareness Training
+   - Last security training: June 2025 (8 months ago)
+   - Training cadence: Annual (insufficient for evolving threats)
+   - Last phishing simulation: December 2025 (2 months ago)
+   - Jennifer did not participate in Dec 2025 simulation (on vacation)
+   - Result: Security awareness not fresh in mind
+
+2. High-Pressure Sales Environment
+   - Jennifer was working under deadline pressure (Q1 end-of-quarter push)
+   - Multiple urgent emails from customers that morning
+   - "Action Required" subject line matched pattern of other urgent work emails
+   - Result: Acted quickly without careful verification
+
+3. Mobile Device Context
+   - Email opened on mobile phone (iPhone 13) during commute
+   - Small screen made it harder to examine sender details carefully
+   - Clicked link on mobile, then opened on laptop (device switching reduced 
+     attention to URL)
+   - Result: Reduced ability to identify phishing indicators
+
+Contributing Factors:
+--------------------------------------------------------------------------------
+
+Technical Gaps:
+1. ✗ Email filtering rules did not flag newly registered domains (<7 days old)
+2. ✗ DMARC policy not strictly enforced (DMARC=NONE allowed to pass)
+3. ✗ Azure AD Identity Protection High Risk policies not enabled (allowed 
+      suspicious login attempt)
+4. ✗ Conditional Access policy did not require compliant device for external 
+      email access
+5. ✗ No URL rewriting/sandboxing for links in external emails
+
+Human/Process Gaps:
+1. ✗ Security awareness training cadence insufficient (annual vs. quarterly)
+2. ✗ Phishing simulations not frequent enough (quarterly vs. monthly)
+3. ✗ No mandatory security training for employees returning from extended leave
+4. ✗ No clear guidance on verifying urgent "action required" emails
+5. ✗ Sales team not identified as high-risk target group for additional training
+
+Protective Factors That Worked:
+--------------------------------------------------------------------------------
+The following security controls successfully LIMITED the impact:
+
+1. ✓ Azure AD Identity Protection detected suspicious login within 1 minute
+2. ✓ Automated alert sent to security@cirque.com immediately
+3. ✓ Azure AD Conditional Access BLOCKED data download (unregistered device)
+4. ✓ User reported incident promptly (within 24 minutes of clicking)
+5. ✓ Incident response procedures followed correctly (quick containment)
+6. ✓ MFA prevented some unauthorized actions (file downloads blocked)
+7. ✓ Microsoft Defender for Endpoint confirmed no malware on user device
+8. ✓ Comprehensive audit logging enabled full forensic investigation
+
+Why This Worked (Defense in Depth):
+Even though the phishing email bypassed the first layer (email filtering), 
+multiple additional security layers prevented data exfiltration:
+- Layer 1 (Email Filtering): ✗ FAILED - Email reached inbox
+- Layer 2 (User Awareness): ✗ FAILED - User clicked link
+- Layer 3 (Authentication): ✗ FAILED - Attacker obtained credentials
+- Layer 4 (Conditional Access): ✓ SUCCESS - Blocked unregistered device
+- Layer 5 (Detection): ✓ SUCCESS - Suspicious login detected within 1 minute
+- Layer 6 (Response): ✓ SUCCESS - Account disabled within 5 minutes
+OVERALL RESULT: Attack stopped before data exfiltration occurred
+
+Five Whys Analysis:
+--------------------------------------------------------------------------------
+WHY #1: Why did the security incident occur?
+ANSWER: Jennifer Martinez clicked a phishing link and entered her Office 365 
+credentials on a fake login page.
+
+WHY #2: Why did Jennifer click the phishing link?
+ANSWER: The email appeared legitimate and urgent, and Jennifer's security 
+awareness was not fresh enough to identify the phishing indicators.
+
+WHY #3: Why did the email appear legitimate?
+ANSWER: The phishing email bypassed spam filtering because it was sent from a 
+newly registered domain using Cloudflare infrastructure, which provided 
+legitimate-looking technical indicators (valid SSL, passing SPF).
+
+WHY #4: Why did the newly registered domain bypass spam filtering?
+ANSWER: Our email filtering rules did not automatically flag or block emails 
+from domains registered within the last 7 days, which is a common phishing tactic.
+
+WHY #5: Why were newly registered domains not flagged?
+ANSWER: The default Microsoft Defender for Office 365 configuration does not 
+include aggressive filtering for domain age, and we had not customized the 
+rules to add this additional check.
+
+ROOT CAUSE CONCLUSION:
+Insufficient email filtering rules (no check for newly registered domains) 
+combined with annual security awareness training cadence allowed sophisticated 
+phishing email to reach user who was not adequately prepared to identify the threat.
+
+
+TECHNICAL ANALYSIS & LOG REVIEW
+================================================================================
+
+Azure AD Sign-In Logs Analysis:
+--------------------------------------------------------------------------------
+Log Source: Azure Active Directory > Sign-in logs
+Time Range: February 18, 2026 09:00 AM - 10:00 AM
+User: jmartinez@cirque.com
+
+LEGITIMATE USER ACTIVITY:
+--------------------------
+Timestamp: 09:15:47 AM
+Activity: Interactive sign-in
+IP Address: 192.168.10.145 (Cirque Corporate Network - Building A)
+Device: LAPTOP-JM-WIN11 (Registered in Intune)
+Location: San Francisco, CA, USA
+Application: Office 365 Outlook
+Status: Success
+Risk Level: Low
+Conditional Access: Pass (all policies met)
+
+Timestamp: 09:20:12 AM
+Activity: Non-interactive sign-in (refresh token)
+IP Address: 192.168.10.145 (Cirque Corporate Network)
+Device: LAPTOP-JM-WIN11
+Application: Microsoft OneDrive Sync
+Status: Success
+Risk Level: Low
+
+ATTACKER ACTIVITY:
+------------------
+Timestamp: 09:24:18 AM
+Activity: Interactive sign-in attempt
+IP Address: 185.220.101.47 (ISP: Cabel-Network, Location: Bucharest, Romania)
+Device: Unknown device (Not registered in Intune MDM)
+Browser: Chrome 98.0.4758.102 on Windows 10
+Location: Bucharest, Romania (4,987 miles from San Francisco)
+Application: Office 365 Portal
+Status: Success (credentials valid)
+Risk Level: HIGH (unusual location, new device, impossible travel)
+Conditional Access: Partial - MFA not required due to credential type
+Azure AD Identity Protection Alert: High Risk Sign-In detected
+Alert Reason: 
+  - Unfamiliar sign-in properties (new device)
+  - Atypical travel (impossible to travel SF to Romania in 5 minutes)
+  - Anonymous IP address (VPN/Proxy detected)
+Risk Score: 95/100
+
+Timestamp: 09:24:45 AM
+Activity: Application access (Exchange Online)
+IP Address: 185.220.101.47 (Romania)
+Device: Unknown device
+Application: Exchange Online (Mailbox access via EWS protocol)
+Status: Success
+Actions: Read mailbox folders, accessed Sent Items, Contacts, Inbox
+Duration: 1 minute 42 seconds
+
+Timestamp: 09:26:11 AM
+Activity: File download attempt (Contact list export)
+IP Address: 185.220.101.47 (Romania)
+Device: Unknown device
+Application: Exchange Online
+Status: BLOCKED by Conditional Access
+Block Reason: Device compliance requirement not met (unregistered device)
+Result: Access denied
+
+Timestamp: 09:26:27 AM - 09:51:38 AM
+Multiple sign-in attempts: 14 attempts
+IP Address: 185.220.101.47 (Romania)
+Status: All FAILED (account locked by security team)
+Result: Access denied (account disabled at 09:52 AM)
+
+ANALYSIS SUMMARY:
+Total attacker window: 2 minutes 9 seconds (09:24:18 to 09:26:27)
+Successful actions: Mailbox read access only
+Blocked actions: File downloads, data exports, email sending
+Time from first suspicious login to containment: 27 minutes 42 seconds
+Time from user report to containment: 5 minutes
+
+Microsoft Defender for Office 365 Email Logs:
+--------------------------------------------------------------------------------
+Log Source: Microsoft 365 Defender > Email & collaboration > Explorer
+Message ID: <CAFmP8KrH3h4zYgBoK+rR6v@mail.cloudflare.net>
+
+EMAIL HEADERS:
+--------------
+From: "Microsoft Online Services" <noreply@microsoft-online.services>
+Reply-To: support@microsoft-online.services
+To: jmartinez@cirque.com
+Subject: Action Required: Verify Your Office 365 Account
+Date: Tue, 18 Feb 2026 09:15:23 -0800
+Message-ID: <CAFmP8KrH3h4zYgBoK+rR6v@mail.cloudflare.net>
+X-Originating-IP: 104.21.78.92 (Cloudflare CDN)
+X-Mailer: PHPMailer 6.8.0
+
+AUTHENTICATION RESULTS:
+-----------------------
+SPF (Sender Policy Framework): PASS
+  SPF Record: v=spf1 include:_spf.cloudflare.com ~all
+  Result: Email sent from authorized Cloudflare IP
+  Analysis: Legitimate Cloudflare IP, but domain is spoofed
+
+DKIM (DomainKeys Identified Mail): FAIL
+  Signature: d=microsoft-online.services
+  Result: Signature verification failed (key not found in DNS)
+  Analysis: Domain does not have valid DKIM keys configured (phishing indicator)
+
+DMARC (Domain-based Message Authentication): NONE
+  Policy: No DMARC policy published for sender domain
+  Result: Email allowed even though DKIM failed
+  Analysis: Lack of strict DMARC enforcement allowed spoofed email through
+
+EMAIL CONTENT ANALYSIS:
+-----------------------
+Subject Line Analysis:
+"Action Required: Verify Your Office 365 Account"
+  - Urgency tactic: "Action Required"
+  - Legitimacy claim: "Office 365 Account"
+  - Social engineering: Creates panic and immediate action response
+
+URL Analysis:
+Embedded Link: hxxps://office365-verify[.]site/login?user=jmartinez@cirque.com
+  - Typosquatting: Similar to legitimate "office365.com" but different TLD
+  - Pre-filled username: User email added to URL (social engineering - 
+    appears legitimate)
+  - SSL certificate: Valid (Let's Encrypt, issued Feb 17, 2026)
+  - Domain age: 1 day old (registered Feb 17, 2026)
+  - WHOIS: Privacy protected, NameCheap registrar
+  - VirusTotal: 0/90 detection (not yet in threat databases at time of attack)
+
+Email Body Content:
+HTML email with Microsoft Office 365 branding (logo, colors, fonts)
+Content: "Your Office 365 account verification is required. Failure to verify 
+within 24 hours will result in account suspension. Click below to verify now."
+Footer: Fake Microsoft copyright notice, links to microsoft.com (legitimate) 
+to appear trustworthy
+
+SPAM FILTER SCORING:
+--------------------
+Microsoft Spam Confidence Level (SCL): 1 (Low spam probability)
+Phishing Confidence Level (PCL): 3 (Medium phishing probability - not high 
+enough to block)
+Bulk Complaint Level (BCL): N/A (not bulk mail)
+Action Taken: Delivered to inbox (score below blocking threshold)
+
+WHY FILTER FAILED:
+The email scored low on spam indicators because:
+1. Sent from legitimate Cloudflare infrastructure (trusted IP range)
+2. SPF passed (technically correct, even though domain spoofed)
+3. Professional HTML formatting (not typical spam formatting)
+4. No obvious spam keywords detected
+5. Domain too new to have negative reputation
+6. VirusTotal had not yet flagged URL (zero-day phishing site)
+
+Azure AD Audit Logs:
+--------------------------------------------------------------------------------
+Log Source: Azure Active Directory > Audit logs
+Activity: User and account actions
+
+Timestamp: 09:52:14 AM
+Activity: Update user (Account disabled)
+Initiated by: Amanda Foster (Security Analyst)
+Target: Jennifer Martinez (jmartinez@cirque.com)
+Changed Property: AccountEnabled = FALSE
+Reason: Security incident - credential compromise
+Result: Success
+
+Timestamp: 09:52:18 AM
+Activity: Revoke refresh tokens
+Initiated by: Amanda Foster (Security Analyst)
+Target: Jennifer Martinez (jmartinez@cirque.com)
+Result: Success (3 sessions terminated)
+
+Timestamp: 10:00:31 AM
+Activity: Reset user password (admin initiated)
+Initiated by: Chris Wren (IT Manager)
+Target: Jennifer Martinez (jmartinez@cirque.com)
+Result: Success (temporary password generated)
+
+Timestamp: 10:00:45 AM
+Activity: Delete authentication method (Microsoft Authenticator)
+Initiated by: Amanda Foster (Security Analyst)
+Target: Jennifer Martinez (jmartinez@cirque.com)
+Method: Mobile app authenticator
+Result: Success
+
+Exchange Online Mailbox Audit Log:
+--------------------------------------------------------------------------------
+Log Source: Microsoft 365 Compliance > Audit > Mailbox audit events
+Mailbox: jmartinez@cirque.com
+
+ATTACKER MAILBOX ACCESS:
+-------------------------
+Timestamp: 09:24:33 AM
+Operation: MailboxLogin
+Client IP: 185.220.101.47 (Romania)
+User Agent: Microsoft Office/16.0 (Windows NT 10.0; Microsoft Outlook 16.0.15726)
+Result: Success
+
+Timestamp: 09:24:41 AM - 09:25:18 AM
+Operation: FolderBind (Accessing folders)
+Folders Accessed:
+  - Sent Items (15 items listed)
+  - Contacts (1 contact list with 162 entries)
+  - Inbox (7 items listed)
+Client IP: 185.220.101.47
+Result: Success
+
+Timestamp: 09:25:22 AM
+Operation: SendAs (Attempt to send email)
+Subject: "RE: Q1 Proposal Follow-up"
+Recipients: [List redacted - 5 customer email addresses]
+Client IP: 185.220.101.47
+Result: BLOCKED (Suspicious activity flagged)
+Block Reason: New device + unusual location
+
+Timestamp: 09:25:48 AM
+Operation: Export (Contact list export attempt)
+Items: Contacts folder (162 contacts)
+Format: CSV
+Client IP: 185.220.101.47
+Result: BLOCKED by Conditional Access (Device not compliant)
+
+Timestamp: 09:26:05 AM
+Operation: HardDelete (Attempt to delete emails)
+Target: Sent Items folder
+Client IP: 185.220.101.47
+Result: BLOCKED (Mailbox access terminated, account disabled)
+
+ANALYSIS SUMMARY:
+Total attacker actions: 8 attempts
+Successful: 3 (login, folder access, viewing emails)
+Blocked: 5 (send email, export data, delete evidence, download attachments, 
+forward emails)
+Assessment: Defense-in-depth controls prevented data exfiltration
+
+Azure Firewall Network Traffic Logs:
+--------------------------------------------------------------------------------
+Log Source: Azure Firewall > Logs > Application and network rules
+
+Attacker IP Investigation:
+--------------------------
+IP Address: 185.220.101.47
+First Seen: February 18, 2026 at 09:24 AM
+ASN: AS9009 (Cabel-Network SRL, Romania)
+Geolocation: Bucharest, Romania
+Reputation Check (AbuseIPDB): 2% abuse confidence (not previously reported)
+Threat Intelligence (Azure Sentinel): No prior incidents
+VirusTotal: Clean (no malicious activity reported)
+
+Network Traffic Pattern:
+------------------------
+09:24 AM - 09:26 AM: 47 HTTPS connections to Office 365 endpoints
+Destination: outlook.office365.com, login.microsoftonline.com
+Protocol: TLS 1.3 (encrypted)
+Data transferred: Inbound 156 KB, Outbound 89 KB
+Pattern: Typical Office 365 API calls (legitimate protocol, malicious intent)
+
+Firewall Rule Applied (Post-Incident):
+---------------------------------------
+Timestamp: 11:03 AM (February 18)
+Rule Name: BLOCK-Incident-INC-2026-00142-AttackerIP
+Action: DENY
+Source: 185.220.101.47 (Romania)
+Destination: Any
+Protocol: Any
+Priority: 100 (high priority)
+Result: 23 subsequent connection attempts blocked (09:52 AM - 11:00 AM)
+
+Microsoft Defender for Endpoint Analysis:
+--------------------------------------------------------------------------------
+Log Source: Microsoft 365 Defender > Devices > LAPTOP-JM-WIN11
+
+Device Scan Results:
+--------------------
+Device Name: LAPTOP-JM-WIN11
+User: Jennifer Martinez
+Operating System: Windows 11 Pro 22H2 (Build 22621.1194)
+Last Full Scan: February 18, 2026 at 2:00 PM
+Scan Duration: 1 hour 23 minutes
+Files Scanned: 487,234 files
+Threats Detected: 0 (CLEAN)
+
+Behavioral Analysis:
+--------------------
+Timeline: February 18, 2026 09:00 AM - 11:00 AM
+Suspicious Processes: None detected
+Registry Modifications: None (no malware installation)
+File System Changes: Normal browser cache activity only
+Network Connections: Standard HTTPS to Office 365, no C2 communication
+Conclusion: Device NOT compromised (only credentials stolen, no malware)
+
+Browser History Analysis:
+--------------------------
+Browser: Microsoft Edge (Chromium)
+Timestamp: 09:23:45 AM
+URL Visited: hxxps://office365-verify[.]site/login?user=jmartinez@cirque.com
+Referrer: Email client (clicked link from Outlook)
+Form Data: Username and password submitted (credentials captured by attacker)
+Redirect: After credential submission, redirected to legitimate office.com 
+(social engineering - made fake page appear to work correctly)
+
+Cached Credentials Check:
+--------------------------
+Windows Credential Manager: No cached passwords for suspicious domains
+Saved Passwords (Edge): No passwords saved for office365-verify[.]site
+Conclusion: Credentials manually entered, not auto-filled (confirms phishing)
+
+
+LESSONS LEARNED & RECOMMENDATIONS
+================================================================================
+
+What Went Well (Strengths):
+--------------------------------------------------------------------------------
+✓ User reported incident quickly (24 minutes after clicking - excellent)
+✓ Incident response team acted fast (5-minute containment time)
+✓ Azure AD Conditional Access successfully blocked data exfiltration
+✓ Comprehensive audit logging enabled detailed forensic analysis
+✓ Defense-in-depth strategy worked (multiple layers prevented worst-case scenario)
+✓ Clear escalation matrix ensured proper executive notification
+✓ Post-incident training conducted promptly for affected team
+
+What Could Be Improved (Weaknesses):
+--------------------------------------------------------------------------------
+✗ Email filtering did not catch newly registered domain (technical gap)
+✗ Annual security training insufficient (human gap)
+✗ DMARC policy not strictly enforced (technical gap)
+✗ High-risk user groups (sales) not identified for additional training (process gap)
+✗ Azure AD Identity Protection policies not enabled proactively (technical gap)
+
+Recommendations for Immediate Implementation (Next 30 Days):
+--------------------------------------------------------------------------------
+
+PRIORITY 1 - TECHNICAL CONTROLS (Owner: Amanda Foster, Security Analyst):
+
+1. ✓ COMPLETED: Enable Azure AD Identity Protection policies
+   - High Risk Sign-In Policy: Block + require password change
+   - High Risk User Policy: Block + require MFA re-registration
+   Status: Implemented February 19, 2026
+
+2. ✓ COMPLETED: Update Microsoft Defender for Office 365 filtering rules
+   - Flag emails from domains registered <7 days ago
+   - Increase DMARC enforcement (reject on DMARC=fail)
+   - Enable URL rewriting and detonation for external emails
+   Status: Implemented February 19, 2026
+
+3. IN PROGRESS: Enhanced Conditional Access policies (Complete by March 1, 2026)
+   - Require compliant device for all external email access
+   - Require MFA for all cloud app access (no exceptions)
+   - Block legacy authentication protocols (POP, IMAP, SMTP AUTH)
+   Status: 70% complete, rollout in progress
+
+4. PLANNED: Deploy Microsoft Defender SmartScreen URL filtering (March 15, 2026)
+   - Real-time URL reputation checking before page load
+   - Blocks access to newly registered suspicious domains
+   - Integrates with Edge browser and Windows Security
+   Status: Pilot testing with IT department
+
+PRIORITY 2 - SECURITY AWARENESS TRAINING (Owner: Chris Wren, IT Manager):
+
+5. IN PROGRESS: Increase phishing simulation cadence to MONTHLY
+   - Simulations sent monthly (currently quarterly)
+   - Track click rate and report rate per department
+   - Targeted remedial training for users who fail twice
+   - Target: Reduce click rate from 12% to <5%
+   Status: Next simulation scheduled March 10, 2026
+
+6. PLANNED: Implement quarterly security awareness training (Q2 2026)
+   - Change from annual to quarterly training sessions
+   - Include latest phishing tactics and real-world examples
+   - Mandatory attendance tracked via HR system
+   - Follow-up quiz required (80% passing score)
+   Status: Training content development in progress
+
+7. PLANNED: Create security awareness training video library (April 2026)
+   - 5-minute micro-learning videos on specific topics
+   - Available on company intranet for on-demand viewing
+   - Topics: Phishing, passwords, physical security, data handling
+   - Assign as onboarding requirement for new employees
+   Status: Video production vendor selected
+
+PRIORITY 3 - PROCESS IMPROVEMENTS (Owner: David Park, CTO):
+
+8. PLANNED: Designate high-risk user groups for enhanced training (March 2026)
+   - Sales team: Monthly targeted phishing simulations
+   - Finance team: Enhanced training on wire transfer fraud
+   - Executive team: Spear-phishing and whaling awareness
+   - HR team: PII handling and social engineering awareness
+   Status: Risk assessment in progress
+
+9. PLANNED: Implement incident response metrics dashboard (Q2 2026)
+   - Real-time dashboard in Azure Sentinel
+   - Metrics: MTTD, MTTR, incident severity trends, user reporting rates
+   - Monthly report to executive team
+   - Quarterly presentation to Board of Directors
+   Status: Dashboard design phase
+
+10. PLANNED: Annual incident response tabletop exercise (scheduled July 2026)
+    - Simulate various incident scenarios (ransomware, data breach, insider threat)
+    - Test IR team coordination and communication
+    - Identify gaps in procedures
+    - Update IR plan based on findings
+    Status: Tabletop scenario development
+
+Long-Term Strategic Improvements (Next 6-12 Months):
+--------------------------------------------------------------------------------
+
+11. Implement Security Orchestration, Automation and Response (SOAR) (Q3 2026)
+    - Automate routine incident response tasks
+    - Reduce MTTR through automated containment actions
+    - Integration with Azure Sentinel and Microsoft Defender
+    - Expected benefit: 50% reduction in response time
+
+12. Deploy Email Authentication (DMARC, DKIM, SPF) for outbound email (Q2 2026)
+    - Prevent Cirque domain from being spoofed in phishing attacks
+    - Publish strict DMARC policy (p=reject)
+    - Monitor DMARC reports for unauthorized sending attempts
+    - Protect company brand and customer trust
+
+13. Implement Zero Trust Network Architecture (2026-2027 roadmap)
+    - Verify every access request regardless of source
+    - Assume breach mentality (continuous verification)
+    - Micro-segmentation of network resources
+    - Expected benefit: Limit lateral movement in future incidents
+
+Success Metrics (Measuring Improvement):
+--------------------------------------------------------------------------------
+
+Current Baseline (February 2026):
+- Phishing simulation click rate: 12%
+- Phishing simulation report rate: 68%
+- Mean Time to Detect (MTTD): 22 minutes
+- Mean Time to Respond (MTTR): 5 minutes
+- Security training completion: 100% (annual)
+- High-risk sign-in detections: 2-3 per month
+
+Target Goals (December 2026):
+- Phishing simulation click rate: <5% (58% reduction)
+- Phishing simulation report rate: >80% (18% improvement)
+- Mean Time to Detect (MTTD): <10 minutes (55% reduction)
+- Mean Time to Respond (MTTR): <3 minutes (40% reduction)
+- Security training completion: 100% (quarterly)
+- High-risk sign-in automatic blocks: >95% (with Identity Protection)
+
+
+APPROVALS & SIGN-OFF
+================================================================================
+
+Incident Report Prepared By:
+--------------------------------------------------------------------------------
+Name:              Amanda Foster
+Title:             Security Analyst
+Date:              February 19, 2026
+Signature:         /s/ Amanda Foster
+Email:             afoster@cirque.com
+Hours Invested:    16 hours (incident response + forensics + documentation)
+
+Incident Report Reviewed By:
+--------------------------------------------------------------------------------
+Name:              Chris Wren
+Title:             IT Manager (Incident Manager)
+Date:              February 19, 2026
+Signature:         /s/ Chris Wren
+Email:             cwren@cirque.com
+Comments:          Excellent response time and containment. No data loss is a 
+                   significant success. Recommend implementing all Priority 1 
+                   technical controls within 30 days.
+
+Executive Approval:
+--------------------------------------------------------------------------------
+Name:              David Park
+Title:             Chief Technology Officer
+Date:              February 19, 2026
+Signature:         /s/ David Park
+Email:             dpark@cirque.com
+Comments:          This incident demonstrates both the effectiveness of our 
+                   defense-in-depth strategy and the critical importance of 
+                   security awareness training. I approve all recommended 
+                   immediate actions. The quarterly training mandate will be 
+                   added to all employee job requirements effective March 1, 
+                   2026. Budget approved for SOAR implementation in Q3 2026.
+
+Legal Review (If Required):
+--------------------------------------------------------------------------------
+Legal Review Required:    NO
+Reason:                   No data breach occurred, no regulatory notification 
+                          required, no customer impact, incident contained 
+                          successfully.
+
+If Legal Review Required: N/A
+
+
+ATTACHMENTS & SUPPORTING DOCUMENTATION
+================================================================================
+
+Attachment A: Azure AD Sign-In Logs (Full Export)
+File: INC-2026-00142_AzureAD_SignIn_Logs_20260218.csv
+Size: 247 KB
+Contents: Complete sign-in log export for jmartinez@cirque.com 
+         (Feb 18, 09:00 AM - Feb 19, 12:00 PM)
+
+Attachment B: Exchange Online Mailbox Audit Log
+File: INC-2026-00142_Mailbox_Audit_Log_20260218.xlsx
+Size: 189 KB
+Contents: Detailed mailbox access audit log showing all attacker actions
+
+Attachment C: Phishing Email Sample (Sanitized)
+File: INC-2026-00142_Phishing_Email_Sample.eml
+Size: 52 KB
+Contents: Original phishing email with links defanged (hxxps://) for safety
+
+Attachment D: Phishing Landing Page Screenshots
+File: INC-2026-00142_Phishing_Page_Screenshots.pdf
+Size: 1.2 MB
+Contents: 4 screenshots of fake Office 365 login page for documentation
+
+Attachment E: Network Traffic Analysis Report
+File: INC-2026-00142_Network_Traffic_Analysis.pdf
+Size: 876 KB
+Contents: Azure Firewall logs and traffic analysis for attacker IP
+
+Attachment F: Microsoft Defender Scan Results
+File: INC-2026-00142_Defender_Scan_Results.pdf
+Size: 145 KB
+Contents: Full scan results from Jennifer's laptop (confirmed clean)
+
+Attachment G: Security Awareness Training Sign-In Sheet
+File: INC-2026-00142_Training_SignIn_20260219.pdf
+Size: 92 KB
+Contents: Attendance record for emergency sales team training (12 attendees)
+
+Attachment H: Incident Response Communications Log
+File: INC-2026-00142_Communications_Log.docx
+Size: 67 KB
+Contents: All phone calls, emails, Teams messages during incident response
+
+
+INCIDENT CLOSURE CHECKLIST
+================================================================================
+
+☑ Incident contained (all malicious access stopped)
+☑ Threat eradicated (compromised credentials changed, attacker access removed)
+☑ Systems recovered (user account restored, functionality verified)
+☑ Root cause identified (email filtering gap + user awareness gap)
+☑ Impact assessment completed (no data exfiltration, minimal business impact)
+☑ Forensic evidence collected and preserved (all logs exported and archived)
+☑ Affected user notified and trained (Jennifer briefed, sales team trained)
+☑ Executive management informed (CTO approved incident closure)
+☑ Lessons learned documented (10 recommendations identified)
+☑ Corrective actions identified (Priority 1, 2, 3 actions assigned)
+☑ Follow-up monitoring implemented (30-day enhanced monitoring active)
+☑ Incident report completed and approved (this document)
+☑ Incident ticket closed in system (Status: CLOSED - RESOLVED)
+
+INCIDENT OFFICIALLY CLOSED: February 19, 2026 at 2:15 PM PST
+
+
+================================================================================
+                         END OF INCIDENT REPORT
+         For questions or additional information, contact:
+              Chris Wren, IT Manager - cwren@cirque.com
+================================================================================

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center" style="margin-top: 100px;">
+    <div class="col-md-5">
+        <div class="card shadow">
+            <div class="card-body p-5">
+                <h2 class="text-center mb-4">
+                    <i class="bi bi-boxes text-primary"></i><br>
+                    Asset Tracker
+                </h2>
+                <h5 class="text-center text-muted mb-4">Sign In</h5>
+                
+                {% if azure_enabled %}
+                <!-- Azure AD SSO Login -->
+                <div class="d-grid mb-3">
+                    <a href="{{ url_for('login_microsoft') }}" class="btn btn-primary btn-lg">
+                        <i class="bi bi-microsoft"></i> Sign in with Microsoft
+                    </a>
+                </div>
+                
+                <div class="position-relative my-4">
+                    <hr>
+                    <div class="position-absolute top-50 start-50 translate-middle px-3" style="background-color: var(--bg-primary);">
+                        <small class="text-muted">OR</small>
+                    </div>
+                </div>
+                {% endif %}
+                
+                <!-- Local Username/Password Login -->
+                <form method="POST">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control" id="username" name="username" {% if not azure_enabled %}required autofocus{% endif %}>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password" name="password" {% if not azure_enabled %}required{% endif %}>
+                    </div>
+                    <button type="submit" class="btn {% if azure_enabled %}btn-outline-primary{% else %}btn-primary{% endif %} w-100">
+                        <i class="bi bi-box-arrow-in-right"></i> {% if azure_enabled %}Login with Local Account{% else %}Login{% endif %}
+                    </button>
+                </form>
+                
+                <div class="alert alert-info mt-4 mb-0">
+                    <small><strong>Default credentials:</strong><br>
+                    Username: <code>admin</code><br>
+                    Password: <code>admin123</code></small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

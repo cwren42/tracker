@@ -1,0 +1,578 @@
+================================================================================
+                           CIRQUE CORPORATION
+                   IT HELP DESK - DATA DISPOSAL TICKET
+================================================================================
+
+TICKET #: IT-2026-00347
+STATUS: CLOSED - COMPLETED
+PRIORITY: MEDIUM
+CATEGORY: Data Disposal / Asset Decommissioning
+
+Created: February 18, 2026, 09:15 AM
+Assigned To: Chris Wren, IT Manager
+Closed: February 21, 2026, 03:45 PM
+Resolution Time: 3 days, 6 hours, 30 minutes
+
+
+================================================================================
+TICKET DETAILS
+================================================================================
+
+REQUESTED BY:
+Name: Emma Thompson
+Department: Human Resources
+Email: emma.thompson@cirque.com
+Phone: (415) 555-0192
+
+REQUEST DATE: February 18, 2026
+
+REQUEST DESCRIPTION:
+--------------------
+HR needs to dispose of employee records and documents that have exceeded their
+retention period per the Records Retention Schedule. This includes:
+
+1. Personnel files for employees terminated 7+ years ago (2019 and earlier)
+2. Employment applications for non-hired candidates from 2022 and earlier
+3. Old payroll records from 2018 and earlier
+4. Historical training records from terminated employees (2018 and earlier)
+5. Expired I-9 forms (retention requirement met)
+
+Additionally, IT needs to decommission old file server and workstation:
+- FILE-SERVER-OLD (decommissioned in January 2026, data migrated)
+- 3 old employee laptops (returned from terminated employees)
+
+All disposal must follow Records Retention Schedule and provide certificate
+of destruction for audit purposes.
+
+
+================================================================================
+DISPOSAL PLAN
+================================================================================
+
+APPROVED BY: Sarah Williams, CFO & David Park, CTO
+APPROVAL DATE: February 18, 2026, 02:30 PM
+
+DISPOSAL METHODS:
+-----------------
+- Paper Records: Secure shredding (cross-cut, DIN P-4 standard)
+- Electronic Media: DoD 5220.22-M 3-pass overwrite + physical destruction
+- Hard Drives: Degaussing + physical shredding
+- Laptops: Data wipe + physical destruction of storage
+
+VENDOR:
+-------
+Iron Mountain - Secure Document & Media Destruction Services
+Service Representative: Jessica Chen
+Account #: IM-845762
+Contact: (888) 555-0144
+
+SCHEDULED DATE:
+---------------
+Off-site pickup and destruction: February 21, 2026 at 10:00 AM
+
+
+================================================================================
+LEGAL HOLD VERIFICATION
+================================================================================
+
+CHECKED BY: Chris Wren, IT Manager
+CHECK DATE: February 18, 2026, 03:00 PM
+
+Legal Hold Status: NO ACTIVE LEGAL HOLDS
+
+Verification Process:
+✓ Reviewed all active litigation list: None involving disposed employees
+✓ Checked HR for pending investigations: None affecting these records
+✓ Confirmed with Legal Counsel (Robert Taylor): No holds in place
+✓ Verified disposal complies with Records Retention Schedule
+
+CONCLUSION: Safe to proceed with disposal
+
+
+================================================================================
+ITEMS FOR DISPOSAL
+================================================================================
+
+SECTION 1: PAPER RECORDS (FROM HR DEPARTMENT)
+----------------------------------------------
+
+Item #1: Personnel Files - Terminated Employees (7+ years ago)
+- Description: Complete personnel files including employment applications,
+  performance reviews, disciplinary actions, benefits forms, termination docs
+- Employees: 8 former employees terminated 2018-2019
+- File Count: 8 banker's boxes
+- Weight: Approximately 180 lbs
+- Sensitivity: CONFIDENTIAL (contains PII, SSN, medical info)
+- Retention Period Met: Yes (7 years after termination)
+- Disposal Method: Secure cross-cut shredding (DIN P-4)
+
+Item #2: Employment Applications - Not Hired
+- Description: Applications, resumes, interview notes for candidates not hired
+- Date Range: January 2020 - December 2022 (3-4 years old)
+- File Count: 2 banker's boxes
+- Weight: Approximately 45 lbs
+- Sensitivity: CONFIDENTIAL (contains PII)
+- Retention Period Met: Yes (3 years after application)
+- Disposal Method: Secure cross-cut shredding (DIN P-4)
+
+Item #3: Payroll Records - Historical
+- Description: Time sheets, pay stubs, payroll summaries
+- Date Range: January 2016 - December 2018 (7-8 years old)
+- File Count: 4 file folders
+- Weight: Approximately 15 lbs
+- Sensitivity: CONFIDENTIAL (contains SSN, salary info)
+- Retention Period Met: Yes (7 years)
+- Disposal Method: Secure cross-cut shredding (DIN P-4)
+
+Item #4: Training Records - Terminated Employees
+- Description: Training completion certificates, course materials, assessments
+- Employees: 12 former employees (terminated 2016-2018)
+- File Count: 1 banker's box
+- Weight: Approximately 20 lbs
+- Sensitivity: INTERNAL USE ONLY
+- Retention Period Met: Yes (Employment + 3 years)
+- Disposal Method: Secure cross-cut shredding (DIN P-4)
+
+Item #5: I-9 Forms - Expired Retention
+- Description: Employment eligibility verification forms (I-9)
+- Employees: 15 former employees (hire date before 2020, terminated before 2023)
+- File Count: 1 file folder
+- Weight: Approximately 2 lbs
+- Sensitivity: CONFIDENTIAL (contains citizenship/immigration info)
+- Retention Period Met: Yes (3 years after hire OR 1 year after termination)
+- Disposal Method: Secure cross-cut shredding (DIN P-4)
+
+PAPER RECORDS TOTAL:
+- 16 banker's boxes + file folders
+- Approximately 262 lbs
+- Estimated page count: 26,200 pages
+
+
+SECTION 2: ELECTRONIC STORAGE MEDIA (FROM IT DEPARTMENT)
+---------------------------------------------------------
+
+Item #6: FILE-SERVER-OLD - Decommissioned Server
+- Asset Tag: SRV-2018-042
+- Description: Dell PowerEdge R640 - File server decommissioned January 2026
+- Hard Drives: 4x 4TB SAS HDDs (RAID 10 configuration)
+- Serial Numbers: 
+  * HDD1: BTRS82A40HPS
+  * HDD2: BTRS82A40HPT
+  * HDD3: BTRS82A40HPU
+  * HDD4: BTRS82A40HPV
+- Data Status: Migrated to FILE-SERVER-01, verified complete
+- Sensitivity: CONFIDENTIAL (contained employee files, financial data)
+- Data Sanitization: 
+  1. DoD 5220.22-M 3-pass overwrite completed 2/19/2026 at 6:30 AM
+  2. Verification: All sectors overwritten successfully
+  3. Degaussing scheduled with Iron Mountain
+  4. Physical shredding of platters
+- Retention Period Met: Yes (data migrated, 90-day verification period passed)
+- Disposal Method: Degaussing + Physical shredding
+
+Item #7: Laptop - Former Employee (Adam Garcia)
+- Asset Tag: LT-2019-087
+- Description: Dell Latitude 5520, 15.6", Intel i7, 16GB RAM, 512GB SSD
+- Serial Number: HGKJS2943HLA
+- Employee: Adam Garcia (Terminated: June 15, 2023)
+- Data Status: BitLocker encrypted, company data synced to OneDrive
+- Sensitivity: CONFIDENTIAL (contained email, documents, CRM data)
+- Data Sanitization:
+  1. BitLocker key destroyed 2/19/2026
+  2. ATA Secure Erase issued to SSD 2/19/2026 at 10:15 AM
+  3. Verification: SSD successfully wiped
+  4. Physical destruction of SSD scheduled
+- Retention Period Met: Yes (Device returned 7 months ago, data archived)
+- Disposal Method: Cryptographic erase + Physical destruction of SSD
+
+Item #8: Laptop - Former Employee (Michelle Foster)
+- Asset Tag: LT-2020-134
+- Description: MacBook Pro 16", M1 Pro, 16GB RAM, 512GB SSD
+- Serial Number: C02F42J7MD6R
+- Employee: Michelle Foster (Terminated: August 30, 2023)
+- Data Status: FileVault encrypted, company data synced to OneDrive
+- Sensitivity: CONFIDENTIAL (contained email, documents, design files)
+- Data Sanitization:
+  1. FileVault key destroyed 2/19/2026
+  2. macOS Erase All Content and Settings executed 2/19/2026 at 11:00 AM
+  3. Verification: 4-pass cryptographic erase completed
+  4. Physical destruction of SSD scheduled
+- Retention Period Met: Yes (Device returned 6 months ago, data archived)
+- Disposal Method: Cryptographic erase + Physical destruction of SSD
+
+Item #9: Laptop - Former Employee (Brian Thompson)
+- Asset Tag: LT-2018-061
+- Description: Dell Latitude 7490, 14", Intel i7, 16GB RAM, 256GB SSD
+- Serial Number: 2KJ5HS2
+- Employee: Brian Thompson (Terminated: March 22, 2023)
+- Data Status: BitLocker encrypted, company data synced to OneDrive
+- Sensitivity: CONFIDENTIAL (contained email, documents, sales data)
+- Data Sanitization:
+  1. BitLocker key destroyed 2/19/2026
+  2. ATA Secure Erase issued to SSD 2/19/2026 at 2:30 PM
+  3. Verification: SSD successfully wiped
+  4. Physical destruction of SSD scheduled
+- Retention Period Met: Yes (Device returned 11 months ago, data archived)
+- Disposal Method: Cryptographic erase + Physical destruction of SSD
+
+ELECTRONIC MEDIA TOTAL:
+- 1 server (4 hard drives)
+- 3 laptops (3 SSDs)
+- 7 storage devices total for physical destruction
+
+
+SECTION 3: BACKUP TAPES (FROM IT DEPARTMENT)
+---------------------------------------------
+
+Item #10: Backup Tapes - Expired Retention
+- Description: LTO-6 backup tapes from FILE-SERVER-OLD
+- Date Range: January 2019 - December 2019 (7 years old)
+- Tape Count: 12 tapes
+- Serial Numbers: 
+  * LTO6-2019-001 through LTO6-2019-012
+- Data Status: Superseded by newer backups, 7-year retention met
+- Sensitivity: CONFIDENTIAL (full system backups)
+- Data Sanitization: Degaussing + physical shredding
+- Retention Period Met: Yes (7 years for archived backups)
+- Disposal Method: Degaussing + Physical shredding
+
+
+================================================================================
+PRE-DISPOSAL VERIFICATION CHECKLIST
+================================================================================
+
+Completed By: Chris Wren, IT Manager
+Date: February 19, 2026
+
+PAPER RECORDS:
+[✓] Records match descriptions in disposal request
+[✓] Box labels verified against inventory
+[✓] No records dated within retention period
+[✓] No "Permanent" retention records included
+[✓] All boxes sealed and labeled "CONFIDENTIAL - FOR DESTRUCTION"
+[✓] Inventory list prepared with box numbers and contents summary
+
+ELECTRONIC MEDIA:
+[✓] Asset tags verified against IT asset database
+[✓] All devices marked "Decommissioned" in asset system
+[✓] Data wiping completed and verified (see sanitization logs)
+[✓] Data migration/backup verified complete (where applicable)
+[✓] Devices labeled with asset tag and "FOR PHYSICAL DESTRUCTION"
+[✓] Serial numbers documented for certificate of destruction
+
+LEGAL & COMPLIANCE:
+[✓] No active legal holds affecting these records
+[✓] Records Retention Schedule requirements met for all items
+[✓] CFO approval obtained (financial/HR records)
+[✓] CTO approval obtained (IT assets)
+[✓] Disposal aligned with company Data Retention Policy (IS-CIRQ-P-019-G)
+
+VENDOR READINESS:
+[✓] Iron Mountain scheduled for pickup: February 21, 2026 at 10:00 AM
+[✓] Pickup location confirmed: Main office loading dock
+[✓] Contact person: Chris Wren (415-555-0187)
+[✓] Certificate of Destruction requested: YES
+
+
+================================================================================
+DISPOSAL EXECUTION
+================================================================================
+
+PICKUP DETAILS:
+---------------
+Date: February 21, 2026
+Time: 10:15 AM (arrived 15 minutes late)
+Location: Cirque Corporation, Main Office, Loading Dock
+Driver: Marcus Johnson
+Truck ID: IM-7821
+License Plate: 8X45KL2
+
+ITEMS COLLECTED:
+----------------
+✓ 16 banker's boxes (paper records) - 262 lbs
+✓ 1 server chassis with 4 HDDs
+✓ 3 laptop computers
+✓ 12 backup tapes (LTO-6)
+
+Total Weight: Approximately 375 lbs
+
+CHAIN OF CUSTODY:
+-----------------
+Transferred from: Chris Wren, IT Manager (Cirque Corporation)
+Received by: Marcus Johnson, Driver (Iron Mountain)
+Signature: [Marcus Johnson] (electronic signature on pickup log)
+Date/Time: February 21, 2026 at 10:22 AM
+
+TRANSPORT:
+----------
+Locked secure transport vehicle
+GPS tracking enabled: YES
+Direct transport to Iron Mountain secure destruction facility
+Facility Address: 1280 Industrial Ave, Sacramento, CA 95838
+
+DESTRUCTION DETAILS:
+--------------------
+Destruction Date: February 21, 2026
+Destruction Time: 2:45 PM - 4:15 PM
+Facility: Iron Mountain Secure Destruction Center, Sacramento, CA
+Witnessed By: Iron Mountain Quality Assurance Officer
+
+Paper Records:
+- Method: Industrial cross-cut shredding (DIN P-4 compliant)
+- Particle size: 1/16" x 5/8" (≤ 0.34 square inches)
+- Total pages shredded: Approximately 26,200 pages
+- Shred material: Recycled per EPA guidelines
+- Verification: Video recording of destruction process
+
+Electronic Media:
+- Hard Drives (4x 4TB SAS): 
+  * Degaussed at 20,000 Gauss minimum
+  * Physically shredded (platters destroyed to < 2" fragments)
+  * Fragments recycled through certified e-waste program
+- SSDs (3 laptop drives):
+  * Physical destruction (shredded to < 2mm fragments)
+  * No degaussing (non-magnetic media)
+  * Fragments recycled through certified e-waste program
+- Backup Tapes (12x LTO-6):
+  * Degaussed at 20,000 Gauss
+  * Physically shredded to < 2" fragments
+  * Tape material recycled
+
+Environmental Compliance:
+✓ E-waste handling per EPA regulations
+✓ R2 (Responsible Recycling) certified facility
+✓ Zero landfill policy - all materials recycled
+✓ Certificate of Recycling provided
+
+
+================================================================================
+CERTIFICATE OF DESTRUCTION
+================================================================================
+
+CERTIFICATE NUMBER: IM-2026-0821-DEST
+ISSUED BY: Iron Mountain Incorporated
+FACILITY: Sacramento Secure Destruction Center
+DATE ISSUED: February 22, 2026
+
+This certifies that the following materials were received and destroyed in
+accordance with NIST 800-88 Guidelines for Media Sanitization, DoD 5220.22-M
+standards, and applicable federal/state regulations:
+
+PAPER RECORDS:
+- 16 boxes containing approximately 26,200 pages
+- Customer: Cirque Corporation (Account IM-845762)
+- Pickup Date: February 21, 2026
+- Destruction Date: February 21, 2026
+- Method: Cross-cut shredding (DIN P-4)
+- Witness: Video recording available (retained 90 days)
+
+ELECTRONIC STORAGE MEDIA:
+- Quantity: 7 devices (4 HDDs, 3 SSDs) + 12 backup tapes
+- Customer: Cirque Corporation (Account IM-845762)
+- Serial Numbers: Listed in attached detailed inventory
+- Pickup Date: February 21, 2026
+- Destruction Date: February 21, 2026
+- Method: Degaussing (magnetic media) + Physical shredding (all media)
+- Verification: Fragment size < 2" (HDDs/tapes), < 2mm (SSDs)
+
+COMPLIANCE CERTIFICATIONS:
+✓ NIST 800-88 Purge-level destruction achieved
+✓ DoD 5220.22-M compliant
+✓ HIPAA compliant (for medical/health records)
+✓ FACTA compliant (for financial records)
+✓ SOX compliant (for audit trail)
+✓ R2 (Responsible Recycling) certified e-waste handling
+✓ ISO 27001 certified secure chain of custody
+
+AUTHORIZED SIGNATURE:
+Jessica Chen, Account Manager
+Iron Mountain Incorporated
+Date: February 22, 2026
+
+Certificate Available: https://ironmountain.com/certificates/IM-2026-0821-DEST
+(Retained for 7 years per customer agreement)
+
+
+================================================================================
+POST-DISPOSAL DOCUMENTATION
+================================================================================
+
+ASSET DATABASE UPDATE:
+----------------------
+Updated By: Chris Wren, IT Manager
+Date: February 21, 2026, 4:00 PM
+
+Actions Taken:
+✓ Asset records updated to "DESTROYED" status
+✓ Disposal date recorded: February 21, 2026
+✓ Certificate of Destruction number added: IM-2026-0821-DEST
+✓ Hard drive serial numbers flagged as destroyed
+✓ Laptop asset tags marked inactive
+
+Assets Affected:
+- SRV-2018-042 (FILE-SERVER-OLD)
+- LT-2019-087 (Adam Garcia laptop)
+- LT-2020-134 (Michelle Foster laptop)
+- LT-2018-061 (Brian Thompson laptop)
+- 12 backup tapes (LTO6-2019-001 through 012)
+
+HR RECORDS UPDATE:
+------------------
+Updated By: Emma Thompson, HR Director
+Date: February 22, 2026, 9:30 AM
+
+Actions Taken:
+✓ Personnel file records marked "DISPOSED" in HRIS system
+✓ Disposal date recorded in employee record audit log
+✓ Disposal ticket number added: IT-2026-00347
+✓ Certificate of Destruction filed in HR Compliance folder
+✓ Records retention audit trail updated
+
+Employee Records Affected:
+- 8 terminated employees (2018-2019 terminations)
+- 15 I-9 forms (expired retention)
+- Historical payroll records (2016-2018)
+- 12 terminated employee training records
+
+AUDIT TRAIL:
+------------
+✓ Disposal ticket archived: IT ticketing system
+✓ Certificate of Destruction filed: SharePoint > IT > Disposal Certificates
+✓ Video recording logged: Available from Iron Mountain for 90 days
+✓ Disposal entry logged: Records Retention tracking spreadsheet
+✓ Financial record: Invoice from Iron Mountain filed with Finance
+
+COMPLIANCE VERIFICATION:
+-------------------------
+Verified By: Chris Wren, IT Manager
+Date: February 22, 2026
+
+✓ All items properly disposed per Records Retention Schedule
+✓ Certificate of Destruction received and verified
+✓ Asset database updated correctly
+✓ No data recovery possible (verified by destruction method)
+✓ Environmental compliance achieved (R2 certified recycling)
+✓ Audit trail complete and documented
+
+
+================================================================================
+COST SUMMARY
+================================================================================
+
+Service Provider: Iron Mountain
+Invoice Number: IM-INV-2026-04782
+Invoice Date: February 22, 2026
+Payment Terms: Net 30
+
+ITEMIZED CHARGES:
+-----------------
+Paper Shredding (262 lbs @ $0.15/lb)              $39.30
+Electronic Media Destruction (7 devices @ $15/ea)  $105.00
+Backup Tape Destruction (12 tapes @ $8/ea)         $96.00
+Transportation & Handling                          $75.00
+Certificate of Destruction                         $25.00
+Environmental Recycling Fee                        $18.50
+                                                   --------
+Subtotal:                                          $358.80
+Tax (8.25%):                                       $29.60
+                                                   --------
+TOTAL:                                             $388.40
+
+Charged to: IT Department Budget
+Cost Center: 4500-IT-Operations
+Account Code: 6420-Data-Disposal
+Approved By: Chris Wren, IT Manager
+
+
+================================================================================
+LESSONS LEARNED & IMPROVEMENTS
+================================================================================
+
+Recorded By: Chris Wren, IT Manager
+Date: February 22, 2026
+
+WHAT WENT WELL:
+✓ Legal hold verification process worked smoothly
+✓ Data wiping completed ahead of schedule
+✓ Iron Mountain pickup was on time and professional
+✓ Certificate received within 24 hours
+✓ Clear documentation trail established
+
+CHALLENGES:
+- Initial inventory took longer than expected (2 days instead of 1)
+- One laptop (LT-2020-134) had firmware issue requiring manual intervention
+- HR had difficulty locating 2 boxes (found in off-site storage)
+
+IMPROVEMENTS FOR NEXT TIME:
+1. Implement quarterly disposal schedule (vs. ad-hoc requests)
+2. Create pre-populated disposal checklist form
+3. Label off-site storage boxes more clearly
+4. Schedule Iron Mountain pickup for early morning (before 9 AM)
+5. Automate asset database updates (integrate with ticketing system)
+6. Create disposal reminder emails 30 days before retention period expires
+
+
+================================================================================
+RELATED TICKETS
+================================================================================
+
+Related Tickets:
+- IT-2026-00298: FILE-SERVER-OLD decommissioning (completed January 2026)
+- IT-2026-00311: Data migration from FILE-SERVER-OLD to FILE-SERVER-01
+- IT-2026-00334: Laptop return processing (Adam Garcia)
+- IT-2026-00335: Laptop return processing (Michelle Foster)
+- IT-2026-00336: Laptop return processing (Brian Thompson)
+
+Follow-up Tickets:
+- IT-2026-00412: Quarterly disposal review (scheduled May 2026)
+
+
+================================================================================
+APPROVALS & SIGN-OFF
+================================================================================
+
+REQUESTED BY:
+Emma Thompson, HR Director
+Signature: [Emma Thompson]
+Date: February 22, 2026
+
+EXECUTED BY:
+Chris Wren, IT Manager
+Signature: [Chris Wren]
+Date: February 22, 2026
+
+VERIFIED BY:
+David Park, CTO
+Signature: [David Park]
+Date: February 22, 2026
+
+COMPLIANCE REVIEW:
+Robert Taylor, VP Sales (Legal Liaison)
+Signature: [Robert Taylor]
+Date: February 22, 2026
+
+
+================================================================================
+RETENTION OF THIS TICKET
+================================================================================
+
+This disposal ticket and all associated documentation (Certificate of
+Destruction, asset records, invoices) will be retained for 7 years per
+the Records Retention Schedule (Section 10: IT Records - Data Disposal Records).
+
+Disposal Ticket Retention:
+- Start Date: February 21, 2026 (disposal date)
+- Retention Period: 7 years
+- Disposal Date: February 21, 2033
+- Storage Location: IT ticketing system + SharePoint archive
+
+
+================================================================================
+                    TICKET CLOSED - DISPOSAL COMPLETE
+================================================================================
+
+Ticket Status: CLOSED
+Close Date: February 21, 2026, 3:45 PM
+Resolution: All items disposed successfully per Records Retention Schedule.
+            Certificate of Destruction received and filed.
+            Asset database updated. Audit trail complete.

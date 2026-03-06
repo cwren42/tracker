@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block title %}Remote Shell — {{ asset_name }}{% endblock %}
+
+{% block content %}
+<style>
+    body, html { height: 100%; }
+    #terminal-wrap {
+        background: #0d0d0d;
+        border-radius: 6px;
+        padding: 8px;
+        height: calc(100vh - 200px);
+        min-height: 400px;
+    }
+    #terminal { height: 100%; }
+    #status-bar { font-size: 0.8rem; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-connecting { background: #ffc107; }
+    .dot-online { background: #28a745; }
+    .dot-offline { background: #dc3545; }
+</style>
+
+<!-- xterm.js -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+<div class="container-fluid pt-3">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+        <div>
+            <h5 class="mb-0">
+                <i class="bi bi-terminal-fill text-success me-2"></i>
+                Remote Shell &mdash; <strong>{{ asset_name }}</strong>
+                <small class="text-muted ms-2 fw-normal">{{ agent_id }}</small>
+            </h5>
+        </div>
+        <div class="d-flex align-items-center gap-3" id="status-bar">
+            <span id="status-text">
+                <span class="status-dot dot-connecting" id="status-dot"></span>
+                <span id="status-label" class="ms-1">Connecting…</span>
+            </span>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary" onclick="sendCtrlC()" title="Send Ctrl+C">
+                    <i class="bi bi-x-octagon"></i> Ctrl+C
+                </button>
+                <button class="btn btn-outline-warning" onclick="restartShell('powershell')" title="New PowerShell">
+                    <i class="bi bi-terminal"></i> PS
+                </button>
+                <button class="btn btn-outline-secondary" onclick="restartShell('cmd')" title="New CMD">
+                    <i class="bi bi-window"></i> CMD
+                </button>
+                <button class="btn btn-outline-danger" onclick="disconnectAndClose()" title="Disconnect">
+                    <i class="bi bi-power"></i>
+                </button>
+            </div>
+            {% if asset_id %}
+            <a href="{{ url_for('view_asset', asset_id=asset_id) }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-arrow-left"></i> Asset
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div id="terminal-wrap">
+        <div id="terminal"></div>
+    </div>
+    <div class="text-muted small mt-1">Gateway: <code>{{ gateway_url }}</code></div>
+</div>
+
+<script>
+const AGENT_ID    = {{ agent_id | tojson }};
+const GATEWAY_URL = {{ gateway_url | tojson }};
+
+const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    theme: {
+        background: '#0d0d0d',
+        foreground: '#f2f2f2',
+        cursor: '#00ff00',
+    },
+    convertEol: true,
+    scrollback: 5000,
+});
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+window.addEventListener('resize', () => fitAddon.fit());
+
+let ws = null;
+let sessionId = null;
+let shellActive = false;
+
+function setStatus(state, label) {
+    const dot = document.getElementById('status-dot');
+    const lbl = document.getElementById('status-label');
+    dot.className = 'status-dot dot-' + state;
+    lbl.textContent = label;
+}
+
+async function issueToken() {
+    const resp = await fetch('/api/rmm/issue-token', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_id: AGENT_ID}),
+    });
+    if (!resp.ok) throw new Error('Failed to get session token');
+    return await resp.json();
+}
+
+async function connect(shellType) {
+    shellType = shellType || 'powershell';
+    setStatus('connecting', 'Connecting…');
+    term.write('\r\n\x1b[33m[Tracker RMM] Connecting to ' + AGENT_ID + '…\x1b[0m\r\n');
+
+    let tokenData;
+    try {
+        tokenData = await issueToken();
+    } catch (e) {
+        term.write('\x1b[31m[ERROR] ' + e.message + '\x1b[0m\r\n');
+        setStatus('offline', 'Auth failed');
+        return;
+    }
+
+    const wsUrl = GATEWAY_URL.replace(/^wss/, 'wss') + '/ws/tech/' + AGENT_ID + '?session_token=' + tokenData.token;
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        setStatus('connecting', 'Authenticating…');
+    };
+
+    ws.onmessage = (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+
+        if (msg.type === 'session') {
+            sessionId = msg.session_id;
+            setStatus('online', 'Connected (session #' + sessionId + ')');
+            term.write('\x1b[32m[Tracker RMM] Session established. Starting ' + shellType + '…\x1b[0m\r\n\r\n');
+            startShell(shellType);
+            return;
+        }
+
+        if (msg.type === 'shell_started') {
+            shellActive = true;
+            return;
+        }
+
+        if (msg.type === 'shell_output') {
+            term.write(msg.data);
+            return;
+        }
+
+        if (msg.type === 'shell_exited') {
+            shellActive = false;
+            term.write('\r\n\x1b[33m[Shell exited]\x1b[0m\r\n');
+            return;
+        }
+
+        if (msg.type === 'error') {
+            term.write('\r\n\x1b[31m[ERROR] ' + msg.error + '\x1b[0m\r\n');
+            setStatus('offline', 'Error');
+        }
+    };
+
+    ws.onclose = (e) => {
+        shellActive = false;
+        setStatus('offline', 'Disconnected');
+        term.write('\r\n\x1b[31m[Tracker RMM] Disconnected (code ' + e.code + ')\x1b[0m\r\n');
+        ws = null; sessionId = null;
+    };
+
+    ws.onerror = () => {
+        setStatus('offline', 'Connection error');
+        term.write('\r\n\x1b[31m[ERROR] WebSocket connection failed\x1b[0m\r\n');
+    };
+}
+
+function startShell(shellType) {
+    if (!ws || !sessionId) return;
+    ws.send(JSON.stringify({type: 'shell_start', session_id: sessionId, shell: shellType}));
+}
+
+function restartShell(shellType) {
+    if (!ws || !sessionId) { connect(shellType); return; }
+    ws.send(JSON.stringify({type: 'shell_stop', session_id: sessionId}));
+    shellActive = false;
+    setTimeout(() => startShell(shellType), 400);
+}
+
+function sendCtrlC() {
+    if (ws && sessionId && shellActive) {
+        ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: '\x03'}));
+    }
+}
+
+function disconnectAndClose() {
+    if (ws) {
+        if (sessionId) ws.send(JSON.stringify({type: 'shell_stop', session_id: sessionId}));
+        ws.close();
+    }
+}
+
+// Client-side line editor for dumb-pipe shell (no PTY = no terminal line discipline).
+// We buffer keystrokes locally, echo them ourselves, and send only complete lines.
+let lineBuffer = '';
+
+function shellSend(data) {
+    if (ws && ws.readyState === WebSocket.OPEN && sessionId) {
+        ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: data}));
+    }
+}
+
+term.onData(data => {
+    if (!shellActive) return;
+
+    // Backspace / DEL — erase last buffered char visually
+    if (data === '\x7f' || data === '\x08') {
+        if (lineBuffer.length > 0) {
+            lineBuffer = lineBuffer.slice(0, -1);
+            term.write('\b \b');
+        }
+        return;
+    }
+
+    // Enter — flush the buffered line to the shell
+    if (data === '\r') {
+        term.write('\r\n');
+        shellSend(lineBuffer + '\r\n');
+        lineBuffer = '';
+        return;
+    }
+
+    // Ctrl+C — interrupt; clear buffer and send immediately
+    if (data === '\x03') {
+        term.write('^C\r\n');
+        lineBuffer = '';
+        shellSend('\x03');
+        return;
+    }
+
+    // Ctrl+L — clear screen
+    if (data === '\x0c') {
+        term.clear();
+        return;
+    }
+
+    // Escape sequences (arrow keys, F-keys, etc.) — forward as-is, don't buffer
+    if (data.length > 1 || data.charCodeAt(0) < 32) {
+        shellSend(data);
+        return;
+    }
+
+    // Printable character — local echo and buffer
+    lineBuffer += data;
+    term.write(data);
+});
+
+// Auto-connect on page load
+connect('powershell');
+</script>
+{% endblock %}

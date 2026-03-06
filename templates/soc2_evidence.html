@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Evidence Viewer - {{ control.control_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('soc2_dashboard') }}">SOC2 Dashboard</a></li>
+            <li class="breadcrumb-item active">{{ control.control_name }}</li>
+        </ol>
+    </nav>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-file-earmark-check"></i> {{ control.control_name }}</h2>
+    <button class="btn btn-success" onclick="location.href='/api/soc2/export/{{ control.id }}'">
+        <i class="bi bi-file-earmark-excel"></i> Export Evidence
+    </button>
+</div>
+
+<!-- Control Details -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Control Details</h5>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-8">
+                <p><strong>Description:</strong></p>
+                {% set description_parts = control.control_description.split('Supporting Policies:') %}
+                <p>{{ description_parts[0] }}</p>
+                
+                {% if description_parts|length > 1 %}
+                <div class="alert alert-info mt-3">
+                    <h6 class="alert-heading"><i class="bi bi-file-text"></i> Supporting ISMS Policies</h6>
+                    <div style="white-space: pre-line;">{{ description_parts[1] }}</div>
+                    <hr>
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> These policies from the ISMS Manual (/home/webuser/ISMS-Manual2025v1.docx) 
+                        provide documented evidence that this control exists and is defined.
+                    </small>
+                </div>
+                {% endif %}
+                
+                <p class="mb-0"><strong>Framework Alignment:</strong> {{ control.audit_alignment }}</p>
+            </div>
+            <div class="col-md-4">
+                <table class="table table-sm">
+                    <tr>
+                        <td><strong>Frequency:</strong></td>
+                        <td><span class="badge bg-secondary">{{ control.control_frequency }}</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Owner:</strong></td>
+                        <td>{{ control.control_owner }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Progress:</strong></td>
+                        <td>
+                            {% if control.control_progress == 'In Place' %}
+                                <span class="badge bg-success">In Place</span>
+                            {% elif control.control_progress == 'Partially In Place' %}
+                                <span class="badge bg-warning">Partial</span>
+                            {% else %}
+                                <span class="badge bg-danger">Not In Place</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Automation:</strong></td>
+                        <td>
+                            {% if control.automation_enabled %}
+                                <i class="bi bi-robot text-primary"></i> Automated
+                            {% else %}
+                                <i class="bi bi-hand-index text-muted"></i> Manual
+                            {% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Evidence History -->
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Evidence History</h5>
+    </div>
+    <div class="card-body">
+        {% if snapshots %}
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Snapshot Date</th>
+                        <th>Evidence Type</th>
+                        <th>Record Count</th>
+                        <th>Status</th>
+                        <th>Collected By</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for snapshot in snapshots %}
+                    <tr>
+                        <td>{{ snapshot.snapshot_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td><span class="badge bg-info">{{ snapshot.evidence_type }}</span></td>
+                        <td>{{ snapshot.record_count }} records</td>
+                        <td>
+                            {% if snapshot.status == 'collected' %}
+                                <span class="badge bg-success">Collected</span>
+                            {% elif snapshot.status == 'verified' %}
+                                <span class="badge bg-primary">Verified</span>
+                            {% else %}
+                                <span class="badge bg-warning">{{ snapshot.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ snapshot.collected_by }}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewSnapshotDetails({{ snapshot.id }})">
+                                <i class="bi bi-eye"></i> Details
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-warning">
+            <h6 class="alert-heading"><i class="bi bi-exclamation-triangle"></i> No Technical Evidence Snapshots Yet</h6>
+            <p>
+            {% if control.automation_enabled %}
+                <strong>Automated Control:</strong> Evidence will be automatically collected from Microsoft 365 and Intune 
+                based on the <strong>{{ control.control_frequency }}</strong> frequency.
+                <br><br>
+                <button class="btn btn-sm btn-primary" onclick="location.href='/soc2'">
+                    <i class="bi bi-arrow-repeat"></i> Run Sync Now
+                </button>
+            {% else %}
+                <strong>Manual Control:</strong> This control requires manual evidence collection and documentation.
+                <br><br>
+                Evidence for manual controls typically includes:
+                <ul class="mb-0 mt-2">
+                    <li>Policy documents (see ISMS policies above)</li>
+                    <li>Procedure screenshots or documentation</li>
+                    <li>Meeting minutes or review records</li>
+                    <li>Tickets or change requests</li>
+                </ul>
+            {% endif %}
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Snapshot Details Modal -->
+<div class="modal fade" id="snapshotModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Evidence Snapshot Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="snapshotDetails">
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function viewSnapshotDetails(snapshotId) {
+    const modal = new bootstrap.Modal(document.getElementById('snapshotModal'));
+    modal.show();
+    
+    fetch(`/api/soc2/snapshot/${snapshotId}`)
+        .then(response => response.json())
+        .then(data => {
+            const detailsDiv = document.getElementById('snapshotDetails');
+            if (data.success) {
+                const snapshot = data.snapshot;
+                const evidenceData = JSON.parse(snapshot.evidence_data);
+                
+                detailsDiv.innerHTML = `
+                    <h6>Snapshot Information</h6>
+                    <table class="table table-sm">
+                        <tr><td><strong>Date:</strong></td><td>${snapshot.snapshot_date}</td></tr>
+                        <tr><td><strong>Type:</strong></td><td>${snapshot.evidence_type}</td></tr>
+                        <tr><td><strong>Records:</strong></td><td>${snapshot.record_count}</td></tr>
+                        <tr><td><strong>Status:</strong></td><td>${snapshot.status}</td></tr>
+                        <tr><td><strong>Collected By:</strong></td><td>${snapshot.collected_by}</td></tr>
+                    </table>
+                    <h6 class="mt-3">Evidence Data</h6>
+                    <pre class="bg-light p-3 rounded">${JSON.stringify(evidenceData, null, 2)}</pre>
+                `;
+            } else {
+                detailsDiv.innerHTML = '<div class="alert alert-danger">Failed to load snapshot details</div>';
+            }
+        })
+        .catch(error => {
+            document.getElementById('snapshotDetails').innerHTML = 
+                '<div class="alert alert-danger">Error loading details: ' + error + '</div>';
+        });
+}
+</script>
+
+{% endblock %}

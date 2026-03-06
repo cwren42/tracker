@@ -1,0 +1,486 @@
+================================================================================
+                           CIRQUE CORPORATION
+                      RECORDS RETENTION SCHEDULE
+                        Effective Date: March 2, 2026
+================================================================================
+
+Document Control:
+-----------------
+Document Owner: Chris Wren, IT Manager
+Approved By: David Park, CTO & Sarah Williams, CFO
+Last Review: March 2, 2026
+Next Review: March 2, 2027 (Annual)
+Version: 2.0
+
+Purpose:
+--------
+This Records Retention Schedule defines the minimum and maximum retention
+periods for all business records and data maintained by Cirque Corporation.
+These retention periods comply with legal, regulatory, and business requirements.
+
+Scope:
+------
+This schedule applies to all records in all formats including:
+- Electronic records (databases, files, emails, cloud storage)
+- Paper records (documents, forms, agreements)
+- Audio/video recordings (meetings, training, surveillance)
+- Backup copies and archives
+
+Legal Basis:
+------------
+- Sarbanes-Oxley Act (SOX) - Financial records
+- Fair Labor Standards Act (FLSA) - Employment records
+- HIPAA - Health-related records
+- GDPR - Personal data of EU residents
+- California Consumer Privacy Act (CCPA) - California resident data
+- IRS regulations - Tax and financial records
+- State employment laws - Personnel records
+
+
+================================================================================
+SECTION 1: FINANCIAL RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Annual Financial Statements          Permanent           N/A (Archive)
+Audit Reports (External/Internal)    7 years             Secure Shred/Delete
+Accounts Payable Invoices            7 years             Secure Shred/Delete
+Accounts Receivable Records          7 years             Secure Shred/Delete
+Bank Statements & Reconciliations    7 years             Secure Shred/Delete
+Credit Card Statements               7 years             Secure Shred/Delete
+Cancelled Checks                     7 years             Secure Shred/Delete
+Expense Reports                      7 years             Secure Shred/Delete
+Purchase Orders                      7 years             Secure Shred/Delete
+Tax Returns (Federal/State)          Permanent           N/A (Archive)
+Tax Payment Records                  7 years             Secure Shred/Delete
+Payroll Records (Summary)            7 years             Secure Shred/Delete
+Payroll Tax Records                  7 years             Secure Shred/Delete
+General Ledger                       Permanent           N/A (Archive)
+Chart of Accounts                    Permanent           N/A (Archive)
+Depreciation Schedules               Permanent           N/A (Archive)
+Fixed Asset Records                  7 years after disposal  Secure Delete
+Contract Payments                    7 years after contract end  Secure Delete
+
+Legal Basis: IRS requires 3-7 years; SOX requires 7 years for public companies; 
+We retain 7 years as best practice for potential audits.
+
+
+================================================================================
+SECTION 2: CORPORATE RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Articles of Incorporation            Permanent           N/A (Archive)
+Corporate Bylaws                     Permanent           N/A (Archive)
+Board Meeting Minutes                Permanent           N/A (Archive)
+Board Resolutions                    Permanent           N/A (Archive)
+Shareholder Records                  Permanent           N/A (Archive)
+Stock Certificates (Cancelled)       7 years after cancellation  Secure Shred
+Annual Reports to Shareholders       Permanent           N/A (Archive)
+Corporate Policies                   3 years after superseded  Secure Delete
+Business Licenses & Permits          7 years after expiration  Secure Shred
+Partnership Agreements               7 years after termination  Secure Shred/Delete
+Merger/Acquisition Records           Permanent           N/A (Archive)
+Trademark/Patent Records             Permanent           N/A (Archive)
+Insurance Policies (Active)          Duration + 3 years  Secure Shred/Delete
+Insurance Policies (Expired)         3 years after expiration  Secure Shred/Delete
+Insurance Claims                     7 years after settlement  Secure Shred/Delete
+
+
+================================================================================
+SECTION 3: EMPLOYMENT & HUMAN RESOURCES RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Employment Applications (Hired)      7 years after termination  Secure Shred/Delete
+Employment Applications (Not Hired)  3 years after application  Secure Shred/Delete
+Personnel Files (General)            7 years after termination  Secure Shred/Delete
+I-9 Forms (Employment Eligibility)   3 years after hire OR 1 year after termination (whichever is later)  Secure Shred/Delete
+W-4 Forms                            7 years after termination  Secure Shred/Delete
+Performance Reviews                  7 years after termination  Secure Shred/Delete
+Disciplinary Actions                 7 years after termination  Secure Shred/Delete
+Termination Documentation            7 years after termination  Secure Shred/Delete
+Job Descriptions                     3 years after superseded  Secure Delete
+Salary & Compensation Records        7 years after termination  Secure Shred/Delete
+Benefits Enrollment Forms            7 years after termination  Secure Shred/Delete
+401(k) / Retirement Plan Records     Permanent (participant records)  N/A
+Health Insurance Records             7 years after termination  Secure Shred/Delete
+Workers' Compensation Claims         30 years after claim  Secure Shred/Delete
+FMLA Records                         3 years            Secure Shred/Delete
+Training Records                     Duration of employment + 3 years  Secure Delete
+Time Sheets / Timecards              7 years            Secure Shred/Delete
+Leave Records (Sick, Vacation)       3 years            Secure Delete
+Employment Contracts                 7 years after expiration  Secure Shred/Delete
+Non-Disclosure Agreements            7 years after expiration  Secure Shred/Delete
+Non-Compete Agreements               7 years after expiration  Secure Shred/Delete
+Background Check Results             7 years after termination  Secure Shred/Delete
+Drug Test Results                    3 years            Secure Shred/Delete
+EEO-1 Reports                        3 years            Secure Shred/Delete
+OSHA Records (Injury/Illness Logs)   5 years            Secure Shred/Delete
+
+Legal Basis: FLSA requires 3 years for most records; State laws vary (CA requires 3-4 years); 
+We retain 7 years as best practice for potential litigation.
+
+
+================================================================================
+SECTION 4: CONTRACTS & LEGAL RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Contracts (Active)                   Duration + 7 years  Secure Shred/Delete
+Contracts (Expired)                  7 years after expiration  Secure Shred/Delete
+Purchase Agreements                  7 years after completion  Secure Shred/Delete
+Service Level Agreements (SLAs)      7 years after expiration  Secure Shred/Delete
+Non-Disclosure Agreements (NDAs)     7 years after expiration  Secure Shred/Delete
+Vendor Agreements                    7 years after termination  Secure Shred/Delete
+Lease Agreements                     7 years after expiration  Secure Shred/Delete
+Software Licenses                    Duration + 3 years  Secure Delete
+Litigation Files (Active)            Permanent (until resolved)  N/A
+Litigation Files (Closed)            10 years after resolution  Secure Shred/Delete
+Settlement Agreements                Permanent           N/A (Archive)
+Correspondence (Legal)               7 years            Secure Shred/Delete
+Intellectual Property Filings        Permanent           N/A (Archive)
+Regulatory Correspondence            7 years            Secure Shred/Delete
+Compliance Certifications            7 years after expiration  Secure Delete
+Warranty Documents                   7 years after expiration  Secure Shred/Delete
+
+
+================================================================================
+SECTION 5: CUSTOMER & SALES RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Customer Contracts                   7 years after expiration  Secure Delete
+Customer Master Records              7 years after last transaction  Secure Delete
+Sales Orders                         7 years            Secure Delete
+Invoices (Customer)                  7 years            Secure Delete
+Quotes & Proposals (Accepted)        7 years after project completion  Secure Delete
+Quotes & Proposals (Rejected)        3 years            Secure Delete
+Shipping Records                     7 years            Secure Delete
+Credit Applications                  7 years after account closure  Secure Delete
+Customer Correspondence              3 years after last contact  Secure Delete
+Customer Complaints                  7 years after resolution  Secure Delete
+Warranty Claims                      7 years after claim  Secure Delete
+Sales Reports                        7 years            Secure Delete
+CRM Data (Active Customers)          Duration of relationship + 7 years  Secure Delete
+CRM Data (Inactive/Lost Customers)   3 years after last contact  Secure Delete
+Marketing Lists                      3 years after last campaign  Secure Delete
+Customer Surveys & Feedback          3 years            Secure Delete
+Product Returns                      7 years            Secure Delete
+
+
+================================================================================
+SECTION 6: INFORMATION TECHNOLOGY RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+System Backups (Full)                90 days            Cryptographic Erase
+System Backups (Archived)            7 years (selective) Cryptographic Erase
+System Logs (Security)               1 year             Secure Delete
+System Logs (Application)            90 days            Secure Delete
+System Logs (Firewall/Network)       1 year             Secure Delete
+User Access Logs                     1 year             Secure Delete
+Database Backups                     90 days            Cryptographic Erase
+Email Archives (Company)             7 years            Secure Delete
+Email (Individual Mailboxes)         3 years            Secure Delete
+Software Licenses & Agreements       Duration + 3 years Secure Delete
+IT Asset Records                     7 years after disposal  Secure Delete
+Network Diagrams                     3 years after superseded  Secure Delete
+System Documentation                 3 years after superseded  Secure Delete
+Change Management Records            7 years            Secure Delete
+Incident Response Records            7 years            Secure Delete
+Vulnerability Scan Reports           3 years            Secure Delete
+Penetration Test Reports             7 years            Secure Delete
+Security Audit Reports               7 years            Secure Delete
+SOC 2 Audit Reports                  7 years            Secure Delete
+Disaster Recovery Test Results       7 years            Secure Delete
+Business Continuity Plans            3 years after superseded  Secure Delete
+User Account Records                 7 years after account deletion  Secure Delete
+Password Reset Records               1 year             Secure Delete
+Multi-Factor Authentication Logs     1 year             Secure Delete
+VPN Connection Logs                  90 days            Secure Delete
+Website Analytics                    3 years            Secure Delete
+Video Surveillance (Security)        90 days            Overwrite/Delete
+
+Special Retention: If IT records relate to litigation, investigation, or audit,
+they must be retained until matter is resolved + 7 years.
+
+
+================================================================================
+SECTION 7: COMMUNICATIONS & CORRESPONDENCE
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Email (Executive)                    7 years            Secure Delete
+Email (General Business)             3 years            Secure Delete
+Email (Legal/Compliance)             7 years            Secure Delete
+Email (Temporary/Transitory)         30 days            Secure Delete
+Electronic Correspondence (Slack, Teams) 3 years       Secure Delete
+Instant Messages (Business-related)  90 days            Secure Delete
+Voice Messages                       30 days            Delete
+Internal Memos                       3 years            Secure Delete
+Meeting Minutes (Non-Board)          3 years            Secure Delete
+Presentations                        3 years            Secure Delete
+Video Conferences (Recordings)       3 years (if business-critical)  Delete
+Phone Records (Call Logs)            3 years            Secure Delete
+
+
+================================================================================
+SECTION 8: MARKETING & COMMUNICATIONS RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Marketing Campaign Records           3 years after campaign  Secure Delete
+Advertising Materials                3 years            Secure Delete
+Press Releases                       7 years            Archive/Delete
+Media Coverage                       3 years            Archive/Delete
+Website Content (Published)          3 years after removal  Secure Delete
+Social Media Posts                   3 years            N/A (platform-owned)
+Photography/Video (Marketing)        3 years after last use  Secure Delete
+Brand Guidelines                     3 years after superseded  Secure Delete
+Market Research                      5 years            Secure Delete
+Competitor Analysis                  3 years            Secure Delete
+Product Documentation                Duration of product support + 3 years  Secure Delete
+User Manuals                         Duration of product support + 3 years  Secure Delete
+
+
+================================================================================
+SECTION 9: FACILITIES & PROPERTY RECORDS
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Building Plans & Blueprints          Permanent (owned property)  N/A
+Lease Agreements (Office Space)      7 years after expiration  Secure Shred/Delete
+Maintenance Records                  7 years            Secure Delete
+Utility Bills                        3 years            Secure Shred/Delete
+Property Tax Records                 7 years            Secure Shred/Delete
+Safety Inspection Reports            5 years            Secure Delete
+Fire Safety Records                  5 years            Secure Delete
+Environmental Compliance Reports     7 years            Secure Delete
+Building Access Logs                 1 year             Secure Delete
+Visitor Logs                         1 year             Secure Delete
+Parking Records                      1 year             Secure Delete
+
+
+================================================================================
+SECTION 10: DATA SUBJECT REQUEST RECORDS (GDPR/CCPA)
+================================================================================
+
+Record Type                          Retention Period    Disposal Method
+---------------------------------------------------------------------------
+Access Requests (DSARs)              3 years after completion  Secure Delete
+Deletion Requests                    3 years after completion  Secure Delete
+Correction Requests                  3 years after completion  Secure Delete
+Opt-Out Requests                     Permanent (until revoked)  N/A
+Do Not Sell Requests (CCPA)          Permanent (until revoked)  N/A
+Consent Records                      7 years after withdrawal  Secure Delete
+Privacy Policy Acceptance Logs       7 years            Secure Delete
+Cookie Consent Records               2 years            Secure Delete
+
+
+================================================================================
+DISPOSAL METHODS DEFINED
+================================================================================
+
+SECURE SHRED (Paper Documents):
+- Cross-cut shredding to DIN P-4 standard or higher
+- Shredded material: < 1/16" x 5/8" particles
+- Performed by: IT staff (internal) or Iron Mountain (external)
+- Certificate of Destruction: Required for all confidential documents
+- Verification: Photo/video evidence required
+
+SECURE DELETE (Electronic Files):
+- Single File Deletion: DoD 5220.22-M 3-pass overwrite minimum
+- Bulk Deletion: NIST 800-88 Clear or Purge methods
+- Tools: DBAN, Eraser, BitRaser, or built-in secure delete
+- Verification: Deletion log with file count, date, operator
+- Cloud Data: Request deletion from provider + verify
+
+CRYPTOGRAPHIC ERASE (Encrypted Storage):
+- Destroy encryption keys, rendering data unrecoverable
+- Applicable to: BitLocker volumes, encrypted databases, encrypted backups
+- Verification: Key destruction logged
+- Faster than overwriting for large volumes
+
+PHYSICAL DESTRUCTION (Storage Media):
+- Hard Drives: Degaussing + physical shredding/crushing
+- SSDs: Cryptographic erase + physical destruction (no magnetic method)
+- USB Drives: Physical destruction
+- Backup Tapes: Degaussing + physical shredding
+- CDs/DVDs: Physical shredding
+- Mobile Devices: Factory reset + physical destruction
+- Provider: Iron Mountain or certified e-waste recycler
+- Certificate of Destruction: REQUIRED (with serial numbers)
+
+OVERWRITE/DELETE (Video/Logs):
+- Standard deletion (non-confidential data)
+- Overwrite in normal course of business (circular logs)
+- No recovery attempt expected
+
+
+================================================================================
+RETENTION SCHEDULE MANAGEMENT
+================================================================================
+
+11.1 SCHEDULE REVIEW
+---------------------
+✓ Annual review: March (every year)
+✓ Review participants: IT Manager, CFO, Legal Counsel, CTO
+✓ Updates triggered by:
+  - Changes in applicable laws or regulations
+  - New business processes or data types
+  - Audit findings or recommendations
+  - Industry best practice updates
+
+11.2 LEGAL HOLDS
+----------------
+When litigation, investigation, or audit is anticipated or in progress:
+✓ IT Manager or Legal Counsel issues "Legal Hold" notification
+✓ All records related to matter are preserved indefinitely
+✓ Automated deletion processes suspended for affected records
+✓ Legal Hold remains until explicitly released by Legal Counsel
+✓ Records under Legal Hold: Not subject to normal retention schedule
+
+11.3 DISPOSAL TRACKING
+----------------------
+✓ All disposals logged in IT ticketing system
+✓ Disposal record includes:
+  - Date of disposal
+  - Type and volume of records destroyed
+  - Method of destruction
+  - Person responsible for disposal
+  - Certificate of Destruction (if external vendor)
+✓ Disposal logs retained for 7 years
+
+11.4 EXCEPTIONS
+---------------
+Exception requests must be submitted to:
+- IT Manager (for IT systems and data)
+- CFO (for financial records)
+- Legal Counsel (for legal/compliance records)
+
+Approved exceptions documented with:
+- Business justification
+- Duration of exception
+- Compensating controls
+- Annual re-approval requirement
+
+11.5 EMPLOYEE RESPONSIBILITIES
+-------------------------------
+✓ All employees must comply with this Records Retention Schedule
+✓ Employees may not:
+  - Retain records beyond scheduled disposal date (except Legal Hold)
+  - Delete records before minimum retention period
+  - Remove records from company custody without authorization
+✓ Violations may result in disciplinary action up to termination
+✓ Training: New hire orientation + annual refresher
+
+
+================================================================================
+COMPLIANCE VERIFICATION
+================================================================================
+
+12.1 AUDIT SCHEDULE
+--------------------
+✓ Annual retention audit: IT conducts sampling audit (10% of record types)
+✓ Findings reported to CTO and CFO
+✓ Non-compliance tracked and remediated within 90 days
+
+12.2 CURRENT COMPLIANCE STATUS (March 2, 2026)
+-----------------------------------------------
+Last Audit: February 2026
+Audit Sample: 15 record types across 6 categories
+Findings:
+✓ Financial records: 100% compliant (proper retention, no premature deletion)
+✓ HR records: 100% compliant
+✓ IT logs: 100% compliant (automated retention policies working correctly)
+✓ Customer records: 98% compliant (2 records retained past schedule - cleaned up)
+✓ Email archives: 95% compliant (some mailboxes >3 years - cleanup scheduled)
+✓ Marketing materials: 100% compliant
+
+Overall Compliance: 98.8%
+Action Items: Email cleanup project scheduled for Q2 2026
+
+
+================================================================================
+RELATED POLICIES
+================================================================================
+
+- Data Retention and Deletion Policy (IS-CIRQ-P-019-G)
+- Information Security Policy (IS-CIRQ-P-001-G)
+- Data Classification Policy (IS-CIRQ-P-018-G)
+- Privacy Policy (IS-CIRQ-P-041-G)
+- Records Management Policy (IS-CIRQ-P-026-G)
+
+
+================================================================================
+REVISION HISTORY
+================================================================================
+
+Version 2.0 - March 2, 2026
+- Annual review completed
+- Added CCPA data subject request records
+- Updated IT records section with cloud backup retention
+- Added cryptographic erase method for encrypted volumes
+- Enhanced disposal tracking requirements
+- Approved by: David Park (CTO), Sarah Williams (CFO)
+
+Version 1.1 - September 15, 2025
+- Added video surveillance retention
+- Updated system log retention periods
+- Clarified Legal Hold procedures
+
+Version 1.0 - January 10, 2025
+- Initial Records Retention Schedule
+- Based on federal/state requirements and industry best practices
+
+
+================================================================================
+APPROVALS
+================================================================================
+
+Prepared By:
+Chris Wren, IT Manager
+Date: March 2, 2026
+
+Financial Review:
+Sarah Williams, Chief Financial Officer
+Date: March 2, 2026
+
+Legal Review:
+Robert Taylor, VP Sales (Legal Liaison)
+Date: March 2, 2026
+
+Approved By:
+David Park, Chief Technology Officer
+Date: March 2, 2026
+
+Next Scheduled Review: March 2, 2027 (Annual)
+
+
+================================================================================
+CONTACT INFORMATION
+================================================================================
+
+Questions about this Records Retention Schedule should be directed to:
+
+IT Records & Data: Chris Wren, IT Manager - chris.wren@cirque.com
+Financial Records: Sarah Williams, CFO - sarah.williams@cirque.com
+HR Records: Emma Thompson, HR Director - emma.thompson@cirque.com
+Legal Matters: Robert Taylor, VP Sales - robert.taylor@cirque.com
+
+Records Disposal Requests: Submit ticket to IT Help Desk
+
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================

@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}TeamViewer Sync Preview{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2><i class="bi bi-eye"></i> TeamViewer Sync Preview</h2>
+    <p class="text-muted">This shows what will happen when you sync TeamViewer devices - no changes will be made yet.</p>
+    
+    <a href="{{ url_for('settings') }}" class="btn btn-secondary mb-3">
+        <i class="bi bi-arrow-left"></i> Back to Settings
+    </a>
+    
+    <!-- Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card border-primary">
+                <div class="card-body text-center">
+                    <h3 class="text-primary">{{ will_update|length }}</h3>
+                    <p class="mb-0">Will Update Existing Assets</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-success">
+                <div class="card-body text-center">
+                    <h3 class="text-success">{{ will_create|length }}</h3>
+                    <p class="mb-0">Will Create New Assets</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-warning">
+                <div class="card-body text-center">
+                    <h3 class="text-warning">{{ will_skip|length }}</h3>
+                    <p class="mb-0">Will Skip (No TV ID)</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Assets That Will Be Updated -->
+    {% if will_update %}
+    <div class="card mb-3">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">
+                <i class="bi bi-arrow-repeat"></i> Will Update ({{ will_update|length }})
+                <span class="badge bg-light text-dark">Existing assets found by name or TeamViewer ID</span>
+            </h5>
+        </div>
+        <div class="card-body">
+            <p class="text-info"><i class="bi bi-info-circle"></i> These assets exist in your system. TeamViewer data will be added/updated WITHOUT overwriting existing asset information.</p>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Asset Tag</th>
+                            <th>Current Name</th>
+                            <th>TeamViewer Name</th>
+                            <th>TeamViewer ID</th>
+                            <th>Status</th>
+                            <th>Last Seen</th>
+                            <th>Will Add/Update</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in will_update %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('view_asset', asset_id=asset.asset_id) }}">{{ asset.asset_tag }}</a>
+                            </td>
+                            <td>{{ asset.current_name }}</td>
+                            <td>
+                                {% if asset.current_name|lower != asset.tv_name|lower %}
+                                <span class="text-warning">{{ asset.tv_name }}</span>
+                                {% else %}
+                                {{ asset.tv_name }}
+                                {% endif %}
+                            </td>
+                            <td><code>{{ asset.tv_id }}</code></td>
+                            <td>
+                                {% if asset.online_state == 'Online' %}
+                                <span class="badge bg-success">Online</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Offline</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if asset.last_seen %}
+                                <small>{{ asset.last_seen }}</small>
+                                {% else %}
+                                <span class="text-muted">Currently online</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <small>
+                                    {% if not asset.current_tv_id %}
+                                    <span class="badge bg-info">TV ID</span>
+                                    {% endif %}
+                                    {% if asset.online_state != asset.current_online_state %}
+                                    <span class="badge bg-info">Status</span>
+                                    {% endif %}
+                                    <span class="badge bg-success">Connect Link</span>
+                                    <span class="badge bg-info">Last Sync</span>
+                                </small>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Assets That Will Be Created -->
+    {% if will_create %}
+    <div class="card mb-3">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0">
+                <i class="bi bi-plus-circle"></i> Will Create ({{ will_create|length }})
+                <span class="badge bg-light text-dark">New devices not found in your system</span>
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Important:</strong> These devices will be created with minimal information (only TeamViewer data). They will be flagged as needing manual completion. You'll need to add manufacturer, model, serial number, purchase date, etc.
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Will Create Asset Tag</th>
+                            <th>Device Name</th>
+                            <th>TeamViewer ID</th>
+                            <th>Status</th>
+                            <th>Last Seen</th>
+                            <th>Group</th>
+                            <th>Will Add</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for device in will_create %}
+                        <tr class="table-success">
+                            <td><code>{{ device.asset_tag }}</code></td>
+                            <td><strong>{{ device.tv_name }}</strong></td>
+                            <td><code>{{ device.tv_id }}</code></td>
+                            <td>
+                                {% if device.online_state == 'Online' %}
+                                <span class="badge bg-success">Online</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Offline</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if device.last_seen %}
+                                <small>{{ device.last_seen }}</small>
+                                {% else %}
+                                <span class="text-muted">Currently online</span>
+                                {% endif %}
+                            </td>
+                            <td><small>{{ device.group }}</small></td>
+                            <td>
+                                <small>
+                                    <span class="badge bg-success">Name</span>
+                                    <span class="badge bg-success">TV ID</span>
+                                    <span class="badge bg-success">Status</span>
+                                    <span class="badge bg-success">Connect Link</span>
+                                    <span class="badge bg-success">Category: Computer</span>
+                                </small>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Devices That Will Be Skipped -->
+    {% if will_skip %}
+    <div class="card mb-3">
+        <div class="card-header bg-warning text-dark">
+            <h5 class="mb-0">
+                <i class="bi bi-x-circle"></i> Will Skip ({{ will_skip|length }})
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Device Name</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for device in will_skip %}
+                        <tr>
+                            <td>{{ device.name }}</td>
+                            <td><span class="text-muted">{{ device.reason }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Summary -->
+    <div class="card border-info">
+        <div class="card-header bg-info text-white">
+            <h5 class="mb-0"><i class="bi bi-check-circle"></i> What Happens Next</h5>
+        </div>
+        <div class="card-body">
+            <h6>Update Process ({{ will_update|length }} assets):</h6>
+            <ul>
+                <li>Existing asset data <strong>will NOT be deleted or overwritten</strong></li>
+                <li>TeamViewer ID will be added/updated</li>
+                <li>Online status will be updated</li>
+                <li>Last sync timestamp will be recorded</li>
+                <li><strong>TeamViewer Connect link will be added</strong> - enables web-based remote control</li>
+                <li>Connect button will be enabled on asset page</li>
+            </ul>
+            
+            <h6>Create Process ({{ will_create|length }} assets):</h6>
+            <ul>
+                <li>New assets created with auto-generated asset tags (TV-XXXXXXXX)</li>
+                <li>Category set to "Computer"</li>
+                <li>Status set to "In Use"</li>
+                <li>Only TeamViewer data populated (Name, TV ID, Status, Group as Location)</li>
+                <li><strong>TeamViewer Connect link will be added</strong> - enables web-based remote control</li>
+                <li><strong>No manufacturer, model, serial, or purchase info</strong> - you'll need to add these manually</li>
+                <li>Will appear in "Incomplete Assets" dashboard widget (needs to be added)</li>
+            </ul>
+            
+            <h6>Data Safety:</h6>
+            <ul>
+                <li class="text-success"><i class="bi bi-shield-check"></i> No existing asset data will be deleted</li>
+                <li class="text-success"><i class="bi bi-shield-check"></i> Manual updates are always preserved</li>
+                <li class="text-success"><i class="bi bi-shield-check"></i> Sync only adds/updates TeamViewer-specific fields</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="mt-3 d-flex gap-2">
+        <form action="{{ url_for('teamviewer_sync') }}" method="POST" onsubmit="return confirm('Are you sure you want to sync TeamViewer devices? This will update {{ will_update|length }} assets and create {{ will_create|length }} new assets.');">
+            <input type="hidden" name="action" value="execute">
+            <button type="submit" class="btn btn-success">
+                <i class="bi bi-arrow-repeat"></i> Execute Sync Now
+            </button>
+        </form>
+        <a href="{{ url_for('settings') }}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> Cancel
+        </a>
+    </div>
+</div>
+{% endblock %}

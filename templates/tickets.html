@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Support Tickets - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1><i class="bi bi-ticket-perforated"></i> Support Tickets</h1>
+  <a class="btn btn-primary" href="{{ url_for('new_ticket') }}">
+    <i class="bi bi-plus-circle"></i> New Ticket
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Subject</th>
+            <th>Asset</th>
+            <th>Reporter</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tickets %}
+          <tr onclick="window.location='{{ url_for('view_ticket', ticket_id=t.id) }}'" style="cursor:pointer;">
+            <td>#{{ t.id }}</td>
+            <td>
+              {% if t.status == 'Open' %}
+                <span class="badge bg-success">Open</span>
+              {% else %}
+                <span class="badge bg-secondary">Closed</span>
+              {% endif %}
+            </td>
+            <td>{{ t.priority }}</td>
+            <td>{{ t.subject }}</td>
+            <td>
+              {% if t.asset_tag %}
+                {{ t.asset_tag }}
+              {% elif t.hostname %}
+                {{ t.hostname }}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td>
+              {% if t.reporter_email %}
+                {{ t.reporter_email }}
+              {% elif t.reporter_name %}
+                {{ t.reporter_name }}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') if t.created_at else '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% if widget_id == 'overview_stats' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> Asset Overview Statistics</h5>
+    </div>
+    <div class="card-body">
+        <div class="row text-center w-100 mx-auto">
+            <div class="col-md-3">
+                <h4>{{ data.category_counts|length }}</h4>
+                <p class="text-muted">Categories</p>
+            </div>
+            <div class="col-md-3">
+                <h4>${{ '%.2f'|format(data.total_value) if data.total_value else '0.00' }}</h4>
+                <p class="text-muted">Total Value</p>
+            </div>
+            <div class="col-md-3">
+                <h4>{{ data.dept_counts|length }}</h4>
+                <p class="text-muted">Departments</p>
+            </div>
+            <div class="col-md-3">
+                <h4>{{ '%.1f'|format(data.avg_age) if data.avg_age else '0.0' }}y</h4>
+                <p class="text-muted">Average Age</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}

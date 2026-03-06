@@ -1,0 +1,64 @@
+Business Continuity/Disaster Recovery Tabletop Test 
+
+Date of the Test: January 18, 2026
+
+Participants: 
+
+* Chris Wren, IT Manager (Test Facilitator)
+* All USA Personnel (in-person and Microsoft Teams)
+* Video Recording Created for Taiwan/China Users (asynchronous training)
+
+Total Attendees: 52 USA-based employees
+Video Distribution: Taiwan office (18 employees), China office (13 employees)
+
+Scenario: 
+
+A ransomware attack has occurred on Friday afternoon at 3:00 PM. Multiple employees report encrypted files with ransom notes on their screens. The file server (\\FILESERVER\Shared) has all files encrypted. Twelve workstations show ransom notes and encrypted files. One Azure VM (WEB-PROD-02) is encrypted and offline. The ransom note demands $50,000 in Bitcoin within 72 hours and threatens to publish data if not paid. It is unknown how attackers gained access or if backups are affected.
+
+Results:
+
+| Test | Test Results | References to Other Policy Documents/Notes |
+| ----- | ----- | ----- |
+| Were any operational processes impacted? | Yes. File server access disrupted. 12 employees unable to access workstations. Web server (WEB-PROD-02) offline. Most operations continued using unaffected systems. | BC/DR Plan (IS-CIRQ-P-043-G) Section 7: Dealing with a Disaster |
+| What systems were down? | - File server (\\FILESERVER\Shared) - all files encrypted<br>- 12 user workstations - encrypted<br>- Azure VM WEB-PROD-02 - encrypted and offline<br>- SQL Server taken offline as precaution (not encrypted) | System Architecture Documentation, Azure Infrastructure Diagrams |
+| What data was lost? | No data lost. Backups verified clean and intact. Most recent file server backup from last night (14 hours old - within 24-hour RPO). Azure VM backup from morning (6 hours old). All data recoverable from Azure Backup. | Backup and Restoration Procedures, IS-CIRQ-P-043-G Section 6: Data and Backups |
+| Which teams were responsible for communication steps and how did they communicate the issue? | - IT Manager (Chris Wren) notified CEO via mobile phone<br>- Communication tree activated within 30 minutes<br>- Executive team notified via mobile phones<br>- All employees notified via company-wide email within 1 hour<br>- Customers notified within 4 hours (website status page + email)<br>- FBI Cyber Division contacted within 2 hours | BC/DR Plan Section 5: Disaster Recovery Communications. Communication tree worked effectively. |
+| For the systems that were impacted, what steps were taken to restore data or restore access to data? | Priority 1 (0-4 hours):<br>- Isolated affected systems from network<br>- Verified backup integrity (Azure Backup confirmed clean)<br>- Began file server restoration from Azure Backup<br>- Rebuilt encrypted Azure VM from backup<br>- Started reimaging 12 affected workstations<br><br>Priority 2 (4-8 hours):<br>- Brought SQL Server back online (was not compromised)<br>- Completed full file server restoration<br>- Completed all workstation reimaging<br><br>Estimated full recovery: 8-12 hours | System Restoration Procedures, Azure Backup Documentation. Decision made: DO NOT pay ransom - recover from backups per company policy and FBI guidance. |
+| Did IT need to set up temporary access points? | Yes. Conference rooms used as temporary workspace for users with encrypted machines. 8 spare laptops deployed. Additional laptops ordered for Monday delivery. VPN capacity increased for remote work. Most employees able to continue working from home or unaffected workstations. | Operations Security Policy (IS-CIRQ-P-011-G). Spare equipment inventory adequate for this scenario. |
+| Were employees asked to continue working? From where? | Yes. Employees with unaffected systems continued normal work. Employees with encrypted workstations:<br>- Issued temporary laptops (8 available)<br>- Worked from home with VPN access<br>- Used conference room workstations<br>IT team worked extended hours for recovery. Food provided for IT staff. | Alternate Work Locations documented in BC/DR Plan. Remote work capability critical for business continuity. |
+| How was customer communication handled? | Hour 2: Internal sales team briefed ("do not promise customers anything")<br>Hour 4: Website status page updated ("experiencing technical issues")<br>Hour 6: Customer email sent ("brief service disruption, investigating")<br>Hour 24: Detailed customer communication based on forensics<br><br>Media inquiries: CEO designated as sole spokesperson | Need breach notification templates (action item created). IS-CIRQ-P-041-G: Public Website Privacy Notice |
+| What security controls prevented worse damage? | - MFA on critical systems prevented wider access<br>- Network segmentation limited lateral movement<br>- Azure Backup isolated from production (cloud backups safe)<br>- Real-time antivirus detected and blocked some attempts<br>- Endpoint detection alerted IT quickly | IS-CIRQ-P-036-G: Antivirus Policy, IS-CIRQ-P-027-G: Access Control Policy. **GAP IDENTIFIED:** File server lacks MFA - need to implement. |
+| Were backups accessible and usable? | Yes. Azure Backup fully accessible and verified clean. One on-premise backup server appeared compromised during scenario (inject). Azure cloud backups unaffected and used for restoration. **CRITICAL GAP:** Need immutable/offline backups to prevent attacker from destroying backups. | **ACTION ITEM:** Implement Azure immutable backup vaults by March 31, 2026 (Chris Wren, IT Manager) |
+| What forensics were conducted? | - Review firewall logs, endpoint logs, email logs<br>- Identify initial compromise method (simulated: phishing email)<br>- Determine extent of data exfiltration<br>- Scenario inject: Forensics showed data exfiltration 2 weeks prior<br>- This triggered breach notification requirements | **ACTION ITEM:** Create breach notification templates pre-approved by legal (VP Sales + Legal, due Feb 28, 2026) |
+
+Summary of Learnings from Test: 
+
+* **STRENGTHS:** Team understood roles and responsibilities clearly. Communication tree worked effectively. Backup systems were robust and accessible. Executive decision-making was rapid and clear (no ransom payment). Cloud backups provided critical protection. Customer communication approach was well-structured.
+
+* **TECHNICAL GAPS:** Need immutable Azure Backup vaults (HIGH priority). Need automated workstation imaging solution (MEDIUM priority). Need MFA on file server access to prevent lateral movement (HIGH priority).
+
+* **PROCESS GAPS:** Need pre-written breach notification templates approved by legal (HIGH priority). Need formal media communication plan and spokesperson training (MEDIUM priority). Need more spare laptop inventory (LOW priority - 8 is adequate for most scenarios).
+
+* **OVERALL ASSESSMENT:** Team would respond effectively to a real ransomware incident. All critical systems recoverable within RTO targets. High confidence in disaster recovery capability. Exercise rated 4.6/5.0 by participants.
+
+Revisions that Need to be Made to Existing Plan (if applicable): 
+
+* **Update BC/DR Plan Section 6 (Data and Backups):** Document implementation of Azure immutable backup vaults and offline backup strategy (Due: March 31, 2026)
+
+* **Add Appendix: Breach Notification Templates:** Create pre-approved templates for customer notifications, employee notifications, regulatory notifications, and media statements (Due: February 28, 2026)
+
+* **Update Section 4 (Roles & Responsibilities):** Add media communication procedures and designate official spokesperson (Due: April 30, 2026)
+
+* **Add Section: Ransomware Response Procedures:** Create specific playbook for ransomware attacks including isolation steps, forensics procedures, FBI notification process (Due: March 15, 2026)
+
+* **Update Appendix C (Critical Service Providers):** Add contact information for FBI Cyber Division, cyber insurance claim procedures, forensics consultants (Due: February 15, 2026)
+
+* **Plan Updated:** February 15, 2026 with lessons learned incorporated
+
+**Next Tabletop Exercise Scheduled:** July 2026 (Scenario: Natural disaster - building unavailable)
+
+**Approved By:**
+- Chris Wren, IT Manager - January 20, 2026
+- CEO - January 21, 2026
+
+**Video Recording:** Made available to Taiwan and China offices on January 22, 2026 via SharePoint with closed captions (English and Mandarin Chinese subtitles)

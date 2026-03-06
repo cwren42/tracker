@@ -1,0 +1,70 @@
+Code Repository Access List - GitLab
+Generated: March 2, 2026
+Source: GitLab Repository Members Export
+
+Account                 Username            Source                              Role        Added Date      Last Activity
+================================================================================================================================================
+Aaron Smith            @AaronSmith          Direct member by Todd Rich          Expiration  Dec 13, 2023    Mar 20, 2025
+Adam Hales             @adam.hales          Direct member by Jon Bertrand       Expiration  Nov 17, 2021    Feb 23, 2026
+Alan Liu               @alan.liu            Direct member by Mike Litster       Expiration  Apr 16, 2025    Mar 02, 2026
+Brian Monson           @bdm                 Direct member                       Expiration  Oct 22, 2020    Dec 03, 2025
+Christian Leishman     @christian.leishman  Direct member by Todd Rich          Expiration  Aug 25, 2021    Feb 27, 2026
+Chris Wren             @cjwren              Direct member by Tyler J. Smith    Reporter    Mar 24, 2020    Mar 02, 2026
+Colby Greenwood        @ColbyGreenwood      Direct member by Todd Rich          Expiration  May 17, 2022    Mar 02, 2026
+Courtney Parsons       @courtney.parsons    Direct member by Chris Wren         Expiration  Nov 12, 2024    Jan 31, 2025
+Dan Ferguson           @dan.ferguson        Direct member by Jon Bertrand       Expiration  Sep 07, 2022    Feb 27, 2026
+David Orr              @david.orr           Direct member by Tyler J. Smith    Expiration  Jan 24, 2022    Oct 09, 2023
+David Smith            @davidsmith          Direct member by Todd Rich - BLOCKED Expiration  Jun 28, 2022    Feb 28, 2024
+David Taylor           @cirq101030          Direct member by Tyler J. Smith    Expiration  Jan 04, 2021    Feb 26, 2026
+Ethan Sturm            @Ethan               Direct member by Todd Rich          Expiration  Dec 09, 2021    Apr 29, 2024
+Greg Clements          @greg.clements       Direct member by Mike Litster       Expiration  Apr 15, 2025    Feb 23, 2026
+Isaac                  @isaac               Direct member by Nolan M - BLOCKED  Expiration  Apr 02, 2021    Nov 08, 2023
+Jack                   @Jackk               Direct member by Todd Rich - BLOCKED Expiration  Apr 06, 2021    Apr 06, 2021
+Jackie                 @Jackie              Direct member by Todd Rich - BLOCKED Expiration  Jul 12, 2023    Jul 20, 2023
+Jared                  @jbytheway           Direct member - BLOCKED             Expiration  Jul 27, 2021    May 05, 2022
+Jenkins Server         @jenkins             Direct member                       Expiration  Dec 23, 2020    Nov 10, 2021
+Jian Dai               @JianDai             Direct member by Todd Rich - BLOCKED Expiration  Aug 31, 2021    May 28, 2022
+Jon Bertrand           @cirq101072          Direct member by Tyler J. Smith - BLOCKED Expiration Oct 20, 2020 Nov 24, 2025
+Jon Evans              @jonathan.evans      Direct member by Jon Bertrand - BLOCKED Expiration Jul 19, 2022 Aug 24, 2022
+Kenny Baker            @Kenny               Direct member by Todd Rich          Expiration  Jun 09, 2021    Mar 02, 2026
+Leo Jiang              @leo.jiang           Direct member by Dan Ferguson       Expiration  Apr 09, 2025    Mar 02, 2026
+Luke Davidson          @luke                Direct member by Todd Rich          Expiration  Sep 13, 2022    Feb 25, 2026
+Michael Chang          @michael.chang       Direct member by Mike Litster - 2FA Expiration  Jun 09, 2025    Feb 27, 2026
+Michael D. Layton      @mdl                 Direct member by Todd Rich          Expiration  Apr 06, 2021    Sep 18, 2025
+Mike Litster           @mike.litster        Direct member by Todd Rich          Expiration  Mar 02, 2021    Feb 27, 2026
+Mike Tran              @MikeT               Direct member by Todd Rich          Expiration  Feb 28, 2023    Nov 10, 2025
+Nemo Wang              @Nemo.Wang           Direct member by Todd Rich          Expiration  Nov 16, 2023    Feb 27, 2026
+Nolan M                @Nolan               Direct member by Tyler J. Smith - BLOCKED Expiration Mar 17, 2020 Apr 15, 2022
+Patrick Sherwood       @cirq101089          Direct member - BLOCKED             Expiration  Feb 16, 2021    May 13, 2022
+Paul B. Vincent        @cirq101033          Direct member by Tyler J. Smith    Expiration  May 18, 2021    May 18, 2021
+Rolando Quintana       @rolando             Direct member by Todd Rich - BLOCKED Expiration  Jun 01, 2021    Aug 31, 2021
+Sam Palomino           @Sam                 Direct member by Todd Rich          Expiration  Jun 24, 2025    Mar 02, 2026
+Scott Crowley          @scott.crowley       Direct member by Todd Rich          Expiration  Jul 05, 2022    Feb 27, 2026
+Sergey Dusheyko        @sergey.dusheyko     Direct member by Todd Rich - BLOCKED Expiration  Jun 27, 2022    Dec 03, 2023
+Shane Rose             @shane               Direct member by Todd Rich          Expiration  Apr 01, 2022    Nov 09, 2022
+Steve Ball             @steve.ball          Direct member by Chris Wren         Expiration  Nov 12, 2024    Dec 09, 2025
+Steve M. Austin        @cirq101037          Direct member by Tyler J. Smith    Expiration  Feb 28, 2022    Jan 15, 2025
+Steven Shrader         @stevens             Direct member by Tyler J. Smith - BLOCKED Expiration Jul 15, 2021 Aug 25, 2021
+Tim Redford            @timr                Direct member by Tyler J. Smith    Expiration  Aug 04, 2020    Mar 02, 2026
+Todd Rich              @todd.rich           Direct member                       Owner       Oct 02, 2020    Feb 04, 2026
+Tyler J. Smith         @cirq101085          Direct member by Tyler J. Smith    Expiration  Apr 02, 2020    Jul 31, 2025
+Vadim Klishko          @cirq101016          Direct member by Todd Rich          Expiration  Feb 25, 2021    Feb 27, 2026
+Varun Chandra Reddy    @varun               Direct member by Todd Rich - BLOCKED Expiration  Jan 20, 2021    Dec 13, 2021
+Wayland M. Duncan      @cirq101008          Direct member by Jon Bertrand       Expiration  Jan 08, 2025    Jan 08, 2025
+
+================================================================================================================================================
+SUMMARY:
+Total Accounts: 47
+Active Accounts: 31
+Blocked Accounts: 16
+Service Accounts: 1 (Jenkins Server)
+Owner: 1 (Todd Rich)
+2FA Enabled: 1 (Michael Chang)
+
+NOTES:
+- All access was reviewed as of March 2, 2026
+- Blocked accounts should be removed from system
+- Several blocked accounts show activity after blocking - requires investigation
+- Expiration dates should be monitored and access reviewed quarterly
+- Inactive accounts (no recent activity) should be deactivated
+- Service account (Jenkins) requires separate review and rotation schedule

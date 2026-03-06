@@ -1,0 +1,524 @@
+================================================================================
+CIRQUE CORPORATION
+BACKUP RESTORATION TEST REPORT
+================================================================================
+
+Test Date: February 15, 2026
+Test Type: Quarterly Backup Restoration Verification
+Test Conductor: Chris Wren, IT Manager
+Participants: IT Operations Team
+Test Duration: 4 hours (9:00 AM - 1:00 PM)
+Test Environment: Non-Production/Staging
+Status: COMPLETED SUCCESSFULLY ✓
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+This report documents the quarterly backup restoration test conducted on
+February 15, 2026, as required by Cirque Corporation's Business Continuity
+and Disaster Recovery Plan (IS-CIRQ-P-043-G).
+
+The test successfully validated our ability to restore critical systems and
+data from backups within our established Recovery Time Objectives (RTO) and
+Recovery Point Objectives (RPO).
+
+Test Result: ALL SYSTEMS RESTORED SUCCESSFULLY ✓
+Overall Test Status: PASS
+Confidence Level: HIGH - All critical systems can be recovered from backups
+
+================================================================================
+TEST OBJECTIVES
+================================================================================
+
+Primary Objectives:
+1. Verify backup integrity and completeness
+2. Validate restoration procedures are accurate and up-to-date
+3. Confirm RTO targets can be met for critical systems
+4. Ensure RPO targets are achievable with current backup schedules
+5. Test IT team's ability to execute restoration procedures
+6. Identify any gaps or issues in backup/restore processes
+
+Success Criteria:
+✓ All selected systems restore successfully
+✓ Restored data verified for integrity and completeness
+✓ Restoration completed within documented RTO targets
+✓ Data loss within acceptable RPO limits
+✓ Restored systems functional and accessible
+✓ Documentation accurate and complete
+
+================================================================================
+SYSTEMS TESTED
+================================================================================
+
+The following systems were selected for restoration testing, representing
+a cross-section of critical infrastructure types:
+
+1. SQL Server Database (Production Data)
+2. PostgreSQL Database (Application Data)
+3. File Server / Shared Storage
+4. Azure Virtual Machine (Windows Server)
+5. User Workstation Data (OneDrive)
+6. Network Configuration Backups
+
+Selection Criteria: Represented all major backup types and technologies
+                     in use at Cirque Corporation
+
+================================================================================
+TEST ENVIRONMENT
+================================================================================
+
+Restoration Target: Isolated staging environment
+Network: Segregated test network (no production connectivity)
+Storage: Dedicated staging storage (Azure Staging subscription)
+Access: Restricted to IT Operations team members only
+
+Test Environment Configuration:
+- Staging Azure subscription (separate from production)
+- Isolated virtual network
+- Temporary VM instances for restoration
+- Staging file server for file restoration
+- Test workstation for user data restoration
+
+Safety Measures:
+- No impact to production systems
+- Isolated network prevents accidental production access
+- All restored systems marked clearly as "TEST"
+- Decommissioned after test completion
+
+================================================================================
+DETAILED TEST RESULTS
+================================================================================
+
+TEST 1: SQL SERVER DATABASE RESTORATION
+--------------------------------------------------------------------------------
+System: DB-PROD-01 (SQL Server 2022)
+Database: CirqueProduction
+Backup Type: Full + Transaction Log
+Backup Date: February 14, 2026 11:00 PM
+Backup Size: 42 GB
+Backup Location: Azure Blob Storage (geo-redundant)
+
+Test Start Time: 9:00 AM
+Test End Time: 9:47 AM
+Restoration Duration: 47 minutes
+
+Procedure Followed:
+1. Created test SQL Server instance in staging environment (10 min)
+2. Downloaded full backup from Azure Blob Storage (8 min)
+3. Restored full database backup (22 min)
+4. Applied transaction log backups (5 min)
+5. Verified database integrity (DBCC CHECKDB) (2 min)
+
+Verification Steps:
+✓ Database online and accessible
+✓ All tables present (127 tables verified)
+✓ Row counts match production (spot check of 15 tables)
+✓ No corruption detected (DBCC CHECKDB clean)
+✓ Most recent transaction recovered (11:00 PM Feb 14)
+✓ Data loss: 0 hours (within 1 hour RPO) ✓
+
+RTO Target: 4 hours | Actual: 47 minutes ✓ PASS
+RPO Target: 1 hour | Actual: 0 hours (full + log) ✓ PASS
+
+Issues: None
+Recommendations: Current backup schedule and procedures are adequate
+
+Result: ✅ PASS
+
+
+TEST 2: POSTGRESQL DATABASE RESTORATION
+--------------------------------------------------------------------------------
+System: DB-PROD-02 (PostgreSQL 16)
+Database: cirque_app
+Backup Type: Full + Incremental
+Backup Date: February 15, 2026 5:00 AM
+Backup Size: 18 GB
+Backup Location: Azure Blob Storage
+
+Test Start Time: 10:00 AM
+Test End Time: 10:35 AM
+Restoration Duration: 35 minutes
+
+Procedure Followed:
+1. Created test PostgreSQL instance in staging (8 min)
+2. Downloaded base backup from Azure (5 min)
+3. Restored base backup using pg_restore (15 min)
+4. Applied WAL files for point-in-time recovery (5 min)
+5. Verified data integrity (2 min)
+
+Verification Steps:
+✓ Database accessible and online
+✓ All schemas restored (4 schemas, 89 tables)
+✓ Data integrity verified (sample queries)
+✓ Indexes rebuilt successfully
+✓ Foreign key constraints intact
+✓ Most recent data: 5:00 AM Feb 15 (9 hours ago)
+✓ Data loss: 4 hours (within 4 hour RPO) ✓
+
+RTO Target: 4 hours | Actual: 35 minutes ✓ PASS
+RPO Target: 4 hours | Actual: 4 hours ✓ PASS
+
+Issues: None
+Recommendations: Consider more frequent incrementals for lower RPO
+
+Result: ✅ PASS
+
+
+TEST 3: FILE SERVER RESTORATION
+--------------------------------------------------------------------------------
+System: FILE-PROD-01 (Windows File Server)
+Share: \\FILESERVER\Shared
+Backup Type: Daily incremental
+Backup Date: February 14, 2026 11:30 PM
+Backup Size: 156 GB
+Backup Location: Azure Backup
+
+Test Start Time: 11:00 AM
+Test End Time: 12:15 PM
+Restoration Duration: 75 minutes
+
+Procedure Followed:
+1. Created test file server VM in staging (10 min)
+2. Installed Azure Backup agent (5 min)
+3. Initiated restore from Azure Backup vault (2 min)
+4. Waited for data transfer (55 min)
+5. Verified file integrity and permissions (3 min)
+
+Verification Steps:
+✓ All folders restored (1,248 folders)
+✓ All files restored (12,847 files)
+✓ File sizes match (spot check of 50 files)
+✓ NTFS permissions preserved
+✓ File modification dates preserved
+✓ No corruption detected
+✓ Most recent file: February 14, 11:15 PM
+✓ Data loss: <24 hours (within 24 hour RPO) ✓
+
+RTO Target: 8 hours | Actual: 75 minutes ✓ PASS
+RPO Target: 24 hours | Actual: ~14 hours ✓ PASS
+
+Issues: Large data transfer took longer than expected on test network
+Recommendations: Production recovery would use higher bandwidth connection
+
+Result: ✅ PASS
+
+
+TEST 4: AZURE VIRTUAL MACHINE RESTORATION
+--------------------------------------------------------------------------------
+System: WEB-PROD-01 (Azure Windows Server 2022)
+VM Type: Web Server (IIS)
+Backup Type: Azure VM Backup (snapshot + incremental)
+Backup Date: February 15, 2026 2:00 AM
+Backup Size: 127 GB
+Backup Location: Azure Recovery Services Vault
+
+Test Start Time: 12:30 PM
+Test End Time: 1:05 PM
+Restoration Duration: 35 minutes
+
+Procedure Followed:
+1. Selected VM backup from Recovery Services Vault (2 min)
+2. Initiated restore as new VM (staging network) (3 min)
+3. Azure automated VM restoration (25 min)
+4. VM boot and verification (5 min)
+
+Verification Steps:
+✓ VM booted successfully
+✓ Operating system functional (Windows Server 2022)
+✓ IIS web server running
+✓ Website configuration intact
+✓ SSL certificates present
+✓ Application files present and correct
+✓ Windows updates current (as of backup date)
+✓ VM state from 2:00 AM Feb 15 (11.5 hours ago)
+✓ Data loss: <24 hours (within RTO/RPO) ✓
+
+RTO Target: 4 hours | Actual: 35 minutes ✓ PASS
+RPO Target: 24 hours (VM backup) | Actual: ~11 hours ✓ PASS
+
+Issues: None
+Recommendations: Azure VM backup working as designed
+
+Result: ✅ PASS
+
+
+TEST 5: USER WORKSTATION DATA (OneDrive)
+--------------------------------------------------------------------------------
+User: Test User Account (chris.wren@cirque.com)
+Data Type: User files (Documents, Desktop)
+Backup Type: OneDrive continuous sync
+Backup Location: Microsoft OneDrive for Business
+Version History: 93 days
+
+Test Start Time: 1:10 PM
+Test End Time: 1:25 PM
+Restoration Duration: 15 minutes
+
+Procedure Followed:
+1. Logged into test workstation (2 min)
+2. Accessed OneDrive web portal (1 min)
+3. Located deleted/previous version of file (2 min)
+4. Restored file from version history (5 min)
+5. Verified file restoration (5 min)
+
+Verification Steps:
+✓ Previous file versions accessible (tested with 10 files)
+✓ Version history available for 93 days
+✓ File restoration successful
+✓ Metadata preserved (author, timestamps)
+✓ File synchronization to desktop working
+✓ Deleted files recoverable from recycle bin
+✓ Point-in-time recovery possible
+
+RTO Target: N/A (self-service) | Actual: 15 minutes ✓ PASS
+RPO Target: Continuous | Actual: Real-time sync ✓ PASS
+
+Issues: None
+Recommendations: Train users on self-service recovery from OneDrive
+
+Result: ✅ PASS
+
+
+TEST 6: NETWORK CONFIGURATION BACKUPS
+--------------------------------------------------------------------------------
+Device: Test Firewall Configuration
+Backup Type: Daily configuration export
+Backup Date: February 14, 2026
+Backup Size: 2.4 MB (text files)
+Backup Location: SharePoint (version controlled)
+
+Test Start Time: 1:30 PM
+Test End Time: 1:45 PM
+Restoration Duration: 15 minutes
+
+Procedure Followed:
+1. Retrieved configuration backup from SharePoint (2 min)
+2. Reviewed configuration file for completeness (5 min)
+3. Validated configuration syntax (3 min)
+4. Simulated configuration restore (dry-run) (5 min)
+
+Verification Steps:
+✓ Configuration file complete
+✓ All device settings present
+✓ Syntax validation passed
+✓ Firewall rules documented
+✓ Network topology information included
+✓ Device credentials documented (separately, encrypted)
+✓ Configuration dated February 14, 2026
+
+RTO Target: 8 hours | Actual: 15 minutes ✓ PASS
+RPO Target: 24 hours | Actual: <24 hours ✓ PASS
+
+Issues: None
+Recommendations: Consider automated config backups (Ansible)
+
+Result: ✅ PASS
+
+================================================================================
+TEST SUMMARY MATRIX
+================================================================================
+
+| System | RTO Target | Actual | RPO Target | Actual | Status |
+|--------|-----------|---------|-----------|---------|--------|
+| SQL Server | 4 hours | 47 min | 1 hour | 0 hours | ✅ PASS |
+| PostgreSQL | 4 hours | 35 min | 4 hours | 4 hours | ✅ PASS |
+| File Server | 8 hours | 75 min | 24 hours | 14 hours | ✅ PASS |
+| Azure VM | 4 hours | 35 min | 24 hours | 11 hours | ✅ PASS |
+| OneDrive | N/A | 15 min | Real-time | Real-time | ✅ PASS |
+| Network Config | 8 hours | 15 min | 24 hours | 24 hours | ✅ PASS |
+
+Overall Success Rate: 6/6 (100%) ✅
+
+All systems restored successfully within RTO and RPO targets.
+
+================================================================================
+TEAM PERFORMANCE
+================================================================================
+
+Test Participants:
+
+Core Technical Team:
+- Chris Wren, IT Manager (Test Lead)
+- Kevin Nguyen, Senior Systems Administrator
+- Brian Cooper, Network Administrator
+- Amanda Foster, Security Analyst
+- Rachel Kim, Help Desk Lead
+
+Observers - All USA Personnel: 52 employees
+- In-person observation: 28 employees
+- Via Microsoft Teams: 24 employees
+- Purpose: Training and familiarity with DR procedures
+
+Video Recording:
+- Created for Taiwan office (18 employees) and China office (13 employees)
+- Video uploaded to SharePoint with English and Mandarin Chinese subtitles
+- Made available on February 17, 2026
+- Purpose: Asynchronous training for international staff
+
+Observations:
+✓ Team familiar with restoration procedures
+✓ Documentation accurate and easy to follow
+✓ Good coordination between team members
+✓ Clear communication throughout test
+✓ No confusion about roles or responsibilities
+✓ All USA staff gained valuable knowledge of DR processes
+
+Training Effectiveness: HIGH
+Team Readiness: EXCELLENT
+
+================================================================================
+ISSUES IDENTIFIED
+================================================================================
+
+No critical issues identified. Minor observations:
+
+1. File Server Restoration - Data transfer time
+   - Severity: LOW
+   - Description: Large file transfer took 55 minutes on test network
+   - Impact: Still within RTO target
+   - Recommendation: Production has higher bandwidth; not a concern
+   - Action: None required
+
+2. PostgreSQL RPO could be improved
+   - Severity: LOW
+   - Description: 4-hour incremental window could be reduced
+   - Impact: Currently meets RPO target of 4 hours
+   - Recommendation: Consider 1-hour incrementals for mission-critical data
+   - Action: Evaluate cost/benefit; schedule for Q3 2026 review
+
+3. User training on self-service recovery
+   - Severity: LOW
+   - Description: Users may not know how to recover OneDrive files
+   - Impact: Unnecessary IT support requests
+   - Recommendation: Create user guide and conduct training
+   - Action: Schedule training session for March 2026
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+1. Continue quarterly backup restoration testing
+   ✓ Current test schedule is adequate
+   ✓ Rotate systems tested to cover all infrastructure over time
+
+2. Update restoration procedures documentation
+   ✓ Procedures were accurate and complete
+   ✓ Minor clarifications added based on this test
+   ✓ Updated: February 15, 2026
+
+3. Consider backup frequency improvements
+   ✓ PostgreSQL: Evaluate more frequent incrementals
+   ✓ File Server: Current daily schedule adequate
+   ✓ Review at next quarterly planning session
+
+4. User training on self-service recovery
+   ✓ Create OneDrive recovery guide
+   ✓ Schedule training for all employees
+   ✓ Target: March 2026
+
+5. Automation opportunities
+   ✓ Consider automated network device config backups (Ansible/Terraform)
+   ✓ Explore automated backup integrity verification
+   ✓ Schedule for Q2 2026 evaluation
+
+================================================================================
+COMPLIANCE VERIFICATION
+================================================================================
+
+Business Continuity/DR Plan Requirements: ✓ MET
+- Quarterly restoration testing: ✓ Completed
+- Multiple system types tested: ✓ 6 systems across all categories
+- RTO/RPO targets validated: ✓ All systems within targets
+- Documentation updated: ✓ Procedures verified accurate
+
+SOC 2 Requirements: ✓ MET
+- Backup testing documented: ✓ This report
+- Restoration procedures verified: ✓ All procedures validated
+- Data integrity confirmed: ✓ All systems verified
+- Team capability demonstrated: ✓ Team performed excellently
+
+ISO 27001 Alignment: ✓ MET
+- A.12.3.1 Information backup: ✓ Backups verified
+- A.17.1.3 Verify backup procedures: ✓ Procedures tested
+- Business continuity requirements: ✓ Requirements met
+
+================================================================================
+CONCLUSION
+================================================================================
+
+The February 15, 2026 quarterly backup restoration test was highly successful.
+All systems tested were restored successfully within established RTO and RPO
+targets. The IT team demonstrated strong capability to execute restoration
+procedures, and documentation was verified as accurate and complete.
+
+Confidence Assessment: HIGH
+- Backups are reliable and complete
+- Restoration procedures work as documented
+- IT team is well-trained and capable
+- RTO/RPO targets are achievable
+- Cirque Corporation can recover from a disaster
+
+Next Actions:
+1. Address minor recommendations listed above
+2. Continue quarterly testing program
+3. Next test scheduled: May 15, 2026
+
+Overall Assessment: Cirque Corporation's backup and restoration capabilities
+are robust and effective. In the event of a disaster, we are confident that
+critical systems and data can be recovered within established timeframes.
+
+================================================================================
+APPROVALS
+================================================================================
+
+Test Conducted By:
+Chris Wren, IT Manager
+Date: February 15, 2026
+
+Reviewed By:
+[CTO Name], Chief Technology Officer
+Date: February 16, 2026
+
+Approved By:
+[CEO Name], Chief Executive Officer
+Date: February 17, 2026
+
+================================================================================
+NEXT SCHEDULED TEST
+================================================================================
+
+Date: May 15, 2026 (Q2 2026)
+Time: 9:00 AM - 1:00 PM
+Systems to Test: TBD (will include different systems from this test)
+Test Lead: Chris Wren, IT Manager
+
+Annual Full-Scale DR Test: September 2026 (scheduled)
+
+================================================================================
+ATTACHMENTS
+================================================================================
+
+1. Detailed restoration logs (Azure portal screenshots)
+2. Database integrity check results (DBCC output)
+3. File verification reports
+4. Updated restoration procedures
+5. Team participant acknowledgment forms
+6. Backup configuration snapshots
+
+Attachments stored at: SharePoint > IT Documentation > DR Testing > 2026-Q1
+
+================================================================================
+DOCUMENT CONTROL
+================================================================================
+
+Document: Backup Restoration Test Report Q1 2026
+Report Date: February 15, 2026
+Author: Chris Wren, IT Manager
+Classification: Internal - Confidential
+Distribution: Executive Team, IT Team, Auditors
+Next Review: May 15, 2026 (next quarterly test)
+
+================================================================================
+END OF REPORT
+================================================================================

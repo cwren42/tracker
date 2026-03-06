@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Edit {{ license.software_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <h1 class="h2">
+                <i class="bi bi-pencil text-warning"></i> Edit License: {{ license.software_name }}
+            </h1>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('edit_license', license_id=license.id) }}">
+                <div class="row">
+                    <!-- Software Information -->
+                    <div class="col-md-6">
+                        <h5 class="mb-3">Software Information</h5>
+                        
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Software Name</strong> <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" name="software_name" value="{{ license.software_name }}" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Vendor</label>
+                            <input type="text" class="form-control" name="vendor" value="{{ license.vendor or '' }}">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">License Type</label>
+                            <select class="form-select" name="license_type">
+                                <option value="">Select Type</option>
+                                <option value="Per User" {% if license.license_type == 'Per User' %}selected{% endif %}>Per User</option>
+                                <option value="Per Device" {% if license.license_type == 'Per Device' %}selected{% endif %}>Per Device</option>
+                                <option value="Site License" {% if license.license_type == 'Site License' %}selected{% endif %}>Site License</option>
+                                <option value="Subscription" {% if license.license_type == 'Subscription' %}selected{% endif %}>Subscription</option>
+                                <option value="Perpetual" {% if license.license_type == 'Perpetual' %}selected{% endif %}>Perpetual</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Total Licenses</label>
+                            <input type="number" class="form-control" name="total_licenses" value="{{ license.total_licenses }}" min="1" required>
+                            <small class="form-text text-muted">Number of licenses purchased</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">License Key</label>
+                            <textarea class="form-control" name="license_key" rows="3">{{ license.license_key or '' }}</textarea>
+                        </div>
+                    </div>
+
+                    <!-- Dates and Costs -->
+                    <div class="col-md-6">
+                        <h5 class="mb-3">Dates & Costs</h5>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Purchase Date</label>
+                            <input type="date" class="form-control" name="purchase_date" 
+                                   value="{{ license.purchase_date.strftime('%Y-%m-%d') if license.purchase_date else '' }}">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Expiry Date</label>
+                            <input type="date" class="form-control" name="expiry_date" 
+                                   value="{{ license.expiry_date.strftime('%Y-%m-%d') if license.expiry_date else '' }}">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Renewal Date</label>
+                            <input type="date" class="form-control" name="renewal_date" 
+                                   value="{{ license.renewal_date.strftime('%Y-%m-%d') if license.renewal_date else '' }}">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Purchase Cost</label>
+                            <div class="input-group">
+                                <span class="input-group-text">$</span>
+                                <input type="number" step="0.01" class="form-control" name="purchase_cost" 
+                                       value="{{ '%.2f'|format(license.purchase_cost) if license.purchase_cost else '' }}">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Annual Cost</label>
+                            <div class="input-group">
+                                <span class="input-group-text">$</span>
+                                <input type="number" step="0.01" class="form-control" name="annual_cost" 
+                                       value="{{ '%.2f'|format(license.annual_cost) if license.annual_cost else '' }}">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" name="status">
+                                <option value="Active" {% if license.status == 'Active' %}selected{% endif %}>Active</option>
+                                <option value="Expired" {% if license.status == 'Expired' %}selected{% endif %}>Expired</option>
+                                <option value="Cancelled" {% if license.status == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Notes -->
+                    <div class="col-12">
+                        <div class="mb-3">
+                            <label class="form-label">Notes</label>
+                            <textarea class="form-control" name="notes" rows="3">{{ license.notes or '' }}</textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle"></i> Save Changes
+                    </button>
+                    <a href="{{ url_for('view_license', license_id=license.id) }}" class="btn btn-secondary">
+                        <i class="bi bi-x-circle"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

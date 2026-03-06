@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}TeamViewer Sync Preview{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <h2><i class="bi bi-arrow-repeat"></i> TeamViewer Sync Preview</h2>
+            <p class="text-muted">Review changes before syncing TeamViewer devices to Asset Tracker</p>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card text-center border-primary">
+                <div class="card-body">
+                    <h3 class="text-primary mb-0">{{ total_devices }}</h3>
+                    <small class="text-muted">Total Devices Found</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center border-warning">
+                <div class="card-body">
+                    <h3 class="text-warning mb-0">{{ preview.to_update|length }}</h3>
+                    <small class="text-muted">Assets to Update</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center border-success">
+                <div class="card-body">
+                    <h3 class="text-success mb-0">{{ preview.to_create|length }}</h3>
+                    <small class="text-muted">New Assets to Create</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center border-secondary">
+                <div class="card-body">
+                    <h3 class="text-secondary mb-0">{{ preview.to_skip|length }}</h3>
+                    <small class="text-muted">Devices to Skip</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assets to Update -->
+    {% if preview.to_update %}
+    <div class="card mb-4">
+        <div class="card-header bg-warning text-dark">
+            <h5 class="mb-0"><i class="bi bi-arrow-clockwise"></i> Assets to Update ({{ preview.to_update|length }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Device Name</th>
+                            <th>Asset Tag</th>
+                            <th>TeamViewer ID</th>
+                            <th>Status</th>
+                            <th>OS</th>
+                            <th>Group</th>
+                            <th>Changes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for device in preview.to_update %}
+                        <tr>
+                            <td><strong>{{ device.name }}</strong></td>
+                            <td><code>{{ device.asset_tag }}</code></td>
+                            <td><small><code>{{ device.tv_id }}</code></small></td>
+                            <td>
+                                {% if device.online_state == 'Online' %}
+                                <span class="badge bg-success">Online</span>
+                                {% elif device.online_state == 'Busy' %}
+                                <span class="badge bg-warning">Busy</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Offline</span>
+                                {% endif %}
+                            </td>
+                            <td><small>{{ device.os }}</small></td>
+                            <td><small>{{ device.group }}</small></td>
+                            <td>
+                                {% if device.changes %}
+                                <ul class="list-unstyled mb-0 small">
+                                    {% for change in device.changes %}
+                                    <li><i class="bi bi-arrow-right text-primary"></i> {{ change }}</li>
+                                    {% endfor %}
+                                </ul>
+                                {% else %}
+                                <span class="text-muted">Refresh data</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- New Assets to Create -->
+    {% if preview.to_create %}
+    <div class="card mb-4">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0"><i class="bi bi-plus-circle"></i> New Assets to Create ({{ preview.to_create|length }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Device Name</th>
+                            <th>TeamViewer ID</th>
+                            <th>Status</th>
+                            <th>OS</th>
+                            <th>Group</th>
+                            <th>Will Create As</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for device in preview.to_create %}
+                        <tr>
+                            <td><strong>{{ device.name }}</strong></td>
+                            <td><small><code>{{ device.tv_id }}</code></small></td>
+                            <td>
+                                {% if device.online_state == 'Online' %}
+                                <span class="badge bg-success">Online</span>
+                                {% elif device.online_state == 'Busy' %}
+                                <span class="badge bg-warning">Busy</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Offline</span>
+                                {% endif %}
+                            </td>
+                            <td><small>{{ device.os }}</small></td>
+                            <td><small>{{ device.group }}</small></td>
+                            <td>
+                                <small>
+                                    <strong>Tag:</strong> TV-{{ device.tv_id[:8] }}<br>
+                                    <strong>Category:</strong> Computer<br>
+                                    <strong>Status:</strong> In Use<br>
+                                    <strong>Location:</strong> {{ device.group }}
+                                </small>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Devices to Skip -->
+    {% if preview.to_skip %}
+    <div class="card mb-4">
+        <div class="card-header bg-secondary text-white">
+            <h5 class="mb-0"><i class="bi bi-x-circle"></i> Devices to Skip ({{ preview.to_skip|length }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Device Name</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in preview.to_skip %}
+                        <tr>
+                            <td>{{ item.device }}</td>
+                            <td><small class="text-muted">{{ item.reason }}</small></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Action Buttons -->
+    <div class="card">
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-8">
+                    <h5><i class="bi bi-exclamation-triangle-fill text-warning"></i> Confirm Sync</h5>
+                    <p class="mb-0">
+                        This will update <strong>{{ preview.to_update|length }}</strong> existing assets 
+                        and create <strong>{{ preview.to_create|length }}</strong> new assets.
+                        {% if preview.to_skip %}
+                        <strong>{{ preview.to_skip|length }}</strong> devices will be skipped.
+                        {% endif %}
+                    </p>
+                    <small class="text-muted">All changes will be logged in asset history.</small>
+                </div>
+                <div class="col-md-4 text-end">
+                    <form method="POST" action="{{ url_for('teamviewer_sync') }}" style="display: inline;">
+                        <input type="hidden" name="action" value="execute">
+                        <button type="submit" class="btn btn-success btn-lg me-2" 
+                                onclick="return confirm('Execute sync now? This will update {{ preview.to_update|length }} asset{{ '' if preview.to_update|length == 1 else 's' }} and create {{ preview.to_create|length }} new asset{{ '' if preview.to_create|length == 1 else 's' }}.');">
+                            <i class="bi bi-check-circle"></i> Execute Sync
+                        </button>
+                    </form>
+                    <a href="{{ url_for('settings') }}" class="btn btn-outline-secondary btn-lg">
+                        <i class="bi bi-x-circle"></i> Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

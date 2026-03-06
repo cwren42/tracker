@@ -1,0 +1,515 @@
+{% set chart_id = widget_id|replace('_chart', '')|title|replace(' ', '') + 'Chart' + range(1000, 9999)|random|string %}
+
+{% if widget_id == 'category_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-pie-chart"></i> Assets by Category</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const categoryData = {{ data.category_counts|tojson }};
+        const labels = categoryData.map(item => item[0]);
+        const values = categoryData.map(item => item[1]);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: [
+                        '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
+                        '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0',
+                        '#6c757d', '#adb5bd'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                onClick: (event, elements) => {
+                    if (elements.length > 0) {
+                        const index = elements[0].index;
+                        const category = labels[index];
+                        window.location.href = `/assets?category=${encodeURIComponent(category)}`;
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        onClick: (e, legendItem, legend) => {
+                            const category = legendItem.text;
+                            window.location.href = `/assets?category=${encodeURIComponent(category)}`;
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function() {
+                                return 'Click to view assets';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        ctx.style.cursor = 'pointer';
+    }
+});
+</script>
+
+{% elif widget_id == 'status_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-pie-chart-fill"></i> Assets by Status</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const statusData = {{ data.status_counts|tojson }};
+        const labels = statusData.map(item => item[0]);
+        const values = statusData.map(item => item[1]);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: ['#198754', '#0dcaf0', '#ffc107', '#6c757d']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                onClick: (event, elements) => {
+                    if (elements.length > 0) {
+                        const index = elements[0].index;
+                        const status = labels[index];
+                        window.location.href = `/assets?status=${encodeURIComponent(status)}`;
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        onClick: (e, legendItem, legend) => {
+                            const status = legendItem.text;
+                            window.location.href = `/assets?status=${encodeURIComponent(status)}`;
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function() {
+                                return 'Click to view assets';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        ctx.style.cursor = 'pointer';
+    }
+});
+</script>
+
+{% elif widget_id == 'department_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-building"></i> Assets by Department</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const deptData = {{ data.dept_counts|tojson }};
+        const labels = deptData.map(item => item[0] || 'Unassigned');
+        const values = deptData.map(item => item[1]);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Asset Count',
+                    data: values,
+                    backgroundColor: '#198754'
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'lifecycle_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-clock-history"></i> Lifecycle Status</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const lifecycleData = {{ data.lifecycle_stats|tojson }};
+        const labels = Object.keys(lifecycleData);
+        const values = Object.values(lifecycleData);
+        
+        // Match colors from reports page exactly
+        const colors = {
+            'New': '#198754',
+            'Active': '#0d6efd',
+            'Aging': '#0dcaf0',
+            'Replace Soon': '#ffc107',
+            'End of Life': '#dc3545'
+        };
+        const bgColors = labels.map(label => colors[label] || '#6c757d');
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: bgColors
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                onClick: (event, elements) => {
+                    if (elements.length > 0) {
+                        const index = elements[0].index;
+                        const lifecycle = labels[index];
+                        window.location.href = `/assets?lifecycle=${encodeURIComponent(lifecycle)}`;
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        onClick: (e, legendItem, legend) => {
+                            const lifecycle = legendItem.text;
+                            window.location.href = `/assets?lifecycle=${encodeURIComponent(lifecycle)}`;
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function() {
+                                return 'Click to view assets';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'license_vendor_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-pie-chart"></i> Licenses by Vendor</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const vendorData = {{ data.license_vendor_stats|tojson }};
+        const labels = vendorData.map(item => item[0] || 'Unassigned');
+        const values = vendorData.map(item => item[1] || 0);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: ['#0dcaf0', '#198754', '#fd7e14', '#6c757d', '#0d6efd', '#d63384', '#20c997', '#ffc107']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        position: 'right'
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'license_type_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-pie-chart-fill"></i> Licenses by Type</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const typeData = {{ data.license_type_stats|tojson }};
+        const labels = typeData.map(item => item[0]);
+        const values = typeData.map(item => item[1]);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: ['#0d6efd', '#198754', '#ffc107', '#dc3545', '#6c757d']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        position: 'right'
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'license_cost_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-cash-stack"></i> Annual License Costs by Vendor</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const vendorData = {{ data.license_vendor_stats|tojson }};
+        const labels = vendorData.map(item => item[0] || 'Unassigned');
+        const values = vendorData.map(item => item[2] || 0);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Annual Cost ($)',
+                    data: values,
+                    backgroundColor: '#198754'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return '$' + context.parsed.y.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'license_utilization_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-bar-chart"></i> License Utilization</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const utilData = {{ data.license_utilization|tojson }};
+        const labels = utilData.map(item => item.software);
+        const assigned = utilData.map(item => item.assigned);
+        const available = utilData.map(item => item.available);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Assigned',
+                    data: assigned,
+                    backgroundColor: '#0d6efd'
+                }, {
+                    label: 'Available',
+                    data: available,
+                    backgroundColor: '#198754'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true }
+                },
+                plugins: {
+                    legend: { position: 'top' }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% elif widget_id == 'category_value_chart' %}
+<div class="card h-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-cash-stack"></i> Total Value by Category</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="{{ chart_id }}" style="max-height: 300px;"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (ctx && !ctx.chart) {
+        const categoryData = {{ data.category_counts|tojson }};
+        const labels = categoryData.map(item => item[0]);
+        const values = categoryData.map(item => item[2] || 0);
+        
+        ctx.chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Total Value ($)',
+                    data: values,
+                    backgroundColor: '#0d6efd'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                onClick: (event, elements) => {
+                    if (elements.length > 0) {
+                        const index = elements[0].index;
+                        const category = labels[index];
+                        window.location.href = `/assets?category=${encodeURIComponent(category)}`;
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return '$' + context.parsed.y.toLocaleString();
+                            },
+                            afterLabel: function() {
+                                return 'Click to view assets';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        ctx.style.cursor = 'pointer';
+    }
+});
+</script>
+{% endif %}

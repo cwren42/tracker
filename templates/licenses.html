@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}Software Licenses{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <h1 class="h2">
+                <i class="bi bi-key-fill text-primary"></i> Software Licenses
+            </h1>
+            <p class="text-muted mb-0">
+                <i class="bi bi-info-circle"></i> Each license can be assigned to multiple users based on available seats
+            </p>
+        </div>
+        <div class="col-md-4 text-end">
+            {% if current_user.role in ['admin', 'manager'] %}
+            <a href="{{ url_for('add_license') }}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> Add License
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <style>
+        .stat-card-clickable {
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+        }
+        .stat-card-clickable:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2) !important;
+        }
+        .stat-card-clickable .card-body {
+            position: relative;
+        }
+        .stat-card-clickable small {
+            opacity: 0.7;
+            font-size: 0.75rem;
+        }
+    </style>
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <a href="{{ url_for('licenses') }}" class="stat-card-clickable">
+                <div class="card border-primary shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Total Licenses</h6>
+                        <h2 class="card-title mb-0">{{ total_licenses }}</h2>
+                        <small class="text-primary"><i class="bi bi-hand-index"></i> Click to view all</small>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a href="{{ url_for('licenses', status='Active') }}" class="stat-card-clickable">
+                <div class="card border-success shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Active</h6>
+                        <h2 class="card-title mb-0 text-success">{{ active_licenses }}</h2>
+                        <small class="text-success"><i class="bi bi-hand-index"></i> Click to filter</small>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a href="#" onclick="filterExpiringSoon(); return false;" class="stat-card-clickable">
+                <div class="card border-warning shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Expiring Soon</h6>
+                        <h2 class="card-title mb-0 text-warning">{{ expiring_soon }}</h2>
+                        <small class="text-warning"><i class="bi bi-hand-index"></i> Click to view</small>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a href="{{ url_for('licenses') }}" class="stat-card-clickable">
+                <div class="card border-info shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Annual Cost</h6>
+                        <h3 class="card-title mb-0 text-info">${{ '%.2f'|format(total_annual_cost) }}</h3>
+                        <small class="text-info"><i class="bi bi-hand-index"></i> All licenses</small>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <form method="GET" action="{{ url_for('licenses') }}" class="row g-3">
+                <div class="col-md-3">
+                    <input type="text" class="form-control" name="software" 
+                           placeholder="Software name" value="{{ request.args.get('software', '') }}">
+                </div>
+                <div class="col-md-3">
+                    <input type="text" class="form-control" name="vendor" 
+                           placeholder="Vendor" value="{{ request.args.get('vendor', '') }}">
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select" name="license_type">
+                        <option value="">All Types</option>
+                        <option value="Per User" {% if request.args.get('license_type') == 'Per User' %}selected{% endif %}>Per User</option>
+                        <option value="Per Device" {% if request.args.get('license_type') == 'Per Device' %}selected{% endif %}>Per Device</option>
+                        <option value="Site License" {% if request.args.get('license_type') == 'Site License' %}selected{% endif %}>Site License</option>
+                        <option value="Subscription" {% if request.args.get('license_type') == 'Subscription' %}selected{% endif %}>Subscription</option>
+                        <option value="Perpetual" {% if request.args.get('license_type') == 'Perpetual' %}selected{% endif %}>Perpetual</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select" name="status">
+                        <option value="">All Status</option>
+                        <option value="Active" {% if request.args.get('status') == 'Active' %}selected{% endif %}>Active</option>
+                        <option value="Expired" {% if request.args.get('status') == 'Expired' %}selected{% endif %}>Expired</option>
+                        <option value="Cancelled" {% if request.args.get('status') == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-search"></i> Filter
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Licenses Table -->
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Software</th>
+                            <th>Vendor</th>
+                            <th>Type</th>
+                            <th>Total/Used</th>
+                            <th>Status</th>
+                            <th>Expiry Date</th>
+                            <th class="mobile-hide">Purchase Cost</th>
+                            <th class="mobile-hide">Annual Cost</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for license in licenses %}
+                        <tr>
+                            <td><strong>{{ license.software_name }}</strong></td>
+                            <td>{{ license.vendor or '-' }}</td>
+                            <td><span class="badge bg-secondary">{{ license.license_type or 'N/A' }}</span></td>
+                            <td>
+                                {% set used = license.total_licenses - license.get_available_licenses() %}
+                                <span class="badge {% if used >= license.total_licenses %}bg-danger{% elif used > license.total_licenses * 0.8 %}bg-warning{% else %}bg-success{% endif %}" 
+                                      data-bs-toggle="tooltip" title="{{ used }} users assigned, {{ license.get_available_licenses() }} seats available">
+                                    {{ used }}/{{ license.total_licenses }} users
+                                </span>
+                            </td>
+                            <td>
+                                {% if license.status == 'Active' %}
+                                    {% if license.is_expiring_soon(30) %}
+                                        <span class="badge bg-warning">Expiring Soon</span>
+                                    {% else %}
+                                        <span class="badge bg-success">Active</span>
+                                    {% endif %}
+                                {% elif license.status == 'Expired' %}
+                                    <span class="badge bg-danger">Expired</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">{{ license.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if license.expiry_date %}
+                                    {{ license.expiry_date.strftime('%Y-%m-%d') }}
+                                    {% if license.is_expiring_soon(30) %}
+                                        <i class="bi bi-exclamation-triangle-fill text-warning" title="Expires soon!"></i>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="mobile-hide">
+                                {% if license.purchase_cost %}
+                                    ${{ '%.2f'|format(license.purchase_cost) }}
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="mobile-hide">
+                                {% if license.annual_cost %}
+                                    ${{ '%.2f'|format(license.annual_cost) }}
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('view_license', license_id=license.id) }}" 
+                                   class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function filterExpiringSoon() {
+    // Get all rows in the table
+    const rows = document.querySelectorAll('tbody tr');
+    let hasExpiring = false;
+    
+    rows.forEach(row => {
+        const statusCell = row.cells[4]; // Status column
+        if (statusCell && statusCell.textContent.includes('Expiring Soon')) {
+            row.style.display = '';
+            hasExpiring = true;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    if (!hasExpiring) {
+        alert('No licenses expiring soon!');
+        rows.forEach(row => row.style.display = '');
+    } else {
+        // Scroll to table
+        document.querySelector('.table-responsive').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+// Enable tooltips
+document.addEventListener('DOMContentLoaded', function() {
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+});
+</script>
+
+{% endblock %}

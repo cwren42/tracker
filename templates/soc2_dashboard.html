@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block title %}SOC2 Compliance Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-shield-check"></i> SOC2 Compliance Dashboard</h2>
+    <div>
+        <a href="/soc2/strikegraph" class="btn btn-outline-primary me-2">
+            <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
+        </a>
+        <button class="btn btn-info me-2" onclick="runAzureSync()">
+            <i class="bi bi-cloud"></i> Azure Security Sync
+        </button>
+        <button class="btn btn-primary me-2" onclick="runSync()">
+            <i class="bi bi-arrow-repeat"></i> M365 Sync
+        </button>
+        <button class="btn btn-success" onclick="location.href='/api/soc2/export/all'">
+            <i class="bi bi-file-earmark-excel"></i> Export Full Report
+        </button>
+    </div>
+</div>
+
+<!-- Sync Status Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">M365 Users</h6>
+                <h3>{{ m365_user_count }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-shield-fill text-danger"></i> {{ m365_admin_count }} admins
+                </small>
+                {% if latest_user_sync %}
+                <div class="mt-2">
+                    <small class="text-muted">
+                        <i class="bi bi-clock"></i> Last sync: {{ latest_user_sync.strftime('%Y-%m-%d %H:%M') }}
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Intune Devices</h6>
+                <h3>{{ intune_device_count }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-check-circle-fill text-success"></i> {{ intune_compliant_count }} compliant
+                </small>
+                {% if latest_device_sync %}
+                <div class="mt-2">
+                    <small class="text-muted">
+                        <i class="bi bi-clock"></i> Last sync: {{ latest_device_sync.strftime('%Y-%m-%d %H:%M') }}
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Evidence Snapshots</h6>
+                <h3>{{ total_snapshots }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-collection"></i> Historical records
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Control Status</h6>
+                <h3>{{ control_summary.in_place }}/{{ control_summary.total }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-robot text-primary"></i> {{ control_summary.automated }} automated
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Control Summary -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-list-check"></i> Control Summary</h5>
+    </div>
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-12">
+                <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check" name="filter" id="filterAll" checked autocomplete="off" onclick="filterControls('all')">
+                    <label class="btn btn-outline-primary" for="filterAll">All ({{ control_summary.total }})</label>
+                    
+                    <input type="radio" class="btn-check" name="filter" id="filterInPlace" autocomplete="off" onclick="filterControls('In Place')">
+                    <label class="btn btn-outline-success" for="filterInPlace">In Place ({{ control_summary.in_place }})</label>
+                    
+                    <input type="radio" class="btn-check" name="filter" id="filterPartial" autocomplete="off" onclick="filterControls('Partially In Place')">
+                    <label class="btn btn-outline-warning" for="filterPartial">Partial ({{ control_summary.partial }})</label>
+                    
+                    <input type="radio" class="btn-check" name="filter" id="filterNot" autocomplete="off" onclick="filterControls('Not In Place')">
+                    <label class="btn btn-outline-danger" for="filterNot">Not In Place ({{ control_summary.not_in_place }})</label>
+                    
+                    <input type="radio" class="btn-check" name="filter" id="filterAuto" autocomplete="off" onclick="filterControls('automated')">
+                    <label class="btn btn-outline-info" for="filterAuto">Automated ({{ control_summary.automated }})</label>
+                </div>
+            </div>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table table-hover table-sortable" id="controlsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)" style="cursor: pointer;">
+                            Control <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th onclick="sortTable(1)" style="cursor: pointer;">
+                            Frequency <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th onclick="sortTable(2)" style="cursor: pointer;">
+                            Progress <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th onclick="sortTable(3)" style="cursor: pointer;">
+                            Automation <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th onclick="sortTable(4)" style="cursor: pointer;">
+                            Last Evidence <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for control in controls %}
+                    <tr data-progress="{{ control.control_progress }}" data-automated="{{ control.automation_enabled }}">
+                        <td>
+                            <strong>{{ control.control_name }}</strong>
+                            <br><small class="text-muted">{{ control.control_description[:100] }}...</small>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">{{ control.control_frequency }}</span>
+                        </td>
+                        <td>
+                            {% if control.control_progress == 'In Place' %}
+                                <span class="badge bg-success">In Place</span>
+                            {% elif control.control_progress == 'Partially In Place' %}
+                                <span class="badge bg-warning">Partial</span>
+                            {% else %}
+                                <span class="badge bg-danger">Not In Place</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if control.automation_enabled %}
+                                <i class="bi bi-robot text-primary" title="Automated"></i> Automated
+                            {% else %}
+                                <i class="bi bi-hand-index text-muted" title="Manual"></i> Manual
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if latest_evidence[control.id] %}
+                                <small>{{ latest_evidence[control.id].snapshot_date.strftime('%Y-%m-%d %H:%M') }}</small>
+                                <br><small class="text-muted">{{ latest_evidence[control.id].record_count }} records</small>
+                            {% else %}
+                                <small class="text-muted">No evidence yet</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewEvidence({{ control.id }})">
+                                <i class="bi bi-eye"></i> View
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-activity"></i> Recent Activity</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Action</th>
+                        <th>Entity</th>
+                        <th>User</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in recent_logs %}
+                    <tr>
+                        <td><small>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</small></td>
+                        <td><span class="badge bg-info">{{ log.action }}</span></td>
+                        <td><small>{{ log.entity_type }}</small></td>
+                        <td><small>{{ log.user_email }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function filterControls(filter) {
+    const rows = document.querySelectorAll('#controlsTable tbody tr');
+    rows.forEach(row => {
+        if (filter === 'all') {
+            row.style.display = '';
+        } else if (filter === 'automated') {
+            row.style.display = row.dataset.automated === 'True' ? '' : 'none';
+        } else {
+            row.style.display = row.dataset.progress === filter ? '' : 'none';
+        }
+    });
+}
+
+function viewEvidence(controlId) {
+    // TODO: Navigate to evidence viewer page
+    window.location.href = `/soc2/evidence/${controlId}`;
+}
+
+function runAzureSync() {
+    if (confirm('Run Azure Security sync? This will collect firewall rules, vulnerability scans, encryption settings, and security alerts from Azure. This may take several minutes.')) {
+        const btn = event.target.closest('button');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing Azure...';
+        
+        fetch('/api/soc2/azure-security-sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Azure Security Sync complete!\n\nNSGs: ${data.nsgs}\nSecurity Alerts: ${data.alerts}\nDatabases: ${data.databases}\nStorage: ${data.storage}\nVMs: ${data.vms}\nVulnerability Scans: ${data.assessments}\nMonitor Alerts: ${data.monitor}\nNetworks: ${data.network}\n\nTotal: ${data.total_items} items`);
+                location.reload();
+            } else {
+                alert('Azure sync failed: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Azure sync error: ' + error);
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cloud"></i> Azure Security Sync';
+        });
+    }
+}
+
+function sortTable(columnIndex) {
+    const table = document.getElementById('controlsTable');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    
+    // Determine sort direction
+    const currentSort = table.dataset.sortColumn;
+    const currentDir = table.dataset.sortDir || 'asc';
+    const newDir = (currentSort == columnIndex && currentDir === 'asc') ? 'desc' : 'asc';
+    
+    rows.sort((a, b) => {
+        const aCell = a.cells[columnIndex].textContent.trim();
+        const bCell = b.cells[columnIndex].textContent.trim();
+        
+        if (newDir === 'asc') {
+            return aCell.localeCompare(bCell);
+        } else {
+            return bCell.localeCompare(aCell);
+        }
+    });
+    
+    // Re-append rows in sorted order
+    rows.forEach(row => tbody.appendChild(row));
+    
+    // Update sort indicators
+    table.dataset.sortColumn = columnIndex;
+    table.dataset.sortDir = newDir;
+    
+    // Update header icons
+    const headers = table.querySelectorAll('th');
+    headers.forEach((header, idx) => {
+        const icon = header.querySelector('i');
+        if (icon) {
+            if (idx === columnIndex) {
+                icon.className = newDir === 'asc' ? 'bi bi-arrow-up' : 'bi bi-arrow-down';
+            } else {
+                icon.className = 'bi bi-arrow-down-up';
+            }
+        }
+    });
+}
+
+function runSync() {
+    if (confirm('Run M365/Intune sync? This will collect users, devices, and software from Microsoft 365. This may take several minutes.')) {
+        const btn = event.target.closest('button');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
+        
+        fetch('/api/soc2/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`M365 Sync complete!\nUsers: ${data.users_synced}\nDevices: ${data.devices_synced}`);
+                location.reload();
+            } else {
+                alert('Sync failed: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Sync error: ' + error);
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> M365 Sync';
+        });
+    }
+}
+</script>
+
+{% endblock %}

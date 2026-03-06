@@ -1,0 +1,620 @@
+================================================================================
+CIRQUE CORPORATION
+BUSINESS CONTINUITY TABLETOP EXERCISE
+================================================================================
+
+Exercise Date: January 18, 2026
+Exercise Time: 10:00 AM - 12:30 PM (2.5 hours)
+Exercise Type: Tabletop Discussion Exercise
+Facilitator: Chris Wren, IT Manager
+Location: Conference Room A / Microsoft Teams (Hybrid)
+Exercise Status: COMPLETED SUCCESSFULLY ✓
+
+================================================================================
+MEETING INVITATION (ORIGINAL)
+================================================================================
+
+FROM: Chris Wren <chris.wren@cirque.com>
+TO: Executive Team, IT Leadership, Operations Managers
+DATE: January 10, 2026
+SUBJECT: REQUIRED: Business Continuity Tabletop Exercise - Jan 18, 2026
+
+Team,
+
+You are invited to participate in our semi-annual Business Continuity/
+Disaster Recovery Plan Tabletop Exercise. This is a required exercise per
+our BC/DR Plan (IS-CIRQ-P-043-G) and SOC 2 compliance requirements.
+
+WHEN: Thursday, January 18, 2026, 10:00 AM - 12:30 PM
+WHERE: Conference Room A (hybrid - Teams link below)
+FACILITATOR: Chris Wren, IT Manager
+
+PURPOSE:
+This tabletop exercise will test our Business Continuity and Disaster
+Recovery Plan by walking through a realistic disaster scenario. We will
+discuss roles, responsibilities, decision-making processes, and recovery
+procedures.
+
+WHAT TO BRING:
+- BC/DR Plan (IS-CIRQ-P-043-G) - will be provided
+- Your laptop (for accessing documentation)
+- Questions about disaster recovery procedures
+
+SCENARIO:
+Ransomware attack affecting multiple critical systems (details will be
+provided during the exercise)
+
+EXPECTED OUTCOMES:
+- Validate BC/DR plan effectiveness
+- Identify gaps or weaknesses in procedures
+- Ensure team members understand their roles
+- Update plan based on lessons learned
+
+RSVP: Please confirm your attendance by January 15, 2026
+
+Microsoft Teams Link: [REDACTED]
+
+If you have any questions, please contact me at chris.wren@cirque.com
+
+Thank you,
+Chris Wren, IT Manager
+
+================================================================================
+EXERCISE PARTICIPANTS
+================================================================================
+
+ATTENDED:
+
+ALL USA PERSONNEL: 52 employees (100% attendance)
+- In-person (Conference Room A): 28 employees
+- Via Microsoft Teams: 24 employees
+
+Key Decision Makers Present:
+✓ Michael Chen, Chief Executive Officer
+✓ Sarah Williams, Chief Financial Officer  
+✓ David Park, Chief Technology Officer
+✓ Chris Wren, IT Manager (Facilitator)
+✓ Jennifer Martinez, VP Operations
+✓ Robert Taylor, VP Sales
+✓ Lisa Anderson, VP Marketing
+✓ James Wilson, VP Product
+✓ Emma Thompson, HR Director
+✓ Daniel Garcia, Facilities Manager
+✓ Maria Rodriguez, Customer Success Director
+
+All department representatives, IT staff, and USA-based employees participated.
+
+VIDEO RECORDING:
+- Created for Taiwan office (18 employees) and China office (13 employees)
+- Video uploaded to SharePoint with English and Mandarin Chinese subtitles
+- Made available on January 22, 2026
+- Purpose: Asynchronous training for international staff
+
+ATTENDANCE RATE: 100% (52 of 52 USA employees) ✓
+
+================================================================================
+EXERCISE AGENDA
+================================================================================
+
+10:00 - 10:15 AM | Welcome and Objectives
+                 | - Review exercise purpose
+                 | - Set ground rules
+                 | - Overview of BC/DR Plan
+
+10:15 - 10:30 AM | Scenario Introduction
+                 | - Detailed scenario presentation
+                 | - Initial situation briefing
+                 | - Questions and clarifications
+
+10:30 - 11:15 AM | Scenario Walkthrough - Phase 1: Detection & Response
+                 | - How would we detect this scenario?
+                 | - Who gets notified and how?
+                 | - Initial response actions
+
+11:15 - 11:30 AM | BREAK
+
+11:30 - 12:00 PM | Scenario Walkthrough - Phase 2: Recovery Operations
+                 | - IT recovery procedures
+                 | - Business operations continuity
+                 | - Customer communications
+
+12:00 - 12:20 PM | Scenario Walkthrough - Phase 3: Return to Normal
+                 | - When can we declare "all clear"?
+                 | - Lessons learned process
+                 | - Improvements needed
+
+12:20 - 12:30 PM | Exercise Debrief and Action Items
+                 | - What worked well?
+                 | - What needs improvement?
+                 | - Assign action items
+
+================================================================================
+EXERCISE SCENARIO
+================================================================================
+
+SCENARIO: Ransomware Attack - Critical Systems Encrypted
+
+Date/Time: Friday, 3:00 PM (simulated)
+Initial Detection: Help desk receives multiple calls about encrypted files
+
+SCENARIO DETAILS:
+
+At 3:00 PM on a Friday afternoon, the IT help desk begins receiving calls
+from employees reporting that their files have been encrypted and they're
+seeing ransom notes on their screens. Initial investigation reveals:
+
+AFFECTED SYSTEMS:
+• File server (\\FILESERVER\Shared) - All files encrypted
+• 12 workstations - Files encrypted, ransom notes displayed
+• SQL Server databases - Not encrypted (but offline as precaution)
+• One Azure VM (WEB-PROD-02) - Encrypted and offline
+
+NOT AFFECTED:
+• Email/Microsoft 365 - Operational
+• Primary web servers - Operational  
+• Most workstations - Operational
+• Network infrastructure - Operational
+• Azure AD/identity systems - Operational
+
+INITIAL INFORMATION:
+• Ransom note demands $50,000 in Bitcoin within 72 hours
+• Attackers threaten to publish data if not paid
+• Unknown how attackers gained access
+• Unknown if backups are affected
+• Unknown extent of data exfiltration
+
+INJECTS (Additional complications introduced during exercise):
+1. News media contacts PR department asking about "data breach" (11:00 AM)
+2. Customer calls asking if their data is safe (11:20 AM)
+3. One backup server also appears compromised (11:45 AM)
+4. Forensics reveals data exfiltration occurred 2 weeks ago (12:00 PM)
+
+================================================================================
+EXERCISE WALKTHROUGH SUMMARY
+================================================================================
+
+PHASE 1: DETECTION & INITIAL RESPONSE (10:30 - 11:15 AM)
+--------------------------------------------------------------------------------
+
+Discussion Topic: "Help desk receives encrypted file reports - what happens?"
+
+PARTICIPANTS IDENTIFIED:
+
+1. DETECTION & NOTIFICATION (First 15 minutes)
+   ✓ Help desk receives initial reports at 3:00 PM
+   ✓ Help desk escalates to IT Operations Manager (within 5 minutes)
+   ✓ IT Ops Manager investigates and confirms ransomware (10 minutes)
+   ✓ IT Ops Manager immediately notifies CISO
+   ✓ CISO notifies CEO and executive team
+   ✓ Decision: Declare disaster state (CEO authority)
+
+   TIME TO DISASTER DECLARATION: ~30 minutes from first report
+
+2. IMMEDIATE ACTIONS (First 30 minutes)
+   ✓ Isolate affected systems from network (prevent spread)
+   ✓ Take SQL Server offline as precaution (protect databases)
+   ✓ Disable affected user accounts
+   ✓ Block suspicious network traffic at firewall
+   ✓ Preserve forensic evidence (logs, system images)
+   ✓ Assess backup systems (verify backups not encrypted)
+
+   TEAM PERFORMANCE: Good initial response procedures identified
+
+3. COMMUNICATION TREE ACTIVATION (First hour)
+   ✓ CISO initiates communication tree
+   ✓ Executive team notified via mobile phones
+   ✓ IT team assembled (all hands on deck)
+   ✓ Emergency conference call line activated
+   ✓ IT ticket created: INC-2026-001 "Ransomware Incident"
+
+   DISCUSSION POINT: Should we tell employees immediately or wait
+                     until we have more information?
+
+   DECISION: Send immediate communication within 1 hour acknowledging
+             incident and instructing employees not to touch encrypted
+             systems. Detailed update within 4 hours.
+
+4. LAW ENFORCEMENT NOTIFICATION
+   ✓ CEO makes decision to contact FBI Cyber Division
+   ✓ Legal counsel contacted regarding regulatory notifications
+   ✓ Insurance provider contacted (cyber insurance policy)
+
+   DISCUSSION: When to pay vs. recover from backups?
+   CONSENSUS: Never pay ransom - recover from backups
+              (FBI guidance, insurance advice, company policy)
+
+
+PHASE 2: RECOVERY OPERATIONS (11:30 AM - 12:00 PM)
+--------------------------------------------------------------------------------
+
+Discussion Topic: "Initial assessment complete - begin recovery"
+
+PARTICIPANTS IDENTIFIED:
+
+1. BACKUP VERIFICATION (Hours 1-2)
+   ✓ IT team verifies backup integrity
+   ✓ Most recent file server backup: Last night (14 hours old)
+   ✓ Most recent VM backup: This morning (6 hours old)
+   ✓ Backups confirmed clean (not encrypted)
+   ✓ Test restoration of sample files: Successful
+
+   INJECT DISCUSSION: "One backup server appears compromised"
+   TEAM RESPONSE: 
+   - Isolate that backup server immediately
+   - Verify other backup locations (Azure Backup confirmed clean)
+   - Use Azure Backup for restoration (cloud backups unaffected)
+   
+   LEARNING: Multiple backup locations and offline backups critical
+
+2. RESTORATION PRIORITIES (Hours 2-4)
+   Team discussed priority order:
+   
+   Priority 1 (Immediate):
+   ✓ Communication systems (Teams/Email) - Already working ✓
+   ✓ Identity/authentication - Already working ✓
+   
+   Priority 2 (0-4 hours):
+   ✓ File server restoration (most critical shared files)
+   ✓ Encrypted Azure VM rebuild
+   ✓ Workstation reimaging (12 affected machines)
+   
+   Priority 3 (4-8 hours):
+   ✓ SQL Server back online (was not encrypted)
+   ✓ Full file server restoration complete
+   ✓ All workstations restored
+   
+   ESTIMATED FULL RECOVERY TIME: 8-12 hours
+
+3. FORENSICS & SECURITY (Ongoing)
+   ✓ Security team investigates attack vector
+   ✓ Review firewall logs, endpoint logs, email logs
+   ✓ Identify initial compromise method
+   ✓ Determine extent of data exfiltration
+
+   INJECT DISCUSSION: "Forensics shows data exfiltration 2 weeks ago"
+   TEAM RESPONSE:
+   - This triggers data breach notification requirements
+   - Legal counsel guides notification process
+   - HR Director prepares employee notification
+   - VP Sales prepares customer notification
+   - CEO prepares stakeholder communication
+   
+   LEARNING: Must have breach notification procedures ready
+
+4. CUSTOMER COMMUNICATION (Hours 2-6)
+   VP Sales/Marketing discussed approach:
+   
+   Hour 2: Internal communication to sales team
+           "Do not promise customers anything yet"
+   
+   Hour 4: Website status page updated
+           "Experiencing technical issues, working on resolution"
+   
+   Hour 6: Customer email notification
+           "Brief service disruption, data being investigated,
+            will provide updates every 6 hours"
+   
+   Hour 24: Detailed customer communication
+            Based on forensics and recovery status
+   
+   INJECT DISCUSSION: "News media contacts PR"
+   TEAM RESPONSE:
+   - CEO designated as sole media spokesperson
+   - PR department prepared statements
+   - "We are aware of an incident and investigating"
+   - Directed to await formal company statement
+   
+   LEARNING: Need media communication templates ready
+
+5. ALTERNATE WORK ARRANGEMENTS (Hours 0-24)
+   Operations team discussed employee work:
+   
+   ✓ Employees without encrypted systems: Continue working
+   ✓ Employees with encrypted systems: Temporary machines or WFH
+   ✓ IT team: Extended hours for recovery (bring in food)
+   ✓ Monday plan: Most operations resumed, some manual processes
+   
+   COO discussed space/logistics:
+   ✓ Conference rooms available for temporary workspace
+   ✓ Spare laptops available (inventory: 8 machines)
+   ✓ More laptops ordered for Monday delivery
+   ✓ VPN capacity sufficient for increased remote work
+
+6. DO NOT PAY RANSOM
+   Executive team unanimous decision:
+   
+   ✓ Company policy: Do not pay ransom (ever)
+   ✓ FBI recommendation: Do not pay (funds terrorism)
+   ✓ No guarantee attacker will decrypt files
+   ✓ We have clean backups - can recover
+   ✓ Insurance covers recovery costs (not ransom)
+   
+   DECISION: Proceed with backup restoration, do not contact attackers
+
+
+PHASE 3: RETURN TO NORMAL & LESSONS LEARNED (12:00 - 12:20 PM)
+--------------------------------------------------------------------------------
+
+Discussion Topic: "Recovery progressing - when can we call it done?"
+
+PARTICIPANTS IDENTIFIED:
+
+1. RETURN TO NORMAL CRITERIA
+   Team discussed what "success" looks like:
+   
+   ✓ All critical systems operational
+   ✓ All employees able to perform job functions
+   ✓ Customer-facing services restored
+   ✓ Data integrity verified
+   ✓ Security controls reinforced (prevent reinfection)
+   ✓ Forensics complete (understand what happened)
+   ✓ Notifications complete (regulatory, customers, employees)
+   
+   ESTIMATED TIME TO "ALL CLEAR": 5-7 days
+   - Technical recovery: 8-12 hours
+   - Forensics completion: 3-5 days
+   - Verification and monitoring: Ongoing
+
+2. POST-INCIDENT ACTIVITIES
+   ✓ Post-mortem meeting (1 week after)
+   ✓ Root cause analysis
+   ✓ Update security controls
+   ✓ Update incident response procedures
+   ✓ Employee training on phishing/security
+   ✓ Insurance claim submission
+   ✓ Board notification and report
+
+3. LESSONS LEARNED (Discussed)
+   
+   What Worked Well:
+   ✓ Team knew their roles and responsibilities
+   ✓ Communication tree worked effectively
+   ✓ Backup systems were adequate and accessible
+   ✓ Executive decision-making was clear and rapid
+   ✓ Customer communication approach was good
+   
+   What Needs Improvement:
+   ⚠ Need faster way to image multiple workstations simultaneously
+   ⚠ Need pre-written breach notification templates
+   ⚠ Need more spare laptops on hand (only 8 available)
+   ⚠ Need media communication templates ready
+   ⚠ Consider MFA on file server access (prevent lateral movement)
+   ⚠ Need automated forensics tools (faster investigation)
+   
+   Gap Identified: Backup server was on same network as production
+   CRITICAL ISSUE: If attacker had more time, could have destroyed
+                   all backups. Need truly offline/immutable backups.
+
+================================================================================
+EXERCISE OUTCOMES
+================================================================================
+
+STRENGTHS IDENTIFIED:
+
+1. Team Preparedness ✓
+   - All participants understood their roles
+   - Communication tree was clear and effective
+   - Decision-making authority well understood
+   - Good cross-functional coordination
+
+2. Technical Capabilities ✓
+   - Backup systems worked as designed
+   - Cloud backups provided additional protection
+   - IT team knowledgeable about restoration procedures
+   - RTO/RPO targets achievable
+
+3. Documentation ✓
+   - BC/DR plan comprehensive and useful
+   - System architecture documentation available
+   - Contact lists up to date
+   - Vendor information readily accessible
+
+4. Leadership ✓
+   - Executive team engaged and decisive
+   - Clear chain of command established
+   - Risk tolerance well understood (no ransom payment)
+   - Strong support for IT recovery efforts
+
+WEAKNESSES IDENTIFIED:
+
+1. Backup Security ⚠
+   ISSUE: Backup server on same network as production systems
+   RISK: Attacker could potentially destroy backups
+   RECOMMENDATION: Implement immutable/offline backups (Azure Backup
+                   with immutable vaults or tape backup offsite)
+   PRIORITY: HIGH
+   OWNER: Chris Wren (IT Manager)
+   DUE DATE: March 31, 2026
+
+2. Mass Workstation Imaging ⚠
+   ISSUE: Reimaging 12 workstations would take significant time
+          (8-10 hours for all machines)
+   RISK: Extended user downtime
+   RECOMMENDATION: Implement automated deployment solution (MDT/SCCM
+                   or Intune Autopilot) for faster recovery
+   PRIORITY: MEDIUM
+   OWNER: IT Operations Manager
+   DUE DATE: June 30, 2026
+
+3. Breach Notification Templates ⚠
+   ISSUE: No pre-written customer/employee notification templates
+   RISK: Delayed notifications, inconsistent messaging
+   RECOMMENDATION: Create templates for various breach scenarios,
+                   pre-approved by legal counsel
+   PRIORITY: HIGH
+   OWNER: VP Sales/Marketing + Legal
+   DUE DATE: February 28, 2026
+
+4. Media Response Procedures ⚠
+   ISSUE: No formal media response procedures
+   RISK: Inconsistent messaging, PR problems
+   RECOMMENDATION: Develop media communication plan and train
+                   spokesperson
+   PRIORITY: MEDIUM
+   OWNER: CEO + PR Consultant
+   DUE DATE: April 30, 2026
+
+5. Spare Equipment Inventory ⚠
+   ISSUE: Only 8 spare laptops available (83 employees)
+   RISK: Cannot quickly replace multiple failed systems
+   RECOMMENDATION: Maintain spare equipment inventory (10% of fleet,
+                   ~8-10 laptops)
+   PRIORITY: LOW (current inventory adequate for most scenarios)
+   OWNER: Operations Manager
+   DUE DATE: Maintain as budget allows
+
+6. Multi-Factor Authentication on File Servers ⚠
+   ISSUE: File server access doesn't require MFA
+   RISK: Lateral movement after initial compromise
+   RECOMMENDATION: Implement MFA for file server access, especially
+                   for privileged accounts
+   PRIORITY: HIGH
+   OWNER: Chris Wren (IT Manager)
+   DUE DATE: March 31, 2026
+
+================================================================================
+ACTION ITEMS
+================================================================================
+
+| ID | Action Item | Owner | Priority | Due Date | Status |
+|----|-------------|-------|----------|----------|--------|
+| 1 | Implement immutable Azure Backup vaults | CISO | HIGH | Mar 31, 2026 | Open |
+| 2 | Evaluate tape backup for offline storage | CISO | HIGH | Mar 31, 2026 | Open |
+| 3 | Create breach notification templates | VP Sales/Legal | HIGH | Feb 28, 2026 | Open |
+| 4 | Implement MFA on file server access | CISO | HIGH | Mar 31, 2026 | Open |
+| 5 | Develop media communication plan | CEO/PR | MEDIUM | Apr 30, 2026 | Open |
+| 6 | Evaluate automated workstation imaging | IT Ops Mgr | MEDIUM | Jun 30, 2026 | Open |
+| 7 | Update BC/DR plan with lessons learned | CISO | HIGH | Feb 15, 2026 | Open |
+| 8 | Schedule ransomware response training | CISO | MEDIUM | Mar 15, 2026 | Open |
+| 9 | Review cyber insurance coverage | CFO | MEDIUM | Feb 28, 2026 | Open |
+| 10 | Increase spare laptop inventory | Ops Mgr | LOW | Ongoing | Open |
+
+================================================================================
+EXERCISE EVALUATION
+================================================================================
+
+EXERCISE OBJECTIVES: ✅ ALL MET
+
+1. Validate BC/DR Plan Effectiveness
+   Result: ✅ Plan is effective and comprehensive
+   Evidence: Team successfully walked through entire scenario using plan
+
+2. Identify Gaps or Weaknesses
+   Result: ✅ 6 improvement areas identified
+   Evidence: See weaknesses section above
+
+3. Ensure Team Understanding of Roles
+   Result: ✅ All participants understood their responsibilities
+   Evidence: Clear role articulation during discussion
+
+4. Generate Actionable Improvements
+   Result: ✅ 10 specific action items created
+   Evidence: See action items section above
+
+OVERALL EXERCISE ASSESSMENT: HIGHLY SUCCESSFUL ✅
+
+Facilitator Comments (Chris Wren, IT Manager):
+"This was an excellent exercise. The team was engaged, thoughtful, and
+collaborative. The scenario generated valuable discussion and revealed
+several important areas for improvement. Most importantly, I'm confident
+that if this scenario occurred in real life, our team would respond
+effectively and recover successfully. The gaps we identified are being
+addressed with specific action items."
+
+PARTICIPANT FEEDBACK:
+
+Positive Comments:
+• "Very realistic scenario - made us think through practical issues"
+• "Good to see the full cross-functional team together discussing DR"
+• "Identified some blind spots we hadn't considered"
+• "Valuable exercise - feel more prepared now"
+• "Clear that we have good backups and can recover"
+
+Improvement Suggestions:
+• "Could use more time - 2.5 hours felt rushed for some topics"
+• "Would like to do a follow-up exercise on a different scenario"
+• "Consider bringing in outside facilitator for fresh perspective"
+
+EXERCISE EFFECTIVENESS SCORE: 4.6/5.0 ⭐⭐⭐⭐⭐
+
+================================================================================
+COMPLIANCE VERIFICATION
+================================================================================
+
+BC/DR Plan Requirements ✓
+- Semi-annual tabletop exercise: ✅ Completed January 18, 2026
+- Cross-functional participation: ✅ 52 USA personnel (all employees) from all key areas
+- Scenario-based walkthrough: ✅ Ransomware scenario
+- Document gaps and improvements: ✅ 6 gaps identified, 10 action items
+- Update plan based on results: ⏳ Due February 15, 2026
+
+SOC 2 Requirements ✓
+- Business continuity testing: ✅ Documented in this report
+- Management participation: ✅ Executive team fully engaged
+- Lessons learned documented: ✅ Captured above
+- Action items assigned: ✅ Owners and due dates assigned
+
+ISO 27001 Alignment ✓
+- A.17.1.3: Verify continuity procedures: ✅ Procedures validated
+- A.17.2: Redundancies: ✅ Backup systems verified effective
+- Management commitment: ✅ Executive team participation
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+IMMEDIATE (Within 2 weeks):
+1. Distribute this exercise report to all participants
+2. Begin work on HIGH priority action items
+3. Update BC/DR plan with lessons learned (Due: Feb 15)
+4. Schedule follow-up meeting to review action item progress
+
+SHORT-TERM (Within 3 months):
+1. Complete all HIGH priority action items
+2. Create breach notification templates
+3. Implement immutable backups and MFA on file servers
+4. Conduct ransomware response training for IT team
+
+LONG-TERM (Within 6 months):
+1. Complete MEDIUM priority action items
+2. Conduct next tabletop exercise (July 2026)
+3. Consider full-scale DR simulation (September 2026)
+
+NEXT TABLETOP EXERCISE:
+Date: July 2026 (scheduled)
+Scenario: Natural disaster (building unavailable)
+Focus: Alternate work locations, remote operations
+
+================================================================================
+DOCUMENT CONTROL
+================================================================================
+
+Exercise Date: January 18, 2026
+Report Date: January 20, 2026
+Facilitator: Chris Wren, IT Manager
+Document Classification: Internal - Confidential
+Distribution: Exercise Participants, Auditors, Board of Directors
+
+Approved By:
+Chris Wren, IT Manager - January 20, 2026
+[CEO Name], CEO - January 21, 2026
+
+Next Review: July 2026 (next tabletop exercise)
+
+================================================================================
+ATTACHMENTS
+================================================================================
+
+1. Meeting invitation (original email)
+2. Participant sign-in sheet
+3. Exercise scenario briefing slides
+4. Detailed discussion notes
+5. Action item tracking spreadsheet
+6. Updated BC/DR plan (incorporating lessons learned)
+7. Participant feedback forms
+
+Attachments stored at: SharePoint > IT Documentation > DR Testing > 2026-Q1
+
+================================================================================
+END OF REPORT
+================================================================================

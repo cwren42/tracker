@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Import Employees - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Import Employees from CSV</h1>
+            <a href="{{ url_for('employees') }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Back
+            </a>
+        </div>
+
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle"></i>
+            <strong>Instructions:</strong>
+            <ul class="mb-0 mt-2">
+                <li>Download the sample CSV template below</li>
+                <li>Fill in employee details (Name is required)</li>
+                <li>Upload the completed CSV file</li>
+                <li>Duplicate employees (by email) will be skipped</li>
+            </ul>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-download"></i> Step 1: Download Template</h5>
+            </div>
+            <div class="card-body">
+                <p>Download a sample CSV template with the correct format:</p>
+                <a href="{{ url_for('download_employee_template') }}" class="btn btn-primary">
+                    <i class="bi bi-file-earmark-spreadsheet"></i> Download Employee Template CSV
+                </a>
+                <div class="mt-3">
+                    <small class="text-muted">
+                        <strong>CSV Format:</strong> Name, Email, Phone, Department, Position<br>
+                        <strong>Example:</strong> "John Doe", "john.doe@company.com", "555-0100", "Engineering", "Software Engineer"
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-upload"></i> Step 2: Upload CSV File</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Select CSV File</label>
+                        <input type="file" class="form-control" id="file" name="file" accept=".csv" required>
+                        <small class="text-muted">Only CSV files are accepted (Max 5MB)</small>
+                    </div>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-upload"></i> Import Employees
+                    </button>
+                    <a href="{{ url_for('employees') }}" class="btn btn-secondary">Cancel</a>
+                </form>
+            </div>
+        </div>
+
+        {% if results %}
+        <div class="card mt-4 border-{{ 'success' if results.errors|length == 0 else 'warning' }}">
+            <div class="card-header bg-{{ 'success' if results.errors|length == 0 else 'warning' }} text-white">
+                <h5 class="mb-0">Import Results</h5>
+            </div>
+            <div class="card-body">
+                <p><strong>Successfully imported:</strong> {{ results.success }} employee(s)</p>
+                <p><strong>Skipped/Errors:</strong> {{ results.errors|length }} employee(s)</p>
+                
+                {% if results.errors %}
+                <hr>
+                <h6>Errors:</h6>
+                <ul class="list-group">
+                    {% for error in results.errors %}
+                    <li class="list-group-item list-group-item-warning">
+                        <strong>Row {{ error.row }}:</strong> {{ error.message }}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                
+                {% if results.success > 0 %}
+                <div class="mt-3">
+                    <a href="{{ url_for('employees') }}" class="btn btn-primary">
+                        <i class="bi bi-people"></i> View All Employees
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

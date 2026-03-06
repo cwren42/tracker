@@ -1,0 +1,729 @@
+{% extends "base.html" %}
+
+{% block title %}Assets - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="mb-1">Assets</h1>
+        {% if request.args.get('category') or request.args.get('status') or request.args.get('lifecycle') or request.args.get('filter') %}
+        <div class="mb-0">
+            <small class="text-muted">Active filters: </small>
+            {% if request.args.get('filter') %}
+            <span class="badge bg-primary">
+                Quick Filter: {{ request.args.get('filter')|replace('_', ' ')|title }}
+                <a href="{{ url_for('assets', search=request.args.get('search', ''), status=request.args.get('status', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
+            </span>
+            {% endif %}
+            {% if request.args.get('category') %}
+            <span class="badge bg-secondary">
+                Category: {{ request.args.get('category') }}
+                <a href="{{ url_for('assets', search=request.args.get('search', ''), status=request.args.get('status', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
+            </span>
+            {% endif %}
+            {% if request.args.get('status') %}
+            <span class="badge bg-info">
+                Status: {{ request.args.get('status') }}
+                <a href="{{ url_for('assets', search=request.args.get('search', ''), category=request.args.get('category', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
+            </span>
+            {% endif %}
+            {% if request.args.get('lifecycle') %}
+            <span class="badge bg-warning">
+                Lifecycle: {{ request.args.get('lifecycle') }}
+                <a href="{{ url_for('assets', search=request.args.get('search', ''), category=request.args.get('category', ''), status=request.args.get('status', '')) }}" class="text-white ms-1">×</a>
+            </span>
+            {% endif %}
+            <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-secondary ms-2">Clear All</a>
+        </div>
+        {% endif %}
+    </div>
+    <div>
+        {% if current_user.role in ['admin', 'manager'] %}
+        <a href="{{ url_for('find_duplicate_assets') }}" class="btn btn-warning">
+            <i class="bi bi-files"></i> Find Duplicates
+        </a>
+        <form method="POST" action="{{ url_for('sync_assets_from_intune') }}" style="display: inline;" onsubmit="return confirm('Sync all devices from Microsoft Intune? This will create new assets or update existing ones based on serial numbers.');">
+            <button type="submit" class="btn btn-secondary">
+                <i class="bi bi-arrow-repeat"></i> Sync from Intune
+            </button>
+        </form>
+        <a href="{{ url_for('bulk_assign_csv') }}" class="btn btn-primary">
+            <i class="bi bi-file-earmark-spreadsheet"></i> Assign from CSV
+        </a>
+        <a href="{{ url_for('import_assets') }}" class="btn btn-info">
+            <i class="bi bi-upload"></i> Import Assets
+        </a>
+        {% endif %}
+        <a href="{{ url_for('export_assets_csv') }}" class="btn btn-success">
+            <i class="bi bi-download"></i> Export CSV
+        </a>
+        {% if current_user.role in ['admin', 'manager'] %}
+        <a href="{{ url_for('add_asset') }}" class="btn btn-primary">
+            <i class="bi bi-plus-circle"></i> Add Asset
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Quick Filters -->
+<div class="mb-3">
+    <div class="btn-group" role="group" aria-label="Quick filters">
+        <a href="{{ url_for('assets', filter='noncompliant') }}" class="btn {% if request.args.get('filter') == 'noncompliant' %}btn-danger{% else %}btn-outline-danger{% endif %}">
+            <i class="bi bi-shield-exclamation"></i> Non-Compliant
+        </a>
+        <a href="{{ url_for('assets', filter='low_storage') }}" class="btn {% if request.args.get('filter') == 'low_storage' %}btn-warning{% else %}btn-outline-warning{% endif %}">
+            <i class="bi bi-hdd"></i> Low Storage (<20%)
+        </a>
+        <a href="{{ url_for('assets', filter='offline') }}" class="btn {% if request.args.get('filter') == 'offline' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+            <i class="bi bi-wifi-off"></i> Offline 7+ Days
+        </a>
+        <a href="{{ url_for('assets', filter='warranty_expiring') }}" class="btn {% if request.args.get('filter') == 'warranty_expiring' %}btn-info{% else %}btn-outline-info{% endif %}">
+            <i class="bi bi-calendar-x"></i> Warranty Expiring
+        </a>
+        <a href="{{ url_for('assets', filter='unassigned') }}" class="btn {% if request.args.get('filter') == 'unassigned' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+            <i class="bi bi-person-x"></i> Unassigned
+        </a>
+        {% if request.args.get('filter') %}
+        <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-x"></i> Clear Filter
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Advanced Search & Filters -->
+<div class="card mb-4">
+    <div class="card-header">
+        <button class="btn btn-sm btn-link text-decoration-none p-0" type="button" data-bs-toggle="collapse" data-bs-target="#advancedFilters">
+            <i class="bi bi-funnel"></i> Advanced Search & Filters
+            <i class="bi bi-chevron-down"></i>
+        </button>
+        <span class="float-end">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="saveCurrentFilters()">
+                <i class="bi bi-bookmark"></i> Save Search
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#savedFiltersModal">
+                <i class="bi bi-bookmarks"></i> Saved Filters
+            </button>
+        </span>
+    </div>
+    <div class="collapse show" id="advancedFilters">
+        <div class="card-body">
+            <form method="GET" id="filterForm" class="row g-3">
+                <!-- Row 1: Text Search and Multi-select Categories -->
+                <div class="col-md-4">
+                    <label class="form-label small">Search</label>
+                    <input type="text" class="form-control" name="search" placeholder="Asset name, tag, serial..." value="{{ request.args.get('search', '') }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small">Categories (Multi-select)</label>
+                    <select class="form-select" name="categories" id="categoriesSelect" multiple size="1">
+                        {% for cat in categories %}
+                        <option value="{{ cat[0] }}" {% if cat[0] in request.args.getlist('categories') %}selected{% endif %}>{{ cat[0] }}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small">Status</label>
+                    <select class="form-select" name="status">
+                        <option value="">All Status</option>
+                        <option value="Available" {% if request.args.get('status') == 'Available' %}selected{% endif %}>Available</option>
+                        <option value="In Use" {% if request.args.get('status') == 'In Use' %}selected{% endif %}>In Use</option>
+                        <option value="In Repair" {% if request.args.get('status') == 'In Repair' %}selected{% endif %}>In Repair</option>
+                        <option value="Retired" {% if request.args.get('status') == 'Retired' %}selected{% endif %}>Retired</option>
+                    </select>
+                </div>
+                
+                <!-- Row 2: Date Ranges -->
+                <div class="col-md-3">
+                    <label class="form-label small">Purchase Date From</label>
+                    <input type="date" class="form-control" name="purchase_from" value="{{ request.args.get('purchase_from', '') }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Purchase Date To</label>
+                    <input type="date" class="form-control" name="purchase_to" value="{{ request.args.get('purchase_to', '') }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Warranty Status</label>
+                    <select class="form-select" name="warranty_status">
+                        <option value="">All</option>
+                        <option value="active" {% if request.args.get('warranty_status') == 'active' %}selected{% endif %}>Active</option>
+                        <option value="expiring" {% if request.args.get('warranty_status') == 'expiring' %}selected{% endif %}>Expiring Soon (30 days)</option>
+                        <option value="expired" {% if request.args.get('warranty_status') == 'expired' %}selected{% endif %}>Expired</option>
+                        <option value="none" {% if request.args.get('warranty_status') == 'none' %}selected{% endif %}>No Warranty</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Lifecycle Status</label>
+                    <select class="form-select" name="lifecycle">
+                        <option value="">All</option>
+                        <option value="New" {% if request.args.get('lifecycle') == 'New' %}selected{% endif %}>New</option>
+                        <option value="Active" {% if request.args.get('lifecycle') == 'Active' %}selected{% endif %}>Active</option>
+                        <option value="Aging" {% if request.args.get('lifecycle') == 'Aging' %}selected{% endif %}>Aging</option>
+                        <option value="Replace Soon" {% if request.args.get('lifecycle') == 'Replace Soon' %}selected{% endif %}>Replace Soon</option>
+                        <option value="End of Life" {% if request.args.get('lifecycle') == 'End of Life' %}selected{% endif %}>End of Life</option>
+                    </select>
+                </div>
+                
+                <!-- Row 3: Action Buttons -->
+                <div class="col-12">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-search"></i> Apply Filters
+                    </button>
+                    <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-circle"></i> Clear All
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if assets %}
+<!-- Bulk Operations Toolbar -->
+{% if current_user.role in ['admin', 'manager'] %}
+<div class="card mb-3 border-info" id="bulkToolbar" style="display: none;">
+    <div class="card-body py-2">
+        <div class="row align-items-center">
+            <div class="col-md-3">
+                <strong><span id="selectedCount">0</span> assets selected</strong>
+            </div>
+            <div class="col-md-9 text-end">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="bulkUpdateStatus()">
+                        <i class="bi bi-arrow-repeat"></i> Update Status
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-info" onclick="bulkAssignDepartment()">
+                        <i class="bi bi-building"></i> Assign Department
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-success" onclick="bulkExportSelected()">
+                        <i class="bi bi-download"></i> Export Selected
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkDelete()">
+                        <i class="bi bi-trash"></i> Delete Selected
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">
+                        <i class="bi bi-x"></i> Clear Selection
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        {% if current_user.role in ['admin', 'manager'] %}
+                        <th width="40">
+                            <input type="checkbox" id="selectAll" class="form-check-input" onchange="toggleSelectAll(this)">
+                        </th>
+                        {% endif %}
+                        <th style="cursor: pointer;" onclick="sortTable('asset_tag')">
+                            Asset Tag 
+                            {% if request.args.get('sort') == 'asset_tag' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th style="cursor: pointer;" onclick="sortTable('name')">
+                            Name
+                            {% if request.args.get('sort') == 'name' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th style="cursor: pointer;" onclick="sortTable('category')">
+                            Category
+                            {% if request.args.get('sort') == 'category' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('manufacturer')">
+                            Manufacturer
+                            {% if request.args.get('sort') == 'manufacturer' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('serial_number')">
+                            Serial Number
+                            {% if request.args.get('sort') == 'serial_number' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th style="cursor: pointer;" onclick="sortTable('status')">
+                            Status
+                            {% if request.args.get('sort') == 'status' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
+                        <th class="mobile-hide">Lifecycle</th>
+                        <th class="mobile-hide">Assigned To</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in assets %}
+                    <tr>
+                        {% if current_user.role in ['admin', 'manager'] %}
+                        <td>
+                            <input type="checkbox" class="form-check-input asset-checkbox" value="{{ asset.id }}" onchange="updateBulkToolbar()">
+                        </td>
+                        {% endif %}
+                        <td><strong>{{ asset.asset_tag }}</strong></td>
+                        <td>
+                            {{ asset.name }}
+                            {% if asset.purchase_date and asset.expected_life_years %}
+                            <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip" 
+                               title="Age: {{ '%.1f'|format(asset.get_age_years()) }} years | Replacement: {{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else 'Not set' }}"></i>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                        <td class="mobile-hide">{{ asset.manufacturer or '-' }}</td>
+                        <td class="mobile-hide"><small class="text-muted">{{ asset.serial_number or '-' }}</small></td>
+                        <td>
+                            {% if asset.status == 'Available' %}
+                                <span class="badge bg-success">{{ asset.status }}</span>
+                            {% elif asset.status == 'In Use' %}
+                                <span class="badge bg-info">{{ asset.status }}</span>
+                            {% elif asset.status == 'In Repair' %}
+                                <span class="badge bg-warning">{{ asset.status }}</span>
+                            {% else %}
+                                <span class="badge bg-secondary">{{ asset.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.purchase_date and asset.expected_life_years %}
+                                {% set status = asset.get_lifecycle_status() %}
+                                {% if status == 'New' %}
+                                    <span class="badge bg-success">{{ status }}</span>
+                                {% elif status == 'Active' %}
+                                    <span class="badge bg-primary">{{ status }}</span>
+                                {% elif status == 'Aging' %}
+                                    <span class="badge bg-info">{{ status }}</span>
+                                {% elif status == 'Replace Soon' %}
+                                    <span class="badge bg-warning">{{ status }}</span>
+                                {% elif status == 'End of Life' %}
+                                    <span class="badge bg-danger">{{ status }}</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.assigned_employee %}
+                                {{ asset.assigned_employee.name }}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <a href="{{ url_for('edit_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info text-center">
+    <i class="bi bi-info-circle"></i> No assets found. <a href="{{ url_for('add_asset') }}">Add your first asset</a>
+</div>
+{% endif %}
+
+<!-- Saved Filters Modal -->
+<div class="modal fade" id="savedFiltersModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Saved Search Filters</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="savedFiltersList"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Status Update Modal -->
+<div class="modal fade" id="bulkStatusModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Bulk Update Status</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label">New Status</label>
+                <select class="form-select" id="bulkStatus">
+                    <option value="Available">Available</option>
+                    <option value="In Use">In Use</option>
+                    <option value="In Repair">In Repair</option>
+                    <option value="Retired">Retired</option>
+                </select>
+                <div class="mt-3">
+                    <p class="text-muted">This will update <strong><span id="bulkStatusCount">0</span></strong> assets.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitBulkStatus()">Update Status</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Department Assignment Modal -->
+<div class="modal fade" id="bulkDepartmentModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Bulk Assign to Department</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label">Select Department</label>
+                <input type="text" class="form-control" id="bulkDepartment" placeholder="Enter department name">
+                <div class="mt-3">
+                    <p class="text-muted">This will assign <strong><span id="bulkDeptCount">0</span></strong> assets to the department.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitBulkDepartment()">Assign Department</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Multi-select categories enhancement
+document.addEventListener('DOMContentLoaded', function() {
+    const categoriesSelect = document.getElementById('categoriesSelect');
+    if (categoriesSelect) {
+        categoriesSelect.size = 3;
+    }
+    
+    // Load saved filters on page load
+    loadSavedFilters();
+});
+
+// Bulk Operations Functions
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.asset-checkbox');
+    checkboxes.forEach(cb => cb.checked = checkbox.checked);
+    updateBulkToolbar();
+}
+
+function updateBulkToolbar() {
+    const checkboxes = document.querySelectorAll('.asset-checkbox:checked');
+    const count = checkboxes.length;
+    const toolbar = document.getElementById('bulkToolbar');
+    const countSpan = document.getElementById('selectedCount');
+    
+    if (count > 0) {
+        toolbar.style.display = 'block';
+        countSpan.textContent = count;
+    } else {
+        toolbar.style.display = 'none';
+        document.getElementById('selectAll').checked = false;
+    }
+}
+
+function getSelectedAssetIds() {
+    const checkboxes = document.querySelectorAll('.asset-checkbox:checked');
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
+function clearSelection() {
+    document.querySelectorAll('.asset-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('selectAll').checked = false;
+    updateBulkToolbar();
+}
+
+// Bulk Status Update
+function bulkUpdateStatus() {
+    const count = getSelectedAssetIds().length;
+    document.getElementById('bulkStatusCount').textContent = count;
+    const modal = new bootstrap.Modal(document.getElementById('bulkStatusModal'));
+    modal.show();
+}
+
+function submitBulkStatus() {
+    const assetIds = getSelectedAssetIds();
+    const status = document.getElementById('bulkStatus').value;
+    
+    fetch('/assets/bulk/status', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            asset_ids: assetIds,
+            status: status
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Successfully updated ${data.count} assets`);
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('Error updating assets: ' + error);
+    });
+}
+
+// Bulk Department Assignment
+function bulkAssignDepartment() {
+    const count = getSelectedAssetIds().length;
+    document.getElementById('bulkDeptCount').textContent = count;
+    const modal = new bootstrap.Modal(document.getElementById('bulkDepartmentModal'));
+    modal.show();
+}
+
+function submitBulkDepartment() {
+    const assetIds = getSelectedAssetIds();
+    const department = document.getElementById('bulkDepartment').value;
+    
+    if (!department) {
+        alert('Please enter a department name');
+        return;
+    }
+    
+    fetch('/assets/bulk/department', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            asset_ids: assetIds,
+            department: department
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Successfully assigned ${data.count} assets to ${department}`);
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('Error assigning department: ' + error);
+    });
+}
+
+// Bulk Export Selected
+function bulkExportSelected() {
+    const assetIds = getSelectedAssetIds();
+    
+    // Create a form and submit it to trigger file download
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/assets/bulk/export';
+    
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'asset_ids';
+    input.value = JSON.stringify(assetIds);
+    
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+}
+
+// Bulk Delete
+function bulkDelete() {
+    const assetIds = getSelectedAssetIds();
+    
+    if (!confirm(`Are you sure you want to delete ${assetIds.length} assets? This action cannot be undone!`)) {
+        return;
+    }
+    
+    fetch('/assets/bulk/delete', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            asset_ids: assetIds
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Successfully deleted ${data.count} assets`);
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('Error deleting assets: ' + error);
+    });
+}
+
+// Saved Filters Functions
+function saveCurrentFilters() {
+    const form = document.getElementById('filterForm');
+    const formData = new FormData(form);
+    const params = new URLSearchParams(formData);
+    
+    // Get all filter values
+    const filters = {
+        search: formData.get('search') || '',
+        categories: formData.getAll('categories'),
+        status: formData.get('status') || '',
+        purchase_from: formData.get('purchase_from') || '',
+        purchase_to: formData.get('purchase_to') || '',
+        warranty_status: formData.get('warranty_status') || '',
+        lifecycle: formData.get('lifecycle') || ''
+    };
+    
+    // Check if any filters are set
+    const hasFilters = Object.values(filters).some(v => 
+        Array.isArray(v) ? v.length > 0 : v !== ''
+    );
+    
+    if (!hasFilters) {
+        alert('No filters to save. Please set some filters first.');
+        return;
+    }
+    
+    const name = prompt('Enter a name for this saved search:');
+    if (!name) return;
+    
+    // Get existing saved filters
+    let savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
+    
+    // Add new filter
+    savedFilters.push({
+        id: Date.now(),
+        name: name,
+        filters: filters,
+        created: new Date().toISOString()
+    });
+    
+    // Save to localStorage
+    localStorage.setItem('assetFilters', JSON.stringify(savedFilters));
+    
+    alert('Search filter saved successfully!');
+}
+
+function loadSavedFilters() {
+    const savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
+    const listDiv = document.getElementById('savedFiltersList');
+    
+    if (savedFilters.length === 0) {
+        listDiv.innerHTML = '<p class="text-muted">No saved filters yet.</p>';
+        return;
+    }
+    
+    let html = '<div class="list-group">';
+    savedFilters.forEach(filter => {
+        const date = new Date(filter.created).toLocaleDateString();
+        html += `
+            <div class="list-group-item">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>${filter.name}</strong>
+                        <br><small class="text-muted">Saved on ${date}</small>
+                    </div>
+                    <div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="applyFilter(${filter.id})">
+                            <i class="bi bi-funnel"></i> Apply
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteFilter(${filter.id})">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    
+    listDiv.innerHTML = html;
+}
+
+function applyFilter(filterId) {
+    const savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
+    const filter = savedFilters.find(f => f.id === filterId);
+    
+    if (!filter) return;
+    
+    // Build URL with filter parameters
+    const params = new URLSearchParams();
+    
+    if (filter.filters.search) params.append('search', filter.filters.search);
+    if (filter.filters.status) params.append('status', filter.filters.status);
+    if (filter.filters.purchase_from) params.append('purchase_from', filter.filters.purchase_from);
+    if (filter.filters.purchase_to) params.append('purchase_to', filter.filters.purchase_to);
+    if (filter.filters.warranty_status) params.append('warranty_status', filter.filters.warranty_status);
+    if (filter.filters.lifecycle) params.append('lifecycle', filter.filters.lifecycle);
+    
+    // Add multiple categories
+    if (filter.filters.categories && filter.filters.categories.length > 0) {
+        filter.filters.categories.forEach(cat => params.append('categories', cat));
+    }
+    
+    // Navigate to filtered page
+    window.location.href = '/assets?' + params.toString();
+}
+
+function deleteFilter(filterId) {
+    if (!confirm('Delete this saved filter?')) return;
+    
+    let savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
+    savedFilters = savedFilters.filter(f => f.id !== filterId);
+    localStorage.setItem('assetFilters', JSON.stringify(savedFilters));
+    
+    loadSavedFilters();
+}
+
+function sortTable(column) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentSort = urlParams.get('sort');
+    const currentDir = urlParams.get('dir') || 'asc';
+    
+    // Toggle direction if clicking same column, otherwise default to asc
+    if (currentSort === column) {
+        urlParams.set('dir', currentDir === 'asc' ? 'desc' : 'asc');
+    } else {
+        urlParams.set('sort', column);
+        urlParams.set('dir', 'asc');
+    }
+    
+    window.location.search = urlParams.toString();
+}
+</script>
+{% endblock %}

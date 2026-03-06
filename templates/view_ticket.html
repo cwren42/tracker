@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Ticket #{{ ticket.id }} - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="mb-1"><i class="bi bi-ticket-perforated"></i> Ticket #{{ ticket.id }}</h1>
+    <div class="text-muted">{{ ticket.subject }}</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-secondary" href="{{ url_for('tickets') }}">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+    {% if ticket.status == 'Open' %}
+      <form method="POST" action="{{ url_for('close_ticket', ticket_id=ticket.id) }}">
+        <button class="btn btn-success" type="submit">
+          <i class="bi bi-check2-circle"></i> Close
+        </button>
+      </form>
+    {% else %}
+      <form method="POST" action="{{ url_for('reopen_ticket', ticket_id=ticket.id) }}">
+        <button class="btn btn-warning" type="submit">
+          <i class="bi bi-arrow-counterclockwise"></i> Reopen
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Description</h5>
+        <div style="white-space: pre-wrap;">{{ ticket.description }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Details</h5>
+        <div class="mb-2">
+          <strong>Status:</strong>
+          {% if ticket.status == 'Open' %}
+            <span class="badge bg-success">Open</span>
+          {% else %}
+            <span class="badge bg-secondary">Closed</span>
+          {% endif %}
+        </div>
+        <div class="mb-2"><strong>Priority:</strong> {{ ticket.priority }}</div>
+        <div class="mb-2"><strong>Source:</strong> {{ ticket.source }}</div>
+        <div class="mb-2"><strong>Created:</strong> {{ ticket.created_at.strftime('%Y-%m-%d %H:%M') if ticket.created_at else '-' }}</div>
+        <div class="mb-2"><strong>Updated:</strong> {{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') if ticket.updated_at else '-' }}</div>
+        <div class="mb-2"><strong>Closed:</strong> {{ ticket.closed_at.strftime('%Y-%m-%d %H:%M') if ticket.closed_at else '-' }}</div>
+
+        <hr>
+
+        <h6>Reporter</h6>
+        <div class="mb-2"><strong>Name:</strong> {{ ticket.reporter_name or '-' }}</div>
+        <div class="mb-2"><strong>Email:</strong> {{ ticket.reporter_email or '-' }}</div>
+
+        <hr>
+
+        <h6>Asset</h6>
+        {% if ticket.asset_id %}
+          <div class="mb-2">
+            <a href="{{ url_for('view_asset', asset_id=ticket.asset_id) }}">
+              <i class="bi bi-laptop"></i> View asset
+            </a>
+          </div>
+        {% endif %}
+        <div class="mb-2"><strong>Asset Tag:</strong> {{ ticket.asset_tag or '-' }}</div>
+        <div class="mb-2"><strong>Hostname:</strong> {{ ticket.hostname or '-' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

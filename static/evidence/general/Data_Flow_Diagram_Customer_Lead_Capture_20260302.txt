@@ -1,0 +1,350 @@
+================================================================================
+CIRQUE CORPORATION
+DATA FLOW DIAGRAM - CUSTOMER LEAD CAPTURE SYSTEM
+================================================================================
+
+Document Date: March 2, 2026
+Document Type: Data Flow Diagram
+Scope: Customer Lead Collection via Website
+Classification: Internal - Confidential
+Owner: Chris Wren, CISO
+
+================================================================================
+SYSTEM OVERVIEW
+================================================================================
+
+System Name: Customer Lead Capture System
+Purpose: Collect customer contact information via website for sales team
+Data Classification: Public/Low Sensitivity (contact information only)
+System Boundary: Cloud-based CRM system (Sales team access only)
+
+================================================================================
+DATA FLOW DESCRIPTION
+================================================================================
+
+FLOW 1: Customer to Cloud Storage
+--------------------------------------------------------------------------------
+
+Source: Data from Customer A (Website visitors)
+Destination: Cloud Storage (Sales only)
+Data Type: Customer name and contact information
+Transport: HTTPS (encrypted in transit)
+
+Data Elements Collected:
+- Customer Name (First Name, Last Name)
+- Email Address
+- Phone Number (optional)
+- Company Name (optional)
+- Contact Message/Inquiry
+
+Collection Method:
+1) Data comes in via a website form
+2) User inputs their name and contact information
+3) Form submission triggers HTTPS POST request
+4) Data transmitted securely to cloud CRM
+
+Security Controls:
+✓ HTTPS encryption (TLS 1.2 or higher)
+✓ Form validation (prevent injection attacks)
+✓ Rate limiting (prevent abuse)
+✓ CAPTCHA protection (prevent bot submissions)
+
+================================================================================
+DATA STORAGE
+================================================================================
+
+Storage Location: Cloud-based CRM System
+Cloud Provider: [CRM Provider Name - e.g., Salesforce, HubSpot, etc.]
+Storage Region: United States
+Access Control: Sales Team Only
+
+Data Retention:
+- Active leads: Retained indefinitely
+- Closed leads: Retained per retention policy (7 years)
+- Deleted upon customer request (GDPR/privacy compliance)
+
+Privacy Controls:
+✓ No private/sensitive information stored
+✓ No PII beyond basic contact information
+✓ No financial information
+✓ No health information
+✓ No authentication credentials
+
+Access Restrictions:
+- Sales Team: Full access (read/write)
+- Marketing Team: Read-only access (if approved)
+- IT Admin: Administrative access (as needed)
+- All other employees: No access
+
+================================================================================
+DATA FLOW ANSWERS
+================================================================================
+
+Q1: How does data enter the system?
+A1: Data comes in via a website and inputs the users name and contact 
+    information through a web form.
+
+Q2: Where is the data stored?
+A2: This goes to a cloud base CRM. No private info is stored on here.
+    Only basic contact information (name, email, phone, inquiry message).
+
+Q3: Does data flow to other systems?
+A3: No Flow - Data stays within the cloud CRM system. No integration with
+    other systems at this time.
+
+Q4: What network security is required?
+A4: No need for firewall - This is a cloud-to-cloud connection. The CRM
+    system is accessed via HTTPS over the internet. Cloud provider manages
+    their own network security/firewalls.
+
+Q5: Who has access to this data?
+A5: Sales Team - Only the sales team has access to the customer lead data
+    stored in the cloud CRM system.
+
+================================================================================
+SYSTEM BOUNDARY
+================================================================================
+
+INSIDE SYSTEM BOUNDARY:
+- Cloud Storage (CRM System)
+- Sales Team Access
+- Customer lead data
+
+OUTSIDE SYSTEM BOUNDARY:
+- Customer website (data origination point)
+- Customer devices/browsers
+- Public internet
+- Other internal Cirque systems
+
+The dashed box in the diagram represents the system boundary containing
+only the cloud storage/CRM component where customer data resides.
+
+================================================================================
+DATA CLASSIFICATION
+================================================================================
+
+Data Sensitivity Level: LOW
+- Contact information only (name, email, phone)
+- No regulated data (PCI, PHI, etc.)
+- No authentication credentials
+- No financial information
+- No confidential business information
+
+Privacy Regulation Applicability:
+✓ GDPR: Applicable (customer can request deletion)
+✓ CalOPPA: Applicable (privacy policy on website)
+✓ CCPA: Applicable (California residents can request info/deletion)
+
+Compliance Requirements:
+- Privacy policy must disclose data collection
+- Consent obtained via form submission
+- Customers can request data deletion
+- Data breach notification if CRM compromised
+
+================================================================================
+SECURITY CONTROLS
+================================================================================
+
+TECHNICAL CONTROLS:
+
+Data in Transit:
+✓ HTTPS/TLS encryption (website to CRM)
+✓ Certificate validation
+✓ Strong cipher suites only
+✓ No plaintext transmission
+
+Data at Rest:
+✓ Cloud provider encryption (AES-256)
+✓ Encrypted database storage
+✓ Encrypted backups
+
+Access Control:
+✓ Cloud CRM authentication (username/password)
+✓ Multi-factor authentication (MFA) required
+✓ Role-based access control (RBAC)
+✓ Principle of least privilege
+
+Monitoring:
+✓ Access logging enabled
+✓ Audit trail of all data access
+✓ Alerts for suspicious activity
+✓ Quarterly access reviews
+
+ADMINISTRATIVE CONTROLS:
+
+✓ Privacy policy published on website
+✓ Data retention policy defined
+✓ Access provisioning/deprovisioning procedures
+✓ Employee training on data handling
+✓ Vendor security assessment (CRM provider)
+
+PHYSICAL CONTROLS:
+
+✓ Cloud provider data center security
+✓ No physical access by Cirque employees
+✓ Cloud provider SOC 2 certification verified
+
+================================================================================
+RISK ASSESSMENT
+================================================================================
+
+RISKS IDENTIFIED:
+
+1. Unauthorized Access to CRM
+   Likelihood: LOW
+   Impact: MEDIUM
+   Mitigation: MFA required, strong passwords, access reviews
+
+2. Data Breach at Cloud Provider
+   Likelihood: LOW
+   Impact: MEDIUM
+   Mitigation: Vendor due diligence, SOC 2 certified provider, 
+               limited sensitive data stored
+
+3. Website Form Abuse/Spam
+   Likelihood: MEDIUM
+   Impact: LOW
+   Mitigation: CAPTCHA, rate limiting, form validation
+
+4. Insider Threat (Sales Team)
+   Likelihood: LOW
+   Impact: LOW
+   Mitigation: Access logging, acceptable use policy, background checks
+
+5. Privacy Regulation Non-Compliance
+   Likelihood: LOW
+   Impact: HIGH
+   Mitigation: Privacy policy, consent mechanism, deletion procedures
+
+OVERALL RISK LEVEL: LOW
+Justification: Limited sensitive data, strong security controls in place,
+               reputable cloud provider, clear access restrictions
+
+================================================================================
+DATA FLOW DIAGRAM (TEXT REPRESENTATION)
+================================================================================
+
+┌─────────────────────┐
+│  Data from          │
+│  Customer A         │
+│  (Website Form)     │
+└──────────┬──────────┘
+           │
+           │ HTTPS (Encrypted)
+           │ [Name, Email, Phone, Message]
+           │
+           ▼
+╔══════════════════════════════════════════════════════════╗
+║  SYSTEM BOUNDARY                                         ║
+║                                                          ║
+║   ┌────────────────────────────────────────────┐        ║
+║   │        Cloud Storage                       │        ║
+║   │        (Cloud-based CRM)                   │        ║
+║   │                                            │        ║
+║   │  • Customer contact information            │        ║
+║   │  • Lead tracking data                      │        ║
+║   │  • Sales notes/activities                  │        ║
+║   │                                            │        ║
+║   │  Access: Sales Team Only                   │        ║
+║   └────────────────────────────────────────────┘        ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+
+Key:
+→ = Data Flow Direction
+╔═╗ = System Boundary
+┌─┐ = System Component
+HTTPS = Encrypted Transport
+
+================================================================================
+CHANGE MANAGEMENT
+================================================================================
+
+Changes to Data Flow:
+- Any changes to data collection must be approved by CISO and Legal
+- Privacy policy must be updated if data collection changes
+- Re-assessment required if new data elements added
+- Document must be updated within 30 days of any changes
+
+Change History:
+| Date | Change | Approved By |
+|------|--------|-------------|
+| 3/2/2026 | Initial documentation | Chris Wren, CISO |
+
+================================================================================
+RELATED DOCUMENTATION
+================================================================================
+
+- IS-CIRQ-P-041-G: Public Website Privacy Notice
+- IS-CIRQ-P-019-G: Data Classification Policy
+- IS-CIRQ-P-022-G: Data Retention and Disposal Policy
+- IS-CIRQ-P-027-G: Access Control Policy
+- Website Privacy Policy (public facing)
+- Cloud CRM Vendor Security Assessment
+
+================================================================================
+COMPLIANCE VERIFICATION
+================================================================================
+
+SOC 2 Trust Service Criteria:
+✓ CC6.1: Logical access controls restrict access to authorized users
+✓ CC6.6: Transmission of data is protected
+✓ CC6.7: Data at rest is protected
+
+GDPR Compliance:
+✓ Article 13: Privacy information provided to data subjects
+✓ Article 17: Right to erasure (deletion process documented)
+✓ Article 32: Appropriate security measures implemented
+
+Privacy Shield (if applicable):
+✓ Notice: Privacy policy published
+✓ Choice: Consent obtained via form submission
+✓ Security: Encryption and access controls in place
+
+================================================================================
+REVIEW AND APPROVAL
+================================================================================
+
+Document Owner: Chris Wren, CISO
+Review Frequency: Annual or when data flow changes
+Next Review Date: March 2, 2027
+
+Approved By:
+- Chris Wren, CISO - March 2, 2026
+- VP Sales - March 2, 2026
+- Legal Counsel - March 2, 2026
+
+This data flow diagram has been reviewed and approved by the above parties
+and accurately represents the current customer lead capture system data flow.
+
+================================================================================
+CONTACT INFORMATION
+================================================================================
+
+For questions regarding this data flow:
+- Technical: Chris Wren, CISO (chris.wren@cirque.com)
+- Privacy: Legal Department (legal@cirque.com)
+- Business: VP Sales (sales@cirque.com)
+
+================================================================================
+NOTES
+================================================================================
+
+System Characteristics:
+- Simple, single-purpose data flow
+- Low risk due to limited sensitive data
+- Cloud-based solution (no on-premise infrastructure)
+- Appropriate for contact information collection
+- Scalable and maintained by cloud provider
+
+Future Considerations:
+- Consider integration with marketing automation (if needed)
+- Evaluate additional data enrichment services (if needed)
+- Monitor for privacy regulation changes
+- Annual vendor security review
+
+Last Updated: March 2, 2026
+
+================================================================================
+END OF DOCUMENT
+================================================================================

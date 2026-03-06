@@ -1,0 +1,2264 @@
+{% extends "base.html" %}
+
+{% block title %}{{ asset.name }} – Asset Details{% endblock %}
+
+{% block content %}
+<style>
+.asset-hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0e4f6e 100%);
+    color: #fff;
+    border-radius: 1rem;
+    padding: 2rem 2.5rem 1.75rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+    overflow: hidden;
+}
+.asset-hero::before {
+    content: "";
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 220px; height: 220px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.04);
+}
+.asset-hero .hero-icon { font-size: 3rem; opacity: .7; line-height: 1; }
+.asset-hero h2 { font-weight: 700; letter-spacing: -.5px; margin-bottom: .15rem; }
+.asset-hero .hero-tag { font-size: .8rem; opacity: .65; }
+
+/* Stat cards — theme-aware */
+.stat-card {
+    border: 1px solid var(--border-color);
+    border-radius: .75rem;
+    background: var(--card-bg);
+    padding: 1rem 1.25rem;
+    height: 100%;
+}
+.stat-card .sc-label {
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-secondary);
+}
+.stat-card .sc-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-top: .15rem;
+    line-height: 1.3;
+    color: var(--text-primary);
+}
+.stat-card .sc-icon { font-size: 1.5rem; opacity: .55; }
+
+/* Main nav tabs */
+.nav-tabs-main {
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1.5rem;
+    gap: .25rem;
+}
+.nav-tabs-main .nav-link {
+    color: var(--text-secondary);
+    font-weight: 500;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: .6rem 1.1rem;
+    border-radius: 0;
+    background: transparent;
+    transition: color .15s;
+}
+.nav-tabs-main .nav-link:hover { color: var(--text-primary); }
+.nav-tabs-main .nav-link.active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+    background: transparent;
+}
+
+/* Section cards */
+.section-card {
+    border-radius: .75rem;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+}
+.section-card .card-header {
+    background: var(--accent-secondary, rgba(0,0,0,.15));
+    border-bottom: 1px solid var(--border-color);
+    border-radius: .75rem .75rem 0 0 !important;
+    font-weight: 600;
+    padding: .75rem 1.25rem;
+    color: var(--text-primary);
+}
+.section-card .card-body { background: var(--card-bg); color: var(--text-primary); }
+
+/* Field labels / values */
+.field-label {
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--text-secondary);
+    margin-bottom: .15rem;
+}
+.field-value {
+    font-size: .95rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* History timeline */
+.history-item {
+    border-left: 3px solid var(--border-color);
+    padding: .55rem 0 .55rem .9rem;
+    margin-bottom: .6rem;
+    color: var(--text-primary);
+}
+.history-item:last-child { margin-bottom: 0; }
+.history-item.assign { border-left-color: var(--accent-primary); }
+.history-item.status { border-left-color: #238636; }
+.history-item.edit   { border-left-color: #9e6a03; }
+
+/* Winget install button states */
+@keyframes rmmShimmer {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+}
+.rmm-btn-progress {
+    position: relative; overflow: hidden;
+    color: #fff !important; border-color: #198754 !important;
+    background: linear-gradient(to right, #198754 var(--fill,5%), rgba(25,135,84,.25) var(--fill,5%)) !important;
+    transition: background 1.5s ease !important;
+}
+.rmm-btn-progress::after {
+    content:''; position:absolute; top:0; left:0; width:35%; height:100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+    animation: rmmShimmer 1.2s ease-in-out infinite;
+}
+.rmm-btn-done-ok  { background:#198754!important; color:#fff!important; border-color:#198754!important; }
+.rmm-btn-done-err { background:#dc3545!important; color:#fff!important; border-color:#dc3545!important; }
+.rmm-btn-undoing  { background:#fd7e14!important; color:#fff!important; border-color:#fd7e14!important; }
+</style>
+
+<!-- ── HERO ─────────────────────────────────────────────────── -->
+<div class="asset-hero mb-4">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+        <div class="d-flex align-items-center gap-3">
+            <div class="hero-icon">
+                {% if asset.category in ['Laptop','Desktop','Computer'] %}
+                    <i class="bi bi-laptop"></i>
+                {% elif asset.category == 'Monitor' %}
+                    <i class="bi bi-display"></i>
+                {% elif asset.category == 'Phone' %}
+                    <i class="bi bi-phone"></i>
+                {% elif asset.category in ['Printer','Scanner'] %}
+                    <i class="bi bi-printer"></i>
+                {% elif asset.category == 'Server' %}
+                    <i class="bi bi-server"></i>
+                {% elif asset.category == 'Network' %}
+                    <i class="bi bi-router"></i>
+                {% elif asset.category == 'Software' %}
+                    <i class="bi bi-code-square"></i>
+                {% else %}
+                    <i class="bi bi-hdd-rack"></i>
+                {% endif %}
+            </div>
+            <div>
+                <h2 class="mb-0">{{ asset.name }}</h2>
+                <div class="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                    <span class="badge bg-white bg-opacity-10 text-white">{{ asset.asset_tag }}</span>
+                    <span class="hero-tag">· {{ asset.category }}</span>
+                    {% if asset.manufacturer %}
+                    <span class="hero-tag">· {{ asset.manufacturer }}{% if asset.model %} {{ asset.model }}{% endif %}</span>
+                    {% endif %}
+                    {% if asset.assigned_employee %}
+                    <span class="hero-tag">· <i class="bi bi-person-fill"></i> {{ asset.assigned_employee.name }}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            {% if asset.status == 'Available' %}
+                <span class="badge bg-success fs-6 px-3 py-2"><i class="bi bi-check-circle me-1"></i>Available</span>
+            {% elif asset.status == 'In Use' %}
+                <span class="badge bg-info fs-6 px-3 py-2"><i class="bi bi-person-check me-1"></i>In Use</span>
+            {% elif asset.status == 'In Repair' %}
+                <span class="badge bg-warning text-dark fs-6 px-3 py-2"><i class="bi bi-tools me-1"></i>In Repair</span>
+            {% else %}
+                <span class="badge bg-secondary fs-6 px-3 py-2">{{ asset.status }}</span>
+            {% endif %}
+            <a href="{{ url_for('asset_qr', asset_id=asset.id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                <i class="bi bi-qr-code"></i> QR
+            </a>
+            {% if current_user.role in ['admin', 'manager'] %}
+            <a href="{{ url_for('edit_asset', asset_id=asset.id) }}" class="btn btn-warning btn-sm">
+                <i class="bi bi-pencil"></i> Edit
+            </a>
+            {% endif %}
+            <a href="{{ url_for('assets') }}" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-arrow-left"></i> Back
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- ── STAT CARDS ─────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card d-flex align-items-center gap-3">
+            <i class="bi bi-cash-coin sc-icon text-success"></i>
+            <div>
+                <div class="sc-label">Cost</div>
+                <div class="sc-value">{% if asset.purchase_cost %}${{ '%.0f'|format(asset.purchase_cost) }}{% else %}&mdash;{% endif %}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card d-flex align-items-center gap-3">
+            <i class="bi bi-calendar-check sc-icon text-primary"></i>
+            <div>
+                <div class="sc-label">Purchased</div>
+                <div class="sc-value">{% if asset.purchase_date %}{{ asset.purchase_date.strftime('%b %Y') }}{% else %}&mdash;{% endif %}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}border-danger{% endif %} d-flex align-items-center gap-3">
+            <i class="bi bi-shield-check sc-icon {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}text-danger{% else %}text-warning{% endif %}"></i>
+            <div>
+                <div class="sc-label">Warranty</div>
+                <div class="sc-value">
+                    {% if asset.warranty_expiry %}
+                        {{ asset.warranty_expiry.strftime('%b %Y') }}
+                        {% if asset.warranty_expiry < now().date() %}
+                        <span class="badge bg-danger ms-1" style="font-size:.65rem;">Expired</span>
+                        {% endif %}
+                    {% else %}&mdash;{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card d-flex align-items-center gap-3">
+            <i class="bi bi-hourglass-split sc-icon text-info"></i>
+            <div>
+                <div class="sc-label">Age</div>
+                <div class="sc-value">
+                    {% if asset.purchase_date %}
+                        {% set age_days = (now().date() - asset.purchase_date).days %}
+                        {% if age_days >= 365 %}{{ (age_days // 365) }}y {{ ((age_days % 365) // 30) }}m{% else %}{{ age_days }} days{% endif %}
+                    {% else %}&mdash;{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card d-flex align-items-center gap-3">
+            <i class="bi bi-star sc-icon text-warning"></i>
+            <div>
+                <div class="sc-label">Condition</div>
+                <div class="sc-value">{{ asset.condition or '&mdash;' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card d-flex align-items-center gap-3">
+            <i class="bi bi-geo-alt sc-icon text-secondary"></i>
+            <div>
+                <div class="sc-label">Location</div>
+                <div class="sc-value" style="font-size:.85rem;">{{ asset.location or '&mdash;' }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── MAIN TABS ──────────────────────────────────────────────── -->
+<ul class="nav nav-tabs-main d-flex" id="assetMainTabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-overview" type="button"><i class="bi bi-info-circle me-1"></i>Overview</button></li>
+    {% if rmm_agent_id %}
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm" type="button"><i class="bi bi-robot me-1"></i>RMM Agent</button></li>
+    {% endif %}
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-intune" type="button"><i class="bi bi-microsoft me-1"></i>Intune</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" type="button"><i class="bi bi-clock-history me-1"></i>History</button></li>
+</ul>
+
+<div class="tab-content" id="assetMainContent">
+
+<!-- ══ OVERVIEW TAB ══════════════════════════════════════════ -->
+<div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
+    <div class="row g-4">
+        <!-- LEFT COLUMN -->
+        <div class="col-lg-8">
+
+            {% if asset.photo %}
+            <div class="text-center mb-4">
+                <img src="{{ url_for('static', filename='uploads/' + asset.photo) }}" alt="{{ asset.name }}" class="img-fluid rounded shadow-sm" style="max-height:300px;">
+            </div>
+            {% endif %}
+
+            <!-- Core Details -->
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-clipboard-data me-2 text-primary"></i>Asset Details</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Asset Tag</div>
+                            <div class="field-value"><span class="badge bg-primary">{{ asset.asset_tag }}</span></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Category</div>
+                            <div class="field-value">{{ asset.category or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Department</div>
+                            <div class="field-value">{{ asset.department or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Manufacturer</div>
+                            <div class="field-value">{{ asset.manufacturer or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Model</div>
+                            <div class="field-value">{{ asset.model or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Serial Number</div>
+                            <div class="field-value"><code>{{ asset.serial_number or '—' }}</code></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">OS / Version</div>
+                            <div class="field-value">{{ asset.os_version or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">IP Address</div>
+                            <div class="field-value"><code>{{ asset.ip_address or '—' }}</code></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">MAC Address</div>
+                            <div class="field-value"><code>{{ asset.mac_address or '—' }}</code></div>
+                        </div>
+                        {% if asset.purchase_date %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Purchase Date</div>
+                            <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.purchase_cost %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Purchase Cost</div>
+                            <div class="field-value">${{ '%.2f'|format(asset.purchase_cost) }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.warranty_expiry %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Warranty Expiry</div>
+                            <div class="field-value">
+                                {{ asset.warranty_expiry.strftime('%Y-%m-%d') }}
+                                {% if asset.warranty_expiry < now().date() %}
+                                <span class="badge bg-danger ms-1">Expired</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if asset.vendor %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Vendor</div>
+                            <div class="field-value">{{ asset.vendor }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.po_number %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">PO Number</div>
+                            <div class="field-value"><code>{{ asset.po_number }}</code></div>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {% if asset.notes %}
+                    <hr>
+                    <div class="field-label mb-1">Notes</div>
+                    <p class="mb-0 text-secondary" style="font-size:.9rem; white-space:pre-wrap;">{{ asset.notes }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Lifecycle -->
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-recycle me-2 text-success"></i>Lifecycle</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Condition</div>
+                            <div class="field-value">
+                                {% if asset.condition == 'Excellent' %}<span class="badge bg-success">Excellent</span>
+                                {% elif asset.condition == 'Good' %}<span class="badge bg-primary">Good</span>
+                                {% elif asset.condition == 'Fair' %}<span class="badge bg-warning text-dark">Fair</span>
+                                {% elif asset.condition == 'Poor' %}<span class="badge bg-danger">Poor</span>
+                                {% else %}{{ asset.condition or '—' }}{% endif %}
+                            </div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Lifecycle Status</div>
+                            <div class="field-value">{{ asset.lifecycle_status or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Expected Replacement</div>
+                            <div class="field-value">{{ asset.expected_replacement_date.strftime('%Y-%m-%d') if asset.expected_replacement_date else '—' }}</div>
+                        </div>
+                        {% if asset.disposal_date %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Disposal Date</div>
+                            <div class="field-value">{{ asset.disposal_date.strftime('%Y-%m-%d') }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.disposal_method %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Disposal Method</div>
+                            <div class="field-value">{{ asset.disposal_method }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Intune Hardware Specs (from DB) -->
+            {% if asset.hardware_cpu or asset.hardware_ram_gb or asset.hardware_storage_total_gb %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-cpu me-2 text-info"></i>Hardware Specs <small class="text-muted fw-normal">(via Intune)</small></div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        {% if asset.hardware_cpu and asset.hardware_cpu != 'unknown' %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Processor</div>
+                            <div class="field-value" style="font-size:.85rem;">{{ asset.hardware_cpu }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_ram_gb and asset.hardware_ram_gb > 0 %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">RAM</div>
+                            <div class="field-value">{{ '%.1f'|format(asset.hardware_ram_gb) }} GB</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_storage_total_gb %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Storage</div>
+                            <div class="field-value">{{ '%.1f'|format(asset.hardware_storage_total_gb) }} GB
+                                {% if asset.hardware_storage_free_gb %}
+                                <small class="text-muted d-block" style="font-size:.75rem;">{{ '%.1f'|format(asset.hardware_storage_free_gb) }} GB free ({{ '%.0f'|format(asset.hardware_storage_free_gb / asset.hardware_storage_total_gb * 100) }}%)</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_bios_version %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">BIOS</div>
+                            <div class="field-value" style="font-size:.82rem;"><code>{{ asset.hardware_bios_version }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_tpm_version %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">TPM</div>
+                            <div class="field-value">{{ asset.hardware_tpm_version }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_mac_wifi %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">WiFi MAC</div>
+                            <div class="field-value"><code style="font-size:.82rem;">{{ asset.hardware_mac_wifi }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_mac_ethernet %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Ethernet MAC</div>
+                            <div class="field-value"><code style="font-size:.82rem;">{{ asset.hardware_mac_ethernet }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.azure_ad_device_id %}
+                        <div class="col-sm-12">
+                            <div class="field-label">Azure AD Device ID</div>
+                            <div class="field-value"><code style="font-size:.78rem;">{{ asset.azure_ad_device_id }}</code></div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Remote Access (RustDesk) -->
+            {% if asset.rustdesk_id %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-display me-2 text-success"></i>Remote Access</div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <div>
+                            <div class="field-label">RustDesk ID</div>
+                            <code id="rustdeskId">{{ asset.rustdesk_id }}</code>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="copyRustDeskId()" title="Copy">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                        </div>
+                        <div class="ms-auto d-flex gap-2">
+                            <button class="btn btn-success btn-sm" onclick="startRustDeskSession({{ asset.id }})">
+                                <i class="bi bi-display"></i> Start Session
+                            </button>
+                            <button id="rustdeskEndBtn" class="btn btn-sm btn-outline-danger d-none" onclick="endRustDeskSession()">
+                                <i class="bi bi-stop-circle"></i> End Session
+                            </button>
+                        </div>
+                    </div>
+                    <small class="text-muted d-block mt-2"><i class="bi bi-shield-lock me-1"></i>Sessions are logged for SOC2 audit compliance.</small>
+                </div>
+            </div>
+            <script>
+            let activeRustDeskSessionId = null;
+            function copyRustDeskId() {
+                const id = document.getElementById('rustdeskId').textContent.trim();
+                navigator.clipboard.writeText(id).catch(() => prompt('Copy RustDesk ID:', id));
+            }
+            async function startRustDeskSession(assetId) {
+                const reason = prompt('Reason for remote session (required for audit log):');
+                if (!reason || !reason.trim()) { alert('A reason is required.'); return; }
+                const resp = await fetch(`/assets/${assetId}/remote/rustdesk/start`, {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({reason: reason.trim()})
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) { alert(data.error || 'Failed to start session'); return; }
+                activeRustDeskSessionId = data.session_id;
+                document.getElementById('rustdeskEndBtn').classList.remove('d-none');
+                const id = (data.rustdesk_id || '').trim();
+                if (id) { window.location.href = `rustdesk://${encodeURIComponent(id)}`; }
+            }
+            async function endRustDeskSession() {
+                if (!activeRustDeskSessionId) return;
+                const resp = await fetch(`/remote-sessions/${activeRustDeskSessionId}/end`, {
+                    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({})
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) { alert(data.error || 'Failed to end session'); return; }
+                activeRustDeskSessionId = null;
+                document.getElementById('rustdeskEndBtn').classList.add('d-none');
+            }
+            </script>
+            {% endif %}
+
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="col-lg-4">
+
+            <!-- Assignment -->
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-person-badge me-2 text-info"></i>Assignment</div>
+                <div class="card-body">
+                    {% if asset.assigned_employee %}
+                    <div class="d-flex align-items-center gap-3 mb-3">
+                        <div class="rounded-circle bg-primary bg-opacity-10 d-flex align-items-center justify-content-center" style="width:48px;height:48px;flex-shrink:0;">
+                            <i class="bi bi-person-fill text-primary fs-4"></i>
+                        </div>
+                        <div>
+                            <div class="fw-semibold">
+                                <a href="{{ url_for('view_employee', employee_id=asset.assigned_employee.id) }}" class="text-decoration-none">{{ asset.assigned_employee.name }}</a>
+                            </div>
+                            <small class="text-muted">{{ asset.assigned_employee.department or 'No department' }}</small><br>
+                            <small class="text-muted">{{ asset.assigned_employee.email or '' }}</small>
+                        </div>
+                    </div>
+                    {% if current_user.role in ['admin', 'manager'] %}
+                    <form method="POST" action="{{ url_for('unassign_asset', asset_id=asset.id) }}">
+                        <button type="submit" class="btn btn-sm btn-outline-warning w-100">
+                            <i class="bi bi-x-circle"></i> Unassign
+                        </button>
+                    </form>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-muted mb-3">Not assigned to anyone.</p>
+                    {% if current_user.role in ['admin', 'manager'] %}
+                    <button type="button" class="btn btn-primary btn-sm w-100" data-bs-toggle="modal" data-bs-target="#assignModal">
+                        <i class="bi bi-person-plus"></i> Assign to Employee
+                    </button>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Intune quick status -->
+            {% if asset.intune_device_id %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-microsoft me-2" style="color:#00a4ef;"></i>Intune Status</div>
+                <div class="card-body">
+                    <div class="row g-2 text-center">
+                        <div class="col-6">
+                            <div class="field-label">Compliance</div>
+                            {% if asset.intune_compliance_state == 'compliant' %}<span class="badge bg-success">Compliant</span>
+                            {% elif asset.intune_compliance_state == 'noncompliant' %}<span class="badge bg-danger">Non-Compliant</span>
+                            {% else %}<span class="badge bg-secondary">{{ asset.intune_compliance_state|title if asset.intune_compliance_state else 'Unknown' }}</span>{% endif %}
+                        </div>
+                        <div class="col-6">
+                            <div class="field-label">Management</div>
+                            <span class="badge bg-info">{{ asset.intune_management_state|title if asset.intune_management_state else 'Unknown' }}</span>
+                        </div>
+                        <div class="col-12 mt-1">
+                            <div class="field-label">Last Sync</div>
+                            <small>{% if asset.intune_last_sync %}{{ asset.intune_last_sync.strftime('%Y-%m-%d %H:%M UTC') }}{% else %}—{% endif %}</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Danger Zone -->
+            {% if current_user.is_admin %}
+            <div class="card border-danger section-card">
+                <div class="card-header bg-danger text-white"><i class="bi bi-exclamation-triangle me-2"></i>Danger Zone</div>
+                <div class="card-body">
+                    <p class="small text-muted mb-3">Permanently delete this asset and all associated records.</p>
+                    <button type="button" class="btn btn-danger btn-sm w-100" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                        <i class="bi bi-trash"></i> Delete Asset
+                    </button>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- ══ RMM AGENT TAB ═════════════════════════════════════════ -->
+{% if rmm_agent_id %}
+<div class="tab-pane fade" id="tab-rmm" role="tabpanel">
+    <div class="card section-card">
+        <div class="card-header d-flex align-items-center gap-3 flex-wrap">
+            <span><i class="bi bi-robot me-2 text-success"></i>Cirque RMM Agent &mdash; <code class="fs-6">{{ rmm_agent_id }}</code></span>
+            <span id="rmm-status-badge" class="badge bg-secondary ms-1">
+                <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
+            </span>
+            <span class="text-muted small" style="font-size:.75rem;">Agent <span id="rmm-agent-version-badge">—</span></span>
+            <div class="ms-auto d-flex gap-2 flex-wrap">
+                <a href="{{ url_for('rmm_terminal', agent_id=rmm_agent_id) }}" id="rmm-shell-btn" target="_blank"
+                   class="btn btn-sm btn-success disabled"><i class="bi bi-terminal-fill"></i> Open Shell</a>
+                <button id="rmm-screenshot-btn" class="btn btn-sm btn-outline-secondary disabled"
+                        onclick="rmmRequestScreenshot()"><i class="bi bi-camera"></i> Screenshot</button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="rmmRefreshTelemetry()">
+                    <i class="bi bi-arrow-repeat"></i> Refresh</button>
+                <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
+                    <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
+                <a href="{{ url_for('rmm_eagle_eyes_dashboard', agent_id=rmm_agent_id) }}"
+                   class="btn btn-sm btn-outline-primary"><i class="bi bi-eye me-1"></i>Eagle Eyes</a>
+            </div>
+        </div>
+        <div class="card-body p-3" id="rmm-telemetry-panel" style="display:none;">
+            <div class="row g-3 mb-3">
+                <!-- CPU -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <small class="text-muted fw-semibold"><i class="bi bi-cpu me-1"></i>CPU</small>
+                                <span id="rmm-cpu-label" class="badge bg-secondary">—</span>
+                            </div>
+                            <div class="progress" style="height:6px;">
+                                <div id="rmm-cpu-bar" class="progress-bar bg-info" role="progressbar" style="width:0%"></div>
+                            </div>
+                            <small id="rmm-cpu-name" class="text-muted d-block mt-1" style="font-size:.72rem;"></small>
+                        </div>
+                    </div>
+                </div>
+                <!-- RAM -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <small class="text-muted fw-semibold"><i class="bi bi-memory me-1"></i>RAM</small>
+                                <span id="rmm-ram-label" class="badge bg-secondary">—</span>
+                            </div>
+                            <div class="progress" style="height:6px;">
+                                <div id="rmm-ram-bar" class="progress-bar bg-warning" role="progressbar" style="width:0%"></div>
+                            </div>
+                            <small id="rmm-ram-detail" class="text-muted d-block mt-1" style="font-size:.72rem;"></small>
+                        </div>
+                    </div>
+                </div>
+                <!-- Disk -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <small class="text-muted fw-semibold"><i class="bi bi-hdd me-1"></i>Disk</small>
+                                <span id="rmm-disk-label" class="badge bg-secondary">—</span>
+                            </div>
+                            <div class="progress" style="height:6px;">
+                                <div id="rmm-disk-bar" class="progress-bar bg-success" role="progressbar" style="width:0%"></div>
+                            </div>
+                            <small id="rmm-disk-detail" class="text-muted d-block mt-1" style="font-size:.72rem;"></small>
+                        </div>
+                    </div>
+                </div>
+                <!-- Battery -->
+                <div class="col-md-6 col-lg-4" id="rmm-battery-col" style="display:none;">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <small class="text-muted fw-semibold"><i class="bi bi-battery-half me-1"></i>Battery</small>
+                                <span id="rmm-battery-label" class="badge bg-secondary">—</span>
+                            </div>
+                            <div class="progress" style="height:6px;">
+                                <div id="rmm-battery-bar" class="progress-bar bg-success" role="progressbar" style="width:0%"></div>
+                            </div>
+                            <small id="rmm-battery-detail" class="text-muted d-block mt-1" style="font-size:.72rem;"></small>
+                        </div>
+                    </div>
+                </div>
+                <!-- Network -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <small class="text-muted fw-semibold"><i class="bi bi-ethernet me-1"></i>Network</small>
+                            <div id="rmm-net-info" class="mt-1" style="font-size:.78rem;"></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- System -->
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 border-0" style="background:var(--accent-secondary,rgba(0,0,0,.2));">
+                        <div class="card-body py-2 px-3">
+                            <small class="text-muted fw-semibold"><i class="bi bi-pc-display me-1"></i>System</small>
+                            <div id="rmm-sys-info" class="mt-1" style="font-size:.78rem;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RMM Sub-tabs -->
+            <ul class="nav nav-tabs mt-2 mb-0" id="rmm-tabs" role="tablist" style="font-size:.8rem;">
+                <li class="nav-item"><button class="nav-link active py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-hw" type="button"><i class="bi bi-cpu me-1"></i>Hardware</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-sec" type="button"><i class="bi bi-shield-check me-1"></i>Security</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-sysinfo" type="button"><i class="bi bi-list-check me-1"></i>System</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-metrics" type="button" onclick="rmmLoadMetrics()"><i class="bi bi-graph-up me-1"></i>Metrics</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-avail" type="button" onclick="rmmLoadAvailability()"><i class="bi bi-activity me-1"></i>Activity</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-patches" type="button" onclick="rmmLoadPatches()"><i class="bi bi-patch-check me-1"></i>Patches</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-software" type="button" onclick="rmmLoadSoftware()"><i class="bi bi-box-seam me-1"></i>Software</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-scripts" type="button"><i class="bi bi-code-slash me-1"></i>Scripts</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-services" type="button" onclick="rmmLoadServices()"><i class="bi bi-gear me-1"></i>Services</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-events" type="button" onclick="rmmLoadEvents()"><i class="bi bi-list-ul me-1"></i>Events</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-transfer" type="button" onclick="rmmFsTabClick()"><i class="bi bi-arrow-left-right me-1"></i>Transfer</button></li>
+                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-power" type="button"><i class="bi bi-power me-1"></i>Power</button></li>
+            </ul>
+
+                    <div class="tab-content border border-top-0 rounded-bottom p-3" style="font-size:.82rem;">
+                        <!-- Hardware -->
+                        <div class="tab-pane fade show active" id="rmm-tab-hw">
+                            <table class="table table-sm mb-0">
+                                <tbody>
+                                    <tr><td class="text-muted" style="width:120px;">Vendor</td><td id="rmm-hw-vendor">—</td></tr>
+                                    <tr><td class="text-muted">Model</td><td id="rmm-hw-model">—</td></tr>
+                                    <tr><td class="text-muted">Serial</td><td id="rmm-hw-serial">—</td></tr>
+                                    <tr><td class="text-muted">Motherboard</td><td id="rmm-hw-mb">—</td></tr>
+                                    <tr><td class="text-muted">BIOS</td><td id="rmm-hw-bios">—</td></tr>
+                                    <tr><td class="text-muted">GPU</td><td id="rmm-hw-gpu">—</td></tr>
+                                    <tr><td class="text-muted">Sound</td><td id="rmm-hw-sound">—</td></tr>
+                                    <tr><td class="text-muted">MACs</td><td id="rmm-hw-macs">—</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <!-- Security -->
+                        <div class="tab-pane fade" id="rmm-tab-sec">
+                            <table class="table table-sm mb-2">
+                                <tbody>
+                                    <tr><td class="text-muted" style="width:120px;">OS Edition</td><td id="rmm-sec-os">—</td></tr>
+                                    <tr><td class="text-muted">Antivirus</td><td id="rmm-sec-av">—</td></tr>
+                                    <tr><td class="text-muted">Firewall</td><td id="rmm-sec-fw">—</td></tr>
+                                    <tr><td class="text-muted">Antispyware</td><td id="rmm-sec-as">—</td></tr>
+                                    <tr><td class="text-muted">Last Scan</td><td id="rmm-sec-lastscan">—</td></tr>
+                                </tbody>
+                            </table>
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:.75rem;" onclick="rmmAvScan('quick')">
+                                    <i class="bi bi-shield-check me-1"></i>Quick Scan
+                                </button>
+                                <button class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.75rem;" onclick="rmmAvScan('full')">
+                                    <i class="bi bi-shield-shaded me-1"></i>Full Scan
+                                </button>
+                                <span id="rmm-scan-status" class="small text-muted ms-1"></span>
+                            </div>
+                            <div id="rmm-scan-out-wrap" style="display:none;">
+                                <pre id="rmm-scan-out" class="bg-dark text-light rounded p-2 mb-0" style="max-height:140px;overflow-y:auto;font-size:.72rem;white-space:pre-wrap;word-break:break-all;"></pre>
+                            </div>
+                        </div>
+                        <!-- System Info -->
+                        <div class="tab-pane fade" id="rmm-tab-sysinfo">
+                            <table class="table table-sm mb-0">
+                                <tbody>
+                                    <tr><td class="text-muted" style="width:130px;white-space:nowrap;vertical-align:top;">BitLocker</td><td id="rmm-si-bitlocker">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">TPM</td><td id="rmm-si-tpm">—</td></tr>
+                                    <tr><td class="text-muted">Activation</td><td id="rmm-si-licensed">—</td></tr>
+                                    <tr><td class="text-muted">RDP</td><td id="rmm-si-rdp">—</td></tr>
+                                    <tr><td class="text-muted">Power Plan</td><td id="rmm-si-power">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Last Win Update</td><td id="rmm-si-lastwu">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Local Admins</td><td id="rmm-si-admins">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Printers</td><td id="rmm-si-printers">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Mapped Drives</td><td id="rmm-si-drives">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">USB / Devices</td><td id="rmm-si-usb">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Startup Apps</td><td id="rmm-si-startup">—</td></tr>
+                                    <tr><td class="text-muted">Pending Reboot</td><td id="rmm-si-reboot">—</td></tr>
+                                    <tr><td class="text-muted">Default Browser</td><td id="rmm-si-browser">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">DNS Servers</td><td id="rmm-si-dns">—</td></tr>
+                                    <tr><td class="text-muted">GP Last Refresh</td><td id="rmm-si-gp">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Disk Health</td><td id="rmm-si-diskhealth">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Recent Crashes</td><td id="rmm-si-bsod">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Monitors</td><td id="rmm-si-monitors">—</td></tr>
+                                    <tr><td class="text-muted">Update Channel</td><td id="rmm-si-wuchannel">—</td></tr>
+                                    <tr><td class="text-muted">Screen Lock</td><td id="rmm-si-screenlock">—</td></tr>
+                                    <tr><td class="text-muted" style="vertical-align:top;">Listening Ports</td><td id="rmm-si-ports">—</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <!-- Metrics -->
+                        <div class="tab-pane fade" id="rmm-tab-metrics">
+                            <div style="position:relative;height:180px;">
+                                <canvas id="rmm-metrics-chart"></canvas>
+                            </div>
+                            <p class="text-muted mb-0 mt-1" style="font-size:.75rem;">CPU % and RAM % over the last 24 hours</p>
+                        </div>
+                        <!-- Activity / Availability -->
+                        <div class="tab-pane fade" id="rmm-tab-avail">
+                            <!-- Eagle Eyes -->
+                            <div class="d-flex align-items-center justify-content-between mb-2 p-2 rounded" style="background:rgba(255,200,0,.07);border:1px solid rgba(255,200,0,.18);">
+                                <div>
+                                    <i class="bi bi-eye me-1 text-warning"></i>
+                                    <strong style="font-size:.82rem;">Eagle Eyes</strong>
+                                    <span class="text-muted ms-2" style="font-size:.75rem;">Enhanced activity monitoring</span>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input" type="checkbox" id="rmm-eagle-toggle" onchange="rmmEagleToggle(this.checked)" style="cursor:pointer;">
+                                    </div>
+                                    <a id="rmm-eagle-dash-btn" href="#" target="_blank" class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.72rem;display:none;">
+                                        <i class="bi bi-bar-chart-line me-1"></i>Dashboard
+                                    </a>
+                                </div>
+                            </div>
+                            <!-- Agent online/offline -->
+                            <div class="mb-2">
+                                <strong style="font-size:.82rem;"><i class="bi bi-wifi me-1"></i>Agent Availability</strong>
+                                <div id="rmm-avail-content" style="max-height:130px;overflow-y:auto;margin-top:.35rem;">
+                                    <span class="text-muted">Loading…</span>
+                                </div>
+                            </div>
+                            <hr class="my-2">
+                            <!-- Session events -->
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <strong style="font-size:.82rem;"><i class="bi bi-person-lines-fill me-1"></i>Session Activity</strong>
+                                <select class="form-select form-select-sm" style="width:auto;font-size:.75rem;" id="rmm-sev-days" onchange="rmmLoadSessionEvents(true)">
+                                    <option value="1">Last 24 h</option>
+                                    <option value="7" selected>Last 7 days</option>
+                                    <option value="30">Last 30 days</option>
+                                </select>
+                            </div>
+                            <div id="rmm-sev-content" style="max-height:220px;overflow-y:auto;">
+                                <span class="text-muted">Loading…</span>
+                            </div>
+                        </div>
+                        <!-- Patches -->
+                        <div class="tab-pane fade" id="rmm-tab-patches">
+                            <!-- Pending Updates -->
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <strong style="font-size:.82rem;"><i class="bi bi-cloud-download me-1"></i>Pending Updates</strong>
+                                <button class="btn btn-sm btn-primary py-0" onclick="rmmApprovePatches()" id="rmm-approve-btn" disabled>
+                                    <i class="bi bi-check2 me-1"></i>Approve Selected
+                                </button>
+                            </div>
+                            <div id="rmm-pending-content" style="max-height:200px;overflow-y:auto;font-size:.8rem;">
+                                <span class="text-muted">Loading…</span>
+                            </div>
+                            <!-- Deployment Jobs -->
+                            <hr class="my-2">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <strong style="font-size:.82rem;"><i class="bi bi-list-check me-1"></i>Deployment Jobs</strong>
+                                <small class="text-muted" id="rmm-jobs-updated"></small>
+                            </div>
+                            <div id="rmm-jobs-content" style="max-height:180px;overflow-y:auto;font-size:.8rem;">
+                                <span class="text-muted">Loading…</span>
+                            </div>
+                            <!-- Installed (collapsed) -->
+                            <hr class="my-2">
+                            <a class="text-muted" data-bs-toggle="collapse" href="#rmm-installed-collapse" style="font-size:.8rem;">
+                                <i class="bi bi-chevron-down me-1"></i>View installed hotfixes
+                            </a>
+                            <div class="collapse" id="rmm-installed-collapse">
+                                <div id="rmm-patches-content" style="max-height:200px;overflow-y:auto;font-size:.8rem;margin-top:.5rem;">
+                                    <span class="text-muted">Click to expand…</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Software Inventory -->
+                        <div class="tab-pane fade" id="rmm-tab-software">
+                            <!-- Install toolbar -->
+                            <div class="d-flex gap-2 mb-2">
+                                <button class="btn btn-sm btn-outline-success" onclick="rmmSwToggle('winget')"><i class="bi bi-cloud-download me-1"></i>Install via winget</button>
+                                <button class="btn btn-sm btn-outline-success" onclick="rmmSwToggle('msi')"><i class="bi bi-file-earmark-arrow-up me-1"></i>Upload &amp; Install MSI/EXE</button>
+                            </div>
+                            <!-- winget panel -->
+                            <div id="rmm-sw-winget-panel" class="border rounded p-2 mb-2" style="display:none;">
+                                <div class="input-group input-group-sm mb-1">
+                                    <input type="text" class="form-control" id="rmm-winget-q" placeholder="Search winget catalog… (e.g. 7zip, googlechrome)" onkeydown="if(event.key==='Enter')rmmWingetSearch()">
+                                    <button class="btn btn-outline-primary" onclick="rmmWingetSearch()"><i class="bi bi-search"></i> Search</button>
+                                </div>
+                                <div id="rmm-winget-results" style="max-height:130px;overflow-y:auto;font-size:.76rem;"></div>
+                            </div>
+                            <!-- MSI/EXE panel -->
+                            <div id="rmm-sw-msi-panel" class="border rounded p-2 mb-2" style="display:none;">
+                                <div class="d-flex gap-2 align-items-center flex-wrap">
+                                    <label class="small mb-0 text-nowrap">Installer:</label>
+                                    <input type="file" class="form-control form-control-sm" id="rmm-msi-file" accept=".msi,.exe" style="max-width:270px;">
+                                    <input type="text" class="form-control form-control-sm" id="rmm-msi-args" placeholder="Silent args for EXE (e.g. /S /VERYSILENT)" style="max-width:260px;">
+                                    <button class="btn btn-sm btn-success" onclick="rmmMsiInstall()"><i class="bi bi-play-fill me-1"></i>Upload &amp; Install</button>
+                                </div>
+                            </div>
+                            <!-- Streaming output -->
+                            <div id="rmm-install-out-wrap" style="display:none;" class="mb-2">
+                                <pre id="rmm-install-out" class="bg-dark text-light rounded p-2 mb-0" style="max-height:130px;overflow-y:auto;font-size:.72rem;white-space:pre-wrap;word-break:break-all;"></pre>
+                                <div id="rmm-install-status" class="small mt-1"></div>
+                            </div>
+                            <!-- Installed list -->
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <strong style="font-size:.82rem;"><i class="bi bi-box-seam me-1"></i>Installed Software</strong>
+                                <span id="rmm-sw-count" class="badge bg-secondary ms-1"></span>
+                                <button class="btn btn-outline-secondary py-0 px-1" style="font-size:.72rem;" onclick="rmmRefreshSoftware()" title="Refresh list"><i class="bi bi-arrow-clockwise"></i></button>
+                                <input type="search" class="form-control form-control-sm ms-auto" style="max-width:200px;"
+                                       id="rmm-sw-filter" placeholder="Filter…" oninput="rmmFilterSoftware()">
+                            </div>
+                            <div id="rmm-sw-content" style="max-height:260px;overflow-y:auto;">
+                                <span class="text-muted">Click Software tab to load.</span>
+                            </div>
+                        </div>
+
+                        <!-- Scripts -->
+                        <div class="tab-pane fade" id="rmm-tab-scripts">
+                            <div class="d-flex flex-wrap gap-2 mb-2 align-items-end">
+                                <select class="form-select form-select-sm" id="rmm-script-shell" style="width:130px;">
+                                    <option value="powershell">PowerShell</option>
+                                    <option value="cmd">CMD</option>
+                                </select>
+                                <select class="form-select form-select-sm" id="rmm-script-timeout" style="width:120px;">
+                                    <option value="30">30s timeout</option>
+                                    <option value="60" selected>60s timeout</option>
+                                    <option value="120">2min timeout</option>
+                                    <option value="300">5min timeout</option>
+                                </select>
+                                <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="document.getElementById('rmm-script-output').textContent='';document.getElementById('rmm-script-status').textContent=''">Clear</button>
+                                <button class="btn btn-sm btn-primary" id="rmm-script-run-btn" onclick="rmmRunScript()">
+                                    <i class="bi bi-play-fill"></i> Run
+                                </button>
+                            </div>
+                            <textarea class="form-control font-monospace mb-2" id="rmm-script-code" rows="5"
+                                      placeholder="Enter PowerShell or CMD code…" style="font-size:.78rem;resize:vertical;"></textarea>
+                            <pre id="rmm-script-output" class="bg-dark text-light rounded p-2 mb-1"
+                                 style="min-height:60px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-size:.75rem;margin:0;"></pre>
+                            <div id="rmm-script-status" class="small text-muted"></div>
+                        </div>
+
+                        <!-- Services -->
+                        <div class="tab-pane fade" id="rmm-tab-services">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <button class="btn btn-sm btn-outline-primary" onclick="rmmLoadServices()">
+                                    <i class="bi bi-arrow-repeat"></i> Load
+                                </button>
+                                <input type="search" class="form-control form-control-sm" id="rmm-svc-filter"
+                                       placeholder="Filter services…" oninput="rmmFilterServices()" style="max-width:220px;">
+                                <span id="rmm-svc-status" class="small text-muted ms-auto"></span>
+                            </div>
+                            <div id="rmm-svc-content" style="max-height:320px;overflow-y:auto;">
+                                <span class="text-muted small">Loading services…</span>
+                            </div>
+                        </div>
+
+                        <!-- Event Viewer -->
+                        <div class="tab-pane fade" id="rmm-tab-events">
+                            <div class="d-flex flex-wrap gap-2 mb-2 align-items-end">
+                                <select class="form-select form-select-sm" id="rmm-ev-log" style="width:130px;">
+                                    <option value="System">System</option>
+                                    <option value="Application">Application</option>
+                                    <option value="Security">Security</option>
+                                    <option value="Setup">Setup</option>
+                                </select>
+                                <select class="form-select form-select-sm" id="rmm-ev-level" style="width:130px;">
+                                    <option value="">All levels</option>
+                                    <option value="1">Critical</option>
+                                    <option value="2" selected>Error</option>
+                                    <option value="3">Warning</option>
+                                    <option value="4">Information</option>
+                                </select>
+                                <input type="text" class="form-control form-control-sm" id="rmm-ev-source"
+                                       placeholder="Source filter" style="max-width:160px;">
+                                <select class="form-select form-select-sm" id="rmm-ev-max" style="width:100px;">
+                                    <option value="50">50 events</option>
+                                    <option value="100" selected>100 events</option>
+                                    <option value="250">250 events</option>
+                                    <option value="500">500 events</option>
+                                </select>
+                                <button class="btn btn-sm btn-outline-primary" onclick="rmmLoadEvents()">
+                                    <i class="bi bi-search"></i> Query
+                                </button>
+                                <span id="rmm-ev-status" class="small text-muted ms-auto"></span>
+                            </div>
+                            <div id="rmm-ev-content" style="max-height:320px;overflow-y:auto;">
+                                <span class="text-muted small">Select filters and click Query.</span>
+                            </div>
+                        </div>
+
+                        <!-- File Transfer -->
+                        <div class="tab-pane fade" id="rmm-tab-transfer">
+                            <!-- Toolbar -->
+                            <div class="d-flex gap-1 align-items-center mb-2">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="rmmFsBack()" title="Back"><i class="bi bi-arrow-left"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="rmmFsNav('')" title="Drives"><i class="bi bi-hdd me-1"></i>Drives</button>
+                                <input type="text" class="form-control form-control-sm font-monospace flex-grow-1"
+                                       id="rmm-fs-path" placeholder="C:\"
+                                       onkeydown="if(event.key==='Enter')rmmFsNav(this.value.trim())">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="rmmFsRefresh()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="rmmFsNav(document.getElementById('rmm-fs-path').value.trim())" title="Go"><i class="bi bi-arrow-right"></i></button>
+                            </div>
+                            <!-- File listing -->
+                            <div id="rmm-fs-content" style="height:280px;overflow-y:auto;border:1px solid #dee2e6;border-radius:.375rem;">
+                                <div class="text-muted small p-3">Click <strong>Drives</strong> to browse the device filesystem.</div>
+                            </div>
+                            <!-- Action bar -->
+                            <div class="d-flex gap-2 align-items-center mt-2">
+                                <span id="rmm-fs-selected" class="small text-muted text-truncate flex-grow-1" style="max-width:300px;"></span>
+                                <button class="btn btn-sm btn-outline-primary" id="rmm-fs-dl-btn" onclick="rmmFsDownload()" disabled>
+                                    <i class="bi bi-download me-1"></i>Download
+                                </button>
+                                <label class="btn btn-sm btn-outline-secondary mb-0" title="Upload to current folder">
+                                    <i class="bi bi-upload me-1"></i>Upload
+                                    <input type="file" id="rmm-ul-file" class="d-none" onchange="rmmFsUpload()">
+                                </label>
+                                <span id="rmm-fs-status" class="small text-muted"></span>
+                            </div>
+                        </div>
+
+                        <!-- Power Actions -->
+                        <div class="tab-pane fade" id="rmm-tab-power">
+                            <div class="alert alert-warning py-2 mb-3" style="font-size:.8rem;">
+                                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                                Actions take effect on the <strong>remote device immediately</strong>.
+                                Shutdown &amp; Restart give a 30-second on-screen warning.
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-sm btn-outline-secondary" onclick="rmmPowerAction('lock')">
+                                    <i class="bi bi-lock me-1"></i>Lock Screen
+                                </button>
+                                <button class="btn btn-sm btn-outline-warning" onclick="rmmPowerAction('logoff')">
+                                    <i class="bi bi-person-x me-1"></i>Log Off
+                                </button>
+                                <button class="btn btn-sm btn-warning" onclick="rmmPowerAction('restart')">
+                                    <i class="bi bi-arrow-clockwise me-1"></i>Restart
+                                </button>
+                                <button class="btn btn-sm btn-danger" onclick="rmmPowerAction('shutdown')">
+                                    <i class="bi bi-power me-1"></i>Shutdown
+                                </button>
+                                <button class="btn btn-sm btn-outline-info" id="rmm-power-cancel-btn" onclick="rmmPowerAction('cancel')" disabled>
+                                    <i class="bi bi-x-circle me-1"></i>Cancel Pending
+                                </button>
+                            </div>
+                            <div id="rmm-power-status" class="small text-muted mt-3"></div>
+                        </div>
+                    </div>
+
+                    <div class="text-end mt-2">
+                        <small class="text-muted">Last telemetry: <span id="rmm-captured-at">—</span></small>
+                        <small class="text-muted ms-3" id="rmm-agent-version-line" style="display:none;">Agent v<span id="rmm-agent-version">—</span></small>
+                    </div>
+                </div>
+
+                <div id="rmm-no-telemetry" class="text-muted small mt-1" style="display:none;">
+                    <i class="bi bi-info-circle me-1"></i>No telemetry yet. Agent will send data when it connects.
+                </div>
+
+                <!-- Screenshot modal -->
+                <div class="modal fade" id="rmmScreenshotModal" tabindex="-1">
+                    <div class="modal-dialog modal-xl modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header py-2">
+                                <h6 class="modal-title mb-0"><i class="bi bi-camera me-2"></i>Device Screenshot</h6>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body p-2 text-center bg-dark position-relative">
+                                <div id="rmm-ss-spinner" class="py-4">
+                                    <div class="spinner-border text-light"></div>
+                                    <p class="text-light mt-2 mb-0">Requesting screenshot from device…</p>
+                                </div>
+                                <img id="rmm-ss-img" src="" style="max-width:100%;display:none;" alt="Screenshot">
+                                <p id="rmm-ss-error" class="text-danger mt-2" style="display:none;"></p>
+                            </div>
+                            <div class="modal-footer py-2">
+                                <small class="text-muted me-auto" id="rmm-ss-meta"></small>
+                                <a id="rmm-ss-download" href="#" download="screenshot.jpg" class="btn btn-sm btn-outline-primary" style="display:none;">
+                                    <i class="bi bi-download me-1"></i>Download
+                                </a>
+                                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                (function(){
+                    const agentId = {{ rmm_agent_id | tojson }};
+                    let _chart = null;
+                    let _swData = [], _svcData = [];
+                    let _fsCurrent = null, _fsHistory = [], _fsPending = null;
+                    let _eagleEnabled = false;
+                    // All timestamps stored as MST — display as-is
+                    function fmtLocal(ts){
+                        if(!ts) return '—';
+                        // Parse string directly—never use Date object (avoids all browser TZ math)
+                        ts = ts.replace(/Z$|[+-]\d\d:\d\d$|[+-]\d{4}$/, '');
+                        // Support both 'T' and space as date/time separator
+                        let tIdx = ts.indexOf('T');
+                        if(tIdx === -1) tIdx = ts.indexOf(' ');
+                        // Date-only (YYYY-MM-DD or YYYYMMDD)
+                        if(tIdx === -1){
+                            const s = ts.replace(/-/g,'');
+                            if(/^\d{8}$/.test(s)){
+                                const yr=+s.slice(0,4),mo=+s.slice(4,6),dy=+s.slice(6,8);
+                                return `${mo}/${dy}/${yr}`;
+                            }
+                            return ts;
+                        }
+                        const [yr, mo, dy] = ts.slice(0, tIdx).split('-').map(Number);
+                        const [hr24, mn] = ts.slice(tIdx+1).split(':').map(Number);
+                        const ap = hr24 >= 12 ? 'PM' : 'AM';
+                        const hr12 = hr24 % 12 || 12;
+                        return `${mo}/${dy}/${yr}, ${hr12}:${String(mn).padStart(2,'0')} ${ap} MST`;
+                    }
+
+                    /* ── helpers ──────────────────────────────── */
+                    function el(id){ return document.getElementById(id); }
+                    function rmmSetStatus(online){
+                        const b = el('rmm-status-badge');
+                        if(online){
+                            b.className='badge bg-success';
+                            b.innerHTML='<i class="bi bi-circle-fill me-1" style="font-size:.55rem;"></i>Online';
+                            el('rmm-shell-btn').classList.remove('disabled');
+                            el('rmm-screenshot-btn').classList.remove('disabled');
+                        } else {
+                            b.className='badge bg-danger';
+                            b.innerHTML='<i class="bi bi-circle-fill me-1" style="font-size:.55rem;"></i>Offline';
+                            el('rmm-shell-btn').classList.add('disabled');
+                            el('rmm-screenshot-btn').classList.add('disabled');
+                        }
+                    }
+                    function bar(id, pct){
+                        const b = el(id);
+                        if(!b) return;
+                        b.style.width = pct+'%';
+                        b.className = 'progress-bar ' + (pct>85?'bg-danger':pct>65?'bg-warning':'bg-'+id.split('-')[2]);
+                    }
+                    async function rmmSend(msg){
+                        const r = await fetch(`/api/rmm/cmd/${agentId}`,{
+                            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(msg)
+                        });
+                        return r.json().catch(()=>({ok:false}));
+                    }
+                    async function rmmPoll(sid, expectedTypes, timeoutMs=25000){
+                        const types = Array.isArray(expectedTypes) ? expectedTypes : [expectedTypes];
+                        const deadline = Date.now()+timeoutMs;
+                        while(Date.now()<deadline){
+                            await new Promise(r=>setTimeout(r,1200));
+                            const r = await fetch(`/api/rmm/cmd-result/${agentId}/${sid}`).then(x=>x.json()).catch(()=>({ok:false}));
+                            if(r.ok && r.ready && types.includes(r.event_type)) return r;
+                        }
+                        return null;
+                    }
+
+                    /* ── initial load ─────────────────────────── */
+                    async function rmmLoad(){
+                        // status
+                        const s = await fetch(`/api/rmm/agent-status/${agentId}`).then(x=>x.json()).catch(()=>({online:false}));
+                        rmmSetStatus(s.online);
+                        // telemetry
+                        const t = await fetch(`/api/rmm/telemetry/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!t.ok){ el('rmm-no-telemetry').style.display=''; return; }
+                        const d = t.telemetry;
+                        el('rmm-telemetry-panel').style.display='';
+                        el('rmm-no-telemetry').style.display='none';
+
+
+                        // Mini cards
+                        const cpu = Math.round(d.cpu_percent||0);
+                        el('rmm-cpu-label').textContent = cpu+'%';
+                        el('rmm-cpu-label').className = 'badge '+(cpu>85?'bg-danger':cpu>65?'bg-warning':'bg-info');
+                        bar('rmm-cpu-bar', cpu);
+                        if(d.cpu_name) el('rmm-cpu-name').textContent = d.cpu_name;
+
+                        const ram = Math.round(d.ram_percent||0);
+                        el('rmm-ram-label').textContent = ram+'%';
+                        el('rmm-ram-label').className = 'badge '+(ram>85?'bg-danger':ram>65?'bg-warning':'bg-warning');
+                        bar('rmm-ram-bar', ram);
+                        if(d.ram_total_gb){
+                            const used = (d.ram_total_gb - (d.ram_available_gb||0));
+                            el('rmm-ram-detail').textContent = `${used.toFixed(1)} / ${(+d.ram_total_gb).toFixed(1)} GB`;
+                        }
+
+                        const disks = d.disk_json||[];
+                        if(disks.length){
+                            const dk = disks[0];
+                            const dp = Math.round(dk.percent||0);
+                            el('rmm-disk-label').textContent = dp+'%';
+                            el('rmm-disk-label').className = 'badge '+(dp>90?'bg-danger':dp>75?'bg-warning':'bg-success');
+                            bar('rmm-disk-bar', dp);
+                            const used_gb = (dk.total_gb||0)-(dk.free_gb||0);
+                            el('rmm-disk-detail').textContent = `${dk.device||dk.mountpoint||''}: ${used_gb.toFixed(0)}/${(dk.total_gb||0).toFixed(0)} GB`;
+                        }
+
+                        if(d.battery_percent!=null){
+                            el('rmm-battery-col').style.display='';
+                            const bp = Math.round(d.battery_percent);
+                            el('rmm-battery-label').textContent = bp+'%'+(d.battery_charging?' ⚡':'');
+                            el('rmm-battery-label').className='badge '+(bp<20?'bg-danger':bp<50?'bg-warning':'bg-success');
+                            bar('rmm-battery-bar', bp);
+                            const minLeft = d.battery_minutes_left;
+                            el('rmm-battery-detail').textContent = d.battery_charging ? 'Plugged in' : (minLeft ? `${Math.floor(minLeft/60)}h ${Math.round(minLeft%60)}m left` : '');
+                        }
+
+                        // Network
+                        const nets = d.network_json||[];
+                        const _vpnKw = /vpn|tunnel|tap-|tun\d|wireguard|anyconnect|openvpn|nordvpn|expressvpn|privatevpn|pia |proton/i;
+                        const netRows = nets.filter(n=>{
+                            const ip = (n.ips&&n.ips[0])||n.ip||'';
+                            return ip && !ip.startsWith('169.');
+                        }).map(n=>{
+                            const ip = (n.ips&&n.ips[0])||n.ip||'';
+                            const isVpn = !n.mac || _vpnKw.test(n.interface||'');
+                            const ssidBadge = n.ssid ? ` <span class="badge bg-info text-dark ms-1" style="font-size:.65rem;font-weight:500;">${n.ssid}</span>` : '';
+                            const vpnBadge  = isVpn  ? ` <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem;font-weight:500;">VPN</span>` : '';
+                            return `<div><strong>${n.interface||n.name||'NIC'}</strong>${ssidBadge}${vpnBadge}: ${ip}</div>`;
+                        }).join('')||'<span class="text-muted">No adapters</span>';
+                        const pubIp = d.public_ip ? `<div class="mt-1 pt-1" style="border-top:1px solid rgba(128,128,128,.2);"><span style="opacity:.55;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;">Public IP</span> <strong>${d.public_ip}</strong></div>` : '';
+                        el('rmm-net-info').innerHTML = netRows + pubIp;
+
+                        // System
+                        const up = d.uptime_seconds ? (() => {
+                            const h=Math.floor(d.uptime_seconds/3600), m=Math.floor((d.uptime_seconds%3600)/60);
+                            return `${h}h ${m}m`;
+                        })() : '—';
+                        const sysRows = [
+                            ['Hostname',   d.hostname],
+                            ['OS',         d.os_edition||d.os_name],
+                            ['Version',    d.os_version],
+                            ['Build',      d.os_build],
+                            ['Domain',     d.domain],
+                            ['User',       d.logged_in_user||d.last_login_user],
+                            ['Uptime',     up],
+                        ].filter(r=>r[1]);
+                        el('rmm-sys-info').innerHTML =
+                            '<table style="width:100%;border-collapse:collapse;">' +
+                            sysRows.map(([k,v])=>
+                                `<tr><td style="opacity:.55;white-space:nowrap;padding-right:.6rem;padding-bottom:.15rem;vertical-align:top;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;">${k}</td>`+
+                                `<td style="word-break:break-word;padding-bottom:.15rem;">${v}</td></tr>`
+                            ).join('') + '</table>';
+
+                        // timestamp — display in agent local time
+                        el('rmm-captured-at').textContent = fmtLocal(d.captured_at);
+
+                        // agent version
+                        if(d.agent_version){
+                            el('rmm-agent-version-badge').textContent = 'v'+d.agent_version;
+                            el('rmm-agent-version').textContent = d.agent_version;
+                            el('rmm-agent-version-line').style.display='';
+                        }
+
+                        // Hardware tab
+                        rmmFillHw(d);
+
+                        // Security tab
+                        rmmFillSec(d);
+
+                        // System info tab
+                        rmmFillSysInfo(d);
+                    }
+
+                    function rmmRefreshTelemetry(){ rmmLoad(); }
+
+                    async function rmmRestartAgent(){
+                        const btn = el('rmm-restart-agent-btn');
+                        if(!confirm('Restart the RMM agent service on this machine?')) return;
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Restarting…';
+                        const r = await rmmSend({type:'restart_agent'});
+                        if(!r.ok){ btn.disabled=false; btn.innerHTML='<i class="bi bi-bootstrap-reboot"></i> Restart Agent'; alert('Failed: '+(r.error||'Agent offline')); return; }
+                        // Wait for ack then poll for reconnect
+                        const ack = await rmmPoll(r.session_id, 'restart_agent_ack', 8000);
+                        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Waiting…';
+                        // Poll until agent comes back online (up to 60s)
+                        let back = false;
+                        for(let i=0;i<20;i++){
+                            await new Promise(res=>setTimeout(res,3000));
+                            const s = await fetch(`/api/rmm/agent-status/${agentId}`).then(x=>x.json()).catch(()=>({online:false}));
+                            if(s.online){ back=true; break; }
+                        }
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-bootstrap-reboot"></i> Restart Agent';
+                        if(back){ rmmLoad(); } else { alert('Agent restarted but has not reconnected yet. Refresh in a moment.'); }
+                    }
+
+                    /* ── hardware tab ─────────────────────────── */
+                    function rmmFillHw(d){
+                        const set = (id,v) => { const e=el(id); if(e) e.textContent=v||'—'; };
+                        set('rmm-hw-vendor', d.vendor||d.bios_manufacturer);
+                        const modelStr = [d.model_name, d.bios_date?`(BIOS ${d.bios_date})`:''].filter(Boolean).join(' ');
+                        set('rmm-hw-model',  d.model_name);
+                        set('rmm-hw-serial', d.serial_number);
+                        set('rmm-hw-mb',     d.motherboard);
+                        const biosStr = [d.bios_version, d.bios_date].filter(Boolean).join(' — ');
+                        set('rmm-hw-bios',   biosStr||d.bios_version);
+                        const gpus = d.gpu||[];
+                        set('rmm-hw-gpu', gpus.map(g=>g.name+(g.vram_gb?` (${g.vram_gb} GB)`:'')).join(', '));
+                        set('rmm-hw-sound', d.sound_card);
+                        const nets = (d.network_json||[]).filter(n=>n.mac&&n.mac!='00:00:00:00:00:00');
+                        set('rmm-hw-macs', nets.map(n=>`${n.interface||''}: ${n.mac}`).join(' | '));
+                    }
+
+                    /* ── security tab ─────────────────────────── */
+                    function rmmFillSec(d){
+                        const sec = d.security||{};
+                        const setEl = (id,v) => { const e=el(id); if(e) e.textContent=v||'—'; };
+                        setEl('rmm-sec-os', d.os_edition||d.os_name||d.os_version);
+
+                        // sec.av / sec.fw / sec.as are arrays of {name, active, updated}
+                        function secBadge(arr){
+                            if(!arr||!arr.length) return '—';
+                            return arr.map(p=>{
+                                const ok=p.active; const upd=p.updated;
+                                const st=ok?(upd?'✔ Active':'⚠ Active/Outdated'):'✘ Inactive';
+                                return `${p.name} (${st})`;
+                            }).join(', ');
+                        }
+                        setEl('rmm-sec-av', secBadge(sec.av));
+                        setEl('rmm-sec-fw', secBadge(sec.fw));
+                        setEl('rmm-sec-as', secBadge(sec.as||sec['as']));
+                        const ls = sec.last_scan;
+                        setEl('rmm-sec-lastscan', ls ? `${ls.type||''} — ${fmtLocal(ls.time||'')}`.trim() : '—');
+                    }
+
+                    /* ── system info tab ───────────────────── */
+                    function rmmFillSysInfo(d){
+                        const si = d.sysinfo || {};
+                        const setH = (id,v) => { const e=el(id); if(e) e.innerHTML=v||'—'; };
+
+                        // BitLocker
+                        if(si.bitlocker && si.bitlocker.length){
+                            let _blIdx = 0;
+                            setH('rmm-si-bitlocker', si.bitlocker.map(v=>{
+                                const ok = v.status==='FullyEncrypted' && v.protected;
+                                const label = ok ? 'Encrypted' : (v.status || 'Not Encrypted');
+                                const badge = ok
+                                    ? '<span class="badge bg-success"><i class="bi bi-lock-fill me-1"></i>'+label+'</span>'
+                                    : '<span class="badge bg-danger"><i class="bi bi-unlock-fill me-1"></i>'+label+'</span>';
+                                const method = v.method ? ' <small class="text-muted">'+v.method+'</small>' : '';
+                                let keyHtml = '';
+                                if(v.keys && v.keys.length){
+                                    keyHtml = v.keys.map(k=>{
+                                        const idx = _blIdx++;
+                                        const spanId = 'bl-key-'+idx;
+                                        const btnId  = 'bl-btn-'+idx;
+                                        return '<div class="mt-1" style="font-size:.78rem;">'
+                                            +'<span class="text-muted me-1">Recovery Key:</span>'
+                                            +'<span id="'+spanId+'" style="font-family:monospace;letter-spacing:.05em;">••••••••••••</span>'
+                                            +' <button id="'+btnId+'" class="btn btn-link btn-sm p-0 ms-1" style="font-size:.72rem;text-decoration:none;" '
+                                            +'onclick="(function(){var s=document.getElementById(''+spanId+''),b=document.getElementById(''+btnId+''),shown=b.dataset.shown==='1';'
+                                            +'s.textContent=shown?'••••••••••••':''+k+'';'
+                                            +'b.textContent=shown?'Show':'Hide';b.dataset.shown=shown?'0':'1';})()">Show</button>'
+                                            +'</div>';
+                                    }).join('');
+                                }
+                                return '<div><strong>'+v.drive+'</strong> '+badge+method+keyHtml+'</div>';
+                            }).join('<div class="mt-1 border-top" style="border-color:rgba(128,128,128,.15)!important;"></div>'));
+                        }
+
+                        // TPM
+                        if(si.tpm){
+                            const t = si.tpm;
+                            const ok = t.present && t.enabled;
+                            const badge = ok ? '<span class="badge bg-success">OK</span>' : '<span class="badge bg-warning text-dark">Issue</span>';
+                            setH('rmm-si-tpm', badge+' v'+(t.version||'?')+(t.enabled?'':' (disabled)'));
+                        }
+
+                        // Windows Activation
+                        if(si.windows_licensed !== undefined){
+                            setH('rmm-si-licensed', si.windows_licensed
+                                ? '<span class="badge bg-success">Licensed</span>'
+                                : '<span class="badge bg-danger">Not Activated</span>');
+                        }
+
+                        // RDP
+                        if(si.rdp_enabled !== undefined){
+                            setH('rmm-si-rdp', si.rdp_enabled
+                                ? '<span class="badge bg-info text-dark">Enabled</span>'
+                                : '<span class="badge bg-secondary">Disabled</span>');
+                        }
+
+                        // Power Plan
+                        if(si.power_plan){ setH('rmm-si-power', si.power_plan); }
+
+                        // Last Windows Update
+                        if(si.last_wu && si.last_wu.date){
+                            const title = si.last_wu.title
+                                ? '<br><small class="text-muted" style="font-size:.72rem;">'+si.last_wu.title+'</small>' : '';
+                            setH('rmm-si-lastwu', fmtLocal(si.last_wu.date)+title);
+                        }
+
+                        // Local Admins
+                        if(si.local_admins && si.local_admins.length){
+                            setH('rmm-si-admins', si.local_admins.map(a=>
+                                '<span class="badge bg-secondary me-1">'+a.name+'</span>'
+                            ).join(''));
+                        }
+
+                        // Printers
+                        if(si.printers && si.printers.length){
+                            setH('rmm-si-printers', si.printers.map(p=>
+                                '<div>'+(p.default?'<i class="bi bi-star-fill text-warning me-1" title="Default"></i>':'')+p.name+'</div>'
+                            ).join(''));
+                        }
+
+                        // Mapped Drives
+                        if(si.mapped_drives && si.mapped_drives.length){
+                            setH('rmm-si-drives', si.mapped_drives.map(m=>
+                                '<div><strong>'+m.letter+'</strong> → '+m.path+'</div>'
+                            ).join(''));
+                        }
+
+                        // USB / Devices
+                        if(si.usb_devices && si.usb_devices.length){
+                            setH('rmm-si-usb', si.usb_devices.map(u=>'<div>'+u.name+'</div>').join(''));
+                        }
+
+                        // Startup Apps
+                        if(si.startup && si.startup.length){
+                            setH('rmm-si-startup', si.startup.map(s=>
+                                '<div><strong>'+s.name+'</strong>'+(s.location||s.user?' <small class="text-muted">('+( s.location||s.user)+')</small>':'')+'</div>'
+                            ).join(''));
+                        }
+
+                        // Pending Reboot
+                        if(si.reboot_pending !== undefined){
+                            setH('rmm-si-reboot', si.reboot_pending
+                                ? '<span class="badge bg-warning text-dark"><i class="bi bi-arrow-repeat me-1"></i>Reboot Required</span>'
+                                : '<span class="badge bg-success">No</span>');
+                        }
+
+                        // Default Browser
+                        if(si.default_browser){ setH('rmm-si-browser', si.default_browser); }
+
+                        // DNS Servers
+                        if(si.dns_servers && si.dns_servers.length){
+                            setH('rmm-si-dns', si.dns_servers.map(s=>'<span class="badge bg-secondary me-1 font-monospace">'+s+'</span>').join(''));
+                        }
+
+                        // GP Last Refresh
+                        if(si.gp_last_refresh){ setH('rmm-si-gp', fmtLocal(si.gp_last_refresh)); }
+
+                        // Disk Health (SMART)
+                        if(si.disk_health && si.disk_health.length){
+                            setH('rmm-si-diskhealth', si.disk_health.map(d=>{
+                                const ok = (d.health||'').toLowerCase()==='healthy';
+                                const badge = ok
+                                    ? '<span class="badge bg-success">Healthy</span>'
+                                    : '<span class="badge bg-danger">'+(d.health||'Unknown')+'</span>';
+                                return '<div>'+badge+' <span class="text-muted" style="font-size:.78rem;">'+(d.name||'')+(d.size_gb?' – '+d.size_gb+' GB':'')+(d.type?' ('+d.type+')':'')+'</span></div>';
+                            }).join(''));
+                        }
+
+                        // Last BSOD / Crashes
+                        if(si.last_bsod && si.last_bsod.length){
+                            setH('rmm-si-bsod', si.last_bsod.map(ev=>
+                                '<div class="mb-1"><span class="badge bg-danger me-1">ID '+ev.id+'</span>'
+                                +'<small class="text-muted">'+fmtLocal(ev.time)+'</small>'
+                                +(ev.msg?'<div style="font-size:.72rem;opacity:.75;">'+ev.msg+'</div>':'')+'</div>'
+                            ).join(''));
+                        } else if(si.last_bsod !== undefined){
+                            setH('rmm-si-bsod', '<span class="text-success">None in last 30 days</span>');
+                        }
+
+                        // Monitors
+                        if(si.monitors && si.monitors.length){
+                            setH('rmm-si-monitors', si.monitors.map((m,i)=>
+                                '<div><strong>Monitor '+(i+1)+'</strong> '+(m.model||'')+(m.serial?' <small class="text-muted">S/N: '+m.serial+'</small>':'')+'</div>'
+                            ).join(''));
+                        }
+
+                        // Windows Update Channel
+                        if(si.wu_channel){ setH('rmm-si-wuchannel', si.wu_channel); }
+
+                        // Screen Lock Timeout
+                        if(si.screen_lock){
+                            const sec = si.screen_lock.timeout_sec || 0;
+                            const mins = sec ? (sec < 60 ? sec+'s' : Math.round(sec/60)+'m') : 'Not set';
+                            const secure = si.screen_lock.secure;
+                            setH('rmm-si-screenlock', mins + (sec ? (secure
+                                ? ' <span class="badge bg-success ms-1">Locked on resume</span>'
+                                : ' <span class="badge bg-warning text-dark ms-1">No password on resume</span>') : ''));
+                        }
+
+                        // Listening Ports
+                        if(si.open_ports && si.open_ports.length){
+                            const _wkPorts = {21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',53:'DNS',80:'HTTP',
+                                110:'POP3',143:'IMAP',443:'HTTPS',445:'SMB',3306:'MySQL',3389:'RDP',
+                                5432:'PostgreSQL',5900:'VNC',8080:'HTTP-alt',8443:'HTTPS-alt'};
+                            setH('rmm-si-ports', si.open_ports.map(p=>{
+                                const known = _wkPorts[p.port]?'<small class="text-muted ms-1">('+_wkPorts[p.port]+')</small>':'';
+                                const rdp = p.port===3389 ? ' <span class="badge bg-warning text-dark">RDP</span>' : '';
+                                return '<span class="me-2 font-monospace" style="font-size:.78rem;">'+p.port+rdp+known+'</span>';
+                            }).join(''));
+                        }
+                    }
+
+                    /* ── AV scan ──────────────────────────────── */
+                    async function rmmAvScan(type){
+                        const st = el('rmm-scan-status'), out = el('rmm-scan-out'), wrap = el('rmm-scan-out-wrap');
+                        st.textContent = 'Sending scan request…';
+                        const code = type==='full'
+                            ? `Start-MpScan -ScanType FullScan; Write-Output "Scan complete"`
+                            : `Start-MpScan -ScanType QuickScan; Write-Output "Scan complete"`;
+                        const r = await rmmSend({type:'run_script', shell:'powershell', code, timeout:600});
+                        if(!r.ok){ st.textContent='Error: '+(r.error||'failed'); return; }
+                        st.textContent = `${type} scan launched… polling for result`;
+                        const res = await rmmPoll(r.session_id, 'script_result', 660000);
+                        const _d=new Date(),_p=n=>String(n).padStart(2,'0'); const now=`${_d.getFullYear()}-${_p(_d.getMonth()+1)}-${_p(_d.getDate())}T${_p(_d.getHours())}:${_p(_d.getMinutes())}:${_p(_d.getSeconds())}`;
+                        await fetch(`/api/rmm/last-scan/${agentId}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scan_type:type,scan_time:now})});
+                        if(res){
+                            wrap.style.display='';
+                            out.textContent=(res.data.stdout||'')+(res.data.stderr?'\nSTDERR:\n'+res.data.stderr:'');
+                            st.textContent = `Scan finished (exit ${res.data.exit_code})`;
+                            el('rmm-sec-lastscan').textContent = `${type} — ${now}`;
+                        } else {
+                            st.textContent='Timed out waiting for scan result';
+                        }
+                    }
+
+                    /* ── metrics ──────────────────────────────── */
+                    async function rmmLoadMetrics(){
+                        const data = await fetch(`/api/rmm/metrics-history/${agentId}?hours=24`).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!data.ok||!data.data||!data.data.length){
+                            document.querySelector('#rmm-tab-metrics').innerHTML='<p class="text-muted">No metrics history yet.</p>';
+                            return;
+                        }
+                        const rows=data.data, labels=rows.map(r=>r.ts.slice(11,16)),
+                              cpuVals=rows.map(r=>r.cpu||0), ramVals=rows.map(r=>r.ram||0);
+                        const ctx=el('rmm-metrics-chart');
+                        if(!ctx) return;
+                        if(_chart) _chart.destroy();
+                        _chart = new Chart(ctx,{
+                            type:'line',
+                            data:{labels,datasets:[
+                                {label:'CPU %',data:cpuVals,borderColor:'#0dcaf0',tension:.3,fill:false,pointRadius:0},
+                                {label:'RAM %',data:ramVals,borderColor:'#ffc107',tension:.3,fill:false,pointRadius:0},
+                            ]},
+                            options:{scales:{y:{min:0,max:100}},plugins:{legend:{position:'bottom'}},animation:false}
+                        });
+                    }
+
+                    /* ── availability / session events ────────── */
+                    async function rmmLoadAvailability(){
+                        // Eagle eyes config
+                        rmmEagleLoad();
+                        // Availability
+                        const av = await fetch(`/api/rmm/availability/${agentId}?limit=50`).then(x=>x.json()).catch(()=>({ok:false}));
+                        const avEl = el('rmm-avail-content');
+                        if(av.ok && av.events && av.events.length){
+                            avEl.innerHTML = av.events.map(e=>{
+                                const on=e.event==='online', ts=fmtLocal(e.ts);
+                                return `<div class="d-flex align-items-center gap-2 mb-1" style="font-size:.8rem;">
+                                    <span class="badge ${on?'bg-success':'bg-secondary'}" style="width:60px;">${on?'Online':'Offline'}</span>
+                                    <span class="text-muted">${ts}</span></div>`;
+                            }).join('');
+                        } else {
+                            avEl.innerHTML='<span class="text-muted" style="font-size:.8rem;">No availability events.</span>';
+                        }
+                        // Session events
+                        rmmLoadSessionEvents(false);
+                    }
+
+                    async function rmmLoadSessionEvents(reset){
+                        const days = el('rmm-sev-days').value;
+                        const se = await fetch(`/api/rmm/session-events/${agentId}?days=${days}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        const seEl = el('rmm-sev-content');
+                        const icons={logon:'person-check',logoff:'person-dash',lock:'lock',unlock:'unlock',sleep:'moon',wake:'sun'};
+                        if(se.ok && se.events && se.events.length){
+                            seEl.innerHTML='<table class="table table-sm mb-0"><thead><tr><th>Event</th><th>User</th><th>Time</th></tr></thead><tbody>'+
+                                se.events.map(e=>{
+                                    const ic=icons[e.type]||'circle'; const ts=fmtLocal(e.time||e.ts||'');
+                                    return `<tr><td><i class="bi bi-${ic} me-1"></i>${e.type||e.event}</td><td>${e.user||''}</td><td>${ts}</td></tr>`;
+                                }).join('')+'</tbody></table>';
+                        } else {
+                            seEl.innerHTML='<span class="text-muted">No session events.</span>';
+                        }
+                    }
+
+                    /* ── eagle eyes ───────────────────────────── */
+                    async function rmmEagleLoad(){
+                        const cfg = await fetch(`/api/rmm/eagle-eyes/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!cfg.ok) return;
+                        _eagleEnabled = !!cfg.enabled;
+                        const tog = el('rmm-eagle-toggle');
+                        if(tog) tog.checked = _eagleEnabled;
+                        const dashBtn = el('rmm-eagle-dash-btn');
+                        if(dashBtn){
+                            dashBtn.style.display = _eagleEnabled?'':'none';
+                            dashBtn.href = `/rmm/eagle-eyes/${agentId}`;
+                        }
+                    }
+                    async function rmmEagleToggle(enabled){
+                        await fetch(`/api/rmm/eagle-eyes/${agentId}`,{
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({enabled})
+                        });
+                        _eagleEnabled = enabled;
+                        const dashBtn = el('rmm-eagle-dash-btn');
+                        if(dashBtn) dashBtn.style.display = enabled?'':'none';
+                    }
+                    document.querySelectorAll('[data-bs-target="#rmm-tab-avail"]').forEach(btn=>{
+                        btn.addEventListener('shown.bs.tab', ()=>rmmEagleLoad());
+                    });
+
+                    /* ── patches ──────────────────────────────── */
+                    let _pendingUpdates = [];
+                    async function rmmLoadPatches(){
+                        // Pending updates
+                        const pu = await fetch(`/api/rmm/pending-updates/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        const puEl = el('rmm-pending-content');
+                        _pendingUpdates = (pu.ok && pu.updates)||[];
+                        if(_pendingUpdates.length){
+                            puEl.innerHTML='<table class="table table-sm table-hover mb-0"><thead class="table-light sticky-top"><tr>'
+                                +'<th><input type="checkbox" id="rmm-chk-all" onchange="rmmChkAll(this.checked)"></th>'
+                                +'<th>Title</th><th>Severity</th><th>Size</th><th>Reboot</th></tr></thead><tbody>'
+                                +_pendingUpdates.map((u,i)=>{
+                                    const sev={Critical:'danger',Important:'warning',Moderate:'info',Low:'secondary'}[u.severity]||'secondary';
+                                    return `<tr><td><input type="checkbox" class="rmm-update-chk" data-idx="${i}" onchange="rmmChkChanged()"></td>`
+                                        +`<td style="font-size:.78rem;">${u.title}<br><small class="text-muted">${(u.kb_ids||[]).join(', ')}</small></td>`
+                                        +`<td><span class="badge bg-${sev}">${u.severity||'?'}</span></td>`
+                                        +`<td>${u.size_mb?u.size_mb.toFixed(0)+' MB':'?'}</td>`
+                                        +`<td>${u.reboot_required?'<i class="bi bi-arrow-clockwise text-warning"></i>':''}</td></tr>`;
+                                }).join('')+'</tbody></table>';
+                            el('rmm-approve-btn').disabled=false;
+                        } else {
+                            puEl.innerHTML='<p class="text-muted mb-0">No pending updates.</p>';
+                        }
+
+                        // Deployment jobs
+                        const jobs = await fetch(`/api/rmm/patch-jobs/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        const jEl = el('rmm-jobs-content');
+                        const jobList = (jobs.ok&&jobs.jobs)||[];
+                        el('rmm-jobs-updated').textContent = jobList.length?`${jobList.length} job(s)`:'';
+                        if(jobList.length){
+                            jEl.innerHTML='<table class="table table-sm mb-0"><thead><tr><th>ID</th><th>Status</th><th>Updates</th><th>Queued</th><th></th></tr></thead><tbody>'+
+                                jobList.map(j=>{
+                                    const sc={queued:'secondary',deploying:'primary',completed:'success',failed:'danger'}[j.status]||'secondary';
+                                    return `<tr><td>${j.id}</td><td><span class="badge bg-${sc}">${j.status}</span></td>`
+                                        +`<td>${(j.titles||[]).slice(0,2).join(', ')+(j.titles&&j.titles.length>2?'…':'')}</td>`
+                                        +`<td style="font-size:.72rem;">${(j.approved_at||j.created_at||'').slice(0,10)}</td>`
+                                        +`<td>${j.status==='queued'||j.status==='failed'?`<button class="btn btn-xs btn-outline-primary py-0 px-1" style="font-size:.7rem;" onclick="rmmDeployJob(${j.id})">Deploy</button>`:''}</td></tr>`;
+                                }).join('')+'</tbody></table>';
+                        } else { jEl.innerHTML='<p class="text-muted mb-0">No deployment jobs.</p>'; }
+
+                        // Installed patches (expanded)
+                        const pi = await fetch(`/api/rmm/patches/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        const piEl = el('rmm-patches-content');
+                        const patches=(pi.ok&&pi.patches)||[];
+                        if(patches.length){
+                            piEl.innerHTML='<table class="table table-sm mb-0"><thead><tr><th>KB</th><th>Description</th><th>Installed</th></tr></thead><tbody>'+
+                                patches.map(p=>`<tr><td><code>${p.id}</code></td><td style="font-size:.78rem;">${p.description||''}</td><td>${fmtLocal(p.installed_on||'')}</td></tr>`
+                                ).join('')+'</tbody></table>';
+                        } else { piEl.innerHTML='<p class="text-muted mb-0">No patch data.</p>'; }
+                    }
+                    function rmmChkAll(v){ document.querySelectorAll('.rmm-update-chk').forEach(c=>c.checked=v); rmmChkChanged(); }
+                    function rmmChkChanged(){ el('rmm-approve-btn').disabled=!document.querySelector('.rmm-update-chk:checked'); }
+                    async function rmmApprovePatches(){
+                        const idxs=[...document.querySelectorAll('.rmm-update-chk:checked')].map(c=>+c.dataset.idx);
+                        const selected=idxs.map(i=>_pendingUpdates[i]).filter(Boolean);
+                        if(!selected.length) return;
+                        const r=await fetch(`/api/rmm/patch-jobs/${agentId}`,{
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({update_ids:selected.map(u=>u.update_id),kb_ids:selected.flatMap(u=>u.kb_ids||[]),titles:selected.map(u=>u.title)})
+                        }).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(r.ok){ rmmLoadPatches(); } else { alert('Failed: '+(r.error||'unknown')); }
+                    }
+                    async function rmmDeployJob(jobId){
+                        const r=await fetch(`/api/rmm/patch-jobs/${agentId}/${jobId}/deploy`,{
+                            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})
+                        }).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(r.ok){ setTimeout(rmmLoadPatches,2000); } else { alert('Deploy failed: '+(r.error||'unknown')); }
+                    }
+
+                    /* ── software ─────────────────────────────── */
+                    async function rmmLoadSoftware(){
+                        if(_swData.length){ rmmRenderSoftware(); return; }
+                        el('rmm-sw-content').innerHTML='<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</span>';
+                        const r=await fetch(`/api/rmm/software/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
+                        _swData=(r.ok&&r.software)||[];
+                        el('rmm-sw-count').textContent=_swData.length||'';
+                        rmmRenderSoftware();
+                    }
+                    async function rmmRefreshSoftware(){ _swData=[]; await rmmLoadSoftware(); }
+                    async function rmmRescanSoftware(){
+                        // Query agent via PowerShell registry scan for live software list
+                        const ps = [
+                            "$p=@(",
+                            "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+                            "'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+                            "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*');",
+                            "$p|ForEach-Object{Get-ItemProperty $_ -EA SilentlyContinue}",
+                            "|Where-Object{$_.DisplayName -and $_.DisplayName.Trim()}",
+                            "|Select-Object @{N='name';E={$_.DisplayName}},@{N='version';E={$_.DisplayVersion}},@{N='publisher';E={$_.Publisher}},@{N='install_date';E={$_.InstallDate}}",
+                            "|Sort-Object name",
+                            "|ConvertTo-Json -Compress"
+                        ].join('');
+                        const sent = await rmmSend({type:'run_script', shell:'powershell', code:ps, timeout:30});
+                        if(!sent.ok){ await rmmRefreshSoftware(); return; }
+                        const ev = await rmmPoll(sent.session_id, 'script_result', 35000);
+                        if(!ev || !ev.data || !ev.data.stdout){ await rmmRefreshSoftware(); return; }
+                        try {
+                            let parsed = JSON.parse(ev.data.stdout.trim());
+                            if(!Array.isArray(parsed)) parsed = [parsed];
+                            _swData = parsed.filter(s=>s.name);
+                            el('rmm-sw-count').textContent = _swData.length||'';
+                            rmmRenderSoftware();
+                        } catch(_e){ await rmmRefreshSoftware(); }
+                    }
+                    function rmmRenderSoftware(){
+                        const q=(el('rmm-sw-filter')||{}).value||'';
+                        const rows=_swData.filter(s=>!q||`${s.name}${s.publisher}${s.version}`.toLowerCase().includes(q.toLowerCase()));
+                        el('rmm-sw-content').innerHTML = rows.length
+                            ? '<table class="table table-sm table-hover mb-0"><thead class="table-light sticky-top"><tr><th>Name</th><th>Version</th><th>Publisher</th><th></th></tr></thead><tbody>'
+                              +rows.map(s=>`<tr><td style="font-size:.78rem;">${s.name||''}</td><td style="font-size:.76rem;">${s.version||''}</td>`
+                                +`<td style="font-size:.76rem;">${s.publisher||''}</td>`
+                                +`<td><button class="btn btn-outline-danger py-0 px-1" style="font-size:.68rem;" onclick='rmmUninstallSw(${JSON.stringify(s.name||"")},this)'><i class="bi bi-trash"></i></button></td></tr>`
+                                ).join('')+'</tbody></table>'
+                            : '<span class="text-muted">No matches.</span>';
+                    }
+                    function rmmFilterSoftware(){ rmmRenderSoftware(); }
+                    function rmmSwToggle(panel){
+                        ['winget','msi'].forEach(p=> el(`rmm-sw-${p}-panel`).style.display=p===panel&&el(`rmm-sw-${p}-panel`).style.display==='none'?'':'none');
+                    }
+                    async function rmmUninstallSw(name, btn){
+                        if(!confirm(`Uninstall "${name}"?`)) return;
+                        const row = btn.closest('tr');
+                        btn.disabled = true;
+                        btn.className = 'btn rmm-btn-undoing py-0 px-2';
+                        btn.style.fontSize = '.68rem';
+                        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uninstalling…';
+
+                        const sent = await rmmSend({type:'sw_uninstall', name});
+                        if(!sent.ok){
+                            btn.disabled=false; btn.className='btn btn-outline-danger py-0 px-1'; btn.style.fontSize='.68rem'; btn.innerHTML='<i class="bi bi-trash"></i>';
+                            alert('Failed: '+(sent.error||'unknown')); return;
+                        }
+
+                        // Poll for install_done (agent uses same event for install+uninstall)
+                        const deadline = Date.now()+120000;
+                        let done = null;
+                        while(Date.now()<deadline){
+                            await new Promise(r=>setTimeout(r,2000));
+                            const ev = await fetch(`/api/rmm/cmd-result/${agentId}/${sent.session_id}`).then(x=>x.json()).catch(()=>({ok:false}));
+                            if(ev.ok && ev.ready && ev.event_type==='install_done'){ done=ev; break; }
+                        }
+
+                        if(done && done.data && done.data.success){
+                            row.style.transition='opacity .5s';
+                            row.style.opacity='0';
+                            setTimeout(()=>{ row.remove(); }, 500);
+                            _swData = _swData.filter(s=>s.name!==name);
+                            el('rmm-sw-count').textContent = _swData.length||'';
+                        } else {
+                            btn.disabled=false; btn.className='btn btn-outline-danger py-0 px-1'; btn.style.fontSize='.68rem'; btn.innerHTML='<i class="bi bi-trash"></i>';
+                            alert('Uninstall failed or timed out.');
+                        }
+                    }
+                    async function rmmWingetSearch(){
+                        const term=el('rmm-winget-q').value.trim(); if(!term) return;
+                        const res=el('rmm-winget-results'); res.innerHTML='Searching…';
+                        const r=await rmmSend({type:'winget_search',term});
+                        if(!r.ok){ res.innerHTML='Error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'winget_search_result',30000);
+                        if(!data){ res.innerHTML='<span class="text-danger">Timed out.</span>'; return; }
+                        const results=data.data.results||[];
+                        if(data.data.error){ res.innerHTML=`<span class="text-danger">${data.data.error}</span>`; return; }
+                        res.innerHTML=results.length
+                            ?'<table class="table table-sm mb-0"><thead><tr><th>ID</th><th>Name</th><th>Version</th><th></th></tr></thead><tbody>'
+                              +results.map(p=>`<tr><td style="font-size:.75rem;"><code>${p.id}</code></td><td>${p.name}</td><td>${p.version||'?'}</td>`
+                                +`<td><button class="btn btn-sm btn-outline-success py-0 px-1" style="font-size:.72rem;border-radius:50px;" onclick='rmmWingetInstall(${JSON.stringify(p.id)},this)'>Install</button></td></tr>`
+                              ).join('')+'</tbody></table>'
+                            :'<span class="text-muted">No results.</span>';
+                    }
+                    async function rmmWingetInstall(pkg, btn){
+                        if(!confirm(`Install ${pkg}?`)) return;
+
+                        // Save original state
+                        const origClass = btn.className;
+                        const origHtml  = btn.innerHTML;
+                        const origStyle = btn.getAttribute('style')||'';
+
+                        // → Installing state: pill fills up left→right
+                        btn.disabled = true;
+                        btn.className = 'btn rmm-btn-progress py-0 px-3';
+                        btn.style.cssText = 'font-size:.72rem;border-radius:50px;min-width:100px;';
+                        btn.style.setProperty('--fill','5%');
+                        btn.innerHTML = '<span style="position:relative;z-index:1;"><span class="spinner-border spinner-border-sm me-1"></span>Installing…</span>';
+
+                        // Animate fill percentage every 3 s (caps at 88% until done)
+                        let fillPct = 5;
+                        const fillTimer = setInterval(()=>{
+                            fillPct = Math.min(fillPct + (fillPct < 50 ? 6 : 2), 88);
+                            btn.style.setProperty('--fill', fillPct+'%');
+                        }, 3000);
+
+                        // Note: agent key is 'id', not 'package_id'
+                        const sent = await rmmSend({type:'winget_install', id: pkg});
+                        if(!sent.ok){
+                            clearInterval(fillTimer);
+                            btn.disabled=false; btn.className=origClass; btn.setAttribute('style',origStyle); btn.innerHTML=origHtml;
+                            alert('Error: '+(sent.error||'failed')); return;
+                        }
+
+                        // Poll for install_done (streaming install_chunk events in between)
+                        const deadline = Date.now()+300000; // 5 min max
+                        let done = null;
+                        while(Date.now()<deadline){
+                            await new Promise(r=>setTimeout(r,2000));
+                            const ev = await fetch(`/api/rmm/cmd-result/${agentId}/${sent.session_id}`).then(x=>x.json()).catch(()=>({ok:false}));
+                            if(!ev.ok) continue;
+                            // Show last chunk text inside the button while waiting
+                            if(ev.ready && ev.event_type==='install_chunk' && ev.data && ev.data.text){
+                                const short = ev.data.text.slice(0,28)+(ev.data.text.length>28?'…':'');
+                                btn.innerHTML=`<span style="position:relative;z-index:1;"><span class="spinner-border spinner-border-sm me-1"></span>${short}</span>`;
+                            }
+                            if(ev.ready && ev.event_type==='install_done'){ done=ev; break; }
+                        }
+
+                        clearInterval(fillTimer);
+                        // Jump fill to 100%
+                        btn.style.setProperty('--fill','100%');
+                        btn.classList.remove('rmm-btn-progress');
+
+                        await new Promise(r=>setTimeout(r,400)); // brief flash at 100%
+
+                        if(done && done.data && done.data.success){
+                            btn.className='btn rmm-btn-done-ok py-0 px-3';
+                            btn.style.cssText='font-size:.72rem;border-radius:50px;min-width:100px;';
+                            btn.innerHTML='<i class="bi bi-check-circle-fill me-1"></i>Installed';
+                            // Rescan software via agent PS registry query
+                            rmmRescanSoftware();
+                        } else {
+                            btn.className='btn rmm-btn-done-err py-0 px-3';
+                            btn.style.cssText='font-size:.72rem;border-radius:50px;min-width:100px;';
+                            btn.innerHTML='<i class="bi bi-x-circle me-1"></i>Failed';
+                            // Reset after 5 s so user can retry
+                            setTimeout(()=>{
+                                btn.disabled=false; btn.className=origClass;
+                                btn.setAttribute('style',origStyle); btn.innerHTML=origHtml;
+                            }, 5000);
+                        }
+                    }
+                    async function rmmMsiInstall(){
+                        const file=el('rmm-msi-file').files[0];
+                        if(!file){ alert('Pick a file first.'); return; }
+                        if(file.size>80*1024*1024){ alert('File too large (max 80 MB). Use the File Transfer tab to upload large installers, then run via Scripts tab.'); return; }
+                        el('rmm-install-out-wrap').style.display=''; el('rmm-install-status').textContent='Uploading…';
+                        const ar=new Promise((res,rej)=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=rej; rd.readAsDataURL(file); });
+                        const dataUrl=await ar;
+                        const b64=dataUrl.split(',')[1];
+                        const destPath=`C:\\Windows\\Temp\\${file.name}`;
+                        const ur=await rmmSend({type:'file_upload',path:destPath,data:b64});
+                        if(!ur.ok){ el('rmm-install-status').textContent='Upload failed: '+(ur.error||''); return; }
+                        const upResult=await rmmPoll(ur.session_id,'file_upload_result',60000);
+                        if(!upResult||!upResult.data.success){ el('rmm-install-status').textContent='Upload failed.'; return; }
+                        el('rmm-install-status').textContent='Running installer…';
+                        const args=el('rmm-msi-args').value.trim();
+                        const isMsi=file.name.toLowerCase().endsWith('.msi');
+                        const code=isMsi
+                            ?`Start-Process msiexec -ArgumentList '/i "${destPath}" /qn ${args}' -Wait; Write-Output "Done"`
+                            :`Start-Process "${destPath}" -ArgumentList "${args}" -Wait; Write-Output "Done"`;
+                        const sr=await rmmSend({type:'run_script',shell:'powershell',code,timeout:300});
+                        if(!sr.ok){ el('rmm-install-status').textContent='Script failed.'; return; }
+                        const sres=await rmmPoll(sr.session_id,'script_result',320000);
+                        if(sres){ el('rmm-install-out').textContent=sres.data.stdout||'(no output)'; el('rmm-install-status').textContent='Finished.'; }
+                        else { el('rmm-install-status').textContent='Timed out.'; }
+                    }
+
+                    /* ── scripts ──────────────────────────────── */
+                    async function rmmRunScript(){
+                        const code=el('rmm-script-code').value.trim(); if(!code) return;
+                        const shell=el('rmm-script-shell').value;
+                        const timeout=+el('rmm-script-timeout').value||60;
+                        const btn=el('rmm-script-run-btn');
+                        btn.disabled=true; btn.textContent='Running…';
+                        el('rmm-script-output').textContent=''; el('rmm-script-status').textContent='Sending…';
+                        const r=await rmmSend({type:'run_script',shell,code,timeout});
+                        if(!r.ok){ el('rmm-script-status').textContent='Error: '+(r.error||'failed'); btn.disabled=false; btn.innerHTML='<i class="bi bi-play-fill"></i> Run'; return; }
+                        el('rmm-script-status').textContent='Waiting for result…';
+                        const data=await rmmPoll(r.session_id,'script_result',(timeout+10)*1000);
+                        if(data){
+                            el('rmm-script-output').textContent=(data.data.stdout||'')+(data.data.stderr?'\n--- STDERR ---\n'+data.data.stderr:'');
+                            el('rmm-script-status').textContent=`Exited ${data.data.exit_code}`;
+                        } else {
+                            el('rmm-script-status').textContent='Timed out.';
+                        }
+                        btn.disabled=false; btn.innerHTML='<i class="bi bi-play-fill"></i> Run';
+                    }
+
+                    /* ── services ─────────────────────────────── */
+                    async function rmmLoadServices(){
+                        el('rmm-svc-content').innerHTML='<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Loading services…</span>';
+                        el('rmm-svc-status').textContent='Requesting…';
+                        const r=await rmmSend({type:'list_services'});
+                        if(!r.ok){ el('rmm-svc-status').textContent='Error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'services_result',20000);
+                        _svcData=(data&&data.data&&data.data.services)||[];
+                        el('rmm-svc-status').textContent=_svcData.length?`${_svcData.length} services`:'No data';
+                        rmmRenderServices();
+                    }
+                    function rmmRenderServices(){
+                        const q=(el('rmm-svc-filter')||{}).value||'';
+                        const rows=_svcData.filter(s=>!q||`${s.name}${s.display_name}`.toLowerCase().includes(q.toLowerCase()));
+                        el('rmm-svc-content').innerHTML=rows.length
+                            ?'<table class="table table-sm table-hover mb-0"><thead class="table-light sticky-top"><tr><th>Name</th><th>Status</th><th>Start</th><th></th></tr></thead><tbody>'
+                              +rows.map(s=>{
+                                  const run=s.status==='running'||s.status==='Running';
+                                  return `<tr><td style="font-size:.78rem;">${s.display_name||s.name}</td>`
+                                      +`<td><span class="badge ${run?'bg-success':'bg-secondary'}">${s.status}</span></td>`
+                                      +`<td style="font-size:.72rem;">${s.start_type||''}</td>`
+                                      +`<td class="text-end"><button class="btn py-0 px-1 btn-outline-${run?'warning':'success'}" style="font-size:.68rem;" onclick="rmmServiceAction(${JSON.stringify(s.name)},${JSON.stringify(run?'stop':'start')})">${run?'Stop':'Start'}</button></td></tr>`;
+                              }).join('')+'</tbody></table>'
+                            :'<span class="text-muted">No services.</span>';
+                    }
+                    function rmmFilterServices(){ rmmRenderServices(); }
+                    async function rmmServiceAction(name,action){
+                        el('rmm-svc-status').textContent=`${action} ${name}…`;
+                        const r=await rmmSend({type:'service_action',action,service_name:name});
+                        if(!r.ok){ el('rmm-svc-status').textContent='Error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'service_action_result',15000);
+                        el('rmm-svc-status').textContent=data?(data.data.message||'Done'):'Timed out';
+                        setTimeout(rmmLoadServices,1500);
+                    }
+
+                    /* ── event viewer ─────────────────────────── */
+                    async function rmmLoadEvents(){
+                        const log=el('rmm-ev-log').value, lvl=el('rmm-ev-level').value,
+                              src=el('rmm-ev-source').value, max=+el('rmm-ev-max').value||100;
+                        el('rmm-ev-status').textContent='Querying…';
+                        el('rmm-ev-content').innerHTML='<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</span>';
+                        const r=await rmmSend({type:'get_event_log',log_name:log,level_filter:lvl?+lvl:null,max_events:max,source_filter:src||null});
+                        if(!r.ok){ el('rmm-ev-status').textContent='Error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'event_log_result',30000);
+                        const evts=(data&&data.data&&data.data.events)||[];
+                        el('rmm-ev-status').textContent=evts.length?`${evts.length} events`:'No results';
+                        const lvlBadge={1:'bg-danger',2:'bg-danger',3:'bg-warning',4:'bg-secondary'};
+                        const lvlName={1:'Critical',2:'Error',3:'Warning',4:'Info'};
+                        el('rmm-ev-content').innerHTML=evts.length
+                            ?'<table class="table table-sm table-hover mb-0" style="font-size:.73rem;"><thead class="table-light sticky-top"><tr><th>Time</th><th>ID</th><th>Level</th><th>Source</th><th>Message</th></tr></thead><tbody>'
+                              +evts.map(e=>`<tr><td class="text-nowrap">${fmtLocal(e.time||e.ts||'')}</td>`
+                                +`<td>${e.id||''}</td><td><span class="badge ${lvlBadge[e.level]||'bg-secondary'}">${lvlName[e.level]||e.level}</span></td>`
+                                +`<td>${e.source||''}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.message||''}</td></tr>`
+                              ).join('')+'</tbody></table>'
+                            :'<span class="text-muted">No events found.</span>';
+                    }
+
+                    /* ── file system ──────────────────────────── */
+                    function rmmFsTabClick(){ if(!_fsCurrent) rmmFsNav(''); }
+                    async function rmmFsNav(path){
+                        if(_fsCurrent!==null && path!==_fsCurrent) _fsHistory.push(_fsCurrent);
+                        _fsCurrent=path;
+                        const pathEl=el('rmm-fs-path'); if(pathEl) pathEl.value=path||'';
+                        el('rmm-fs-content').innerHTML='<div class="text-muted small p-3"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</div>';
+                        const r=await rmmSend({type:'list_directory',path:path||''});
+                        if(!r.ok){ el('rmm-fs-content').innerHTML=`<div class="text-danger p-3">${r.error||'Failed'}</div>`; return; }
+                        const data=await rmmPoll(r.session_id,'list_dir_result',20000);
+                        const entries=(data&&data.data&&data.data.entries)||[];
+                        if(!entries.length){ el('rmm-fs-content').innerHTML='<div class="text-muted small p-3">Empty or access denied.</div>'; return; }
+                        const dirs=entries.filter(e=>e.is_dir), files=entries.filter(e=>!e.is_dir);
+                        const rows=[...dirs,...files].map(e=>{
+                            const icon=e.is_dir?'folder-fill':'file-earmark';
+                            const color=e.is_dir?'text-warning':'text-secondary';
+                            const sizeStr=e.is_dir?'':(e.size>1048576?(e.size/1048576).toFixed(1)+' MB':e.size>1024?(e.size/1024).toFixed(0)+' KB':e.size+' B');
+                            // Normalise: strip any trailing backslashes from path then join
+                            const base = path ? path.replace(/\\+$/, '') + '\\' : '';
+                            const newPath = base + e.name;
+                            // Use single-quoted onclick so JSON.stringify double-quotes don't break the HTML attribute
+                            return `<tr class="rmm-fs-row" style="cursor:${e.is_dir?'pointer':'default'};" onclick='${e.is_dir?`rmmFsNav(${JSON.stringify(newPath)})`:''}'>`
+                                +`<td><i class="bi bi-${icon} ${color} me-1"></i>${e.name}</td><td class="text-muted">${sizeStr}</td>`
+                                +`<td>${(e.modified||'').slice(0,10)}</td>`
+                                +`<td class="text-end">${!e.is_dir?`<button class="btn btn-outline-secondary py-0 px-1" style="font-size:.68rem;" onclick='event.stopPropagation();rmmFsSelect(${JSON.stringify(newPath)},this)'><i class="bi bi-check2"></i></button>`:''}</td></tr>`;
+                        });
+                        el('rmm-fs-content').innerHTML='<table class="table table-sm table-hover mb-0"><thead class="table-light"><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+                    }
+                    function rmmFsSelect(path,btn){
+                        document.querySelectorAll('#rmm-fs-content .rmm-fs-row').forEach(r=>r.classList.remove('table-primary'));
+                        btn.closest('tr').classList.add('table-primary');
+                        _fsPending=path;
+                        const sEl=el('rmm-fs-selected'); if(sEl) sEl.textContent=path;
+                        const dlBtn=el('rmm-fs-dl-btn'); if(dlBtn) dlBtn.disabled=false;
+                    }
+                    function rmmFsBack(){
+                        const prev=_fsHistory.pop();
+                        if(prev!=null){ _fsCurrent=null; rmmFsNav(prev); }
+                    }
+                    function rmmFsRefresh(){ if(_fsCurrent!=null){ const c=_fsCurrent; _fsCurrent=null; _fsHistory.pop(); rmmFsNav(c); } }
+                    async function rmmFsDownload(){
+                        if(!_fsPending) return;
+                        el('rmm-fs-status').textContent='Requesting download…';
+                        const r=await rmmSend({type:'file_download',path:_fsPending});
+                        if(!r.ok){ el('rmm-fs-status').textContent='Error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'file_download_data',30000);
+                        if(!data||data.data.error){ el('rmm-fs-status').textContent='Download failed: '+(data&&data.data.error||'timeout'); return; }
+                        const blob=new Blob([Uint8Array.from(atob(data.data.data),c=>c.charCodeAt(0))]);
+                        const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=data.data.filename||'file'; a.click();
+                        el('rmm-fs-status').textContent=`Downloaded ${data.data.filename}`;
+                    }
+                    async function rmmFsUpload(){
+                        const file=el('rmm-ul-file').files[0]; if(!file||!_fsCurrent) return;
+                        el('rmm-fs-status').textContent='Uploading…';
+                        const ar=new Promise((res,rej)=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=rej; rd.readAsDataURL(file); });
+                        const dataUrl=await ar; const b64=dataUrl.split(',')[1];
+                        const destPath=(_fsCurrent?_fsCurrent.replace(/\\$/,'')+'\\'  :'')+file.name;
+                        const r=await rmmSend({type:'file_upload',path:destPath,data:b64});
+                        if(!r.ok){ el('rmm-fs-status').textContent='Upload error: '+(r.error||'failed'); return; }
+                        const data=await rmmPoll(r.session_id,'file_upload_result',60000);
+                        if(data&&data.data.success){ el('rmm-fs-status').textContent='Uploaded.'; rmmFsRefresh(); }
+                        else { el('rmm-fs-status').textContent='Upload failed.'; }
+                    }
+
+                    /* ── power ────────────────────────────────── */
+                    async function rmmPowerAction(action){
+                        if(action==='shutdown'||action==='restart'){
+                            if(!confirm(`Really ${action} this device? The user will get a 30-second warning.`)) return;
+                        }
+                        el('rmm-power-status').textContent=`Sending ${action}…`;
+                        el('rmm-power-cancel-btn').disabled=action==='cancel';
+                        const r=await rmmSend({type:'power_action',action});
+                        el('rmm-power-status').textContent=r.ok?`${action} command sent.`:'Error: '+(r.error||'failed');
+                        if(r.ok&&action==='shutdown'||action==='restart') el('rmm-power-cancel-btn').disabled=false;
+                        if(action==='cancel') el('rmm-power-cancel-btn').disabled=true;
+                    }
+
+                    /* ── screenshot ───────────────────────────── */
+                    async function rmmRequestScreenshot(){
+                        const modal=new bootstrap.Modal(el('rmmScreenshotModal'));
+                        const img=el('rmm-ss-img'), spin=el('rmm-ss-spinner'), err=el('rmm-ss-error'), meta=el('rmm-ss-meta'), dl=el('rmm-ss-download');
+                        img.style.display='none'; err.style.display='none'; spin.style.display=''; dl.style.display='none';
+                        meta.textContent=''; modal.show();
+                        const r=await fetch(`/api/rmm/screenshot/${agentId}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!r.ok){ spin.style.display='none'; err.textContent='Failed to send screenshot request: '+(r.error||'agent not connected'); err.style.display=''; return; }
+                        // Poll for latest screenshot (compare timestamps)
+                        const before=Date.now();
+                        let found=null;
+                        for(let i=0;i<30;i++){
+                            await new Promise(res=>setTimeout(res,2000));
+                            const s=await fetch(`/api/rmm/screenshot/${agentId}/latest`).then(x=>x.json()).catch(()=>({ok:false}));
+                            if(s.ok && s.screenshot){
+                                const ts=new Date(s.screenshot.captured_at||'').getTime();
+                                if(ts>before-5000){ found=s.screenshot; break; }
+                            }
+                        }
+                        spin.style.display='none';
+                        if(found){
+                            const shotId=found.id;
+                            img.src=`/api/rmm/eagle-eyes/screenshot/${shotId}`;
+                            img.style.display='';
+                            meta.textContent=`Captured: ${fmtLocal(found.captured_at)} | ${found.width||'?'}×${found.height||'?'}`;
+                            dl.href=`/api/rmm/eagle-eyes/screenshot/${shotId}/download`;
+                            dl.style.display='';
+                        } else {
+                            err.textContent='Screenshot not received in time. Make sure the agent is connected.';
+                            err.style.display='';
+                        }
+                    }
+
+                    // Expose to global scope for inline onclick handlers
+                    Object.assign(window,{
+                        rmmLoad, rmmRefreshTelemetry, rmmAvScan, rmmLoadMetrics,
+                        rmmLoadAvailability, rmmLoadSessionEvents, rmmEagleLoad, rmmEagleToggle,
+                        rmmLoadPatches, rmmApprovePatches, rmmChkAll, rmmChkChanged, rmmDeployJob,
+                        rmmLoadSoftware, rmmRefreshSoftware, rmmRescanSoftware, rmmFilterSoftware, rmmSwToggle,
+                        rmmUninstallSw, rmmWingetSearch, rmmWingetInstall, rmmMsiInstall,
+                        rmmRunScript,
+                        rmmLoadServices, rmmFilterServices, rmmServiceAction,
+                        rmmLoadEvents,
+                        rmmFsTabClick, rmmFsNav, rmmFsSelect, rmmFsBack, rmmFsRefresh, rmmFsDownload, rmmFsUpload,
+                        rmmPowerAction, rmmRequestScreenshot
+                    });
+
+                    rmmLoad();
+                })();
+                </script>
+    </div><!-- /.card-body -->
+    </div><!-- /.card -->
+</div><!-- /.tab-pane #tab-rmm -->
+{% endif %}
+
+<!-- ══ INTUNE TAB ═══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-intune" role="tabpanel">
+    {% if not asset.serial_number %}
+    <div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No serial number on file. Add a serial number to enable Intune data comparison.</div>
+    {% elif intune_error %}
+    <div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Unable to fetch Intune data: {{ intune_error }}</div>
+    {% elif intune_device %}
+    <p class="text-muted mb-3"><small><i class="bi bi-info-circle me-1"></i>Live data from Microsoft Intune compared against your asset record.</small></p>
+    <div class="card section-card">
+        <div class="table-responsive">
+            <table class="table table-bordered mb-0">
+                <thead class="table-light">
+                    <tr><th style="width:22%;">Field</th><th>Asset Record</th><th>Intune Live Data</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Device Name</strong></td>
+                        <td>{{ asset.name }}</td>
+                        <td>{{ intune_device.get('deviceName', '-') }}{% if asset.name != intune_device.get('deviceName') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Serial Number</strong></td>
+                        <td><code>{{ asset.serial_number }}</code></td>
+                        <td><code>{{ intune_device.get('serialNumber', '-') }}</code>{% if asset.serial_number == intune_device.get('serialNumber') %} <span class="badge bg-success ms-1">Match</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Manufacturer</strong></td>
+                        <td>{{ asset.manufacturer or '-' }}</td>
+                        <td>{{ intune_device.get('manufacturer', '-') }}{% if asset.manufacturer != intune_device.get('manufacturer') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Model</strong></td>
+                        <td>{{ asset.model or '-' }}</td>
+                        <td>{{ intune_device.get('model', '-') }}{% if asset.model != intune_device.get('model') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Operating System</strong></td>
+                        <td>{{ asset.os_version or '-' }}</td>
+                        <td>{{ intune_device.get('operatingSystem', '-') }} {{ intune_device.get('osVersion', '') }}{% if asset.os_version and intune_device.get('operatingSystem') and asset.os_version != intune_device.get('operatingSystem') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Assigned User</strong></td>
+                        <td>{% if asset.employee %}{{ asset.employee.name }}<br><small class="text-muted">{{ asset.employee.email }}</small>{% else %}<span class="text-muted">Not assigned</span>{% endif %}</td>
+                        <td>
+                            {% if intune_device.get('userPrincipalName') %}
+                                {{ intune_device.get('userDisplayName', '-') }}<br>
+                                <small class="text-muted">{{ intune_device.get('userPrincipalName') }}</small>
+                                {% if asset.employee and asset.employee.email != intune_device.get('userPrincipalName') %}<br><span class="badge bg-warning">Different user</span>
+                                {% elif not asset.employee %}<br><span class="badge bg-info">Can sync</span>{% endif %}
+                            {% else %}<span class="text-muted">Not assigned in Intune</span>{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Compliance</strong></td>
+                        <td>{{ asset.online_state or '-' }}</td>
+                        <td>{% set compliance = intune_device.get('complianceState', 'unknown') %}
+                            {% if compliance == 'compliant' %}<span class="badge bg-success">{{ compliance|title }}</span>
+                            {% elif compliance == 'noncompliant' %}<span class="badge bg-danger">{{ compliance|title }}</span>
+                            {% else %}<span class="badge bg-secondary">{{ compliance|title }}</span>{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Last Seen / Sync</strong></td>
+                        <td>{% if asset.last_seen %}{{ asset.last_seen.strftime('%Y-%m-%d %H:%M UTC') }}{% else %}-{% endif %}</td>
+                        <td>{% if intune_device.get('lastSyncDateTime') %}{{ intune_device.get('lastSyncDateTime', '').replace('T',' ').replace('Z',' UTC')[:19] + ' UTC' }}{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Enrollment Date</strong></td>
+                        <td>-</td>
+                        <td>{% if intune_device.get('enrolledDateTime') %}{{ intune_device.get('enrolledDateTime', '').split('T')[0] }}{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Management State</strong></td>
+                        <td>-</td>
+                        <td>{{ intune_device.get('managementState', '-') }}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Device ID (Intune)</strong></td>
+                        <td>-</td>
+                        <td><small><code>{{ intune_device.get('id', '-') }}</code></small></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% if asset.manufacturer != intune_device.get('manufacturer') or asset.model != intune_device.get('model') or asset.name != intune_device.get('deviceName') %}
+    <div class="alert alert-info mt-3"><i class="bi bi-info-circle me-2"></i><strong>Data Mismatch Detected:</strong> Some fields differ. Run "Sync from Intune" on the Assets page to update.</div>
+    {% endif %}
+    {% else %}
+    <div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Device (Serial: <code>{{ asset.serial_number }}</code>) was not found in Microsoft Intune. It may not be enrolled.</div>
+    {% endif %}
+</div>
+
+<!-- ══ HISTORY TAB ══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-history" role="tabpanel">
+    {% if history %}
+    <div class="list-unstyled">
+        {% for entry in history %}
+        <div class="history-item {% if 'assign' in entry.action|lower %}assign{% elif 'status' in entry.action|lower %}status{% elif 'edit' in entry.action|lower or 'update' in entry.action|lower %}edit{% endif %}">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <strong style="font-size:.9rem;">{{ entry.action }}</strong>
+                    {% if entry.description %}
+                    <p class="mb-0 text-muted" style="font-size:.83rem;">{{ entry.description }}</p>
+                    {% endif %}
+                    {% if entry.changed_by %}<small class="text-muted">by {{ entry.changed_by }}</small>{% endif %}
+                </div>
+                <small class="text-muted text-nowrap ms-3">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-muted">No history available.</p>
+    {% endif %}
+</div>
+
+</div><!-- /.tab-content -->
+
+<!-- Assign Modal -->
+<div class="modal fade" id="assignModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-plus me-2"></i>Assign Asset</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('assign_asset', asset_id=asset.id) }}">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="employee_id" class="form-label">Select Employee</label>
+                        <select class="form-select" id="employee_id" name="employee_id" required>
+                            <option value="">Choose...</option>
+                            {% for emp in employees %}
+                            <option value="{{ emp.id }}">{{ emp.name }} – {{ emp.department or 'No dept' }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Assign</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-trash me-2"></i>Confirm Delete</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('delete_asset', asset_id=asset.id) }}">
+                <div class="modal-body">
+                    <p>Are you sure you want to permanently delete <strong>{{ asset.asset_tag }} – {{ asset.name }}</strong>?</p>
+                    <p class="text-danger mb-0">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

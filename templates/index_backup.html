@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Asset Tracker{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Dashboard</h1>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('assets') }}" class="text-decoration-none">
+            <div class="card stat-card border-primary" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-box-seam text-primary" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ total_assets }}</h3>
+                    <p class="text-muted mb-0 small">Total Assets</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('assets') }}?status=Available" class="text-decoration-none">
+            <div class="card stat-card border-success" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-check-circle text-success" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ available }}</h3>
+                    <p class="text-muted mb-0 small">Available</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('assets') }}?status=In Use" class="text-decoration-none">
+            <div class="card stat-card border-info" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-arrow-repeat text-info" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ in_use }}</h3>
+                    <p class="text-muted mb-0 small">In Use</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('assets') }}?status=In Repair" class="text-decoration-none">
+            <div class="card stat-card border-warning" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-tools text-warning" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ in_repair }}</h3>
+                    <p class="text-muted mb-0 small">In Repair</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('reports') }}" class="text-decoration-none">
+            <div class="card stat-card border-secondary" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-clock-history text-secondary" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ '%.1f'|format(avg_age) if avg_age else '-' }}</h3>
+                    <p class="text-muted mb-0 small">Avg Age (years)</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 col-lg-2">
+        <a href="{{ url_for('reports') }}" class="text-decoration-none">
+            <div class="card stat-card border-danger" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-exclamation-circle text-danger" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ replacement_needed }}</h3>
+                    <p class="text-muted mb-0 small">Need Replacement</p>
+                </div>
+            </div>
+        </a>
+    </div>
+</div>
+
+{% if expiring_soon > 0 %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    <strong>Warning:</strong> {{ expiring_soon }} asset(s) have warranties expiring within 30 days!
+    <a href="{{ url_for('reports') }}" class="alert-link">View details</a>
+</div>
+{% endif %}
+
+{% if replacement_needed > 0 %}
+<div class="alert alert-danger">
+    <i class="bi bi-arrow-repeat"></i>
+    <strong>Action Required:</strong> {{ replacement_needed }} asset(s) need replacement soon (within 6 months)!
+    <a href="{{ url_for('assets') }}" class="alert-link">View assets</a>
+</div>
+{% endif %}
+
+{% if licenses_expiring_soon > 0 %}
+<div class="alert alert-warning">
+    <i class="bi bi-key-fill"></i>
+    <strong>License Alert:</strong> {{ licenses_expiring_soon }} software license(s) expiring within 30 days!
+    <a href="{{ url_for('licenses') }}" class="alert-link">View licenses</a>
+</div>
+{% endif %}
+
+<!-- License Statistics -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h5><i class="bi bi-key-fill text-primary"></i> Software Licenses</h5>
+    </div>
+    <div class="col-md-3">
+        <a href="{{ url_for('licenses') }}" class="text-decoration-none">
+            <div class="card stat-card border-primary" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-key text-primary" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ total_licenses }}</h3>
+                    <p class="text-muted mb-0 small">Total Licenses</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3">
+        <a href="{{ url_for('licenses') }}?status=Active" class="text-decoration-none">
+            <div class="card stat-card border-success" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-check-circle text-success" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ active_licenses }}</h3>
+                    <p class="text-muted mb-0 small">Active Licenses</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3">
+        <a href="{{ url_for('reports') }}#license-utilization" class="text-decoration-none">
+            <div class="card stat-card border-info" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-people text-info" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">{{ total_assigned_seats }}/{{ total_license_seats }}</h3>
+                    <p class="text-muted mb-0 small">Seats Assigned</p>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3">
+        <a href="{{ url_for('reports') }}#license-costs" class="text-decoration-none">
+            <div class="card stat-card border-warning" style="cursor: pointer;">
+                <div class="card-body text-center">
+                    <i class="bi bi-currency-dollar text-warning" style="font-size: 2.5rem;"></i>
+                    <h3 class="mt-2">${{ '%.0f'|format(total_annual_license_cost) }}</h3>
+                    <p class="text-muted mb-0 small">Annual License Cost</p>
+                </div>
+            </div>
+        </a>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-pie-chart"></i> Assets by Status</h6>
+            </div>
+            <div class="card-body">
+                <canvas id="dashboardStatusChart" style="max-height: 250px;"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-pie-chart-fill"></i> Assets by Category</h6>
+            </div>
+            <div class="card-body">
+                <canvas id="dashboardCategoryChart" style="max-height: 250px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent Assets</h5>
+                <a href="{{ url_for('add_asset') }}" class="btn btn-primary btn-sm">
+                    <i class="bi bi-plus-circle"></i> Add Asset
+                </a>
+            </div>
+            <div class="card-body">
+                {% if recent_assets %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Asset Tag</th>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Status</th>
+                                <th>Assigned To</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for asset in recent_assets %}
+                            <tr>
+                                <td><strong>{{ asset.asset_tag }}</strong></td>
+                                <td>{{ asset.name }}</td>
+                                <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                                <td>
+                                    {% if asset.status == 'Available' %}
+                                        <span class="badge bg-success">{{ asset.status }}</span>
+                                    {% elif asset.status == 'In Use' %}
+                                        <span class="badge bg-info">{{ asset.status }}</span>
+                                    {% elif asset.status == 'In Repair' %}
+                                        <span class="badge bg-warning">{{ asset.status }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ asset.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if asset.assigned_employee %}
+                                        {{ asset.assigned_employee.name }}
+                                    {% else %}
+                                        <span class="text-muted">Unassigned</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center mb-0">No assets yet. <a href="{{ url_for('add_asset') }}">Add your first asset</a></p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Dashboard Status Chart
+const dashStatusCtx = document.getElementById('dashboardStatusChart');
+if (dashStatusCtx) {
+    new Chart(dashStatusCtx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Available', 'In Use', 'In Repair'],
+            datasets: [{
+                data: [{{ available }}, {{ in_use }}, {{ in_repair }}],
+                backgroundColor: ['#198754', '#0dcaf0', '#ffc107']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const index = elements[0].index;
+                    const statuses = ['Available', 'In Use', 'In Repair'];
+                    const status = statuses[index];
+                    window.location.href = `/assets?status=${encodeURIComponent(status)}`;
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    onClick: (e, legendItem, legend) => {
+                        const status = legendItem.text;
+                        window.location.href = `/assets?status=${encodeURIComponent(status)}`;
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        afterLabel: function() {
+                            return 'Click to view assets';
+                        }
+                    }
+                }
+            }
+        }
+    });
+    dashStatusCtx.style.cursor = 'pointer';
+}
+
+// Dashboard Category Chart
+const dashCatCtx = document.getElementById('dashboardCategoryChart');
+if (dashCatCtx) {
+    new Chart(dashCatCtx, {
+        type: 'doughnut',
+        data: {
+            labels: [{% for cat in category_counts %}'{{ cat[0] }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+            datasets: [{
+                data: [{% for cat in category_counts %}{{ cat[1] }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                backgroundColor: [
+                    '#0d6efd', '#6610f2', '#6f42c1', '#d63384',
+                    '#dc3545', '#fd7e14', '#ffc107', '#198754',
+                    '#20c997', '#0dcaf0'
+                ]
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const index = elements[0].index;
+                    const category = [{% for cat in category_counts %}'{{ cat[0] }}'{% if not loop.last %}, {% endif %}{% endfor %}][index];
+                    window.location.href = `/assets?category=${encodeURIComponent(category)}`;
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    onClick: (e, legendItem, legend) => {
+                        const category = legendItem.text;
+                        window.location.href = `/assets?category=${encodeURIComponent(category)}`;
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        afterLabel: function() {
+                            return 'Click to view assets';
+                        }
+                    }
+                }
+            }
+        }
+    });
+    dashCatCtx.style.cursor = 'pointer';
+}
+</script>
+{% endblock %}

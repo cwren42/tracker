@@ -1,0 +1,686 @@
+{% extends "base.html" %}
+{% block title %}Eagle Eyes — {{ hostname }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1500px;">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div class="d-flex align-items-center gap-3">
+      <a href="/assets/{{ asset_id_num if asset_id_num else '' }}" class="btn btn-sm btn-outline-secondary py-0">
+        <i class="bi bi-arrow-left me-1"></i>Back
+      </a>
+      <div>
+        <h5 class="mb-0 fw-bold"><i class="bi bi-eye me-1 text-warning"></i>Eagle Eyes</h5>
+        <small class="text-muted">{{ hostname }}&nbsp;<span class="badge bg-dark border border-secondary fw-normal" style="font-size:.65rem;">{{ tz_label }}</span></small>
+      </div>
+    </div>
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <label class="small text-muted mb-0">Period:</label>
+      <select id="ee-days" class="form-select form-select-sm" style="width:auto;" onchange="onPeriodChange()">
+        <option value="7" selected>Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <span id="ee-custom-range" class="d-none d-flex align-items-center gap-1">
+        <input type="date" id="ee-from" class="form-control form-control-sm" style="width:135px;">
+        <span class="text-muted small">to</span>
+        <input type="date" id="ee-to" class="form-control form-control-sm" style="width:135px;">
+        <button class="btn btn-sm btn-primary py-0" onclick="eeLoad()">Go</button>
+      </span>
+      <div class="form-check form-switch mb-0 ms-1">
+        <input class="form-check-input" type="checkbox" id="ee-work-hours" onchange="eeLoad()">
+        <label class="form-check-label small text-muted" for="ee-work-hours">Work hrs (8a–6p)</label>
+      </div>
+      <button class="btn btn-sm btn-outline-primary" onclick="eeLoad()">
+        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+      </button>
+      <button class="btn btn-sm btn-outline-secondary" id="ee-ar-btn" onclick="toggleAutoRefresh()">
+        <i class="bi bi-play-circle me-1"></i>Auto
+      </button>
+      <div class="dropdown">
+        <button class="btn btn-sm btn-outline-success dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="bi bi-download me-1"></i>Export
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="#" onclick="exportCSV('events');return false;"><i class="bi bi-table me-2"></i>Events CSV</a></li>
+          <li><a class="dropdown-item" href="#" onclick="exportCSV('summary');return false;"><i class="bi bi-bar-chart me-2"></i>App Summary CSV</a></li>
+          <li><a class="dropdown-item" href="#" onclick="exportCSV('sites');return false;"><i class="bi bi-globe me-2"></i>Top Sites CSV</a></li>
+        </ul>
+      </div>
+      <small class="text-muted" id="ee-last-updated"></small>
+    </div>
+  </div>
+
+  <!-- Stat Cards -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md">
+      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1a1a2e,#16213e);">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-clock me-1"></i>Total Tracked Time</div>
+          <div class="fw-bold fs-4 text-white" id="stat-total-time">—</div>
+          <div class="small text-muted" id="stat-total-sub"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#0f3460,#1a4f72);">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-trophy me-1"></i>Top App</div>
+          <div class="fw-bold fs-5 text-warning text-truncate" id="stat-top-app">—</div>
+          <div class="small text-muted" id="stat-top-app-time"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1b4332,#2d6a4f);">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-calendar-check me-1"></i>Active Days</div>
+          <div class="fw-bold fs-4 text-white" id="stat-active-days">—</div>
+          <div class="small text-muted" id="stat-active-days-sub"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#3d0000,#6d1a1a);">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-bar-chart-line me-1"></i>Peak Hour</div>
+          <div class="fw-bold fs-4 text-white" id="stat-peak-hour">—</div>
+          <div class="small text-muted" id="stat-peak-hour-sub"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1a2a1a,#2d4a1e);">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-lightning-charge me-1"></i>Productivity</div>
+          <div class="fw-bold fs-4" id="stat-prod-score" style="color:#51cf66;">—</div>
+          <div class="small text-muted" id="stat-prod-sub"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: App Bar + Category Donut -->
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-7">
+      <div class="card shadow-sm h-100">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-bar-chart-horizontal me-1 text-warning"></i>Application Usage</span>
+          <span id="ee-usage-range" class="badge bg-secondary fw-normal"></span>
+        </div>
+        <div class="card-body py-2" style="position:relative;min-height:240px;">
+          <div id="ee-usage-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
+          <canvas id="ee-usage-chart" style="display:none;"></canvas>
+          <p id="ee-usage-empty" class="text-muted text-center small mt-4" style="display:none;">No activity data for this period.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-pie-chart me-1 text-info"></i>Work Categories</span>
+          <span id="ee-cat-total" class="badge bg-secondary fw-normal"></span>
+        </div>
+        <div class="card-body d-flex align-items-center justify-content-center py-2" style="min-height:240px;position:relative;">
+          <div id="ee-cat-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
+          <div id="ee-cat-wrap" style="display:none;width:100%;max-width:380px;">
+            <canvas id="ee-cat-chart" style="max-height:230px;"></canvas>
+          </div>
+          <p id="ee-cat-empty" class="text-muted text-center small mt-4" style="display:none;">No category data.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2b: Top Browser Sites -->
+  <div class="row g-3 mb-3">
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-globe2 me-1 text-primary"></i>Top Browser Sites</span>
+          <span id="ee-sites-range" class="badge bg-secondary fw-normal"></span>
+        </div>
+        <div class="card-body py-2" style="min-height:140px;position:relative;">
+          <div id="ee-sites-spin" class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>
+          <canvas id="ee-sites-chart" style="display:none;"></canvas>
+          <p id="ee-sites-empty" class="text-muted text-center small mt-4" style="display:none;">No browser activity in this period.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: Daily + Hourly -->
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-7">
+      <div class="card shadow-sm h-100">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-graph-up me-1 text-success"></i>Daily Activity</span>
+          <span id="ee-daily-range" class="badge bg-secondary fw-normal"></span>
+        </div>
+        <div class="card-body py-2" style="min-height:200px;position:relative;">
+          <div id="ee-daily-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
+          <canvas id="ee-daily-chart" style="display:none;max-height:220px;"></canvas>
+          <p id="ee-daily-empty" class="text-muted text-center small mt-4" style="display:none;">Not enough data for this period.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-clock me-1 text-warning"></i>Activity by Hour of Day</span>
+          <span id="ee-hourly-range" class="badge bg-secondary fw-normal"></span>
+        </div>
+        <div class="card-body py-2" style="min-height:200px;position:relative;">
+          <div id="ee-hourly-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
+          <canvas id="ee-hourly-chart" style="display:none;max-height:220px;"></canvas>
+          <p id="ee-hourly-empty" class="text-muted text-center small mt-4" style="display:none;">No hourly data.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 4: Event Timeline -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between py-2">
+      <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-clock-history me-1"></i>Window Timeline</span>
+      <span id="ee-evt-range" class="badge bg-secondary fw-normal"></span>
+    </div>
+    <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
+      <div id="ee-evt-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
+      <table class="table table-sm table-hover mb-0" id="ee-evt-table" style="font-size:.78rem;display:none;">
+        <thead class="sticky-top table-dark">
+          <tr>
+            <th style="width:145px;">Time</th>
+            <th style="width:130px;">Application</th>
+            <th>Window Title</th>
+            <th style="width:90px;" class="text-end">Duration</th>
+          </tr>
+        </thead>
+        <tbody id="ee-evt-body"></tbody>
+      </table>
+      <p id="ee-evt-empty" class="text-muted text-center small mt-4" style="display:none;">No window events for this period.</p>
+    </div>
+  </div>
+
+  <!-- Row 5: Screenshot Gallery -->
+  <div class="card shadow-sm">
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+      <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-images me-1"></i>Screenshots</span>
+      <div class="d-flex align-items-center gap-2">
+        <span id="ee-ss-count" class="badge bg-secondary fw-normal"></span>
+        <select id="ee-ss-interval" class="form-select form-select-sm" style="width:auto;font-size:.75rem;" onchange="setScreenshotInterval()">
+          <option value="5">Every 5 min</option>
+          <option value="10">Every 10 min</option>
+          <option value="15">Every 15 min</option>
+          <option value="30" selected>Every 30 min</option>
+          <option value="60">Every 1 hour</option>
+        </select>
+        <button class="btn btn-sm btn-outline-warning py-0" onclick="takeScreenshot()" id="ee-ss-take-btn">
+          <i class="bi bi-camera me-1"></i>Take Now
+        </button>
+      </div>
+    </div>
+    <div class="card-body" style="min-height:120px;">
+      <div id="ee-ss-spin" class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>
+      <div id="ee-ss-grid" class="d-flex flex-wrap gap-2"></div>
+      <p id="ee-ss-empty" class="text-muted text-center small mt-3" style="display:none;">No screenshots captured in this period.</p>
+    </div>
+  </div>
+
+</div>
+
+<!-- Screenshot Modal -->
+<div class="modal fade" id="ee-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0" id="ee-modal-title"></h6>
+        <div class="d-flex align-items-center gap-2 ms-auto">
+          <a id="ee-modal-download" href="#" class="btn btn-sm btn-outline-success py-0" download>
+            <i class="bi bi-download me-1"></i>Download
+          </a>
+          <button type="button" class="btn-close ms-1" data-bs-dismiss="modal"></button>
+        </div>
+      </div>
+      <div class="modal-body text-center p-2" id="ee-modal-body"><span class="spinner-border"></span></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+const agentId        = {{ agent_id | tojson }};
+const agentTzOffsetH = {{ tz_offset_h }};
+const agentTzLabel   = {{ tz_label | tojson }};
+let lastSummary = [], lastEvents = [], lastSites = [];
+let _arTimer = null;
+
+function dateParams() {
+  const sel = document.getElementById('ee-days').value;
+  if (sel === 'custom') {
+    const f = document.getElementById('ee-from').value;
+    const t = document.getElementById('ee-to').value;
+    if (f && t) return `from_date=${f}&to_date=${t}`;
+  }
+  return `days=${parseInt(sel)||7}`;
+}
+function onPeriodChange() {
+  const sel = document.getElementById('ee-days').value;
+  const cr  = document.getElementById('ee-custom-range');
+  if (sel === 'custom') {
+    cr.classList.remove('d-none');
+    // Use agent's local time (MST), not browser/UTC time
+    const agentNow  = new Date(Date.now() + agentTzOffsetH * 3600000);
+    const agentFrom = new Date(agentNow.getTime() - 7 * 86400000);
+    document.getElementById('ee-to').value   = agentNow.toISOString().slice(0, 10);
+    document.getElementById('ee-from').value = agentFrom.toISOString().slice(0, 10);
+  } else {
+    cr.classList.add('d-none');
+    eeLoad();
+  }
+}
+function workHoursFilter(events) {
+  if (!document.getElementById('ee-work-hours').checked) return events;
+  return events.filter(e => {
+    try {
+      let t = e.captured_at; if (!/Z$|[+-]\d\d/.test(t)) t += 'Z';
+      const h = new Date(new Date(t).getTime() + agentTzOffsetH*3600000).getUTCHours();
+      return h >= 8 && h < 18;
+    } catch(_) { return true; }
+  });
+}
+function rebuildSummary(events) {
+  const m = {};
+  for (const e of events) {
+    const p = e.process_name || '';
+    if (!m[p]) m[p] = {process_name:p, events:0, total_s:0};
+    m[p].events++; m[p].total_s += e.duration_s||0;
+  }
+  return Object.values(m).sort((a,b)=>b.total_s-a.total_s);
+}
+function toggleAutoRefresh() {
+  const btn = document.getElementById('ee-ar-btn');
+  if (_arTimer) {
+    clearInterval(_arTimer); _arTimer = null;
+    btn.innerHTML = '<i class="bi bi-play-circle me-1"></i>Auto';
+    btn.className = btn.className.replace('btn-success','btn-outline-secondary');
+  } else {
+    _arTimer = setInterval(eeLoad, 60000);
+    btn.innerHTML = '<i class="bi bi-stop-circle me-1"></i>Auto';
+    btn.className = btn.className.replace('btn-outline-secondary','btn-success');
+  }
+}
+function exportCSV(type) {
+  let rows, fname, hdr;
+  if (type === 'events') {
+    hdr  = ['Time','Process','Window Title','Duration (s)'];
+    rows = lastEvents.map(e=>[fmtTs(e.captured_at),e.process_name||'',(e.window_title||'').replace(/"/g,'""'),e.duration_s||0]);
+    fname = `eagle-events-${agentId}.csv`;
+  } else if (type === 'summary') {
+    hdr  = ['Application','Events','Total Seconds','Total Time'];
+    rows = lastSummary.map(r=>[r.process_name||'',r.events||0,r.total_s||0,fmtDuration(r.total_s)]);
+    fname = `eagle-summary-${agentId}.csv`;
+  } else {
+    hdr  = ['Site','Total Seconds','Total Time'];
+    rows = lastSites.map(s=>[s.site||'',s.total_s||0,fmtDuration(s.total_s)]);
+    fname = `eagle-sites-${agentId}.csv`;
+  }
+  const csv = [hdr,...rows].map(r=>r.map(v=>`"${v}"`).join(',')).join('\r\n');
+  const a = Object.assign(document.createElement('a'),{href:'data:text/csv;charset=utf-8,'+encodeURIComponent(csv),download:fname});
+  a.click();
+}
+async function takeScreenshot() {
+  const btn = document.getElementById('ee-ss-take-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  try { await fetch(`/api/rmm/screenshot/${encodeURIComponent(agentId)}`,{method:'POST'}); } catch(_){}
+  setTimeout(()=>loadScreenshots(dateParams()), 8000);
+  setTimeout(()=>{ btn.disabled=false; btn.innerHTML='<i class="bi bi-camera me-1"></i>Take Now'; }, 5000);
+}
+async function setScreenshotInterval() {
+  const iv = parseInt(document.getElementById('ee-ss-interval').value);
+  try {
+    await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:true, screenshot_interval_min:iv})
+    });
+  } catch(_){}
+}
+
+/* ── App category map ─────────────────────────────────────────────────── */
+const CAT = {
+  browser: { label:'Browser',       color:'#4dabf7', procs:['msedge','chrome','firefox','brave','opera','iexplore','safari','vivaldi','arc'] },
+  comms:   { label:'Communication', color:'#69db7c', procs:['teams','slack','zoom','outlook','thunderbird','discord','lync','skype','mail','msteams'] },
+  dev:     { label:'Development',   color:'#f783ac', procs:['code','devenv','rider','idea','pycharm','webstorm','androidstudio','gitbash','windowsterminal','cmd','powershell','git','notepad++','vim','nvim','sublime_text','atom','fleet'] },
+  office:  { label:'Productivity',  color:'#ffa94d', procs:['winword','excel','powerpnt','onenote','access','msaccess','word','acrobat','acrord32','foxit','libreoffice','soffice','calc','impress','writer'] },
+  remote:  { label:'Remote / IT',   color:'#cc5de8', procs:['teamviewer','mstsc','anydesk','vnc','putty','winscp','filezilla','ssh'] },
+  media:   { label:'Media',         color:'#20c997', procs:['vlc','spotify','wmplayer','groove','itunes','mpc-hc','mpv'] },
+  system:  { label:'System',        color:'#868e96', procs:['explorer','taskmgr','regedit','mmc','msiexec','svchost','control'] },
+};
+
+function categorise(procs) {
+  const b = {};
+  for (const c in CAT) b[c] = 0;
+  b.other = 0;
+  for (const { process_name, total_s } of procs) {
+    const p = (process_name || '').toLowerCase();
+    let hit = false;
+    for (const c in CAT) {
+      if (CAT[c].procs.some(x => p === x || p.startsWith(x))) { b[c] += total_s || 0; hit = true; break; }
+    }
+    if (!hit) b.other += total_s || 0;
+  }
+  return b;
+}
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+function fmtDuration(s) {
+  if (!s) return '0s';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.round(s/60) + 'm';
+  const h = Math.floor(s/3600), m = Math.round((s%3600)/60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+function fmtTs(t) {
+  try {
+    if (!/Z$|[+-]\d\d/.test(t)) t += 'Z';
+    const utcMs = new Date(t).getTime();
+    if (isNaN(utcMs)) return t;
+    const d = new Date(utcMs + agentTzOffsetH * 3600000);
+    return d.toLocaleString('en-US', {timeZone:'UTC',
+      month:'numeric', day:'numeric', year:'numeric',
+      hour:'numeric', minute:'2-digit', hour12:true}) + ' ' + agentTzLabel;
+  } catch(_) { return t; }
+}
+function fmtHour(h) {
+  if (h === 0) return '12 AM'; if (h < 12) return h + ' AM';
+  if (h === 12) return '12 PM'; return (h-12) + ' PM';
+}
+const gridColor = 'rgba(255,255,255,0.07)', textColor = '#adb5bd';
+const _ch = {};
+function mkChart(id, cfg) { if (_ch[id]) _ch[id].destroy(); _ch[id] = new Chart(document.getElementById(id).getContext('2d'), cfg); }
+function vis(id, show) { const el = document.getElementById(id); if (el) el.style.display = show ? '' : 'none'; }
+function spinSet(prefix, state) {
+  vis(prefix+'-spin', state === 'spin');
+  vis(prefix+'-chart', state === 'chart');
+  vis(prefix+'-wrap',  state === 'wrap');
+  vis(prefix+'-empty', state === 'empty');
+}
+/* ── Productivity score ──────────────────────────────────────────── */
+function renderProductivity(events) {
+  const el = document.getElementById('stat-prod-score');
+  const sub = document.getElementById('stat-prod-sub');
+  if (!events.length) { el.textContent='—'; sub.textContent=''; return; }
+  let focusedS=0, deepS=0, idleS=0;
+  for (const e of events) {
+    const d = e.duration_s||0;
+    if (d<=1800) focusedS+=d; else if(d<=7200) deepS+=d; else idleS+=d;
+  }
+  const total = focusedS+deepS+idleS;
+  const score = total>0 ? Math.round((focusedS+deepS*0.7)/total*100) : 0;
+  el.textContent = score+'%';
+  el.style.color = score>=75?'#51cf66':score>=50?'#fcc419':'#ff6b6b';
+  sub.textContent = `${fmtDuration(focusedS)} focused · ${fmtDuration(idleS)} idle`;
+}
+/* ── Stat cards ───────────────────────────────────────────────────────── */
+function renderStats(summary, daily, hourly) {
+  const totalS = summary.reduce((a,r) => a+(r.total_s||0), 0);
+  document.getElementById('stat-total-time').textContent = fmtDuration(totalS);
+  document.getElementById('stat-total-sub').textContent  = summary.length + ' apps tracked';
+
+  if (summary.length) {
+    document.getElementById('stat-top-app').textContent      = summary[0].process_name || '—';
+    document.getElementById('stat-top-app-time').textContent = fmtDuration(summary[0].total_s);
+  }
+
+  const activeDays = daily.filter(d => d.total_s > 0).length;
+  document.getElementById('stat-active-days').textContent    = activeDays;
+  document.getElementById('stat-active-days-sub').textContent = `of ${daily.length} days in period`;
+
+  const peak = hourly.length ? hourly.reduce((a,b) => b.total_s>a.total_s?b:a, hourly[0]) : null;
+  if (peak && peak.total_s > 0) {
+    document.getElementById('stat-peak-hour').textContent     = fmtHour(peak.hour);
+    document.getElementById('stat-peak-hour-sub').textContent = fmtDuration(peak.total_s) + ' total activity';
+  } else {
+    document.getElementById('stat-peak-hour').textContent = '—';
+    document.getElementById('stat-peak-hour-sub').textContent = '';
+  }
+}
+
+/* ── App Usage bar ────────────────────────────────────────────────────── */
+function renderUsage(summary) {
+  if (!summary.length) { spinSet('ee-usage','empty'); return; }
+  const top = summary.slice(0,15);
+  document.getElementById('ee-usage-range').textContent = top.length + ' apps';
+  spinSet('ee-usage','chart');
+  const el = document.getElementById('ee-usage-chart');
+  el.style.height = Math.max(200, top.length*28+50) + 'px';
+  mkChart('ee-usage-chart', {
+    type:'bar',
+    data:{ labels: top.map(r=>r.process_name||'unknown'),
+           datasets:[{ label:'Minutes', data: top.map(r=>Math.round((r.total_s||0)/60)),
+                       backgroundColor: top.map((_,i)=>`hsl(${45+i*16},80%,52%)`),
+                       borderRadius:4, borderSkipped:false }] },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+                tooltip:{callbacks:{label:c=>' '+fmtDuration(top[c.dataIndex].total_s)}} },
+      scales:{ x:{grid:{color:gridColor},ticks:{color:textColor},title:{display:true,text:'minutes',color:textColor}},
+               y:{grid:{color:'transparent'},ticks:{color:textColor}} } }
+  });
+}
+
+/* ── Category donut ───────────────────────────────────────────────────── */
+function renderCategories(summary) {
+  const buckets = categorise(summary);
+  const entries = [...Object.keys(buckets).map(k=>({
+    label: k==='other'?'Other':CAT[k].label,
+    s: buckets[k],
+    color: k==='other'?'#495057':CAT[k].color
+  }))].filter(e=>e.s>0).sort((a,b)=>b.s-a.s);
+  const totalS = entries.reduce((a,e)=>a+e.s,0);
+  document.getElementById('ee-cat-total').textContent = fmtDuration(totalS);
+  if (!entries.length) {
+    vis('ee-cat-spin',false); vis('ee-cat-wrap',false); vis('ee-cat-empty',true);
+    return;
+  }
+  vis('ee-cat-spin',false); vis('ee-cat-wrap',true); vis('ee-cat-empty',false);
+  mkChart('ee-cat-chart', {
+    type:'doughnut',
+    data:{ labels:entries.map(e=>e.label),
+           datasets:[{data:entries.map(e=>Math.round(e.s/60)),
+                      backgroundColor:entries.map(e=>e.color),
+                      borderColor:'#121212',borderWidth:2,hoverOffset:6}] },
+    options:{ responsive:true, maintainAspectRatio:true, cutout:'62%',
+      plugins:{ legend:{position:'right',labels:{color:textColor,boxWidth:12,font:{size:11},padding:10}},
+                tooltip:{callbacks:{label:c=>{const pct=totalS?Math.round(c.parsed/(totalS/60)*100):0;return ` ${fmtDuration(entries[c.dataIndex].s)} (${pct}%)`;}}}} }
+  });
+}
+
+/* ── Daily activity ───────────────────────────────────────────────────── */
+function renderDaily(daily) {
+  const active = daily.filter(d=>d.total_s>0);
+  if (active.length < 2) { spinSet('ee-daily','empty'); return; }
+  document.getElementById('ee-daily-range').textContent = active.length + ' active days';
+  spinSet('ee-daily','chart');
+  mkChart('ee-daily-chart', {
+    type:'line',
+    data:{ labels: daily.map(d=>{ const parts=d.day.split('-'); return `${parseInt(parts[1])}/${parseInt(parts[2])}`; }),
+           datasets:[{ label:'Hours active', data: daily.map(d=>+((d.total_s||0)/3600).toFixed(2)),
+                       fill:true, tension:0.35, borderColor:'#51cf66',
+                       backgroundColor:'rgba(81,207,102,0.12)',
+                       pointRadius: daily.length>14?2:4, pointBackgroundColor:'#51cf66' }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+                tooltip:{callbacks:{label:c=>' '+fmtDuration(Math.round(c.parsed.y*3600))}} },
+      scales:{ x:{grid:{color:gridColor},ticks:{color:textColor,maxTicksLimit:12}},
+               y:{grid:{color:gridColor},ticks:{color:textColor,callback:v=>v+'h'},min:0,
+                  title:{display:true,text:'hours',color:textColor}} } }
+  });
+}
+
+/* ── Hourly heatmap ───────────────────────────────────────────────────── */
+function renderHourly(hourly) {
+  if (!hourly.some(h=>h.total_s>0)) { spinSet('ee-hourly','empty'); return; }
+  const values = hourly.map(h=>Math.round((h.total_s||0)/60));
+  const maxV = Math.max(...values,1);
+  document.getElementById('ee-hourly-range').textContent = 'by hour';
+  spinSet('ee-hourly','chart');
+  mkChart('ee-hourly-chart', {
+    type:'bar',
+    data:{ labels: hourly.map(h=>fmtHour(h.hour)),
+           datasets:[{ label:'Minutes', data:values,
+                       backgroundColor: values.map(v=>`rgba(255,193,7,${0.2+0.8*(v/maxV)})`),
+                       borderColor:     values.map(v=>`rgba(255,193,7,${0.5+0.5*(v/maxV)})`),
+                       borderWidth:1, borderRadius:3 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+                tooltip:{callbacks:{label:c=>' '+fmtDuration(c.parsed.y*60)}} },
+      scales:{ x:{grid:{color:'transparent'},
+                  ticks:{color:textColor,maxRotation:60,callback:function(v,i){return i%3===0?this.getLabelForValue(v):'';}}},
+               y:{grid:{color:gridColor},ticks:{color:textColor,callback:v=>v+'m'},min:0,
+                  title:{display:true,text:'minutes',color:textColor}} } }
+  });
+}
+
+/* ── Event timeline ───────────────────────────────────────────────────── */
+function renderEvents(events) {
+  if (!events.length) { spinSet('ee-evt','empty'); return; }
+  document.getElementById('ee-evt-range').textContent = events.length + ' events';
+  const ICONS = {msedge:'browser-edge',chrome:'browser-chrome',firefox:'browser-firefox',teams:'chat-square-text',slack:'chat-left-dots',zoom:'camera-video',code:'code-slash',devenv:'code-slash',outlook:'envelope',excel:'file-earmark-spreadsheet',winword:'file-earmark-word',powerpnt:'file-earmark-slides',teamviewer:'display',mstsc:'display',explorer:'folder2-open'};
+  function icon(p){ const k=(p||'').toLowerCase(); for(const[n,ic]of Object.entries(ICONS))if(k.startsWith(n))return `<i class="bi bi-${ic} me-1 text-muted"></i>`; return '<i class="bi bi-window me-1 text-muted"></i>'; }
+  document.getElementById('ee-evt-body').innerHTML = events.map(e=>{
+    const dur=e.duration_s||0;
+    const bd=dur>=1800?'bg-danger':dur>=600?'bg-warning text-dark':'bg-secondary';
+    return `<tr>
+      <td class="text-muted" style="white-space:nowrap;font-size:.75rem;">${fmtTs(e.captured_at)}</td>
+      <td style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${icon(e.process_name)}<span title="${e.process_name||''}">${e.process_name||'—'}</span></td>
+      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;" title="${(e.window_title||'').replace(/"/g,'&quot;')}">${e.window_title||'—'}</td>
+      <td class="text-end"><span class="badge ${bd}" style="font-size:.7rem;">${fmtDuration(dur)}</span></td>
+    </tr>`;
+  }).join('');
+  vis('ee-evt-spin',false); vis('ee-evt-table',true); vis('ee-evt-empty',false);
+}
+
+/* ── Top Browser Sites ──────────────────────────────────────────── */
+function renderTopSites(sites) {
+  if (!sites.length) { spinSet('ee-sites','empty'); return; }
+  document.getElementById('ee-sites-range').textContent = sites.length + ' sites';
+  spinSet('ee-sites','chart');
+  const el = document.getElementById('ee-sites-chart');
+  el.style.height = Math.max(120, sites.length*22+40)+'px';
+  mkChart('ee-sites-chart',{
+    type:'bar',
+    data:{ labels:sites.map(s=>s.site),
+           datasets:[{label:'Minutes', data:sites.map(s=>Math.round((s.total_s||0)/60)),
+                      backgroundColor:sites.map((_,i)=>`hsl(${200+i*11},65%,55%)`),
+                      borderRadius:3, borderSkipped:false}] },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+                tooltip:{callbacks:{label:c=>' '+fmtDuration(sites[c.dataIndex].total_s)}} },
+      scales:{ x:{grid:{color:gridColor},ticks:{color:textColor},title:{display:true,text:'minutes',color:textColor}},
+               y:{grid:{color:'transparent'},ticks:{color:textColor,font:{size:11}}} } }
+  });
+}
+
+/* ── Screenshots ───────────────────────────────────────────────────── */
+async function loadScreenshots(dp) {
+  const spin=document.getElementById('ee-ss-spin'), grid=document.getElementById('ee-ss-grid'), empty=document.getElementById('ee-ss-empty'), count=document.getElementById('ee-ss-count');
+  spin.style.display=''; grid.style.display='none'; empty.style.display='none';
+  const res=await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/screenshots?${dp}&limit=200`);
+  const data=await res.json();
+  spin.style.display='none';
+  if (!data.ok||!data.screenshots.length){ empty.style.display=''; count.textContent=''; grid.innerHTML=''; return; }
+  count.textContent=`${data.screenshots.length} screenshots`;
+  grid.innerHTML = data.screenshots.map(s=>`
+    <div class="ee-thumb" data-id="${s.id}" onclick="eeOpenShot(${s.id},'${s.time||s.captured_at||''}')"
+         style="cursor:pointer;width:168px;flex-shrink:0;border-radius:8px;overflow:hidden;border:1px solid rgba(128,128,128,.2);background:#1a1a2e;">
+      <div class="ee-thumb-inner" style="height:106px;display:flex;align-items:center;justify-content:center;">
+        <span class="spinner-border spinner-border-sm text-secondary"></span>
+      </div>
+      <div class="px-2 pb-1 text-muted" style="font-size:.66rem;">${fmtTs(s.time||s.captured_at||'')}</div>
+    </div>`).join('');
+  grid.style.display='flex';
+  for (const s of data.screenshots) {
+    const el=grid.querySelector(`[data-id="${s.id}"] .ee-thumb-inner`);
+    if (!el) continue;
+    try {
+      const r=await fetch(`/api/rmm/eagle-eyes/screenshot/${s.id}`);
+      const d=await r.json();
+      const b64=d.image_b64||d.screenshot?.data;
+      const fmt=d.format||d.screenshot?.format||'jpeg';
+      if (d.ok&&b64) el.innerHTML=`<img src="data:image/${fmt};base64,${b64}" style="max-width:100%;max-height:106px;object-fit:cover;">`;
+      else el.innerHTML='<i class="bi bi-image text-muted fs-3"></i>';
+    } catch(_){ el.innerHTML='<i class="bi bi-image text-muted fs-3"></i>'; }
+  }
+}
+
+window.eeOpenShot = async function(id,ts) {
+  const title=document.getElementById('ee-modal-title'), body=document.getElementById('ee-modal-body');
+  title.textContent=fmtTs(ts); body.innerHTML='<span class="spinner-border"></span>';
+  document.getElementById('ee-modal-download').href=`/api/rmm/eagle-eyes/screenshot/${id}/download`;
+  new bootstrap.Modal(document.getElementById('ee-modal')).show();
+  try {
+    const res=await fetch(`/api/rmm/eagle-eyes/screenshot/${id}`);
+    const d=await res.json();
+    const b64=d.image_b64||d.screenshot?.data, fmt=d.format||d.screenshot?.format||'jpeg';
+    body.innerHTML=d.ok&&b64?`<img src="data:image/${fmt};base64,${b64}" style="max-width:100%;border-radius:4px;">`:'<p class="text-muted">Image not available.</p>';
+  } catch(_){ body.innerHTML='<p class="text-danger">Failed to load.</p>'; }
+};
+
+/* ── Set section into loading state ───────────────────────────────────── */
+function setAllLoading() {
+  ['ee-usage','ee-sites','ee-daily','ee-hourly'].forEach(p=>spinSet(p,'spin'));
+  vis('ee-cat-spin',true); vis('ee-cat-wrap',false); vis('ee-cat-empty',false);
+  vis('ee-evt-spin',true); vis('ee-evt-table',false); vis('ee-evt-empty',false);
+}
+
+/* ── Main ─────────────────────────────────────────────────────────────── */
+window.eeLoad = async function() {
+  const dp = dateParams();
+  setAllLoading();
+  const [sumRes,dailyRes,hourlyRes,evtRes,sitesRes] = await Promise.all([
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/app-summary?${dp}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/daily?${dp}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/hourly?${dp}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/events?${dp}&limit=500`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?${dp}`),
+  ]);
+  const [sumData,dailyData,hourlyData,evtData,sitesData] = await Promise.all(
+    [sumRes.json(),dailyRes.json(),hourlyRes.json(),evtRes.json(),sitesRes.json()]
+  );
+  lastSummary = sumData.ok  ? sumData.summary  : [];
+  lastEvents  = evtData.ok  ? evtData.events   : [];
+  lastSites   = sitesData.ok? sitesData.sites   : [];
+  const daily  = dailyData.ok  ? dailyData.daily  : [];
+  const hourly = hourlyData.ok ? hourlyData.hourly : [];
+
+  const filteredEvt = workHoursFilter(lastEvents);
+  const filteredSum = filteredEvt.length < lastEvents.length
+    ? rebuildSummary(filteredEvt) : lastSummary;
+
+  renderStats(filteredSum, daily, hourly);
+  renderProductivity(filteredEvt);
+  renderUsage(filteredSum);
+  renderCategories(filteredSum);
+  renderTopSites(lastSites);
+  renderDaily(daily);
+  renderHourly(hourly);
+  renderEvents(filteredEvt);
+  loadScreenshots(dp);
+
+  const now = new Date(Date.now() + agentTzOffsetH*3600000);
+  const t = now.toLocaleTimeString('en-US',{timeZone:'UTC',hour:'numeric',minute:'2-digit'});
+  const upd = document.getElementById('ee-last-updated');
+  if (upd) upd.textContent = `Updated ${t} ${agentTzLabel}`;
+};
+
+document.addEventListener('DOMContentLoaded', eeLoad);
+</script>
+
+<style>
+.ee-thumb { transition: transform .15s; }
+.ee-thumb:hover { transform: scale(1.04); z-index:1; }
+</style>
+{% endblock %}

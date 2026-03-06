@@ -1,0 +1,295 @@
+{% if widget_id == 'recent_assets' %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-list-ul"></i> Recent Assets</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="list-group list-group-flush">
+            {% for asset in data.recent_assets %}
+            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1"><span class="badge bg-secondary">{{ asset.asset_tag }}</span> {{ asset.name }}</h6>
+                    <small class="text-muted">{{ asset.created_at.strftime('%m/%d/%y') if asset.created_at else 'N/A' }}</small>
+                </div>
+                <p class="mb-1 small">
+                    <strong>Category:</strong> {{ asset.category }} | 
+                    <strong>Manufacturer:</strong> {{ asset.manufacturer or 'N/A' }} | 
+                    <strong>Model:</strong> {{ asset.model or 'N/A' }}<br>
+                    <strong>Serial:</strong> {{ asset.serial_number or 'N/A' }} | 
+                    <strong>Status:</strong> 
+                    {% if asset.status == 'Available' %}
+                        <span class="badge bg-success">{{ asset.status }}</span>
+                    {% elif asset.status == 'In Use' %}
+                        <span class="badge bg-info">{{ asset.status }}</span>
+                    {% elif asset.status == 'In Repair' %}
+                        <span class="badge bg-warning">{{ asset.status }}</span>
+                    {% else %}
+                        <span class="badge bg-secondary">{{ asset.status }}</span>
+                    {% endif %}
+                </p>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All</a>
+    </div>
+</div>
+
+{% elif widget_id == 'warranty_expiring' %}
+<div class="card border-warning">
+    <div class="card-header bg-warning text-dark">
+        <h5 class="card-title mb-0"><i class="bi bi-exclamation-triangle"></i> Warranty Expiring Soon</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if data.warranty_expiring %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Asset Tag</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Manufacturer</th>
+                        <th>Model</th>
+                        <th>Serial</th>
+                        <th>Expiry Date</th>
+                        <th>Days Left</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in data.warranty_expiring %}
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                        <td><strong>{{ asset.asset_tag }}</strong></td>
+                        <td>{{ asset.name }}</td>
+                        <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                        <td>{{ asset.manufacturer or '-' }}</td>
+                        <td>{{ asset.model or '-' }}</td>
+                        <td>{{ asset.serial_number or '-' }}</td>
+                        <td>{{ asset.warranty_expiry.strftime('%m/%d/%y') }}</td>
+                        <td>
+                            {% set days_left = (asset.warranty_expiry - now().date()).days %}
+                            <span class="badge bg-warning">{{ days_left }} days</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-3 text-center text-muted">
+            <p class="mb-0">No warranties expiring soon</p>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
+    </div>
+</div>
+
+{% elif widget_id == 'replacement_needed' %}
+<div class="card border-danger">
+    <div class="card-header bg-danger text-white">
+        <h5 class="card-title mb-0"><i class="bi bi-arrow-clockwise"></i> Assets Need Replacement</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if data.replacement_list %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Asset Tag</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Manufacturer</th>
+                        <th>Model</th>
+                        <th>Serial</th>
+                        <th>Purchase Date</th>
+                        <th>Age</th>
+                        <th>Lifecycle</th>
+                        <th>Condition</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in data.replacement_list %}
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                        <td><strong>{{ asset.asset_tag }}</strong></td>
+                        <td>{{ asset.name }}</td>
+                        <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                        <td>{{ asset.manufacturer or '-' }}</td>
+                        <td>{{ asset.model or '-' }}</td>
+                        <td>{{ asset.serial_number or '-' }}</td>
+                        <td>{{ asset.purchase_date.strftime('%m/%d/%y') if asset.purchase_date else '-' }}</td>
+                        <td>{{ "%.1f"|format(asset.get_age_years()) }}y</td>
+                        <td>
+                            {% set status = asset.get_lifecycle_status() %}
+                            {% if status == 'Replace Soon' %}
+                                <span class="badge bg-warning">{{ status }}</span>
+                            {% elif status == 'End of Life' %}
+                                <span class="badge bg-danger">{{ status }}</span>
+                            {% else %}
+                                <span class="badge bg-info">{{ status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if asset.condition == 'Excellent' %}
+                                <span class="badge bg-success">{{ asset.condition }}</span>
+                            {% elif asset.condition == 'Good' %}
+                                <span class="badge bg-primary">{{ asset.condition }}</span>
+                            {% elif asset.condition == 'Fair' %}
+                                <span class="badge bg-warning">{{ asset.condition }}</span>
+                            {% elif asset.condition == 'Poor' %}
+                                <span class="badge bg-danger">{{ asset.condition }}</span>
+                            {% else %}
+                                <span class="badge bg-secondary">N/A</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-3 text-center text-muted">
+            <p class="mb-0">No assets need replacement</p>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-danger">View Full Report</a>
+    </div>
+</div>
+
+{% elif widget_id == 'licenses_expiring' %}
+<div class="card border-warning">
+    <div class="card-header bg-warning text-dark">
+        <h5 class="card-title mb-0"><i class="bi bi-key"></i> Licenses Expiring Soon</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if data.licenses_expiring_list %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Software</th>
+                        <th>Vendor</th>
+                        <th>Type</th>
+                        <th>Purchase Date</th>
+                        <th>Expiry Date</th>
+                        <th>Days Left</th>
+                        <th>Annual Cost</th>
+                        <th>Seats</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for license in data.licenses_expiring_list %}
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_license', license_id=license.id) }}'">
+                        <td><strong>{{ license.software_name }}</strong></td>
+                        <td>{{ license.vendor or '-' }}</td>
+                        <td><span class="badge bg-info">{{ license.license_type or '-' }}</span></td>
+                        <td>{{ license.purchase_date.strftime('%m/%d/%y') if license.purchase_date else '-' }}</td>
+                        <td>{{ license.expiry_date.strftime('%m/%d/%y') if license.expiry_date else '-' }}</td>
+                        <td>
+                            {% if license.expiry_date %}
+                                {% set today = license.expiry_date.__class__.today() %}
+                                {% set days_left = (license.expiry_date - today).days %}
+                                {% if days_left <= 7 %}
+                                    <span class="badge bg-danger">{{ days_left }} days</span>
+                                {% else %}
+                                    <span class="badge bg-warning">{{ days_left }} days</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="badge bg-secondary">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ '$%.2f'|format(license.annual_cost) if license.annual_cost else '-' }}</td>
+                        <td>{{ license.total_licenses }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-3 text-center text-muted">
+            <p class="mb-0">No licenses expiring soon</p>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
+    </div>
+</div>
+
+{% elif widget_id == 'incomplete_assets' %}
+<div class="card border-warning">
+    <div class="card-header bg-warning text-dark">
+        <h5 class="card-title mb-0"><i class="bi bi-clipboard-x"></i> Incomplete Assets</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if data.incomplete_assets %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Asset Tag</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Missing</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in data.incomplete_assets %}
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                        <td><strong>{{ asset.asset_tag }}</strong></td>
+                        <td>{{ asset.name }}</td>
+                        <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                        <td>
+                            {% if not asset.manufacturer %}
+                            <span class="badge bg-warning">Manufacturer</span>
+                            {% endif %}
+                            {% if not asset.model %}
+                            <span class="badge bg-warning">Model</span>
+                            {% endif %}
+                            {% if not asset.serial_number %}
+                            <span class="badge bg-warning">Serial</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="card-body">
+            <p class="text-muted mb-0 text-center">All assets have complete information!</p>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
+    </div>
+</div>
+
+{% elif widget_id == 'recent_employees' %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="card-title mb-0"><i class="bi bi-people"></i> Recent Employees</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="list-group list-group-flush">
+            {% for employee in data.recent_employees %}
+            <a href="{{ url_for('view_employee', employee_id=employee.id) }}" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1">{{ employee.name }}</h6>
+                    <small class="text-muted">{{ employee.created_at.strftime('%m/%d/%y') if employee.created_at else 'N/A' }}</small>
+                </div>
+                <p class="mb-0 small text-muted">{{ employee.department or 'No Dept' }} - {{ employee.position or 'No Position' }}</p>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="card-footer text-center">
+        <a href="{{ url_for('employees') }}" class="btn btn-sm btn-outline-primary">View All</a>
+    </div>
+</div>
+{% endif %}

@@ -1,0 +1,986 @@
+================================================================================
+                           CIRQUE CORPORATION
+                   SECURITY INCIDENT RESPONSE PLAN
+                        Effective Date: March 2, 2026
+================================================================================
+
+Document Control:
+-----------------
+Document Owner: Chris Wren, IT Manager
+Approved By: David Park, CTO
+Last Review: March 2, 2026
+Next Review: March 2, 2027 (Annual)
+Version: 2.0
+
+Purpose:
+--------
+This Security Incident Response Plan defines how Cirque Corporation identifies,
+responds to, contains, eradicates, and recovers from security incidents. This
+plan ensures incidents are handled consistently, efficiently, and in compliance
+with regulatory requirements.
+
+Scope:
+------
+This plan applies to all security incidents affecting:
+- Information systems and networks
+- Data (customer, employee, financial, proprietary)
+- Physical security breaches
+- Personnel security issues
+- Third-party vendor security issues
+- Cloud services and SaaS applications
+
+Incident Response Team:
+-----------------------
+- Incident Response Manager: Chris Wren, IT Manager
+- Executive Sponsor: David Park, CTO
+- IT Security: Amanda Foster, Security Analyst
+- IT Operations: Kevin Nguyen, Senior Systems Administrator
+- Legal Liaison: Robert Taylor, VP Sales
+- HR Representative: Emma Thompson, HR Director
+- Communications: Lisa Anderson, VP Marketing
+- Finance (if PCI/financial data): Sarah Williams, CFO
+
+External Resources:
+- Law Enforcement: FBI Cyber Division, Local Police
+- Legal Counsel: External law firm (when needed)
+- Forensics: Third-party forensics firm (when needed)
+- Cyber Insurance: CyberGuard Insurance - Policy #CG-2024-9281
+
+
+================================================================================
+SECTION 1: INCIDENT DEFINITION & CLASSIFICATION
+================================================================================
+
+1.1 WHAT IS A SECURITY INCIDENT?
+---------------------------------
+A security incident is any event that compromises the confidentiality,
+integrity, or availability of information systems, data, or physical assets.
+
+Examples of Security Incidents:
+✓ Unauthorized access to systems or data
+✓ Malware infections (ransomware, viruses, trojans)
+✓ Phishing attacks (successful or attempted)
+✓ Data breach or data loss
+✓ Denial of Service (DoS) attacks
+✓ Lost or stolen devices (laptops, phones, tablets)
+✓ Unauthorized disclosure of confidential information
+✓ Insider threats or malicious employee activity
+✓ Physical security breaches (facility access, theft)
+✓ Social engineering attacks
+✓ Compromised user accounts
+✓ Website defacement
+✓ Vulnerability exploits
+✓ Third-party vendor security incidents affecting Cirque
+
+What is NOT an Incident (but should still be reported):
+- Suspicious emails (report to IT for analysis)
+- Failed login attempts (system alerts IT automatically)
+- Spam or junk mail
+- System errors or outages (not security-related)
+- Lost passwords (help desk request)
+
+
+1.2 INCIDENT SEVERITY CLASSIFICATION
+-------------------------------------
+
+SEVERITY 1 - CRITICAL (Response Time: Immediate)
+- Active ransomware attack or major malware outbreak
+- Confirmed data breach with customer/employee PII exposed
+- Complete system or network outage due to security incident
+- Ongoing active attack or intrusion
+- Loss of critical business systems
+- Media attention or public disclosure imminent
+- Regulatory reporting required (GDPR, CCPA, etc.)
+→ ACTION: Activate full Incident Response Team immediately
+→ NOTIFICATION: CTO, CEO, Legal within 1 hour
+
+SEVERITY 2 - HIGH (Response Time: Within 2 hours)
+- Suspected data breach (investigation needed)
+- Compromised privileged account
+- Malware on multiple systems
+- Successful phishing attack with credential theft
+- Lost/stolen device with unencrypted data
+- DDoS attack affecting availability
+- Insider threat detected
+→ ACTION: Activate core Incident Response Team
+→ NOTIFICATION: CTO, IT Manager immediately
+
+SEVERITY 3 - MEDIUM (Response Time: Within 24 hours)
+- Isolated malware infection (single device)
+- Attempted unauthorized access (blocked)
+- Lost/stolen device with encrypted data
+- Minor data leak (limited scope)
+- Suspicious network activity under investigation
+- Failed phishing attempt (user reported)
+→ ACTION: IT Security investigates
+→ NOTIFICATION: IT Manager within 4 hours
+
+SEVERITY 4 - LOW (Response Time: Within 3 days)
+- Spam or phishing emails (not clicked)
+- Minor policy violations
+- Unsuccessful attack attempts
+- Security awareness incidents (user mistakes)
+→ ACTION: IT logs and tracks for trending
+→ NOTIFICATION: Weekly summary to IT Manager
+
+
+1.3 INCIDENT CATEGORIES
+------------------------
+- Malware (viruses, ransomware, trojans)
+- Phishing / Social Engineering
+- Unauthorized Access / Intrusion
+- Data Breach / Data Loss
+- Denial of Service (DoS/DDoS)
+- Lost/Stolen Devices
+- Physical Security Breach
+- Insider Threat
+- Third-Party Vendor Incident
+- Web Application Attack
+- Account Compromise
+- Policy Violation
+- Other
+
+
+================================================================================
+SECTION 2: INCIDENT RESPONSE PHASES (NIST SP 800-61)
+================================================================================
+
+Our incident response process follows the NIST Cybersecurity Framework phases:
+
+Phase 1: PREPARATION
+Phase 2: DETECTION & ANALYSIS (Identification + Investigation)
+Phase 3: CONTAINMENT, ERADICATION & RECOVERY
+Phase 4: POST-INCIDENT ACTIVITY (Lessons Learned)
+
+
+================================================================================
+PHASE 1: PREPARATION
+================================================================================
+
+2.1 PREVENTION & READINESS
+---------------------------
+✓ Security tools deployed:
+  - Microsoft Defender for Endpoint (all devices)
+  - Azure Firewall with IDS/IPS
+  - Email filtering (Microsoft Defender for Office 365)
+  - Multi-factor authentication (Azure AD)
+  - Endpoint Detection and Response (EDR)
+  - Security Information and Event Management (Azure Sentinel)
+  - Backup systems (Azure Backup - daily)
+
+✓ Employee training:
+  - Annual security awareness training (all employees)
+  - Phishing simulation exercises (quarterly)
+  - New hire security orientation
+  - Incident reporting procedures
+
+✓ Documentation maintained:
+  - Network diagrams and asset inventory
+  - System administrator credentials (in password vault)
+  - Contact lists (internal and external)
+  - Incident response playbooks
+  - Data flow diagrams
+  - Backup and recovery procedures
+
+✓ Incident Response Team identified and trained
+✓ Incident Response Plan reviewed annually
+✓ Tabletop exercises conducted semi-annually
+
+
+================================================================================
+PHASE 2: DETECTION & ANALYSIS
+================================================================================
+
+3.1 INCIDENT DETECTION METHODS
+-------------------------------
+Incidents may be detected through:
+✓ Automated Security Alerts:
+  - Microsoft Defender alerts
+  - Azure Sentinel SIEM alerts
+  - Firewall alerts
+  - Failed login attempt notifications
+  - Antivirus detection alerts
+  - Data loss prevention (DLP) alerts
+
+✓ Employee Reports:
+  - Suspicious emails reported to security@cirque.com
+  - Help desk tickets
+  - Direct reports to IT Manager
+  - Anonymous hotline
+
+✓ Third-Party Notifications:
+  - Vendor security notices
+  - Law enforcement contacts
+  - Customer complaints
+  - Media reports
+
+✓ Audit/Review Activities:
+  - Log reviews
+  - Vulnerability scans
+  - Penetration testing
+  - SOC 2 audits
+
+
+3.2 INITIAL REPORTING (ALL EMPLOYEES)
+--------------------------------------
+WHO TO CONTACT:
+- Primary: Chris Wren, IT Manager
+  Email: security@cirque.com
+  Phone: (415) 555-0187
+  Slack: @chris.wren
+  
+- After Hours: Call IT Manager mobile (24/7)
+
+- Alternate: Amanda Foster, Security Analyst
+  Email: amanda.foster@cirque.com
+  Phone: (415) 555-0194
+
+WHAT TO REPORT:
+✓ Suspicious emails (DO NOT CLICK - forward to security@cirque.com)
+✓ Unexpected pop-ups or system behavior
+✓ Lost or stolen devices
+✓ Accidental data disclosure
+✓ Unauthorized access to files or systems
+✓ Requests for sensitive information
+✓ Physical security concerns
+
+WHEN TO REPORT:
+→ IMMEDIATELY for Severity 1-2 incidents
+→ Same business day for Severity 3-4 incidents
+
+DO NOT:
+✗ Delete evidence (don't delete emails, logs, files)
+✗ Turn off infected computers (disconnect from network instead)
+✗ Attempt to recover lost data yourself
+✗ Discuss incident publicly or on social media
+✗ Contact media or customers (Communications team handles this)
+
+
+3.3 INCIDENT LOGGING & DOCUMENTATION
+-------------------------------------
+ALL incidents logged in IT ticketing system with:
+- Incident ID number (format: INC-YYYY-NNNNN)
+- Date/time reported and detected
+- Reporter name and contact
+- Incident description
+- Severity classification
+- Category/type
+- Affected systems/users/data
+- Initial assessment
+- Assigned responder
+
+Incident Ticket Created Within: 30 minutes of detection
+
+
+3.4 INITIAL ASSESSMENT & INVESTIGATION
+---------------------------------------
+Performed by: IT Security (Amanda Foster) or IT Manager (Chris Wren)
+Timeline: Within response time based on severity
+
+Investigation Steps:
+1. Verify the incident is legitimate (not false positive)
+2. Determine scope and impact:
+   - What systems are affected?
+   - What data is involved?
+   - How many users impacted?
+   - Is attack ongoing or contained?
+   - Is this part of larger campaign?
+3. Classify severity (may upgrade/downgrade from initial report)
+4. Gather forensic evidence:
+   - System logs
+   - Network traffic captures
+   - Email headers
+   - Screenshots
+   - Witness statements
+5. Document timeline of events
+6. Preserve evidence (don't alter affected systems)
+7. Determine if law enforcement notification needed
+
+Investigation Findings Documented in Incident Ticket
+
+
+3.5 INCIDENT ESCALATION
+------------------------
+Escalation Matrix:
+
+SEVERITY 1 (CRITICAL):
+- Notify: CTO, CEO, Legal Liaison within 1 hour
+- Activate: Full Incident Response Team
+- Communications: Prepare external statement (if needed)
+- Convene: Emergency response meeting within 2 hours
+
+SEVERITY 2 (HIGH):
+- Notify: CTO, IT Manager immediately
+- Activate: Core IR Team (IT Security, IT Ops)
+- Response Meeting: Within 4 hours
+
+SEVERITY 3 (MEDIUM):
+- Notify: IT Manager within 4 hours
+- Assigned to: IT Security for investigation
+- Status Update: Daily until resolved
+
+SEVERITY 4 (LOW):
+- Handle: IT Security tracks and resolves
+- Report: Weekly summary to IT Manager
+
+
+================================================================================
+PHASE 3: CONTAINMENT, ERADICATION & RECOVERY
+================================================================================
+
+4.1 CONTAINMENT STRATEGY
+-------------------------
+Goal: Stop the incident from spreading while preserving evidence
+
+SHORT-TERM CONTAINMENT (Immediate Actions):
+✓ Isolate affected systems (disconnect from network, don't power off)
+✓ Disable compromised user accounts
+✓ Block malicious IPs/domains at firewall
+✓ Quarantine malicious emails
+✓ Change passwords for compromised accounts
+✓ Enable additional monitoring/logging
+✓ Take systems offline if actively under attack
+
+Containment Actions Based on Incident Type:
+
+MALWARE/RANSOMWARE:
+→ Disconnect infected devices from network (leave powered on)
+→ Block command & control (C2) IPs at firewall
+→ Stop file server sync/replication
+→ Verify backups are clean and accessible
+→ Do NOT pay ransom (FBI guidance + company policy)
+
+PHISHING/ACCOUNT COMPROMISE:
+→ Disable affected user accounts immediately
+→ Force password reset on compromised accounts
+→ Revoke all active sessions/tokens
+→ Review account activity logs
+→ Check for unauthorized email forwards/rules
+→ Scan for data exfiltration
+
+DATA BREACH:
+→ Identify what data was accessed/exfiltrated
+→ Stop ongoing access (close entry point)
+→ Preserve logs and evidence
+→ Determine if notification required (GDPR, CCPA)
+→ Consult with Legal team
+
+LOST/STOLEN DEVICE:
+→ Remote wipe device immediately (if enabled)
+→ Disable device in MDM (Intune)
+→ Revoke device certificates
+→ Force password reset for user
+→ Review data stored locally vs. cloud
+→ File police report (if stolen)
+
+DENIAL OF SERVICE:
+→ Engage DDoS mitigation service
+→ Block attack sources at firewall
+→ Increase bandwidth if possible
+→ Notify Azure support
+→ Consider moving to alternative IP range
+
+
+4.2 LONG-TERM CONTAINMENT
+--------------------------
+Implement temporary fixes to allow systems to resume operation:
+✓ Apply emergency patches
+✓ Implement additional firewall rules
+✓ Deploy compensating controls
+✓ Monitor affected systems continuously
+✓ Backup system state for forensics
+
+
+4.3 ERADICATION
+----------------
+Goal: Remove the threat and close security gaps
+
+Actions:
+✓ Remove malware from all affected systems
+✓ Delete malicious files and registry entries
+✓ Close exploited vulnerabilities (patch systems)
+✓ Remove unauthorized accounts or access
+✓ Update security controls (firewall rules, AV signatures)
+✓ Rebuild compromised systems from known-good backups (if needed)
+✓ Verify threat is completely removed
+
+Verification:
+- Re-scan systems with multiple tools
+- Review logs for residual activity
+- Monitor for 72 hours minimum
+
+Eradication Complete When:
+→ No signs of malicious activity
+→ All vulnerabilities patched
+→ Systems scanned clean by multiple tools
+→ Monitoring shows normal behavior
+
+
+4.4 RECOVERY
+-------------
+Goal: Restore systems to normal operation and verify security
+
+Recovery Steps:
+1. Restore systems from clean backups (if rebuilt)
+2. Re-apply security configurations
+3. Change all passwords associated with incident
+4. Test system functionality
+5. Verify data integrity
+6. Restore network connectivity (in phases)
+7. Monitor intensively for 7-14 days
+8. Verify backups are current
+
+Validation:
+✓ System performance normal
+✓ No signs of compromise
+✓ Security controls functioning
+✓ Users able to access required resources
+✓ Data integrity verified
+
+Return to Production Approved By: IT Manager + CTO
+
+
+================================================================================
+PHASE 4: POST-INCIDENT ACTIVITY
+================================================================================
+
+5.1 LESSONS LEARNED MEETING
+----------------------------
+Conducted Within: 7 days of incident closure
+
+Attendees: Incident Response Team members + affected department heads
+
+Agenda:
+1. Incident timeline review
+2. What went well?
+3. What could be improved?
+4. Were policies and procedures followed?
+5. Were any gaps identified in tools/training/processes?
+6. Action items and responsibilities
+7. Update IR plan if needed
+
+Meeting Minutes Documented and Filed
+
+
+5.2 INCIDENT REPORT (FINAL)
+----------------------------
+Prepared By: Incident Response Manager (Chris Wren)
+Completed Within: 14 days of incident closure
+
+Report Contents:
+- Executive summary
+- Incident timeline
+- Technical details
+- Impact assessment (systems, data, users, $$$)
+- Root cause analysis
+- Response actions taken
+- Effectiveness of response
+- Lessons learned
+- Recommendations
+- Action items with owners and due dates
+
+Report Distribution:
+- CTO (always)
+- CEO (Severity 1-2)
+- Board of Directors (Severity 1 with significant impact)
+- Audit committee (annual summary)
+- SOC 2 auditor (relevant incidents)
+
+
+5.3 REGULATORY NOTIFICATION
+----------------------------
+Certain incidents require external notification:
+
+DATA BREACH involving Personal Information:
+- GDPR (EU residents): Within 72 hours to Data Protection Authority
+- CCPA (California residents): "Without unreasonable delay"
+- State breach notification laws: Varies by state (typically 30-90 days)
+- Affected individuals: Per applicable law
+→ Legal team determines requirements
+
+PCI DSS (Payment Card Data):
+- Payment card processor: Within 24 hours
+- Card brands (Visa, Mastercard, etc.): Per contract
+→ CFO and Legal coordinate
+
+HIPAA (Health Data) - if applicable:
+- HHS Office for Civil Rights: Within 60 days
+- Affected individuals: Within 60 days
+→ HR and Legal coordinate
+
+Law Enforcement:
+- FBI Cyber Division: Recommended for major incidents
+- Local Police: Lost/stolen devices, physical security
+→ IT Manager or CTO initiates contact
+
+Insurance:
+- CyberGuard Insurance: Within 24 hours of major incident
+→ CFO files claim
+
+
+5.4 COMMUNICATION PLAN
+-----------------------
+INTERNAL COMMUNICATION:
+
+Employees (Affected Users):
+- Incident summary (non-technical)
+- What data/systems affected
+- Required actions (password change, etc.)
+- Who to contact with questions
+- Timeline for resolution
+→ Approved by: HR Director + IT Manager
+
+All Employees (Company-Wide):
+- High-level summary when appropriate
+- Security reminders/lessons learned
+- Updated security procedures
+→ Approved by: CTO + CEO
+
+EXTERNAL COMMUNICATION:
+
+Customers (if their data affected):
+- Notification letter/email (Legal approved)
+- What happened (high-level)
+- What data was affected
+- What we're doing to prevent recurrence
+- Credit monitoring offer (if PII breach)
+- Contact information for questions
+→ Approved by: CEO + Legal
+
+Media/Public (if necessary):
+- Official statement prepared by Communications (Lisa Anderson)
+- Designated spokesperson: CEO or CTO only
+- Employees: Direct media inquiries to Communications
+→ Approved by: CEO + Legal
+
+Vendors/Partners (if they're affected or involved):
+- Notification of incident
+- Impact to their services/data
+- Coordination for mitigation
+→ Approved by: CTO + Legal
+
+
+================================================================================
+SECTION 3: INCIDENT TRACKING & MONITORING
+================================================================================
+
+6.1 INCIDENT TICKETING SYSTEM
+------------------------------
+All incidents tracked in: IT Help Desk Ticketing System (SharePoint-based)
+
+Ticket Fields:
+- Incident ID: INC-YYYY-NNNNN
+- Reported Date/Time
+- Detected Date/Time
+- Reporter Name
+- Severity: 1-4
+- Category: (Malware, Phishing, Data Breach, etc.)
+- Status: New, Investigating, Contained, Eradicated, Recovered, Closed
+- Assigned To: Incident handler
+- Affected Systems: List of systems/users
+- Affected Data: Type and scope
+- Description: Detailed incident notes
+- Timeline: Chronological log of actions
+- Root Cause: Determined during investigation
+- Resolution: Actions taken to resolve
+- Lessons Learned: Documented improvements
+- Closure Date
+
+Status Updates Required:
+- Severity 1-2: Every 4 hours until contained
+- Severity 3: Daily
+- Severity 4: At closure
+
+
+6.2 INCIDENT METRICS & REPORTING
+---------------------------------
+Monthly Metrics Tracked:
+✓ Total incidents by severity
+✓ Incidents by category
+✓ Mean time to detect (MTTD)
+✓ Mean time to respond (MTTR)
+✓ Mean time to recover (MTTR - recovery)
+✓ Open vs. closed incidents
+✓ Repeat incidents (same type)
+✓ Employee-reported incidents
+
+Quarterly Report to CTO:
+- Trend analysis
+- Top incident categories
+- Response time metrics
+- Recommendations for improvement
+- Security awareness effectiveness
+
+Annual Report to CEO/Board:
+- Executive summary of all incidents
+- Major incidents and outcomes
+- Security posture improvements
+- Budget requests for tools/training
+
+
+================================================================================
+SECTION 4: ROLES & RESPONSIBILITIES
+================================================================================
+
+7.1 INCIDENT RESPONSE MANAGER (Chris Wren, IT Manager)
+-------------------------------------------------------
+- Overall coordination of incident response
+- Declares incident severity and activates IR Team
+- Assigns investigation tasks
+- Makes containment and recovery decisions
+- Approves return to production
+- Coordinates with executive management
+- Prepares final incident report
+- Conducts lessons learned meeting
+- Updates incident response procedures
+- On-call 24/7 for critical incidents
+
+7.2 IT SECURITY (Amanda Foster, Security Analyst)
+--------------------------------------------------
+- Monitors security alerts
+- Performs initial triage and investigation
+- Collects and preserves forensic evidence
+- Analyzes malware and attack patterns
+- Implements containment measures
+- Documents technical findings
+- Recommends security improvements
+- Assists with eradication and recovery
+- Updates security tools and signatures
+
+7.3 IT OPERATIONS (Kevin Nguyen, Senior Systems Administrator)
+---------------------------------------------------------------
+- System isolation and containment
+- System restoration from backups
+- Patching and configuration changes
+- Log collection and analysis
+- Network traffic analysis
+- Implements firewall rules
+- Rebuilds compromised systems
+- Verifies system integrity after recovery
+
+7.4 EXECUTIVE SPONSOR (David Park, CTO)
+----------------------------------------
+- Provides authority and resources
+- Makes business decisions (downtime vs. risk)
+- Approves major response actions
+- Escalates to CEO when needed
+- Approves external communications
+- Liaison with Board of Directors
+- Budget approval for incident costs
+
+7.5 LEGAL LIAISON (Robert Taylor, VP Sales)
+--------------------------------------------
+- Determines regulatory notification requirements
+- Coordinates with external legal counsel
+- Advises on legal implications
+- Reviews external communications
+- Manages law enforcement interaction
+- Handles subpoenas or court orders
+- Protects attorney-client privilege
+
+7.6 HR REPRESENTATIVE (Emma Thompson, HR Director)
+---------------------------------------------------
+- Employee disciplinary actions (if insider threat)
+- Employee communications (internal notifications)
+- Workforce impact assessment
+- Privacy concerns (employee data)
+- Coordinates with Legal on employee matters
+- Provides employee support resources
+
+7.7 COMMUNICATIONS (Lisa Anderson, VP Marketing)
+-------------------------------------------------
+- Prepares external statements
+- Media relations and press releases
+- Customer communications (approved by Legal)
+- Social media monitoring and response
+- Reputation management
+- Internal communications (company-wide announcements)
+
+7.8 FINANCE (Sarah Williams, CFO - if financial impact)
+--------------------------------------------------------
+- Financial impact assessment
+- Insurance claim filing and coordination
+- Budget for incident response costs
+- Payment card industry compliance
+- Financial reporting implications
+- Cost-benefit analysis for prevention measures
+
+
+================================================================================
+SECTION 5: INCIDENT RESPONSE PLAYBOOKS
+================================================================================
+
+8.1 RANSOMWARE INCIDENT PLAYBOOK
+---------------------------------
+1. CONTAIN:
+   - Disconnect infected systems from network (leave powered on)
+   - Identify ransomware variant (search ransom note text)
+   - Block C2 IPs at firewall
+   - Stop replication/sync services
+2. ASSESS:
+   - How many systems encrypted?
+   - What data is affected?
+   - Are backups accessible and clean?
+   - Ransom amount and payment deadline
+3. DO NOT PAY RANSOM (company policy + FBI guidance)
+4. RECOVER:
+   - Restore from clean backups
+   - Check NoMoreRansom.org for decryption tools
+   - Rebuild systems from scratch if needed
+5. PREVENT:
+   - Identify entry point (phishing, remote access, vulnerability)
+   - Patch vulnerabilities
+   - Enhance email filtering
+   - Implement application whitelisting
+
+8.2 PHISHING INCIDENT PLAYBOOK
+-------------------------------
+1. User reports suspicious email to security@cirque.com
+2. User forwards email (do not click links or attachments)
+3. IT Security analyzes email headers and links
+4. If malicious:
+   - Quarantine email from all mailboxes
+   - Block sender domain
+   - Check if anyone clicked link or opened attachment
+   - If credentials entered: Force password reset, disable account, check for unauthorized access
+   - If attachment opened: Scan device for malware, isolate if infected
+5. Send warning email to all employees (if widespread phishing campaign)
+6. Update email filtering rules
+
+8.3 DATA BREACH PLAYBOOK
+-------------------------
+1. IDENTIFY:
+   - What data was accessed/exfiltrated?
+   - How was data accessed? (hacked, lost device, insider, misconfiguration)
+   - When did breach occur? (time window)
+   - Who is affected? (customers, employees, count)
+2. CONTAIN:
+   - Stop ongoing access
+   - Secure entry point
+   - Preserve evidence
+3. LEGAL NOTIFICATION:
+   - Consult Legal team immediately
+   - Determine if PII, PHI, or financial data involved
+   - Regulatory notification requirements (GDPR 72 hours)
+   - Customer notification requirements
+4. COMMUNICATION:
+   - Prepare notification letters
+   - Offer credit monitoring (if PII)
+   - Set up call center for inquiries
+5. REMEDIATE:
+   - Fix vulnerability
+   - Enhance monitoring
+   - Implement additional controls
+
+8.4 LOST/STOLEN DEVICE PLAYBOOK
+--------------------------------
+1. User reports device lost/stolen to IT immediately
+2. Determine:
+   - Device type and ownership (company vs. BYOD)
+   - Was device encrypted? (BitLocker, FileVault)
+   - What data was stored locally?
+   - Was device PIN/password protected?
+   - When was it last seen?
+3. IMMEDIATE ACTIONS:
+   - Remote wipe device (Intune MDM)
+   - Disable device in MDM
+   - Revoke device certificates
+   - Disable user account temporarily
+   - Check for recent sign-ins from unusual locations
+4. If stolen: File police report
+5. Recovery: If device found, verify not compromised before re-enrolling
+6. ASSESS RISK:
+   - Low: Encrypted device, no local data, remote wiped
+   - High: Unencrypted device with local PII/confidential data
+   - Determine if data breach notification required
+
+
+================================================================================
+SECTION 6: TESTING & TRAINING
+================================================================================
+
+9.1 INCIDENT RESPONSE PLAN TESTING
+-----------------------------------
+Annual Tabletop Exercise:
+- Scenario: Simulated incident (ransomware, data breach, etc.)
+- Participants: Full Incident Response Team
+- Duration: 2-3 hours
+- Walkthrough of response procedures
+- Identify gaps and improvement areas
+- Document lessons learned
+- Update IR plan based on findings
+
+Last Tabletop: January 18, 2026 (Ransomware scenario)
+Next Tabletop: July 2026
+
+Live DR Test:
+- Actual system restoration from backup
+- Conducted as part of Business Continuity testing
+- Quarterly tests (different systems each quarter)
+
+Last Live Test: February 15, 2026
+Next Live Test: May 15, 2026
+
+
+9.2 EMPLOYEE SECURITY AWARENESS TRAINING
+-----------------------------------------
+Annual Training (All Employees):
+- Security awareness fundamentals
+- How to identify phishing emails
+- Password security
+- Data handling procedures
+- Incident reporting procedures
+- Social engineering awareness
+
+Quarterly Phishing Simulations:
+- Realistic phishing emails sent to all users
+- Track click rates and report rates
+- Remedial training for users who fall for simulations
+- Trend analysis to measure improvement
+
+New Hire Orientation:
+- Security policies overview
+- Acceptable use policy
+- Incident reporting procedures
+- IT contact information
+
+Current Metrics (Q1 2026):
+- Phishing simulation click rate: 12% (target: <10%)
+- Phishing simulation report rate: 68% (target: >75%)
+- Security training completion: 100%
+
+
+================================================================================
+SECTION 7: TOOLS & RESOURCES
+================================================================================
+
+10.1 SECURITY TOOLS
+-------------------
+Detection & Monitoring:
+- Microsoft Defender for Endpoint (EDR)
+- Azure Sentinel (SIEM)
+- Azure Firewall (IPS/IDS)
+- Microsoft Defender for Office 365 (Email security)
+- Azure AD Identity Protection
+
+Response & Recovery:
+- Microsoft Intune (MDM - remote wipe)
+- Azure Backup
+- Password Vault: Bitwarden (emergency credentials)
+- Forensics: SIEM logs, packet captures
+
+Communication:
+- Microsoft Teams (internal)
+- Email (external notifications)
+- SharePoint (incident documentation)
+
+
+10.2 EXTERNAL RESOURCES
+-----------------------
+Law Enforcement:
+- FBI Cyber Division: (855) 292-3937, www.ic3.gov
+- Local Police: 911 / (415) 555-0100
+
+Insurance:
+- CyberGuard Insurance
+- Account Manager: Jennifer Liu
+- Phone: (888) 555-0199
+- Policy: CG-2024-9281
+- Email: claims@cyberguard.com
+
+Forensics (if needed):
+- Mandiant (FireEye)
+- CrowdStrike
+- (Vendor TBD - evaluate based on incident)
+
+Legal:
+- External counsel: TBD based on incident
+- FBI guidance on ransomware: www.fbi.gov/ransomware
+
+Resources:
+- NIST Computer Security Incident Handling Guide (SP 800-61)
+- SANS Incident Handler's Handbook
+- US-CERT (www.us-cert.gov)
+
+
+================================================================================
+SECTION 8: DOCUMENT MAINTENANCE
+================================================================================
+
+11.1 PLAN REVIEW
+----------------
+Annual Review:
+- Conducted by: Incident Response Manager
+- Review Date: March (every year)
+- Participants: IR Team members
+- Updates based on:
+  * New threats/vulnerabilities
+  * Organizational changes
+  * Technology changes
+  * Lessons learned from incidents
+  * Tabletop exercise findings
+  * Regulatory changes
+
+Approval: CTO
+
+
+11.2 VERSION HISTORY
+--------------------
+Version 2.0 - March 2, 2026
+- Annual review completed
+- Added GDPR/CCPA breach notification requirements
+- Updated contact information
+- Enhanced playbooks for ransomware and data breach
+- Added metrics from 2025 incidents
+- Incorporated lessons learned from January 2026 tabletop
+- Approved by: David Park, CTO
+
+Version 1.1 - September 10, 2025
+- Updated security tools (added Azure Sentinel)
+- Enhanced phishing playbook
+- Added employee training metrics
+
+Version 1.0 - January 15, 2025
+- Initial Security Incident Response Plan
+- Based on NIST SP 800-61
+- Approved by: David Park, CTO
+
+
+================================================================================
+APPROVALS
+================================================================================
+
+Prepared By:
+Chris Wren, IT Manager
+Date: March 2, 2026
+
+Reviewed By:
+Amanda Foster, Security Analyst
+Date: March 2, 2026
+
+Kevin Nguyen, Senior Systems Administrator
+Date: March 2, 2026
+
+Approved By:
+David Park, Chief Technology Officer
+Date: March 2, 2026
+
+Next Scheduled Review:  March 2, 2027 (Annual)
+
+
+================================================================================
+RELATED POLICIES & DOCUMENTS
+================================================================================
+
+- Information Security Policy (IS-CIRQ-P-001-G)
+- Incident Response Procedure (IS-CIRQ-PR-015-G)
+- Business Continuity/DR Plan (IS-CIRQ-P-043-G)
+- Data Breach Response Policy (IS-CIRQ-P-020-G)
+- Acceptable Use Policy (IS-CIRQ-P-002-G)
+- Data Classification Policy (IS-CIRQ-P-018-G)
+- Employee Handbook (Security section)
+
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================

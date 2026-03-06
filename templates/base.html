@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#0d6efd">
+    <title>{% block title %}Asset Tracker{% endblock %}</title>
+    
+    <!-- Favicons -->
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="apple-touch-icon" sizes="192x192" href="{{ url_for('static', filename='favicon-192.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        /* Theme CSS Variables */
+        :root {
+            /* Default Theme (Bootstrap) */
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-primary: #0d6efd;
+            --accent-secondary: #6c757d;
+            --border-color: #dee2e6;
+            --card-bg: #ffffff;
+            --navbar-bg: #0d6efd;
+            --navbar-text: #ffffff;
+            --button-primary: #0d6efd;
+            --button-primary-hover: #0b5ed7;
+        }
+        
+        /* Deep Forest Theme */
+        [data-theme="deep-forest"] {
+            --bg-primary: #0D0D0D;
+            --bg-secondary: #1B3022;
+            --text-primary: #F2E8CF;
+            --text-secondary: #D6C7A1;
+            --accent-primary: #BC986A;
+            --accent-secondary: #1B3022;
+            --border-color: #1B3022;
+            --card-bg: #1a1a1a;
+            --navbar-bg: #1B3022;
+            --navbar-text: #F2E8CF;
+            --button-primary: #BC986A;
+            --button-primary-hover: #9e7d55;
+        }
+        
+        /* Modern Naturalist Theme */
+        [data-theme="modern-naturalist"] {
+            --bg-primary: #F5F2ED;
+            --bg-secondary: #ffffff;
+            --text-primary: #1A1A1A;
+            --text-secondary: #4a4a4a;
+            --accent-primary: #2D4639;
+            --accent-secondary: #D6C7A1;
+            --border-color: #D6C7A1;
+            --card-bg: #ffffff;
+            --navbar-bg: #2D4639;
+            --navbar-text: #F5F2ED;
+            --button-primary: #2D4639;
+            --button-primary-hover: #1f3127;
+        }
+        
+        /* Heritage Theme */
+        [data-theme="heritage"] {
+            --bg-primary: #FAF9F6;
+            --bg-secondary: #F5F2ED;
+            --text-primary: #000000;
+            --text-secondary: #4a4a4a;
+            --accent-primary: #354A21;
+            --accent-secondary: #C2B280;
+            --border-color: #000000;
+            --card-bg: #ffffff;
+            --navbar-bg: #354A21;
+            --navbar-text: #FAF9F6;
+            --button-primary: #C2B280;
+            --button-primary-hover: #a89a6b;
+        }
+        
+        /* Dark Mode Theme (GitHub-inspired) */
+        [data-theme="dark"] {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-primary: #58a6ff;
+            --accent-secondary: #21262d;
+            --border-color: #30363d;
+            --card-bg: #161b22;
+            --navbar-bg: #161b22;
+            --navbar-text: #c9d1d9;
+            --button-primary: #238636;
+            --button-primary-hover: #2ea043;
+        }
+        
+        /* Dark Mode - Global Overrides */
+        [data-theme="dark"] body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+        }
+        
+        [data-theme="dark"] .card {
+            background-color: #161b22;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        
+        [data-theme="dark"] .card-body {
+            background-color: #161b22;
+        }
+        
+        [data-theme="dark"] .stat-card {
+            background-color: #161b22;
+            border-color: #30363d;
+        }
+        
+        [data-theme="dark"] .stat-card h3,
+        [data-theme="dark"] .stat-card h6,
+        [data-theme="dark"] .stat-card p,
+        [data-theme="dark"] .stat-card small {
+            color: #c9d1d9 !important;
+        }
+        
+        [data-theme="dark"] .text-muted {
+            color: #8b949e !important;
+        }
+        
+        [data-theme="dark"] .navbar {
+            background-color: #161b22 !important;
+            border-bottom: 1px solid #30363d;
+        }
+        
+        [data-theme="dark"] .navbar-brand,
+        [data-theme="dark"] .navbar-dark .navbar-nav .nav-link {
+            color: #c9d1d9 !important;
+        }
+        
+        [data-theme="dark"] .navbar-dark .navbar-nav .nav-link:hover {
+            color: #58a6ff !important;
+        }
+        
+        [data-theme="dark"] .btn-primary {
+            background-color: #238636;
+            border-color: #238636;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .btn-primary:hover {
+            background-color: #2ea043;
+            border-color: #2ea043;
+        }
+        
+        [data-theme="dark"] .btn-outline-primary {
+            color: #58a6ff;
+            border-color: #58a6ff;
+        }
+        
+        [data-theme="dark"] .btn-outline-primary:hover {
+            background-color: #58a6ff;
+            border-color: #58a6ff;
+            color: #0d1117;
+        }
+        
+        [data-theme="dark"] .btn-secondary {
+            background-color: #30363d;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        
+        [data-theme="dark"] .btn-secondary:hover {
+            background-color: #484f58;
+            border-color: #484f58;
+        }
+        
+        [data-theme="dark"] .btn-success {
+            background-color: #238636;
+            border-color: #238636;
+        }
+        
+        [data-theme="dark"] .btn-danger {
+            background-color: #da3633;
+            border-color: #da3633;
+        }
+        
+        [data-theme="dark"] .btn-warning {
+            background-color: #9e6a03;
+            border-color: #9e6a03;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .btn-info {
+            background-color: #0969da;
+            border-color: #0969da;
+        }
+        
+        [data-theme="dark"] .badge {
+            background-color: #30363d;
+            color: #c9d1d9;
+        }
+        
+        [data-theme="dark"] .badge.bg-danger {
+            background-color: #da3633 !important;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .badge.bg-warning {
+            background-color: #9e6a03 !important;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .badge.bg-success {
+            background-color: #238636 !important;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .badge.bg-info {
+            background-color: #0969da !important;
+            color: #ffffff;
+        }
+        
+        [data-theme="dark"] .alert {
+            background-color: #161b22;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        
+        [data-theme="dark"] .alert-warning {
+            background-color: #341a03;
+            border-color: #9e6a03;
+            color: #f8e088;
+        }
+        
+        [data-theme="dark"] .alert-danger {
+            background-color: #2c1012;
+            border-color: #da3633;
+            color: #f47067;
+        }
+        
+        [data-theme="dark"] .alert-success {
+            background-color: #0a3e1d;
+            border-color: #238636;
+            color: #7ee787;
+        }
+        
+        [data-theme="dark"] .alert-info {
+            background-color: #0c2d6b;
+            border-color: #0969da;
+            color: #79c0ff;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        .navbar-brand {
+            font-weight: bold;
+        }
+        .content {
+            flex: 1;
+            padding: 20px 0;
+        }
+        .stat-card {
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        .card {
+            background-color: var(--card-bg);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        .navbar {
+            background-color: var(--navbar-bg) !important;
+            color: var(--navbar-text);
+        }
+        .navbar-dark .navbar-nav .nav-link {
+            color: var(--navbar-text);
+        }
+        .btn-primary {
+            background-color: var(--button-primary);
+            border-color: var(--button-primary);
+        }
+        .btn-primary:hover {
+            background-color: var(--button-primary-hover);
+            border-color: var(--button-primary-hover);
+        }
+        
+        /* Dark Mode Dropdown Menus */
+        [data-theme="dark"] .dropdown-menu {
+            background-color: #161b22;
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .dropdown-item {
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .dropdown-item:hover,
+        [data-theme="dark"] .dropdown-item:focus {
+            background-color: #21262d;
+            color: #58a6ff;
+        }
+        [data-theme="dark"] .dropdown-divider {
+            border-color: #30363d;
+        }
+        
+        /* Dark Mode Tables */
+        [data-theme="dark"] .table {
+            color: #c9d1d9;
+            border-color: #30363d;
+            background-color: #161b22;
+        }
+        [data-theme="dark"] .table > :not(caption) > * > * {
+            background-color: #161b22;
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .table thead th {
+            background-color: #161b22;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .table tbody td {
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .table-striped tbody tr:nth-of-type(odd) {
+            background-color: rgba(110, 118, 129, 0.05);
+        }
+        [data-theme="dark"] .table-hover > tbody > tr:hover > * {
+            background-color: #21262d;
+        }
+
+        /* Dark Mode - Neutralize Bootstrap warning header/table-light usage */
+        [data-theme="dark"] .card.border-warning {
+            border-color: #30363d !important;
+        }
+        [data-theme="dark"] .card-header.bg-warning {
+            background-color: #161b22 !important;
+            border-bottom: 1px solid #30363d;
+        }
+        [data-theme="dark"] .card-header.bg-warning.text-dark,
+        [data-theme="dark"] .card-header.bg-warning .card-title {
+            color: #c9d1d9 !important;
+        }
+        [data-theme="dark"] .table-light {
+            --bs-table-bg: #161b22;
+            --bs-table-accent-bg: transparent;
+            color: #c9d1d9;
+        }
+        
+        /* Dark Mode Forms */
+        [data-theme="dark"] .form-control,
+        [data-theme="dark"] .form-select {
+            background-color: #0d1117;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .form-control:focus,
+        [data-theme="dark"] .form-select:focus {
+            background-color: #0d1117;
+            border-color: #58a6ff;
+            color: #c9d1d9;
+            box-shadow: 0 0 0 0.25rem rgba(88, 166, 255, 0.25);
+        }
+        [data-theme="dark"] .form-control::placeholder {
+            color: #6e7681;
+        }
+        [data-theme="dark"] .form-label {
+            color: #c9d1d9;
+        }
+        
+        /* Dark Mode List Groups */
+        [data-theme="dark"] .list-group-item {
+            background-color: #161b22;
+            border-color: #30363d;
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .list-group-item:hover {
+            background-color: #21262d;
+        }
+        
+        /* Dark Mode Modals */
+        [data-theme="dark"] .modal-content {
+            background-color: #161b22;
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .modal-header,
+        [data-theme="dark"] .modal-footer {
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .modal-title {
+            color: #c9d1d9;
+        }
+        [data-theme="dark"] .btn-close {
+            filter: invert(1);
+        }
+        
+        /* Dark Mode Progress Bars */
+        [data-theme="dark"] .progress {
+            background-color: #21262d;
+        }
+        
+        /* Dark Mode Pagination */
+        [data-theme="dark"] .pagination .page-link {
+            background-color: #161b22;
+            border-color: #30363d;
+            color: #58a6ff;
+        }
+        [data-theme="dark"] .pagination .page-link:hover {
+            background-color: #21262d;
+            border-color: #58a6ff;
+        }
+        [data-theme="dark"] .pagination .page-item.active .page-link {
+            background-color: #58a6ff;
+            border-color: #58a6ff;
+            color: #0d1117;
+        }
+        
+        /* Dark Mode Footer */
+        [data-theme="dark"] .footer {
+            background-color: #161b22;
+            border-top: 1px solid #30363d;
+            color: #8b949e;
+        }
+        
+        /* Dark Mode HR */
+        [data-theme="dark"] hr {
+            border-color: #30363d;
+            opacity: 1;
+        }
+        
+        /* Dark Mode Links */
+        [data-theme="dark"] a {
+            color: #58a6ff;
+        }
+        [data-theme="dark"] a:hover {
+            color: #79c0ff;
+        }
+
+        .footer {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 20px 0;
+            margin-top: auto;
+        }
+        .table {
+            color: var(--text-primary);
+        }
+        .form-control, .form-select {
+            background-color: var(--card-bg);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+        .form-control:focus, .form-select:focus {
+            background-color: var(--card-bg);
+            color: var(--text-primary);
+        }
+        
+        /* Mobile-specific improvements */
+        @media (max-width: 768px) {
+            .content {
+                padding: 10px 0;
+            }
+            .navbar-brand {
+                font-size: 1rem;
+            }
+            .card {
+                margin-bottom: 1rem;
+            }
+            .table-responsive {
+                font-size: 0.85rem;
+            }
+            .btn-group {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.25rem;
+            }
+            .btn-sm {
+                padding: 0.25rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            /* Larger touch targets */
+            .btn, .form-control, .form-select {
+                min-height: 44px;
+            }
+            /* Better form spacing on mobile */
+            .form-group, .mb-3 {
+                margin-bottom: 1.5rem;
+            }
+            /* Stack buttons vertically on mobile */
+            .d-flex.justify-content-between {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            /* Hide less important columns on mobile */
+            .mobile-hide {
+                display: none;
+            }
+        }
+        
+        /* QR Scanner styles */
+        #qrScannerModal .modal-dialog {
+            max-width: 90%;
+            margin: 1rem auto;
+        }
+        #qrReader {
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        #qrReader video {
+            width: 100%;
+            border: 2px solid #0d6efd;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body {% if current_user.is_authenticated and current_user.theme %}data-theme="{{ current_user.theme }}"{% endif %}>
+    {% if current_user.is_authenticated %}
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <i class="bi bi-boxes"></i> Asset Tracker
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="bi bi-house-door"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('assets') }}">
+                            <i class="bi bi-laptop"></i> Assets
+                        </a>
+                    </li>
+                    {% if current_user.role in ['admin', 'manager'] %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('tickets') }}">
+                            <i class="bi bi-ticket-perforated"></i> Tickets
+                        </a>
+                    </li>
+                    {% endif %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('employees') }}">
+                            <i class="bi bi-people"></i> Employees
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('licenses') }}">
+                            <i class="bi bi-key-fill"></i> Licenses
+                        </a>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="reportsDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-graph-up"></i> Reports
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{{ url_for('reports') }}">
+                                <i class="bi bi-bar-chart-line"></i> Analytics Dashboard
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('custom_reports') }}">
+                                <i class="bi bi-file-earmark-bar-graph"></i> Custom Reports
+                            </a></li>
+                        </ul>
+                    </li>
+                    {% if current_user.role == 'admin' %}
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="soc2Dropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-shield-check"></i> SOC2 Compliance
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{{ url_for('soc2_dashboard') }}">
+                                <i class="bi bi-speedometer2"></i> Dashboard
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('soc2_strikegraph') }}">
+                                <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{{ url_for('management_risk_review') }}">
+                                <i class="bi bi-clipboard-check"></i> Risk Assessment Review
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('system_description') }}">
+                                <i class="bi bi-file-earmark-text"></i> System Description
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('policies') }}">
+                                <i class="bi bi-book"></i> Policy Library
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('controls') }}">
+                                <i class="bi bi-shield-fill"></i> Controls
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('risks') }}">
+                                <i class="bi bi-exclamation-triangle"></i> Risks
+                            </a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('users') }}">
+                            <i class="bi bi-people-fill"></i> Users
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('settings') }}">
+                            <i class="bi bi-gear-fill"></i> Settings
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="https://incident.corp.cirque.com" target="_blank" rel="noopener">
+                            <i class="bi bi-shield-exclamation"></i> Incident
+                        </a>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-person-circle"></i> {{ current_user.username }}
+                            {% if current_user.role == 'admin' %}
+                                <span class="badge bg-danger">Admin</span>
+                            {% elif current_user.role == 'manager' %}
+                                <span class="badge bg-warning">Manager</span>
+                            {% else %}
+                                <span class="badge bg-info">Viewer</span>
+                            {% endif %}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
+                                <i class="bi bi-box-arrow-right"></i> Logout
+                            </a></li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <div class="content">
+        <div class="container-fluid">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+
+    {% if current_user.is_authenticated %}
+    <!-- QR Scanner Modal -->
+    <div class="modal fade" id="qrScannerModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-qr-code-scan"></i> Scan QR Code</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <div id="qrReader"></div>
+                    <div id="qrResult" class="mt-3" style="display: none;">
+                        <div class="alert alert-success">
+                            <strong>Asset Found:</strong> <span id="qrAssetTag"></span>
+                        </div>
+                        <button class="btn btn-primary" id="viewAssetBtn">View Asset</button>
+                    </div>
+                    <div class="mt-3">
+                        <small class="text-muted">Position the QR code within the camera frame</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Quick Actions FAB -->
+    <div class="d-md-none position-fixed bottom-0 end-0 p-3" style="z-index: 1030;">
+        <div class="dropup">
+            <button class="btn btn-primary btn-lg rounded-circle shadow" 
+                    type="button" 
+                    data-bs-toggle="dropdown" 
+                    style="width: 60px; height: 60px;">
+                <i class="bi bi-plus-lg"></i>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end mb-2">
+                {% if current_user.role in ['admin', 'manager'] %}
+                <li>
+                    <a class="dropdown-item" href="{{ url_for('add_asset') }}">
+                        <i class="bi bi-laptop"></i> Add Asset
+                    </a>
+                </li>
+                <li>
+                    <a class="dropdown-item" href="{{ url_for('add_employee') }}">
+                        <i class="bi bi-person-plus"></i> Add Employee
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                {% endif %}
+                <li>
+                    <a class="dropdown-item" href="#" onclick="openQRScanner(); return false;">
+                        <i class="bi bi-qr-code-scan"></i> Scan QR Code
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="container text-center text-muted">
+            <small>&copy; 2025 IT Asset Tracker | Logged in as {{ current_user.username }}</small>
+        </div>
+    </footer>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script>
+        // Initialize Bootstrap tooltips
+        document.addEventListener('DOMContentLoaded', function() {
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        });
+
+        // QR Scanner functionality
+        let html5QrCode = null;
+        let scannedAssetId = null;
+
+        function openQRScanner() {
+            const modal = new bootstrap.Modal(document.getElementById('qrScannerModal'));
+            modal.show();
+            
+            // Start scanner when modal is shown
+            document.getElementById('qrScannerModal').addEventListener('shown.bs.modal', function() {
+                startQRScanner();
+            }, { once: true });
+            
+            // Stop scanner when modal is hidden
+            document.getElementById('qrScannerModal').addEventListener('hidden.bs.modal', function() {
+                stopQRScanner();
+            }, { once: true });
+        }
+
+        function startQRScanner() {
+            if (html5QrCode) {
+                return; // Already running
+            }
+
+            html5QrCode = new Html5Qrcode("qrReader");
+            
+            const config = {
+                fps: 10,
+                qrbox: { width: 250, height: 250 },
+                aspectRatio: 1.0
+            };
+
+            html5QrCode.start(
+                { facingMode: "environment" }, // Use back camera
+                config,
+                onScanSuccess,
+                onScanError
+            ).catch(err => {
+                console.error("Unable to start QR scanner:", err);
+                alert("Unable to access camera. Please grant camera permissions.");
+            });
+        }
+
+        function stopQRScanner() {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    html5QrCode = null;
+                    document.getElementById('qrResult').style.display = 'none';
+                }).catch(err => {
+                    console.error("Error stopping scanner:", err);
+                });
+            }
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            // Parse the QR code (format: ASSET:LAP001 or just LAP001)
+            let assetTag = decodedText;
+            if (decodedText.startsWith('ASSET:')) {
+                assetTag = decodedText.substring(6);
+            }
+
+            // Stop scanning
+            stopQRScanner();
+
+            // Show result
+            document.getElementById('qrAssetTag').textContent = assetTag;
+            document.getElementById('qrResult').style.display = 'block';
+            scannedAssetId = assetTag;
+
+            // Set up view button
+            document.getElementById('viewAssetBtn').onclick = function() {
+                // Fetch asset by tag and redirect
+                fetch(`/api/asset/search?tag=${assetTag}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.asset_id) {
+                            window.location.href = `/assets/${data.asset_id}`;
+                        } else {
+                            alert('Asset not found: ' + assetTag);
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Error finding asset:', err);
+                        alert('Error finding asset. Please try manual search.');
+                    });
+            };
+        }
+
+        function onScanError(errorMessage) {
+            // Ignore scan errors (they happen continuously while scanning)
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

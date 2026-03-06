@@ -1,0 +1,1030 @@
+================================================================================
+               INCIDENT RESPONSE PORTAL ROADMAP & ARCHITECTURE
+                        incident.corp.cirque.com
+                           Cirque Corporation
+                            March 3, 2026
+================================================================================
+
+PROJECT OVERVIEW
+================================================================================
+Build a comprehensive security incident response portal that integrates with
+existing SOC2 compliance tracking system. The portal will manage the complete
+incident lifecycle from detection through resolution, with automated workflows
+based on SOC2 policies and procedures.
+
+Current Asset Tracker:        tracker.corp.cirque.com (port 8000)
+New Incident Portal:          incident.corp.cirque.com (port 8001)
+Integration:                  Shared database, unified authentication
+
+
+CORE FEATURES & FUNCTIONALITY
+================================================================================
+
+1. INCIDENT INTAKE & TRIAGE
+   -------------------------
+   ☐ Multi-channel incident reporting
+     - Web form (internal employees)
+     - Email monitoring (security@cirque.com forwarding)
+     - API endpoint (automated alert integration from Azure Sentinel)
+     - Mobile-responsive reporting interface
+   
+   ☐ Automated severity classification
+     - AI-assisted severity scoring based on keywords/indicators
+     - Manual override with justification
+     - Automatic escalation based on severity (from IR Plan)
+     - Real-time alerts to IR Team members
+   
+   ☐ Incident categorization
+     - 11 categories from IR Plan: Malware, Phishing, Unauthorized Access,
+       Data Breach, DoS/DDoS, Lost/Stolen Device, Physical Security,
+       Insider Threat, Vendor Incident, Web Attack, Account Compromise
+     - Auto-tagging based on description keywords
+     - Custom tags for tracking
+
+2. AUTOMATED TICKET ROUTING & ASSIGNMENT
+   ---------------------------------------
+   ☐ Smart assignment based on:
+     - Incident type → responsible team member (Security Analyst, IT Ops, etc.)
+     - Severity level → automatic IR Team activation
+     - Current workload balancing
+     - On-call schedule integration
+   
+   ☐ Escalation matrix automation
+     - Sev 1: CTO/CEO notification within 1 hour (automatic email/SMS)
+     - Sev 2: CTO/IT Manager immediate notification
+     - Sev 3: IT Manager notification within 4 hours
+     - Sev 4: IT Security handles, weekly summary
+   
+   ☐ On-call schedule management
+     - Weekly on-call rotation (Security Analyst, IT Ops)
+     - Automatic failover to backup responder if no acknowledgment
+     - Integration with phone/SMS for after-hours incidents
+
+3. INCIDENT RESPONSE WORKFLOW ENGINE
+   -----------------------------------
+   ☐ Guided playbook execution
+     - 4 detailed playbooks from IR Plan:
+       * Ransomware playbook (14 steps with checklist)
+       * Phishing playbook (10 steps with checklist)
+       * Data Breach playbook (12 steps with checklist)
+       * Lost/Stolen Device playbook (8 steps with checklist)
+     - Step-by-step guided interface with action verification
+     - Automated containment actions where possible
+   
+   ☐ NIST SP 800-61 phase tracking
+     - Phase 1: Preparation (pre-incident readiness check)
+     - Phase 2: Detection & Analysis (evidence collection)
+     - Phase 3: Containment, Eradication, Recovery (action tracking)
+     - Phase 4: Post-Incident (lessons learned, reporting)
+     - Visual progress indicator showing current phase
+   
+   ☐ Timeline documentation (automatic)
+     - All actions auto-logged with timestamp
+     - User actions (account disabled, password reset, etc.)
+     - System events (alerts triggered, sessions terminated, etc.)
+     - Communications (emails sent, calls made, meetings held)
+     - Evidence collected (logs, screenshots, forensic data)
+   
+   ☐ Containment action tracking
+     - Pre-built containment action library:
+       * Disable user account (Azure AD API integration)
+       * Revoke user sessions (Azure AD API)
+       * Reset password (Azure AD API)
+       * Block IP address (Azure Firewall API)
+       * Quarantine email (Microsoft Defender API)
+       * Remote wipe device (Intune MDM API)
+       * Block domain (Microsoft Defender for Office 365 API)
+     - One-click execution with confirmation
+     - Automatic documentation in incident timeline
+     - Rollback capability for reversible actions
+
+4. FORENSICS & EVIDENCE COLLECTION
+   ---------------------------------
+   ☐ Integrated log collection
+     - Azure AD sign-in logs (API pull for affected user)
+     - Exchange Online mailbox audit logs (API pull)
+     - Azure Firewall network traffic logs (API pull)
+     - Microsoft Defender for Endpoint scan results (API pull)
+     - Automatic export and attachment to incident ticket
+   
+   ☐ Evidence upload and management
+     - Drag-and-drop file upload (screenshots, email samples, etc.)
+     - Chain of custody tracking (who uploaded, when, why)
+     - Evidence tagging and categorization
+     - Secure storage with access logging
+   
+   ☐ Impact assessment calculator
+     - Systems affected counter
+     - Data exposure calculator (PII records, confidential docs, etc.)
+     - Financial impact estimator (labor hours, external costs, downtime)
+     - Regulatory notification requirement checker (GDPR, CCPA, PCI, HIPAA)
+   
+   ☐ Root cause analysis framework
+     - Guided "5 Whys" template
+     - Fishbone diagram builder (Ishikawa)
+     - Technical gap identification
+     - Human/process gap identification
+     - Corrective action recommendation engine
+
+5. COMMUNICATION & COLLABORATION
+   -------------------------------
+   ☐ Internal communication hub
+     - Real-time chat per incident (like Teams integration)
+     - @mention notifications for IR Team members
+     - Status updates with automatic distribution list
+     - Meeting scheduler for war rooms
+   
+   ☐ External communication templates
+     - Customer notification letters (data breach)
+     - Regulatory notification templates (GDPR, CCPA, PCI, HIPAA)
+     - Media statements (approved by Legal/CEO)
+     - Vendor notifications (third-party incidents)
+     - Pre-approved by Legal, ready for incident-specific customization
+   
+   ☐ Executive reporting
+     - Executive summary generator (one-page overview)
+     - Board report template (for Sev 1 incidents)
+     - Automatic distribution on incident closure
+     - Configurable approval workflow before sending
+
+6. REPORTING & ANALYTICS DASHBOARDS
+   ----------------------------------
+   ☐ Real-time incident dashboard
+     - Open incidents by severity (color-coded: Red/Orange/Yellow/Blue)
+     - Incidents by category (bar chart)
+     - Average time to detect (MTTD trend line)
+     - Average time to respond (MTTR trend line)
+     - Average time to recover (recovery time trend)
+     - Open vs. closed incidents (month-over-month)
+     - SLA compliance percentage (response time targets)
+   
+   ☐ Metrics & KPIs
+     - Total incidents (monthly, quarterly, annual)
+     - Incidents by severity breakdown
+     - Incidents by category breakdown
+     - Mean Time to Detect (MTTD) with trend
+     - Mean Time to Respond (MTTR) with trend
+     - Mean Time to Recover with trend
+     - User report rate (% of incidents reported by users vs. automated)
+     - Recurring incident tracking (same root cause)
+     - Cost per incident average
+   
+   ☐ Custom reports
+     - Date range selector (last 7 days, 30 days, quarter, year, custom)
+     - Filter by: severity, category, assigned to, status, date range
+     - Export formats: PDF, Excel, CSV
+     - Scheduled reports (weekly summary to IT Manager, monthly to CTO)
+   
+   ☐ SOC2 audit reports
+     - Incident history for audit period
+     - Evidence of response times meeting policy requirements
+     - Post-incident activity completion tracking
+     - Lessons learned summary
+     - Corrective action implementation tracking
+     - Export ready for SOC2 auditor
+
+7. REGULATORY & COMPLIANCE TRACKING
+   ----------------------------------
+   ☐ Regulatory notification requirements
+     - Automatic detection of notification triggers:
+       * PII exposed → GDPR 72 hours, CCPA immediate, state laws 30-90 days
+       * Payment card data → PCI DSS 24 hours to processor
+       * Health data → HIPAA 60 days to HHS OCR
+     - Countdown timer showing regulatory deadline
+     - Notification template library by regulation
+     - Tracking of notification sent date/time/method
+   
+   ☐ SOC2 control mapping
+     - Each incident auto-mapped to relevant SOC2 controls:
+       * Control 29: Incident Response - Employee Responsibility
+       * Control 30: Incident Response - Process
+       * Control 31: Incident Response - Testing
+       * Control 32: Incidents External
+     - Documented evidence chain for auditor
+     - Compliance gap identification (if response didn't follow policy)
+   
+   ☐ Policy adherence tracking
+     - Checklist verification that IR Plan was followed
+     - Escalation matrix compliance (were right people notified on time?)
+     - Response time SLA tracking (did we meet severity-based targets?)
+     - Deviation tracking with justification required
+
+8. INTEGRATION WITH EXISTING SYSTEMS
+   -----------------------------------
+   ☐ Asset Tracker integration
+     - Link incidents to affected assets (laptops, servers, etc.)
+     - Automatic asset quarantine flag in asset tracker
+     - Asset compliance impact tracking
+     - Cross-reference incident history per asset
+   
+   ☐ Azure AD integration (Microsoft Graph API)
+     - User account management (disable, enable, reset password)
+     - Session revocation (terminate all sessions)
+     - MFA re-registration forcing
+     - Sign-in log retrieval for forensics
+     - Risk detection (high-risk sign-ins, high-risk users)
+   
+   ☐ Microsoft Defender for Office 365 integration
+     - Email quarantine/deletion
+     - Domain/URL blocking
+     - Sender blocking
+     - Phishing email search across all mailboxes
+     - Threat intelligence lookup
+   
+   ☐ Microsoft Defender for Endpoint integration
+     - Device isolation (network isolation)
+     - Antivirus scan triggering
+     - Threat investigation package collection
+     - Device compliance check
+     - Remediation action (remove malware, quarantine file)
+   
+   ☐ Azure Sentinel integration (SIEM)
+     - Automatic incident creation from Sentinel alerts
+     - Bi-directional sync (status updates push back to Sentinel)
+     - Log query execution for forensics
+     - Threat intelligence enrichment
+   
+   ☐ Intune MDM integration
+     - Remote device wipe
+     - Device compliance status check
+     - Device location tracking (for lost/stolen)
+     - App inventory retrieval
+     - Certificate revocation
+
+9. KNOWLEDGE BASE & TRAINING
+   ---------------------------
+   ☐ Incident response playbook library
+     - 4 detailed playbooks (Ransomware, Phishing, Data Breach, Lost/Stolen)
+     - Searchable by symptom/indicator
+     - Community contributions (lessons learned from past incidents)
+     - Version control with change history
+   
+   ☐ Security awareness integration
+     - Link to company security training portal
+     - Phishing simulation results (per-user data)
+     - Training completion tracking
+     - Security awareness quiz scores
+   
+   ☐ Vendor contact directory
+     - CyberGuard Insurance (Jennifer Liu, 888-555-0199)
+     - FBI Cyber Division (855-292-3937)
+     - Local Police (415-555-0100)
+     - Forensics vendors (Mandiant, CrowdStrike)
+     - External legal counsel
+     - One-click emergency contact
+
+10. POST-INCIDENT ACTIVITIES
+    -------------------------
+    ☐ Lessons learned template
+      - Required within 7 days of incident closure
+      - Structured format: What went well, What could improve, Action items
+      - IR Team member participation tracking
+      - Action item assignment with due dates
+      - Follow-up reminders until all actions completed
+    
+    ☐ Final incident report generator
+      - Auto-populated from incident data (timeline, impact, costs, etc.)
+      - Customizable template matching company format
+      - Approval workflow (IT Manager → CTO → CEO for Sev 1/2)
+      - PDF export with signature blocks
+      - Automatic filing to SOC2 evidence repository
+    
+    ☐ Corrective action tracking
+      - Action items from lessons learned
+      - Assignment to owner with due date
+      - Progress tracking (Not Started, In Progress, Completed)
+      - Verification of completion (evidence attachment)
+      - Recurring incident correlation (did corrective action prevent recurrence?)
+    
+    ☐ Trend analysis
+      - Recurring incident detection (same category, same root cause)
+      - Seasonal patterns (more phishing in Q4, etc.)
+      - Attack vector effectiveness tracking
+      - Security control effectiveness measurement
+      - Investment prioritization recommendations
+
+
+TECHNICAL ARCHITECTURE
+================================================================================
+
+Technology Stack:
+-----------------
+Backend:           Python 3.11 + Flask 3.0
+Database:          SQLite (shared with asset tracker, new tables)
+Frontend:          HTML5, Bootstrap 5, JavaScript/jQuery
+Charts:            Chart.js for dashboards
+Real-time:         Flask-SocketIO for live updates
+Authentication:    Shared session with asset tracker (existing users)
+API Integration:   Microsoft Graph API, Azure REST APIs
+Task Queue:        Celery + Redis (for async API calls, email sending)
+Web Server:        Gunicorn (3 workers on port 8001)
+Reverse Proxy:     Nginx (subdomain routing)
+Deployment:        Same server as asset tracker (/var/www/incident/)
+
+Database Schema (New Tables):
+------------------------------
+
+TABLE: incidents
+  - id (PRIMARY KEY)
+  - incident_number (INC-YYYY-NNNNN, auto-generated, unique)
+  - title (short description)
+  - description (detailed description)
+  - severity (1=Critical, 2=High, 3=Medium, 4=Low)
+  - category (Malware, Phishing, Data Breach, etc.)
+  - status (New, Investigating, Contained, Eradicated, Recovered, Closed)
+  - reported_by (user ID, FK to users table)
+  - reported_date (timestamp)
+  - assigned_to (user ID, FK to users table)
+  - ir_manager (user ID, FK to users table)
+  - detected_date (when incident actually occurred)
+  - contained_date (when containment completed)
+  - resolved_date (when fully resolved)
+  - closed_date (when ticket closed)
+  - nist_phase (Preparation, Detection, Containment, Post-Incident)
+  - playbook_used (Ransomware, Phishing, Data Breach, Lost/Stolen, Custom, None)
+  - root_cause (text field for analysis)
+  - impact_systems_count (integer)
+  - impact_data_exposed (text field describing data)
+  - impact_pii_count (integer - number of PII records)
+  - impact_financial_cost (decimal)
+  - regulatory_notification_required (boolean)
+  - regulatory_notifications_sent (text field with dates)
+  - tags (JSON array of custom tags)
+  - created_at (timestamp)
+  - updated_at (timestamp)
+
+TABLE: incident_timeline
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - timestamp (when event occurred)
+  - event_type (Detection, Action, Communication, Evidence, StatusChange, etc.)
+  - actor (who performed action - user ID or "System" for automated)
+  - description (what happened)
+  - details (JSON field for structured data)
+  - created_at (timestamp)
+
+TABLE: incident_evidence
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - evidence_type (Log, Screenshot, Email, Document, Forensic, Other)
+  - file_name (original filename)
+  - file_path (storage path on server)
+  - file_size (bytes)
+  - uploaded_by (user ID)
+  - uploaded_date (timestamp)
+  - description (what this evidence shows)
+  - chain_of_custody (JSON array of access log)
+  - created_at (timestamp)
+
+TABLE: incident_actions
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - action_type (DisableAccount, ResetPassword, BlockIP, QuarantineEmail, etc.)
+  - target (what was acted upon - user email, IP address, etc.)
+  - status (Pending, InProgress, Completed, Failed, RolledBack)
+  - executed_by (user ID)
+  - executed_date (timestamp)
+  - result (success/failure message)
+  - api_response (JSON of API response for audit)
+  - rollback_possible (boolean)
+  - rollback_date (timestamp if rolled back)
+  - created_at (timestamp)
+
+TABLE: incident_communications
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - comm_type (InternalUpdate, CustomerNotification, RegulatoryReport, MediaStatement, etc.)
+  - recipients (text field or JSON array)
+  - subject (email subject or communication title)
+  - body (communication content)
+  - sent_by (user ID)
+  - sent_date (timestamp)
+  - approved_by (user ID, for external comms requiring approval)
+  - approval_date (timestamp)
+  - delivery_status (Sent, Failed, Pending)
+  - created_at (timestamp)
+
+TABLE: incident_lessons_learned
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - meeting_date (when lessons learned meeting held)
+  - attendees (JSON array of user IDs)
+  - what_went_well (text field)
+  - what_could_improve (text field)
+  - action_items (JSON array of actions with owner, due date, status)
+  - created_by (user ID)
+  - created_at (timestamp)
+  - updated_at (timestamp)
+
+TABLE: incident_reports
+  - id (PRIMARY KEY)
+  - incident_id (FK to incidents)
+  - report_type (Executive, Final, Board, SOC2, Custom)
+  - file_path (PDF storage path)
+  - generated_by (user ID)
+  - generated_date (timestamp)
+  - approved_by (user ID)
+  - approval_date (timestamp)
+  - distributed_to (JSON array of recipients)
+  - created_at (timestamp)
+
+TABLE: oncall_schedule
+  - id (PRIMARY KEY)
+  - role (SecurityAnalyst, ITOperations, IRManager)
+  - user_id (FK to users)
+  - start_date (date)
+  - end_date (date)
+  - backup_user_id (FK to users)
+  - active (boolean)
+  - created_at (timestamp)
+
+TABLE: incident_metrics
+  - id (PRIMARY KEY)
+  - metric_date (date - for aggregations)
+  - total_incidents (count)
+  - sev1_count (count)
+  - sev2_count (count)
+  - sev3_count (count)
+  - sev4_count (count)
+  - avg_mttd_minutes (average time to detect)
+  - avg_mttr_minutes (average time to respond)
+  - avg_recovery_hours (average recovery time)
+  - user_reported_count (count)
+  - automated_detected_count (count)
+  - sla_compliance_percentage (decimal)
+  - total_cost (decimal)
+  - created_at (timestamp)
+
+Integration with Existing Tables:
+----------------------------------
+- Link to existing 'users' table for authentication and user management
+- Link to existing 'intune_device' table for device incidents
+- Link to existing 'control' table for SOC2 control mapping
+- Link to existing 'strikegraph_evidence' table to auto-file incident reports as evidence
+
+
+PHASE-BY-PHASE IMPLEMENTATION ROADMAP
+================================================================================
+
+PHASE 1: FOUNDATION & CORE TICKETING (Week 1-2)
+------------------------------------------------
+Timeline: March 4-15, 2026 (2 weeks)
+Effort: 40-50 hours
+
+✓ Tasks:
+  [1.1] Create /var/www/incident/ directory structure
+  [1.2] Set up Flask application skeleton with blueprint architecture
+  [1.3] Configure Nginx subdomain routing (incident.corp.cirque.com → port 8001)
+  [1.4] Create database schema (10 new tables)
+  [1.5] Set up shared authentication with asset tracker
+  [1.6] Build incident creation form (web-based reporting)
+  [1.7] Implement incident list view with filtering
+  [1.8] Build incident detail view with basic info display
+  [1.9] Create incident edit functionality
+  [1.10] Implement status workflow (New → Investigating → Contained → etc.)
+  [1.11] Build basic timeline tracking (auto-log status changes)
+  [1.12] Create user assignment functionality
+
+✓ Deliverables:
+  - Working subdomain: incident.corp.cirque.com
+  - Basic incident ticket CRUD (Create, Read, Update, Delete)
+  - Simple incident list and detail views
+  - Automated incident numbering (INC-2026-00001, etc.)
+  - Status workflow implemented
+
+✓ Success Metrics:
+  - Can create incident ticket via web form
+  - Can assign incident to user
+  - Can update status through workflow
+  - Timeline auto-logs all changes
+  - Incident list shows all tickets with filters
+
+
+PHASE 2: IR TEAM & ESCALATION AUTOMATION (Week 3)
+--------------------------------------------------
+Timeline: March 16-22, 2026 (1 week)
+Effort: 20-25 hours
+
+✓ Tasks:
+  [2.1] Build on-call schedule management interface
+  [2.2] Implement auto-assignment based on incident category
+  [2.3] Create escalation matrix automation (Sev 1 → CTO notification, etc.)
+  [2.4] Build email notification system for assignments and escalations
+  [2.5] Create IR Team dashboard (assigned to me, team workload)
+  [2.6] Implement SLA tracking (response time targets per severity)
+  [2.7] Build overdue incident alerting
+
+✓ Deliverables:
+  - On-call schedule management UI
+  - Automatic ticket routing to correct person
+  - Automated escalation emails based on severity
+  - IR Team dashboard showing workload
+  - SLA countdown timers on tickets
+
+✓ Success Metrics:
+  - New Sev 1 incident auto-notifies CTO within 1 minute
+  - Sev 2 incident auto-assigns to Security Analyst on-call
+  - Email notifications sent to assigned user
+  - Dashboard shows all incidents assigned to logged-in user
+  - Overdue incidents highlighted
+
+
+PHASE 3: PLAYBOOKS & GUIDED WORKFLOWS (Week 4)
+-----------------------------------------------
+Timeline: March 23-29, 2026 (1 week)
+Effort: 25-30 hours
+
+✓ Tasks:
+  [3.1] Create playbook data model (steps, checklists, decision trees)
+  [3.2] Import 4 playbooks from IR Plan (Ransomware, Phishing, Data Breach, Lost/Stolen)
+  [3.3] Build guided playbook execution interface
+  [3.4] Implement checklist tracking (mark steps complete)
+  [3.5] Create NIST phase progression tracking
+  [3.6] Build playbook step evidence attachment (attach logs/screenshots to specific step)
+  [3.7] Add playbook customization (add notes, skip steps with justification)
+
+✓ Deliverables:
+  - 4 pre-built playbooks ready for execution
+  - Guided step-by-step interface
+  - Progress tracking (X of Y steps complete)
+  - NIST phase indicator on incident detail page
+  - Evidence attachment per playbook step
+
+✓ Success Metrics:
+  - Can select playbook for incident
+  - Steps display in order with checkboxes
+  - Marking step complete auto-logs to timeline
+  - Can attach evidence to specific step
+  - NIST phase auto-advances based on steps completed
+
+
+PHASE 4: EVIDENCE & FORENSICS (Week 5)
+---------------------------------------
+Timeline: March 30 - April 5, 2026 (1 week)
+Effort: 20-25 hours
+
+✓ Tasks:
+  [4.1] Build evidence upload interface (drag-and-drop)
+  [4.2] Implement file storage with chain of custody tracking
+  [4.3] Create evidence list view per incident
+  [4.4] Build impact assessment form/calculator
+  [4.5] Create root cause analysis guided template (5 Whys, Fishbone)
+  [4.6] Implement evidence tagging and search
+  [4.7] Add evidence viewer (inline preview for images, text files)
+
+✓ Deliverables:
+  - Evidence upload with drag-and-drop
+  - Secure evidence storage with access logging
+  - Impact assessment calculator (systems, data, cost)
+  - Root cause analysis templates
+  - Evidence gallery view
+
+✓ Success Metrics:
+  - Can upload multiple evidence files
+  - Chain of custody logs who accessed when
+  - Impact assessment calculates financial cost
+  - Root cause template guides through 5 Whys
+  - Evidence searchable by tag
+
+
+PHASE 5: AZURE/MICROSOFT 365 INTEGRATION (Week 6-7)
+----------------------------------------------------
+Timeline: April 6-19, 2026 (2 weeks)
+Effort: 40-50 hours
+
+✓ Tasks:
+  [5.1] Set up Microsoft Graph API authentication (OAuth2)
+  [5.2] Implement Azure AD user management actions
+    - Disable/enable account
+    - Reset password
+    - Revoke sessions
+    - Force MFA re-registration
+  [5.3] Integrate Azure AD sign-in log retrieval
+  [5.4] Implement Exchange Online mailbox audit log retrieval
+  [5.5] Integrate Microsoft Defender for Office 365
+    - Quarantine/delete email
+    - Block domain/URL
+    - Search for phishing emails
+  [5.6] Integrate Microsoft Defender for Endpoint
+    - Isolate device
+    - Trigger scan
+    - Collect investigation package
+  [5.7] Integrate Intune MDM
+    - Remote wipe device
+    - Check device compliance
+  [5.8] Build containment action library UI
+  [5.9] Implement one-click containment actions with confirmation
+  [5.10] Add API response logging for audit trail
+
+✓ Deliverables:
+  - Working Microsoft Graph API integration
+  - One-click containment actions (disable account, block IP, etc.)
+  - Automatic log retrieval from Azure/M365
+  - API audit trail for compliance
+  - Error handling and rollback capability
+
+✓ Success Metrics:
+  - Can disable Azure AD account in one click from incident page
+  - Containment action auto-logs to timeline
+  - Azure AD sign-in logs auto-retrieved and attached as evidence
+  - Mailbox audit logs auto-retrieved for affected user
+  - All API calls logged for audit
+
+
+PHASE 6: REPORTING & DASHBOARDS (Week 8)
+-----------------------------------------
+Timeline: April 20-26, 2026 (1 week)
+Effort: 25-30 hours
+
+✓ Tasks:
+  [6.1] Build real-time incident dashboard (home page)
+  [6.2] Implement metrics calculation (MTTD, MTTR, etc.)
+  [6.3] Create charts with Chart.js (incidents by severity, category, trend lines)
+  [6.4] Build custom report builder (date range, filters)
+  [6.5] Implement PDF export for reports
+  [6.6] Create scheduled report functionality (weekly summary to IT Manager)
+  [6.7] Build SOC2 audit report (incident history for audit period)
+
+✓ Deliverables:
+  - Real-time dashboard with live charts
+  - KPI cards (open incidents, MTTD, MTTR, SLA compliance)
+  - Custom report builder with filters
+  - PDF export functionality
+  - SOC2 audit report ready for auditor
+
+✓ Success Metrics:
+  - Dashboard loads in <2 seconds with current data
+  - Charts update in real-time as incidents change
+  - Can filter report by date range and severity
+  - PDF export generates professional report
+  - SOC2 report shows all required audit data
+
+
+PHASE 7: COMMUNICATIONS & NOTIFICATIONS (Week 9)
+-------------------------------------------------
+Timeline: April 27 - May 3, 2026 (1 week)
+Effort: 20-25 hours
+
+✓ Tasks:
+  [7.1] Build communication template library
+    - Customer notification (data breach)
+    - Regulatory notification (GDPR, CCPA, PCI, HIPAA)
+    - Media statement
+    - Vendor notification
+  [7.2] Create communication form with template selection
+  [7.3] Implement approval workflow for external communications
+  [7.4] Build communication history per incident
+  [7.5] Implement regulatory notification tracking with deadline countdown
+  [7.6] Create executive summary generator (auto-populated from incident data)
+  [7.7] Add email sending with delivery tracking
+
+✓ Deliverables:
+  - Communication template library
+  - Approval workflow (requires Legal approval for external)
+  - Regulatory notification deadline tracker
+  - Executive summary auto-generator
+  - Communication history log
+
+✓ Success Metrics:
+  - Can select template and customize for incident
+  - External communication requires approval before sending
+  - Regulatory deadline countdown displays on dashboard
+  - Executive summary auto-populates with incident data
+  - All communications logged to timeline
+
+
+PHASE 8: POST-INCIDENT & LESSONS LEARNED (Week 10)
+---------------------------------------------------
+Timeline: May 4-10, 2026 (1 week)
+Effort: 20-25 hours
+
+✓ Tasks:
+  [8.1] Build lessons learned meeting template
+  [8.2] Create action item tracking system
+  [8.3] Implement action item assignment with due dates
+  [8.4] Build final incident report generator (auto-populated)
+  [8.5] Create report approval workflow (IT Manager → CTO → CEO)
+  [8.6] Implement automatic filing to SOC2 evidence repository
+  [8.7] Build trend analysis (recurring incidents, patterns)
+  [8.8] Create corrective action effectiveness tracking
+
+✓ Deliverables:
+  - Lessons learned template with structured format
+  - Action item tracking dashboard
+  - Final incident report generator
+  - Approval workflow for reports
+  - Automatic SOC2 evidence filing
+  - Trend analysis dashboard
+
+✓ Success Metrics:
+  - Lessons learned meeting scheduled within 7 days of closure
+  - Action items tracked until completion
+  - Final report auto-generated with one click
+  - Report requires CTO approval for Sev 1/2
+  - Report auto-filed as SOC2 evidence
+  - Recurring incidents identified on trend dashboard
+
+
+PHASE 9: AZURE SENTINEL INTEGRATION (Week 11)
+----------------------------------------------
+Timeline: May 11-17, 2026 (1 week)
+Effort: 25-30 hours
+
+✓ Tasks:
+  [9.1] Set up Azure Sentinel API authentication
+  [9.2] Implement webhook receiver for Sentinel alerts
+  [9.3] Build automatic incident creation from Sentinel alerts
+  [9.4] Create bi-directional sync (status updates push back to Sentinel)
+  [9.5] Implement threat intelligence enrichment
+  [9.6] Build log query execution interface
+  [9.7] Add alert rule management from incident portal
+
+✓ Deliverables:
+  - Webhook endpoint receiving Sentinel alerts
+  - Auto-created incidents from high-severity Sentinel alerts
+  - Two-way sync (incident updates push to Sentinel)
+  - Threat intelligence data displayed on incident page
+  - Log query interface for forensics
+
+✓ Success Metrics:
+  - Sentinel high-severity alert auto-creates incident ticket
+  - Incident status changes sync back to Sentinel
+  - Threat intel shows IP reputation, domain reputation
+  - Can run KQL queries from incident portal
+  - Results auto-attach as evidence
+
+
+PHASE 10: KNOWLEDGE BASE & TRAINING (Week 12)
+----------------------------------------------
+Timeline: May 18-24, 2026 (1 week)
+Effort: 15-20 hours
+
+✓ Tasks:
+  [10.1] Build playbook library with search
+  [10.2] Create vendor contact directory
+  [10.3] Implement quick reference guides (what to do for common incidents)
+  [10.4] Build FAQ section
+  [10.5] Create security awareness training integration
+  [10.6] Add phishing simulation results display per user
+  [10.7] Implement suggested playbook recommendation based on incident description
+
+✓ Deliverables:
+  - Searchable playbook library
+  - Vendor contact directory with one-click contact
+  - Quick reference guides
+  - Security awareness dashboard per user
+  - AI-powered playbook recommendation
+
+✓ Success Metrics:
+  - Can search playbooks by keyword
+  - Vendor contacts display with phone/email
+  - Quick reference guides accessible from incident page
+  - User's training completion % displays on their profile
+  - System suggests relevant playbook based on incident keywords
+
+
+PHASE 11: MOBILE INTERFACE & POLISH (Week 13)
+----------------------------------------------
+Timeline: May 25-31, 2026 (1 week)
+Effort: 20-25 hours
+
+✓ Tasks:
+  [11.1] Optimize all pages for mobile responsive design
+  [11.2] Create mobile-friendly incident reporting form
+  [11.3] Build mobile incident list view
+  [11.4] Implement push notifications for mobile (optional)
+  [11.5] Add dark mode toggle
+  [11.6] Optimize page load performance
+  [11.7] Conduct user acceptance testing with IR Team
+  [11.8] Fix bugs and polish UI/UX
+
+✓ Deliverables:
+  - Fully responsive mobile interface
+  - Mobile incident reporting
+  - Performance optimizations
+  - Dark mode
+  - Bug fixes and polish
+
+✓ Success Metrics:
+  - All pages load correctly on mobile devices
+  - Can report incident from mobile phone
+  - Page load time <2 seconds
+  - No critical bugs reported by IR Team
+  - Positive user feedback from testing
+
+
+PHASE 12: LAUNCH & TRAINING (Week 14)
+--------------------------------------
+Timeline: June 1-7, 2026 (1 week)
+Effort: 15-20 hours
+
+✓ Tasks:
+  [12.1] Deploy to production
+  [12.2] Conduct IR Team training (Chris Wren, Amanda Foster, Kevin Nguyen, etc.)
+  [12.3] Create user documentation
+  [12.4] Record video tutorials for common workflows
+  [12.5] Set up monitoring and alerting for portal uptime
+  [12.6] Establish support process for portal issues
+  [12.7] Announce portal launch to company
+  [12.8] Migrate 3 recent closed incidents as examples
+
+✓ Deliverables:
+  - Production portal live at incident.corp.cirque.com
+  - IR Team trained on all features
+  - User documentation
+  - Video tutorials
+  - Portal uptime monitoring
+  - Launch announcement
+
+✓ Success Metrics:
+  - Portal accessible by all employees
+  - IR Team can complete full incident workflow
+  - Documentation covers all major features
+  - 3 example incidents loaded for reference
+  - No critical issues in first 48 hours
+
+
+TOTAL PROJECT TIMELINE
+================================================================================
+Start Date:           March 4, 2026
+Estimated Completion: June 7, 2026
+Total Duration:       14 weeks (3.5 months)
+Total Effort:         320-380 hours
+
+Milestones:
+-----------
+✓ March 15:  Phase 1 complete - Core ticketing system operational
+✓ March 29:  Phase 3 complete - Playbook execution working
+✓ April 19:  Phase 5 complete - Azure/M365 integration live
+✓ May 10:    Phase 8 complete - Full incident lifecycle supported
+✓ June 7:    Phase 12 complete - Production launch
+
+
+RESOURCE REQUIREMENTS
+================================================================================
+
+Server Resources:
+-----------------
+- CPU: Shared with asset tracker (current server adequate)
+- RAM: +512 MB for incident portal (8 GB total recommended)
+- Disk: +5 GB for evidence storage (expandable)
+- Port: 8001 (already available)
+- Network: Subdomain DNS entry (incident.corp.cirque.com)
+
+Software Dependencies:
+----------------------
+- Flask extensions: Flask-SocketIO, Flask-Mail, Flask-APScheduler
+- Python libraries: python-graph-auth, azure-mgmt-*, pandas, reportlab
+- Redis: For Celery task queue (async jobs)
+- Celery: For background task processing
+- Chart.js: For dashboards (frontend)
+- Bootstrap 5: Already in use
+
+API Credentials Required:
+--------------------------
+- Microsoft Graph API: App registration + permissions
+  * User.ReadWrite.All (for account management)
+  * SecurityEvents.ReadWrite.All (for incident access)
+  * Mail.Send (for notifications)
+- Azure Sentinel API: Contributor role on Log Analytics workspace
+- Microsoft Defender for Office 365: Security admin role
+- Microsoft Defender for Endpoint: Security admin role
+- Intune MDM: Intune admin role
+
+Development Team:
+------------------
+- 1 Full-stack developer (Python + JavaScript)
+- Part-time input from IT Manager (requirements, testing)
+- Part-time input from Security Analyst (playbook validation)
+
+
+RISK ASSESSMENT & MITIGATION
+================================================================================
+
+Technical Risks:
+----------------
+RISK: API rate limiting from Microsoft Graph
+MITIGATION: Implement caching, batch requests, use webhooks instead of polling
+
+RISK: Complex Azure permissions requiring tenant admin approval
+MITIGATION: Document required permissions clearly, work with Azure admin early
+
+RISK: Evidence storage growing large over time
+MITIGATION: Implement retention policy (delete evidence after 2 years), use external storage for large files
+
+RISK: Performance degradation with many concurrent incidents
+MITIGATION: Database indexing, query optimization, consider PostgreSQL migration if needed
+
+Process Risks:
+--------------
+RISK: IR Team not adopting new portal (continuing to use email/spreadsheets)
+MITIGATION: Executive mandate, make portal easiest path, integrate with existing workflows
+
+RISK: Incomplete playbooks causing confusion
+MITIGATION: Pilot with IT team first, iterative improvement, allow custom playbooks
+
+RISK: Regulatory notification templates becoming outdated
+MITIGATION: Annual legal review, version control, require legal approval before sending
+
+Security Risks:
+---------------
+RISK: Incident data contains sensitive information (credentials, PII)
+MITIGATION: Role-based access control, audit logging, encryption at rest
+
+RISK: API credentials with broad permissions
+MITIGATION: Principle of least privilege, separate service accounts, key rotation
+
+RISK: Evidence chain of custody broken
+MITIGATION: Immutable logs, cryptographic signatures, access restrictions
+
+
+SUCCESS CRITERIA
+================================================================================
+
+Launch Success Criteria:
+-------------------------
+✓ Portal accessible at incident.corp.cirque.com
+✓ All 8 IR Team members have accounts and can log in
+✓ Can create incident from web form in <2 minutes
+✓ Can execute ransomware playbook end-to-end
+✓ Can disable Azure AD account with one click
+✓ Dashboard shows real-time metrics
+✓ Can generate SOC2 audit report
+✓ No critical bugs in first month
+
+6-Month Success Metrics:
+-------------------------
+✓ 90% of incidents reported through portal (vs. email)
+✓ Average time to create incident ticket: <5 minutes
+✓ MTTD reduced by 20% (from 22 minutes to <18 minutes)
+✓ MTTR reduced by 30% (from 5 minutes to <3.5 minutes)
+✓ 100% of incidents have completed timeline
+✓ 100% of closed incidents have lessons learned documented
+✓ SOC2 auditor accepts portal data as evidence
+✓ Executive dashboard used in monthly CTO reports
+
+
+OPTIONAL FUTURE ENHANCEMENTS (Post-Launch)
+================================================================================
+
+Phase 13+: Advanced Features (If Budget/Time Allows)
+-----------------------------------------------------
+- AI/ML incident categorization (auto-detect phishing vs. malware from description)
+- Chatbot interface for incident reporting ("Tell me what happened")
+- Mobile app (iOS/Android) for on-call responders
+- Integration with ServiceNow/Jira (if company uses enterprise ITSM)
+- Threat intelligence feeds (AlienVault OTX, VirusTotal API)
+- Automated remediation scripts (self-healing for common issues)
+- Video evidence support (screen recordings during incident)
+- Blockchain-based evidence chain of custody (tamper-proof)
+- Multi-tenant support (for subsidiaries or business units)
+- Advanced analytics (predictive modeling, attack pattern recognition)
+
+
+NEXT STEPS TO BEGIN DEVELOPMENT
+================================================================================
+
+STEP 1: Get Approval
+--------------------
+☐ Review this roadmap with Chris Wren (IT Manager)
+☐ Get budget approval from David Park (CTO)
+☐ Confirm IR Team availability for requirements gathering
+☐ Set official project kick-off date
+
+STEP 2: Prepare Environment
+----------------------------
+☐ Create /var/www/incident/ directory
+☐ Set up Git repository for version control
+☐ Configure subdomain DNS (incident.corp.cirque.com)
+☐ Install additional Python dependencies
+☐ Install Redis for Celery task queue
+☐ Register Microsoft Graph API application
+
+STEP 3: Begin Phase 1 Development
+----------------------------------
+☐ Initialize Flask application structure
+☐ Create database schema (run migration script)
+☐ Build basic authentication (copy from asset tracker)
+☐ Create incident model and database tables
+☐ Build incident creation form
+☐ Implement incident list view
+☐ Set up Nginx reverse proxy configuration
+
+STEP 4: Iterate and Test
+-------------------------
+☐ Weekly demos to IT Manager
+☐ Bi-weekly demos to IR Team
+☐ Collect feedback and adjust priorities
+☐ Maintain development roadmap (update as needed)
+
+
+================================================================================
+                     READY TO BEGIN DEVELOPMENT
+           
+          Shall we start with Phase 1 (Foundation & Core Ticketing)?
+          This will create the basic incident portal at 
+          incident.corp.cirque.com with ticketing functionality.
+          
+          Estimated time to complete Phase 1: 2 days of focused work
+          (~16 hours spread across multiple coding sessions)
+================================================================================

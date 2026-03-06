@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block title %}Vendor Risk Register{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="bi bi-building"></i> Vendor Risk Register</h2>
+                <div class="btn-group">
+                    <button class="btn btn-success btn-lg" onclick="downloadHTML()">
+                        <i class="bi bi-download"></i> Download Report
+                    </button>
+                    <button class="btn btn-primary btn-lg" onclick="window.print()">
+                        <i class="bi bi-printer"></i> Print/PDF
+                    </button>
+                </div>
+            </div>
+
+            <div id="report-content">
+                <div class="card mb-4 border-primary">
+                    <div class="card-header bg-primary text-white">
+                        <h3>Vendor Risk Register</h3>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Report Date:</strong> {{ review_date.strftime('%B %d, %Y') }}</p>
+                        <p><strong>Total Vendors:</strong> {{ vendors|length }}</p>
+                        <p><strong>Document Owner:</strong> chris.wren@cirque.com</p>
+                        <p class="mb-0">This register provides a listing of relevant IT vendors and any critical non-IT vendors along with their associated risk level and date of the last review.</p>
+                    </div>
+                </div>
+
+                <!-- Vendor Risk Table -->
+                <div class="card mb-4">
+                    <div class="card-header bg-info text-white">
+                        <h4><i class="bi bi-table"></i> IT Vendor Risk Assessment</h4>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-bordered table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th width="20%">Vendor Name</th>
+                                    <th width="20%">Service Provided</th>
+                                    <th width="10%">Criticality</th>
+                                    <th width="15%">Data Access/Scope</th>
+                                    <th width="10%">Risk Level</th>
+                                    <th width="15%">Compliance Status</th>
+                                    <th width="10%">Last Review</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for vendor in vendors %}
+                                <tr>
+                                    <td><strong>{{ vendor.vendor_name }}</strong></td>
+                                    <td>{{ vendor.service }}</td>
+                                    <td>
+                                        {% if vendor.criticality == 'Critical' %}
+                                        <span class="badge bg-danger">{{ vendor.criticality }}</span>
+                                        {% elif vendor.criticality == 'High' %}
+                                        <span class="badge bg-warning text-dark">{{ vendor.criticality }}</span>
+                                        {% else %}
+                                        <span class="badge bg-info">{{ vendor.criticality }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td><small>{{ vendor.data_access }}</small></td>
+                                    <td>
+                                        {% if vendor.risk_level == 'Low' %}
+                                        <span class="badge bg-success">{{ vendor.risk_level }}</span>
+                                        {% elif vendor.risk_level == 'Medium' %}
+                                        <span class="badge bg-warning text-dark">{{ vendor.risk_level }}</span>
+                                        {% else %}
+                                        <span class="badge bg-danger">{{ vendor.risk_level }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td><small>{{ vendor.soc2_status }}</small></td>
+                                    <td>{{ vendor.last_review }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Risk Assessment Criteria -->
+                <div class="card mb-4">
+                    <div class="card-header bg-warning text-dark">
+                        <h4><i class="bi bi-info-circle"></i> Risk Assessment Criteria</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <h5>Risk Level Definitions</h5>
+                                <ul>
+                                    <li><strong>Low:</strong> SOC 2 Type II or ISO 27001 certified, established vendor, minimal data access</li>
+                                    <li><strong>Medium:</strong> Some compliance certifications, moderate data access</li>
+                                    <li><strong>High:</strong> No certifications, high data access, new vendor</li>
+                                </ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h5>Criticality Levels</h5>
+                                <ul>
+                                    <li><strong>Critical:</strong> Service outage would halt business operations</li>
+                                    <li><strong>High:</strong> Significant business impact if unavailable</li>
+                                    <li><strong>Medium:</strong> Limited business impact</li>
+                                    <li><strong>Low:</strong> Minimal impact, alternatives available</li>
+                                </ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h5>Review Schedule</h5>
+                                <ul>
+                                    <li><strong>Critical Vendors:</strong> Quarterly review</li>
+                                    <li><strong>High Risk:</strong> Semi-annual review</li>
+                                    <li><strong>Medium/Low Risk:</strong> Annual review</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vendor Due Diligence Process -->
+                <div class="card mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h4><i class="bi bi-clipboard-check"></i> Vendor Due Diligence Process</h4>
+                    </div>
+                    <div class="card-body">
+                        <h5>Onboarding Requirements</h5>
+                        <ol>
+                            <li>Security questionnaire completion</li>
+                            <li>SOC 2 Type II or equivalent audit report review</li>
+                            <li>Data processing agreement (DPA) review and execution</li>
+                            <li>Business associate agreement (BAA) if handling PHI</li>
+                            <li>Security incident notification requirements</li>
+                        </ol>
+
+                        <h5 class="mt-4">Ongoing Monitoring</h5>
+                        <ul>
+                            <li>Annual compliance certification review</li>
+                            <li>Security incident monitoring and response</li>
+                            <li>Service level agreement (SLA) monitoring</li>
+                            <li>Risk reassessment based on changes in service or data access</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Management Approval -->
+                <div class="card border-primary">
+                    <div class="card-header bg-primary text-white">
+                        <h4>Management Approval</h4>
+                    </div>
+                    <div class="card-body">
+                        <p>This Vendor Risk Register has been reviewed and approved. All vendors have undergone due diligence appropriate to their risk level and criticality.</p>
+                        
+                        <div class="mt-4 pt-3 border-top">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>Document Owner:</strong> chris.wren@cirque.com</p>
+                                    <p><strong>Title:</strong> Head of IT</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <p><strong>Approval Date:</strong> {{ review_date.strftime('%B %d, %Y') }}</p>
+                                    <p><strong>Next Review:</strong> {{ (review_date.replace(year=review_date.year + 1)).strftime('%B %d, %Y') }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function downloadHTML() {
+    const title = 'Vendor_Risk_Register_{{ review_date.strftime("%Y%m%d") }}';
+    const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${title}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body { padding: 40px; background-color: white; color: #333; }
+        .card { margin-bottom: 20px; border: 1px solid #ddd; }
+        .card-header { padding: 15px; font-weight: bold; }
+        .table { font-size: 0.9em; }
+        .table thead { background-color: #f8f9fa; }
+        @media print {
+            body { padding: 20px; }
+            .card { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    ${document.getElementById('report-content').innerHTML}
+</body>
+</html>`;
+    
+    const blob = new Blob([htmlContent], {type: 'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = title + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+</script>
+
+<style>
+@media print {
+    .btn, .btn-group { display: none !important; }
+}
+</style>
+{% endblock %}

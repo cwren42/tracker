@@ -1,0 +1,80 @@
+<div class="card h-100 widget-card alert-widget">
+    {% if edit_mode %}
+    <div class="widget-overlay"></div>
+    {% endif %}
+
+    {% set alert_last_updated = None %}
+    
+    {% if widget_id == 'noncompliant' %}
+        {% set alert_items = data.noncompliant_assets %}
+        {% set alert_count = data.noncompliant_count %}
+        {% set alert_url = url_for('assets') + '?filter=noncompliant' %}
+        {% set alert_last_updated = data.noncompliant_last_updated %}
+    {% elif widget_id == 'low_storage' %}
+        {% set alert_items = data.low_storage_assets %}
+        {% set alert_count = data.low_storage_count %}
+        {% set alert_url = url_for('assets') + '?filter=low_storage' %}
+        {% set alert_last_updated = data.low_storage_last_updated %}
+    {% elif widget_id == 'offline' %}
+        {% set alert_items = data.offline_assets %}
+        {% set alert_count = data.offline_count %}
+        {% set alert_url = url_for('assets') + '?filter=offline' %}
+    {% elif widget_id == 'warranty_expiring' %}
+        {% set alert_items = data.warranty_expiring %}
+        {% set alert_count = data.expiring_soon %}
+        {% set alert_url = url_for('assets') + '?filter=warranty_expiring' %}
+    {% endif %}
+    
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">
+            <i class="bi {{ widget.icon if widget.icon else 'bi-exclamation-triangle' }}"></i>
+            {{ widget_title }}
+        </h6>
+        {% if alert_count and alert_count > 0 %}
+        <span class="badge bg-danger">{{ alert_count }}</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% if alert_last_updated %}
+        <div class="small text-muted mb-2">Updated: {{ alert_last_updated }}</div>
+        {% endif %}
+        {% if alert_items and alert_items|length > 0 %}
+        <div class="list-group list-group-flush">
+            {% for item in alert_items[:5] %}
+            <a href="{{ url_for('view_asset', asset_id=item.id) }}" class="list-group-item list-group-item-action px-0 py-2">
+                <div class="d-flex w-100 justify-content-between align-items-center">
+                    <div class="flex-grow-1">
+                        <strong class="mb-0">{{ item.name }}</strong>
+                        {% if widget_id == 'low_storage' and item.hardware_storage_total_gb and item.hardware_storage_free_gb %}
+                        <br><small class="text-muted">
+                            {{ '%.1f'|format(item.hardware_storage_free_gb) }} GB free of {{ '%.1f'|format(item.hardware_storage_total_gb) }} GB
+                            ({{ '%.0f'|format((item.hardware_storage_free_gb / item.hardware_storage_total_gb * 100)) }}%)
+                        </small>
+                        {% elif widget_id == 'noncompliant' %}
+                        <br><small class="text-danger">Non-compliant</small>
+                        {% elif widget_id == 'offline' and item.last_seen %}
+                        <br><small class="text-muted">Last seen: {{ item.last_seen.strftime('%Y-%m-%d') }}</small>
+                        {% elif widget_id == 'warranty_expiring' and item.warranty_expiry %}
+                        <br><small class="text-warning">Expires: {{ item.warranty_expiry.strftime('%Y-%m-%d') }}</small>
+                        {% endif %}
+                    </div>
+                    <i class="bi bi-chevron-right text-muted"></i>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% if alert_count and alert_count > 5 %}
+        <div class="text-center mt-2">
+            <a href="{{ alert_url }}" class="btn btn-sm btn-outline-primary">
+                View All {{ alert_count }}
+            </a>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="text-center text-muted py-4">
+            <i class="bi bi-check-circle display-4"></i>
+            <p class="mb-0 mt-2">All good!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>

@@ -1,81 +1,370 @@
 {% extends "base.html" %}
-
-{% block title %}Ticket #{{ ticket.id }} - Asset Tracker{% endblock %}
+{% block title %}Ticket #{{ ticket.id }} — {{ ticket.subject }}{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+
+{# ── Breadcrumb & header ───────────────────────────────────── #}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
   <div>
-    <h1 class="mb-1"><i class="bi bi-ticket-perforated"></i> Ticket #{{ ticket.id }}</h1>
-    <div class="text-muted">{{ ticket.subject }}</div>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-1">
+        <li class="breadcrumb-item"><a href="{{ url_for('tickets') }}">Tickets</a></li>
+        <li class="breadcrumb-item active">#{{ ticket.id }}</li>
+      </ol>
+    </nav>
+    <h1 class="mb-1 h3">
+      {% if ticket.status == 'Open' %}<span class="badge bg-success me-2">Open</span>
+      {% elif ticket.status == 'In Progress' %}<span class="badge bg-primary me-2">In Progress</span>
+      {% else %}<span class="badge bg-secondary me-2">Closed</span>{% endif %}
+      #{{ ticket.id }} — {{ ticket.subject }}
+    </h1>
+    <div class="text-muted small">
+      Opened {{ ticket.created_at.strftime('%B %d, %Y at %H:%M') if ticket.created_at else '—' }}
+      {% if ticket.reporter_name %} by <strong>{{ ticket.reporter_name }}</strong>{% endif %}
+      &nbsp;·&nbsp;
+      Source: <span class="text-capitalize">{{ ticket.source }}</span>
+    </div>
   </div>
-  <div class="d-flex gap-2">
-    <a class="btn btn-secondary" href="{{ url_for('tickets') }}">
-      <i class="bi bi-arrow-left"></i> Back
-    </a>
-    {% if ticket.status == 'Open' %}
+
+  {# Status action buttons #}
+  <div class="d-flex gap-2 flex-wrap">
+    {% if ticket.status != 'Closed' %}
+      {% if ticket.status == 'Open' %}
+        <form method="POST" action="{{ url_for('set_ticket_status', ticket_id=ticket.id) }}">
+          <input type="hidden" name="status" value="In Progress">
+          <button class="btn btn-primary btn-sm"><i class="bi bi-play-circle me-1"></i>Start Working</button>
+        </form>
+      {% endif %}
+      {% if ticket.status == 'In Progress' %}
+        <form method="POST" action="{{ url_for('set_ticket_status', ticket_id=ticket.id) }}">
+          <input type="hidden" name="status" value="Open">
+          <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Back to Open</button>
+        </form>
+      {% endif %}
       <form method="POST" action="{{ url_for('close_ticket', ticket_id=ticket.id) }}">
-        <button class="btn btn-success" type="submit">
-          <i class="bi bi-check2-circle"></i> Close
-        </button>
+        <button class="btn btn-success btn-sm"><i class="bi bi-check2-circle me-1"></i>Close Ticket</button>
       </form>
     {% else %}
       <form method="POST" action="{{ url_for('reopen_ticket', ticket_id=ticket.id) }}">
-        <button class="btn btn-warning" type="submit">
-          <i class="bi bi-arrow-counterclockwise"></i> Reopen
-        </button>
+        <button class="btn btn-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Reopen</button>
       </form>
     {% endif %}
   </div>
 </div>
 
 <div class="row g-4">
+
+  {# ══ LEFT COLUMN ══════════════════════════════════════════ #}
   <div class="col-lg-8">
-    <div class="card">
+
+    {# Description #}
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="bi bi-card-text me-2"></i>Description</span>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#editForm">
+          <i class="bi bi-pencil me-1"></i>Edit
+        </button>
+      </div>
       <div class="card-body">
-        <h5 class="card-title">Description</h5>
-        <div style="white-space: pre-wrap;">{{ ticket.description }}</div>
+        <div id="descDisplay" style="white-space:pre-wrap;">{{ ticket.description }}</div>
+        <div class="collapse mt-3" id="editForm">
+          <hr>
+          <form method="POST" action="{{ url_for('edit_ticket', ticket_id=ticket.id) }}">
+            <div class="mb-2">
+              <label class="form-label small fw-semibold">Subject</label>
+              <input type="text" name="subject" class="form-control" value="{{ ticket.subject }}" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">Description</label>
+              <textarea name="description" class="form-control" rows="6" required>{{ ticket.description }}</textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#editForm">Cancel</button>
+          </form>
+        </div>
       </div>
     </div>
+
+    {# Activity timeline #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>Activity</div>
+      <div class="card-body p-0">
+        {% if timeline %}
+        <ul class="list-group list-group-flush">
+          {% for item in timeline %}
+          {% set obj = item.obj %}
+          <li class="list-group-item d-flex gap-3 py-3">
+            {# Icon #}
+            <div class="flex-shrink-0 mt-1">
+              {% if item.type == 'note' %}
+                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>
+              {% elif obj.action == 'created' %}
+                <span class="badge bg-success rounded-circle p-2"><i class="bi bi-plus-lg"></i></span>
+              {% elif obj.action == 'closed' %}
+                <span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-check2-circle"></i></span>
+              {% elif obj.action == 'assigned' %}
+                <span class="badge bg-info rounded-circle p-2"><i class="bi bi-person-check"></i></span>
+              {% elif obj.action == 'priority_changed' %}
+                <span class="badge bg-warning rounded-circle p-2"><i class="bi bi-exclamation-triangle"></i></span>
+              {% elif obj.action == 'note_added' %}
+                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left"></i></span>
+              {% elif obj.action == 'edited' %}
+                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-pencil text-secondary"></i></span>
+              {% else %}
+                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-arrow-repeat text-info"></i></span>
+              {% endif %}
+            </div>
+            {# Content #}
+            <div class="flex-grow-1">
+              {% if item.type == 'note' %}
+                <div class="fw-semibold small mb-1">
+                  Note by {{ obj.author.display_name if obj.author else '—' }}
+                </div>
+                <div class="small border-start border-2 border-primary ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
+              {% else %}
+                <div class="small">{{ obj.detail or obj.action }}</div>
+              {% endif %}
+              <div class="text-muted" style="font-size:11px;">
+                {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}
+              </div>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-muted text-center py-4 small">No activity yet.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Add note #}
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="bi bi-chat-left-dots me-2"></i>Add Internal Note</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('add_ticket_note', ticket_id=ticket.id) }}">
+          <textarea name="content" class="form-control mb-2" rows="3" placeholder="Internal note — not visible to the reporter…" required></textarea>
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-send me-1"></i>Add Note</button>
+        </form>
+      </div>
+    </div>
+
   </div>
 
+  {# ══ RIGHT COLUMN ═════════════════════════════════════════ #}
   <div class="col-lg-4">
-    <div class="card">
+
+    {# Details #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-info-circle me-2"></i>Details</div>
       <div class="card-body">
-        <h5 class="card-title">Details</h5>
-        <div class="mb-2">
-          <strong>Status:</strong>
-          {% if ticket.status == 'Open' %}
-            <span class="badge bg-success">Open</span>
-          {% else %}
-            <span class="badge bg-secondary">Closed</span>
+        <div class="row g-2 small">
+          <div class="col-5 text-muted">Priority</div>
+          <div class="col-7">
+            {% if ticket.priority == 'Urgent' %}<span class="badge bg-danger">Urgent</span>
+            {% elif ticket.priority == 'High' %}<span class="badge bg-warning text-dark">High</span>
+            {% elif ticket.priority == 'Low' %}<span class="badge bg-secondary">Low</span>
+            {% else %}<span class="badge bg-info text-dark">Normal</span>{% endif %}
+          </div>
+          <div class="col-5 text-muted">Created</div>
+          <div class="col-7">{{ ticket.created_at.strftime('%m/%d/%Y %H:%M') if ticket.created_at else '—' }}</div>
+          {% if ticket.updated_at %}
+          <div class="col-5 text-muted">Updated</div>
+          <div class="col-7">{{ ticket.updated_at.strftime('%m/%d/%Y %H:%M') }}</div>
+          {% endif %}
+          {% if ticket.closed_at %}
+          <div class="col-5 text-muted">Closed</div>
+          <div class="col-7">{{ ticket.closed_at.strftime('%m/%d/%Y %H:%M') }}</div>
+          {% endif %}
+          {% if ticket.closed_at and ticket.created_at %}
+          {% set hrs = ((ticket.closed_at - ticket.created_at).total_seconds() / 3600) | round(1) %}
+          <div class="col-5 text-muted">Resolution</div>
+          <div class="col-7">{% if hrs < 1 %}&lt;1h{% elif hrs < 24 %}{{ hrs }}h{% else %}{{ (hrs/24)|round(1) }}d{% endif %}</div>
           {% endif %}
         </div>
-        <div class="mb-2"><strong>Priority:</strong> {{ ticket.priority }}</div>
-        <div class="mb-2"><strong>Source:</strong> {{ ticket.source }}</div>
-        <div class="mb-2"><strong>Created:</strong> {{ ticket.created_at.strftime('%Y-%m-%d %H:%M') if ticket.created_at else '-' }}</div>
-        <div class="mb-2"><strong>Updated:</strong> {{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') if ticket.updated_at else '-' }}</div>
-        <div class="mb-2"><strong>Closed:</strong> {{ ticket.closed_at.strftime('%Y-%m-%d %H:%M') if ticket.closed_at else '-' }}</div>
-
-        <hr>
-
-        <h6>Reporter</h6>
-        <div class="mb-2"><strong>Name:</strong> {{ ticket.reporter_name or '-' }}</div>
-        <div class="mb-2"><strong>Email:</strong> {{ ticket.reporter_email or '-' }}</div>
-
-        <hr>
-
-        <h6>Asset</h6>
-        {% if ticket.asset_id %}
-          <div class="mb-2">
-            <a href="{{ url_for('view_asset', asset_id=ticket.asset_id) }}">
-              <i class="bi bi-laptop"></i> View asset
-            </a>
-          </div>
-        {% endif %}
-        <div class="mb-2"><strong>Asset Tag:</strong> {{ ticket.asset_tag or '-' }}</div>
-        <div class="mb-2"><strong>Hostname:</strong> {{ ticket.hostname or '-' }}</div>
       </div>
     </div>
-  </div>
-</div>
+
+    {# Category #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-tag me-2"></i>Category</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('set_ticket_category', ticket_id=ticket.id) }}" class="d-flex gap-2">
+          <select name="category" class="form-select form-select-sm">
+            {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
+            <option value="{{ cat }}" {% if (ticket.category or 'General') == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
+        </form>
+      </div>
+    </div>
+
+    {# Change Priority #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-exclamation-triangle me-2"></i>Priority</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('set_ticket_priority', ticket_id=ticket.id) }}" class="d-flex gap-2">
+          <select name="priority" class="form-select form-select-sm">
+            <option value="Low" {% if ticket.priority=='Low' %}selected{% endif %}>Low</option>
+            <option value="Normal" {% if ticket.priority=='Normal' %}selected{% endif %}>Normal</option>
+            <option value="High" {% if ticket.priority=='High' %}selected{% endif %}>High</option>
+            <option value="Urgent" {% if ticket.priority=='Urgent' %}selected{% endif %}>Urgent</option>
+          </select>
+          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
+        </form>
+      </div>
+    </div>
+
+    {# Assign #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-person-check me-2"></i>Assignee</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('assign_ticket', ticket_id=ticket.id) }}" class="d-flex gap-2">
+          <select name="assignee_id" class="form-select form-select-sm">
+            <option value="0">— Unassigned —</option>
+            {% for tech in techs %}
+            <option value="{{ tech.id }}" {% if ticket.assigned_to_user_id == tech.id %}selected{% endif %}>{{ tech.display_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
+        </form>
+      </div>
+    </div>
+
+    {# SLA Status #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-clock me-2"></i>SLA</div>
+      <div class="card-body small">
+        {% if ticket.status == 'Closed' %}
+          <span class="text-muted">Resolved — no SLA tracking</span>
+        {% elif ticket.sla_breached %}
+          <span class="badge bg-danger"><i class="bi bi-alarm me-1"></i>BREACHED</span>
+          <div class="text-danger mt-1">{{ '%.1f'|format(ticket.sla_elapsed_hours) }}h elapsed (target {{ ticket.sla_target_hours }}h)</div>
+        {% else %}
+          {% set pct = (ticket.sla_elapsed_hours / ticket.sla_target_hours * 100)|int %}
+          {% set remain = ticket.sla_hours_remaining %}
+          <div class="progress mb-2" style="height:8px;">
+            <div class="progress-bar {% if pct >= 75 %}bg-warning{% else %}bg-success{% endif %}" style="width:{{ [pct,100]|min }}%;"></div>
+          </div>
+          <div class="{% if pct >= 75 %}text-warning{% else %}text-success{% endif %}">
+            {% if remain < 1 %}{{ (remain * 60)|int }}m remaining{% else %}{{ '%.1f'|format(remain) }}h remaining{% endif %}
+          </div>
+          <div class="text-muted">Target: {{ ticket.sla_target_hours }}h</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# CSAT #}
+    {% if ticket.csat_token %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-star me-2"></i>Satisfaction</div>
+      <div class="card-body small">
+        {% if ticket.csat_score is none %}
+          <span class="text-muted"><i class="bi bi-hourglass me-1"></i>Awaiting response</span>
+        {% elif ticket.csat_score == 1 %}
+          <span class="text-success fs-5">👍</span> <strong>Positive</strong>
+          {% if ticket.csat_comment %}<div class="text-muted mt-1">"{{ ticket.csat_comment }}"</div>{% endif %}
+        {% else %}
+          <span class="text-danger fs-5">👎</span> <strong>Negative</strong>
+          {% if ticket.csat_comment %}<div class="text-muted mt-1">"{{ ticket.csat_comment }}"</div>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Reporter #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-person me-2"></i>Reporter</div>
+      <div class="card-body small">
+        {% if ticket.reporter_name %}
+        <div><i class="bi bi-person me-1 text-muted"></i>{{ ticket.reporter_name }}</div>
+        {% endif %}
+        {% if ticket.reporter_email %}
+        <div><i class="bi bi-envelope me-1 text-muted"></i><a href="mailto:{{ ticket.reporter_email }}">{{ ticket.reporter_email }}</a></div>
+        {% endif %}
+        {% if not ticket.reporter_name and not ticket.reporter_email %}
+        <div class="text-muted">Unknown</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Asset #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-laptop me-2"></i>Asset</div>
+      <div class="card-body small">
+        {% if ticket.asset_tag %}<div><strong>Tag:</strong> {{ ticket.asset_tag }}</div>{% endif %}
+        {% if ticket.hostname %}<div><strong>Host:</strong> {{ ticket.hostname }}</div>{% endif %}
+        {% if ticket.asset_id %}
+        <a href="{{ url_for('view_asset', asset_id=ticket.asset_id) }}" class="btn btn-sm btn-outline-secondary mt-2 w-100">
+          <i class="bi bi-box-arrow-up-right me-1"></i>View Asset
+        </a>
+        {% if ticket.asset and ticket.asset.rustdesk_id %}
+        <button class="btn btn-sm btn-success mt-1 w-100" onclick="startRustDeskSession({{ ticket.asset_id }})">
+          <i class="bi bi-display me-1"></i>Remote Session
+        </button>
+        {% endif %}
+        {% endif %}
+        {% if not ticket.asset_tag and not ticket.hostname and not ticket.asset_id %}
+        <div class="text-muted">No asset linked</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Merge Ticket #}
+    {% if ticket.status not in ('Closed','Merged') %}
+    <div class="card mb-3 border-warning">
+      <div class="card-header fw-semibold text-warning-emphasis bg-warning-subtle"><i class="bi bi-arrows-collapse me-2"></i>Merge into another ticket</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('merge_ticket', ticket_id=ticket.id) }}" onsubmit="return confirm('Merge this ticket? This cannot be undone.')">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text">#</span>
+            <input type="number" name="merge_into_id" class="form-control" placeholder="Target ticket ID" required min="1">
+            <button type="submit" class="btn btn-warning">Merge</button>
+          </div>
+          <div class="form-text">This ticket will be closed and marked as merged.</div>
+        </form>
+      </div>
+    </div>
+    {% elif ticket.status == 'Merged' and ticket.merged_into %}
+    <div class="card mb-3 border-secondary">
+      <div class="card-header fw-semibold"><i class="bi bi-arrows-collapse me-2"></i>Merged</div>
+      <div class="card-body small">
+        <span class="text-muted">This ticket was merged into</span>
+        <a href="{{ url_for('view_ticket', ticket_id=ticket.merged_into.id) }}">Ticket #{{ ticket.merged_into.id }}</a>.
+      </div>
+    </div>
+    {% endif %}
+
+  </div>{# /right col #}
+</div>{# /row #}
+
+<script>
+async function startRustDeskSession(assetId) {
+  const reason = prompt('Reason for remote session (required for audit log):');
+  if (!reason || !reason.trim()) { alert('A reason is required.'); return; }
+  const resp = await fetch(`/assets/${assetId}/remote/rustdesk/start`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({reason: reason.trim()})
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.success) { alert(data.error || 'Failed to start session'); return; }
+  const pw = (data.rustdesk_password || '').trim();
+  const id = (data.rustdesk_id || '').trim();
+  if (pw) {
+    try { await navigator.clipboard.writeText(pw); showToast('Password copied to clipboard ✓'); }
+    catch (_) { showToast('Password: ' + pw, 8000); }
+  }
+  if (id) { setTimeout(() => { window.location.href = `rustdesk://${encodeURIComponent(id)}`; }, 600); }
+}
+function showToast(msg, ms=3500) {
+  let t = document.getElementById('rdToast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'rdToast';
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:#198754;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .4s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg; t.style.opacity = '1';
+  clearTimeout(t._hide); t._hide = setTimeout(() => { t.style.opacity = '0'; }, ms);
+}
+</script>
 {% endblock %}

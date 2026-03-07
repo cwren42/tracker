@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from .db import (
+    auto_link_or_create_asset,
     create_rmm_session,
     end_rmm_session,
     get_eagle_config,
@@ -22,6 +23,8 @@ from .db import (
     _utc_to_mst,
     update_patch_job,
     get_patch_job,
+    get_session_reason,
+    store_rustdesk_id,
     validate_agent,
     validate_api_key,
     validate_session_token,
@@ -232,6 +235,12 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                 try:
                     if client_ip and _is_public_ip(client_ip):
                         payload["public_ip"] = client_ip
+                    # Auto-link or create asset if not yet linked
+                    if asset_id == 0:
+                        resolved = auto_link_or_create_asset(agent_id, payload)
+                        if resolved:
+                            asset_id = resolved
+                            agent_asset_ids[agent_id] = asset_id
                     store_telemetry(agent_id, asset_id, payload)
                 except Exception as e:
                     print(f"[gw] store_telemetry error: {e}", flush=True)
@@ -361,6 +370,17 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     print(f"[gw] script_result sid={session_id} exit={payload.get('exit_code')} "
                           f"stdout={repr(payload.get('stdout','')[:500])} "
                           f"stderr={repr(payload.get('stderr','')[:200])}", flush=True)
+                    # If this was a RustDesk deploy job, extract and store the peer ID
+                    if payload.get('exit_code') == 0:
+                        try:
+                            import re as _re
+                            reason = get_session_reason(int(session_id))
+                            if reason == 'Deploy RustDesk':
+                                m = _re.search(r'RUSTDESK_ID=(\S+)', payload.get('stdout', ''))
+                                if m:
+                                    store_rustdesk_id(agent_id, m.group(1))
+                        except Exception as _e:
+                            print(f"[gw] rustdesk_id store error: {_e}", flush=True)
                 try:
                     log_rmm_event(int(session_id), "agent", msg_type or "message", payload)
                 except Exception:

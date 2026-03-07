@@ -1,12 +1,11 @@
 {% extends "base.html" %}
-
 {% block title %}Edit User - Asset Tracker{% endblock %}
 
 {% block content %}
 <div class="row">
     <div class="col-md-6 offset-md-3">
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>Edit User: {{ user.username }}</h1>
+            <h1 class="h3">Edit User: {{ user.display_name }}</h1>
             <a href="{{ url_for('users') }}" class="btn btn-secondary">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
@@ -15,13 +14,28 @@
         <div class="card">
             <div class="card-body">
                 <form method="POST">
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-6">
+                            <label for="first_name" class="form-label">First Name</label>
+                            <input type="text" class="form-control" id="first_name" name="first_name"
+                                   value="{{ user.first_name or '' }}" placeholder="First">
+                        </div>
+                        <div class="col-sm-6">
+                            <label for="last_name" class="form-label">Last Name</label>
+                            <input type="text" class="form-control" id="last_name" name="last_name"
+                                   value="{{ user.last_name or '' }}" placeholder="Last">
+                        </div>
+                    </div>
                     <div class="mb-3">
                         <label for="username" class="form-label">Username *</label>
-                        <input type="text" class="form-control" id="username" name="username" value="{{ user.username }}" required>
+                        <input type="text" class="form-control" id="username" name="username"
+                               value="{{ user.username }}" required>
+                        <div class="form-text">Used for login only; first + last name shown on the site.</div>
                     </div>
                     <div class="mb-3">
                         <label for="email" class="form-label">Email *</label>
-                        <input type="email" class="form-control" id="email" name="email" value="{{ user.email }}" required>
+                        <input type="email" class="form-control" id="email" name="email"
+                               value="{{ user.email }}" required>
                     </div>
                     <div class="mb-3">
                         <label for="password" class="form-label">New Password</label>
@@ -31,16 +45,16 @@
                     <div class="mb-3">
                         <label for="role" class="form-label">Role *</label>
                         <select class="form-select" id="role" name="role" required>
-                            <option value="viewer" {% if user.role == 'viewer' %}selected{% endif %}>Viewer</option>
+                            <option value="viewer"  {% if user.role == 'viewer'  %}selected{% endif %}>Viewer</option>
                             <option value="manager" {% if user.role == 'manager' %}selected{% endif %}>Manager</option>
-                            <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                            <option value="admin"   {% if user.role == 'admin'   %}selected{% endif %}>Admin</option>
                         </select>
                     </div>
-                    
+
                     <div class="alert alert-warning">
                         <strong>Note:</strong> Changing a user's role will take effect on their next login.
                     </div>
-                    
+
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Update User
                     </button>

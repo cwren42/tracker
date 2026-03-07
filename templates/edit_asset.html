@@ -47,6 +47,7 @@
                                 <option value="In Use" {% if asset.status == 'In Use' %}selected{% endif %}>In Use</option>
                                 <option value="In Repair" {% if asset.status == 'In Repair' %}selected{% endif %}>In Repair</option>
                                 <option value="Retired" {% if asset.status == 'Retired' %}selected{% endif %}>Retired</option>
+                                <option value="Disposed" {% if asset.status == 'Disposed' %}selected{% endif %}>Disposed</option>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -65,10 +66,17 @@
                             <label for="location" class="form-label">Location</label>
                             <input type="text" class="form-control" id="location" name="location" value="{{ asset.location or '' }}">
                         </div>
+
+                        <div class="col-12"><hr class="my-1"><p class="fw-semibold mb-0"><i class="bi bi-display me-2 text-success"></i>Remote Access</p></div>
+
                         <div class="col-md-6">
                             <label for="rustdesk_id" class="form-label">RustDesk ID</label>
                             <input type="text" class="form-control" id="rustdesk_id" name="rustdesk_id" value="{{ asset.rustdesk_id or '' }}" placeholder="e.g. 123 456 789">
-                            <small class="text-muted">Used for remote support via RustDesk</small>
+                            <small class="text-muted">Open RustDesk on the device — the large number on the left is the ID.</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="vendor" class="form-label">Vendor / Supplier</label>
+                            <input type="text" class="form-control" id="vendor" name="vendor" value="{{ asset.vendor or '' }}" placeholder="e.g. CDW, Amazon, Dell">
                         </div>
                         <div class="col-md-4">
                             <label for="purchase_date" class="form-label">Purchase Date</label>
@@ -93,9 +101,9 @@
                             </select>
                         </div>
                         <div class="col-md-4">
-                            <label for="replacement_date" class="form-label">Replacement Date</label>
-                            <input type="date" class="form-control" id="replacement_date" name="replacement_date" value="{{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else '' }}">
-                            <small class="text-muted">Auto-calculated based on purchase date + life expectancy</small>
+                            <label class="form-label">EOL / Replace By <small class="text-muted">(auto)</small></label>
+                            <input type="text" class="form-control" readonly value="{{ asset.computed_eol_date.strftime('%Y-%m-%d') if asset.computed_eol_date else 'Set purchase date + life years' }}" style="background:rgba(0,0,0,.06);cursor:default;">
+                            <small class="text-muted">Auto-calculated: purchase date + expected life</small>
                         </div>
                         <div class="col-md-4">
                             <label for="condition" class="form-label">Condition</label>

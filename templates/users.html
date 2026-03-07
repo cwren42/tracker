@@ -29,7 +29,8 @@
                     {% for user in users %}
                     <tr>
                         <td>
-                            <strong>{{ user.username }}</strong>
+                            <strong>{{ user.display_name }}</strong>
+                            <div class="text-muted small">@{{ user.username }}</div>
                             {% if user.id == current_user.id %}
                                 <span class="badge bg-secondary">You</span>
                             {% endif %}
@@ -74,7 +75,7 @@
                                 </div>
                                 <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}">
                                     <div class="modal-body">
-                                        <p>Are you sure you want to delete user <strong>{{ user.username }}</strong>?</p>
+                                        <p>Are you sure you want to delete user <strong>{{ user.display_name }}</strong> (@{{ user.username }})?</p>
                                         <p class="text-danger">This action cannot be undone!</p>
                                     </div>
                                     <div class="modal-footer">

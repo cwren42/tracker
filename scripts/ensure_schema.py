@@ -42,7 +42,57 @@ def ensure_schema():
                 print("✓ Successfully added 'photo' column")
             else:
                 print("✓ 'photo' column exists")
-            
+
+            # Support ticket: assigned_to_user_id
+            result = db.session.execute(text("PRAGMA table_info(support_ticket)"))
+            columns = [row[1] for row in result]
+            if 'assigned_to_user_id' not in columns:
+                print("Adding 'assigned_to_user_id' to support_ticket...")
+                db.session.execute(text("ALTER TABLE support_ticket ADD COLUMN assigned_to_user_id INTEGER REFERENCES user(id)"))
+                db.session.commit()
+                print("✓ Added 'assigned_to_user_id'")
+            else:
+                print("✓ support_ticket.assigned_to_user_id exists")
+
+            # Create ticket_note and ticket_activity tables
+            db.create_all()
+            print("✓ ticket_note / ticket_activity tables verified")
+
+            # first_name / last_name on user table
+            result = db.session.execute(text("PRAGMA table_info(user)"))
+            columns = [row[1] for row in result]
+            for col, typedef in [('first_name', 'VARCHAR(100)'), ('last_name', 'VARCHAR(100)')]:
+                if col not in columns:
+                    print(f"Adding '{col}' column to user table...")
+                    db.session.execute(text(f"ALTER TABLE user ADD COLUMN {col} {typedef}"))
+                    db.session.commit()
+                    print(f"✓ Added '{col}'")
+                else:
+                    print(f"✓ user.{col} exists")
+
+            # New support_ticket columns
+            result = db.session.execute(text("PRAGMA table_info(support_ticket)"))
+            st_cols = [row[1] for row in result]
+            new_ticket_cols = [
+                ('category',       "VARCHAR(50) DEFAULT 'General'"),
+                ('merged_into_id', 'INTEGER'),
+                ('csat_token',     'VARCHAR(64)'),
+                ('csat_score',     'INTEGER'),
+                ('csat_comment',   'TEXT'),
+            ]
+            for col, typedef in new_ticket_cols:
+                if col not in st_cols:
+                    print(f"Adding support_ticket.{col}...")
+                    db.session.execute(text(f"ALTER TABLE support_ticket ADD COLUMN {col} {typedef}"))
+                    db.session.commit()
+                    print(f"✓ Added '{col}'")
+                else:
+                    print(f"✓ support_ticket.{col} exists")
+
+            # Create asset_loan, installed_app tables
+            db.create_all()
+            print("✓ asset_loan / installed_app tables verified")
+
             return True
             
         except Exception as e:

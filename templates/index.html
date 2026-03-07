@@ -71,6 +71,19 @@
                 {% include 'widgets/overview_widget.html' %}
             {% elif widget_type == 'alert' %}
                 {% include 'widgets/alert_widget.html' %}
+            {% elif widget_type == 'tickets_summary' %}
+                <div class="card h-100">
+                  <div class="card-header fw-semibold"><i class="bi bi-ticket-perforated me-2 text-primary"></i>Tickets Summary</div>
+                  <div class="card-body">
+                    <div class="row text-center g-2">
+                      <div class="col-6"><div class="fw-bold fs-4 text-success">{{ data.tickets_open }}</div><div class="small text-muted">Open</div></div>
+                      <div class="col-6"><div class="fw-bold fs-4 text-primary">{{ data.tickets_inprog }}</div><div class="small text-muted">In Progress</div></div>
+                      <div class="col-6"><div class="fw-bold fs-4 text-warning">{{ data.tickets_unassigned }}</div><div class="small text-muted">Unassigned</div></div>
+                      <div class="col-6"><div class="fw-bold fs-4 text-danger">{{ data.tickets_breached }}</div><div class="small text-muted">SLA Breached</div></div>
+                    </div>
+                    <a href="{{ url_for('tickets') }}" class="btn btn-sm btn-outline-primary w-100 mt-3">View All Tickets</a>
+                  </div>
+                </div>
             {% endif %}
             
             {% if edit_mode %}
@@ -255,10 +268,52 @@
                     </div>
                     
                     <div class="col-12 mt-4">
-                        <h6 class="text-muted border-bottom pb-2"><i class="bi bi-list-task"></i> Lists & Reports</h6>
+                        <h6 class="text-muted border-bottom pb-2"><i class="bi bi-ticket-perforated"></i> Support Tickets</h6>
+                    </div>
+                    <div class="col-md-4 col-lg-3">
+                        <div class="card widget-option" data-widget-id="tickets_open" data-widget-type="stat" data-widget-size="col-md-2" style="cursor: pointer;">
+                            <div class="card-body text-center py-2">
+                                <i class="bi bi-ticket-perforated text-success" style="font-size: 1.5rem;"></i>
+                                <p class="mb-0 mt-1 small"><strong>Open Tickets</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-lg-3">
+                        <div class="card widget-option" data-widget-id="tickets_inprog" data-widget-type="stat" data-widget-size="col-md-2" style="cursor: pointer;">
+                            <div class="card-body text-center py-2">
+                                <i class="bi bi-hourglass-split text-primary" style="font-size: 1.5rem;"></i>
+                                <p class="mb-0 mt-1 small"><strong>In Progress</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-lg-3">
+                        <div class="card widget-option" data-widget-id="tickets_unassigned" data-widget-type="stat" data-widget-size="col-md-2" style="cursor: pointer;">
+                            <div class="card-body text-center py-2">
+                                <i class="bi bi-person-x text-warning" style="font-size: 1.5rem;"></i>
+                                <p class="mb-0 mt-1 small"><strong>Unassigned</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-lg-3">
+                        <div class="card widget-option" data-widget-id="tickets_breached" data-widget-type="stat" data-widget-size="col-md-2" style="cursor: pointer;">
+                            <div class="card-body text-center py-2">
+                                <i class="bi bi-alarm text-danger" style="font-size: 1.5rem;"></i>
+                                <p class="mb-0 mt-1 small"><strong>SLA Breached</strong></p>
+                            </div>
+                        </div>
                     </div>
                     <div class="col-md-6 col-lg-4">
-                        <div class="card widget-option" data-widget-id="recent_assets" data-widget-type="list" data-widget-size="col-md-4" style="cursor: pointer;">
+                        <div class="card widget-option" data-widget-id="tickets_summary" data-widget-type="tickets_summary" data-widget-size="col-md-4" style="cursor: pointer;">
+                            <div class="card-body text-center py-2">
+                                <i class="bi bi-layout-text-sidebar text-info" style="font-size: 1.5rem;"></i>
+                                <p class="mb-0 mt-1 small"><strong>Tickets Summary</strong></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-12 mt-4">
+                        <h6 class="text-muted border-bottom pb-2"><i class="bi bi-list-task"></i> Lists & Reports</h6>
+                    </div>
                             <div class="card-body text-center py-2">
                                 <i class="bi bi-list-ul text-primary" style="font-size: 1.5rem;"></i>
                                 <p class="mb-0 mt-1 small"><strong>Recent Assets</strong></p>

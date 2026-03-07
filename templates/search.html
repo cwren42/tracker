@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Search — {{ q }}{% endblock %}
+{% block content %}
+<h1 class="h3 mb-4"><i class="bi bi-search me-2"></i>Search results for <em>"{{ q }}"</em></h1>
+
+{% if not q or q|length < 2 %}
+<div class="alert alert-info">Enter at least 2 characters to search.</div>
+{% elif not assets and not tickets and not employees %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-search fs-1 d-block mb-2 opacity-25"></i>
+  <div class="fw-semibold">No results found for "{{ q }}"</div>
+</div>
+{% else %}
+
+{% if assets %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold"><i class="bi bi-box-seam me-2"></i>Assets <span class="badge bg-secondary ms-1">{{ assets|length }}</span></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light"><tr><th class="ps-3">Tag</th><th>Hostname</th><th>Make / Model</th><th>Serial</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for a in assets %}
+        <tr onclick="location='{{ url_for('view_asset', asset_id=a.id) }}'" style="cursor:pointer">
+          <td class="ps-3"><code>{{ a.asset_tag or '—' }}</code></td>
+          <td>{{ a.hostname or '—' }}</td>
+          <td>{{ a.make or '' }} {{ a.model or '' }}</td>
+          <td class="text-muted small">{{ a.serial_number or '—' }}</td>
+          <td><span class="badge bg-secondary">{{ a.status or '—' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if tickets %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold"><i class="bi bi-ticket-perforated me-2"></i>Tickets <span class="badge bg-secondary ms-1">{{ tickets|length }}</span></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light"><tr><th class="ps-3">#</th><th>Subject</th><th>Reporter</th><th>Status</th><th>Priority</th></tr></thead>
+      <tbody>
+        {% for t in tickets %}
+        <tr onclick="location='{{ url_for('view_ticket', ticket_id=t.id) }}'" style="cursor:pointer">
+          <td class="ps-3 text-muted">#{{ t.id }}</td>
+          <td class="fw-semibold">{{ t.subject }}</td>
+          <td class="text-muted small">{{ t.reporter_name or t.reporter_email or '—' }}</td>
+          <td>
+            {% if t.status == 'Open' %}<span class="badge bg-success">Open</span>
+            {% elif t.status == 'In Progress' %}<span class="badge bg-primary">In Progress</span>
+            {% elif t.status == 'Merged' %}<span class="badge bg-secondary">Merged</span>
+            {% else %}<span class="badge bg-secondary">Closed</span>{% endif %}
+          </td>
+          <td>
+            {% if t.priority == 'Urgent' %}<span class="badge bg-danger">Urgent</span>
+            {% elif t.priority == 'High' %}<span class="badge bg-warning text-dark">High</span>
+            {% else %}<span class="badge bg-light text-muted border">{{ t.priority }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if employees %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold"><i class="bi bi-people me-2"></i>Employees <span class="badge bg-secondary ms-1">{{ employees|length }}</span></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light"><tr><th class="ps-3">Name</th><th>Email</th><th>Department</th><th>Title</th></tr></thead>
+      <tbody>
+        {% for e in employees %}
+        <tr onclick="location='{{ url_for('view_employee', employee_id=e.id) }}'" style="cursor:pointer">
+          <td class="ps-3 fw-semibold">{{ e.name }}</td>
+          <td class="text-muted small">{{ e.email or '—' }}</td>
+          <td class="text-muted small">{{ e.department or '—' }}</td>
+          <td class="text-muted small">{{ e.job_title or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -61,6 +61,26 @@
         <a href="{{ url_for('add_asset') }}" class="btn btn-primary">
             <i class="bi bi-plus-circle"></i> Add Asset
         </a>
+        <div class="btn-group" role="group">
+            <a href="{{ url_for('download_agent_installer') }}" class="btn btn-outline-secondary" title="Download Windows MSI installer for RMM agent">
+                <i class="bi bi-robot"></i> Download Agent
+            </a>
+            <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+                <span class="visually-hidden">Toggle Dropdown</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <a class="dropdown-item" href="{{ url_for('download_agent_installer') }}">
+                        <i class="bi bi-box-arrow-in-down"></i> MSI Installer <small class="text-muted">(recommended)</small>
+                    </a>
+                </li>
+                <li>
+                    <a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}">
+                        <i class="bi bi-terminal"></i> PowerShell Script <small class="text-muted">(.ps1)</small>
+                    </a>
+                </li>
+            </ul>
+        </div>
         {% endif %}
     </div>
 </div>

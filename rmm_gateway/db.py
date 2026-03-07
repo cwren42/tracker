@@ -177,7 +177,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        captured_at = _utc_to_mst(data.get("captured_at")) or now_iso()
+        captured_at = data.get("captured_at") or now_iso()
         cur.execute(
             """
             INSERT INTO rmm_telemetry (
@@ -274,6 +274,93 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 (agent_id,),
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def auto_link_or_create_asset(agent_id: str, data: Dict[str, Any]) -> int:
+    """
+    Ensure rmm_agent.asset_id is set. On each call:
+      1. If rmm_agent already has asset_id → return it (already linked).
+      2. Match asset table on serial_number → link & return.
+      3. Match asset table on hostname (name) → link & return.
+      4. Auto-create a new asset → link & return.
+    Returns the resolved asset_id (> 0), or 0 on failure.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        # ── 1. Already linked? ────────────────────────────────────────────
+        row = cur.execute(
+            "SELECT asset_id FROM rmm_agent WHERE agent_id = ?", (agent_id,)
+        ).fetchone()
+        if row and row["asset_id"]:
+            return int(row["asset_id"])
+
+        hostname   = (data.get("hostname") or "").strip()
+        serial     = (data.get("serial_number") or "").strip()
+        vendor     = (data.get("vendor") or "").strip()
+        model      = (data.get("model_name") or "").strip()
+        os_ver     = (data.get("os_name") or "").strip()
+
+        asset_id = None
+
+        # ── 2. Match on serial_number ─────────────────────────────────────
+        if serial:
+            r = cur.execute(
+                "SELECT id FROM asset WHERE serial_number = ? LIMIT 1", (serial,)
+            ).fetchone()
+            if r:
+                asset_id = r["id"]
+                print(f"[gw] auto_link: matched {agent_id} → asset {asset_id} via serial '{serial}'", flush=True)
+
+        # ── 3. Match on hostname → asset.name ─────────────────────────────
+        if not asset_id and hostname:
+            r = cur.execute(
+                "SELECT id FROM asset WHERE LOWER(name) = LOWER(?) LIMIT 1", (hostname,)
+            ).fetchone()
+            if r:
+                asset_id = r["id"]
+                print(f"[gw] auto_link: matched {agent_id} → asset {asset_id} via hostname '{hostname}'", flush=True)
+
+        # ── 4. Auto-create ────────────────────────────────────────────────
+        if not asset_id:
+            # Pick a unique asset_tag (prefer hostname, add suffix if taken)
+            tag_base = hostname or agent_id
+            tag = tag_base
+            suffix = 1
+            while cur.execute("SELECT id FROM asset WHERE asset_tag = ?", (tag,)).fetchone():
+                tag = f"{tag_base}-{suffix}"
+                suffix += 1
+
+            cur.execute(
+                """INSERT INTO asset
+                   (asset_tag, name, category, manufacturer, model, serial_number,
+                    os_version, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?)""",
+                (tag, hostname or agent_id, "Computer",
+                 vendor or None, model or None, serial or None,
+                 os_ver or None, now_iso(), now_iso()),
+            )
+            asset_id = cur.lastrowid
+            print(f"[gw] auto_link: created asset {asset_id} (tag='{tag}') for agent '{agent_id}'", flush=True)
+
+        # ── Update rmm_agent ──────────────────────────────────────────────
+        cur.execute(
+            "UPDATE rmm_agent SET asset_id = ? WHERE agent_id = ?",
+            (asset_id, agent_id),
+        )
+        # Also keep rmm_telemetry.asset_id in sync
+        cur.execute(
+            "UPDATE rmm_telemetry SET asset_id = ? WHERE agent_id = ?",
+            (asset_id, agent_id),
+        )
+        conn.commit()
+        return asset_id
+
+    except Exception as e:
+        print(f"[gw] auto_link_or_create_asset error: {e}", flush=True)
+        return 0
     finally:
         conn.close()
 
@@ -467,6 +554,41 @@ def log_rmm_event(session_id: int, actor_type: str, event_type: str, data: Dict[
             (session_id, actor_type, event_type, json.dumps(data), now_iso()),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_session_reason(session_id: int) -> Optional[str]:
+    """Return the reason string for an rmm_session row."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        row = cur.execute(
+            "SELECT reason FROM rmm_session WHERE id = ? LIMIT 1", (session_id,)
+        ).fetchone()
+        return row["reason"] if row else None
+    finally:
+        conn.close()
+
+
+def store_rustdesk_id(agent_id: str, rustdesk_id: str) -> None:
+    """Write the RustDesk peer ID into the asset linked to the given agent."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        row = cur.execute(
+            "SELECT asset_id FROM rmm_agent WHERE agent_id = ? AND enabled = 1 LIMIT 1",
+            (agent_id,)
+        ).fetchone()
+        if not row or not row["asset_id"]:
+            return
+        cur.execute(
+            "UPDATE asset SET rustdesk_id = ? WHERE id = ? AND (rustdesk_id IS NULL OR rustdesk_id != ?)",
+            (rustdesk_id, row["asset_id"], rustdesk_id)
+        )
+        conn.commit()
+        if cur.rowcount:
+            print(f"[gw] stored rustdesk_id={rustdesk_id} for asset {row['asset_id']}", flush=True)
     finally:
         conn.close()
 

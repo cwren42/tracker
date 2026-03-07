@@ -9,7 +9,7 @@ Env vars:
   RMM_SCREENSHOT     1 = enable screenshot capture (default: 0)
 """
 
-AGENT_VERSION = "2.1.7"
+AGENT_VERSION = "2.3.3"
 
 import asyncio
 import base64
@@ -72,6 +72,505 @@ def _ps_json(script: str, timeout: int = 15):
 # Self-update
 # ---------------------------------------------------------------------------
 
+def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
+    """Read the local RustDesk peer ID and send it to the tracker so
+    asset.rustdesk_id is kept up-to-date automatically.
+    Silently ignores all errors (RustDesk may not be installed)."""
+    try:
+        import re as _re
+        import glob as _glob
+        # Candidate config paths (Windows + Linux/Mac)
+        candidates = []
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            candidates.append(os.path.join(appdata, "RustDesk", "config", "RustDesk.toml"))
+        # Also try LocalAppData / programdata layouts
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        if localappdata:
+            candidates.append(os.path.join(localappdata, "RustDesk", "config", "RustDesk.toml"))
+        # SYSTEM / service account profiles (always check these regardless of env)
+        candidates += [
+            # MSI service runs as LocalService
+            r'C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk.toml',
+            r'C:\Windows\ServiceProfiles\NetworkService\AppData\Roaming\RustDesk\config\RustDesk.toml',
+            r'C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config\RustDesk.toml',
+            r'C:\ProgramData\RustDesk\config\RustDesk.toml',
+            r'C:\Windows\ServiceProfiles\LocalSystem\AppData\Roaming\RustDesk\config\RustDesk.toml',
+        ]
+        # All user profiles (covers interactive sessions)
+        for p in _glob.glob(r'C:\Users\*\AppData\Roaming\RustDesk\config\RustDesk.toml'):
+            candidates.append(p)
+        # Linux / Mac
+        home = os.path.expanduser("~")
+        candidates.append(os.path.join(home, ".config", "rustdesk", "RustDesk.toml"))
+        candidates.append("/etc/rustdesk/RustDesk.toml")
+
+        peer_id = None
+        for path in candidates:
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+                m = _re.search(r'^id\s*=\s*["\']?([0-9a-zA-Z_\-]+)["\']?', content, _re.MULTILINE)
+                if m:
+                    peer_id = m.group(1).strip()
+                    break
+            except Exception:
+                continue
+
+        # Fallback: ask the running RustDesk process via --get-id (works when
+        # the service is running but the TOML hasn't been written yet)
+        if not peer_id:
+            try:
+                exe = _rustdesk_exe()
+                if exe and os.path.isfile(exe):
+                    import subprocess as _sp
+                    r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
+                    out = (r.stdout or "").strip()
+                    # Output is just the numeric/alphanumeric ID, possibly with trailing newline
+                    if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
+                        peer_id = out
+                        print(f"[rustdesk] Got peer ID via --get-id: {peer_id}", flush=True)
+            except Exception as ge:
+                print(f"[rustdesk] --get-id fallback failed: {ge}", flush=True)
+
+        if not peer_id:
+            return  # RustDesk not installed or ID not yet assigned
+
+        # Get (or create) the permanent access password and include it in sync
+        rd_password = _ensure_rustdesk_password()
+
+        url = f"{tracker_url}/api/rmm/rustdesk-sync/{agent_id}?token={token}"
+        import urllib.request as _ur
+        sync_payload: dict = {"rustdesk_id": peer_id}
+        if rd_password:
+            sync_payload["rustdesk_password"] = rd_password
+        payload = json.dumps(sync_payload).encode()
+        req = _ur.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        with _ur.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+            if body.get("changed"):
+                print(f"[rustdesk] Synced peer ID {peer_id} to tracker (asset {body.get('asset_id')})", flush=True)
+    except Exception as e:
+        print(f"[rustdesk] sync skipped: {e}", flush=True)
+
+
+_RUSTDESK_SERVER = 'rust.corp.cirque.com'
+_RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo'
+
+# File on disk where we persist the plaintext password so it survives restarts.
+_RUSTDESK_PASS_FILE = r'C:\CirqueRMM\rustdesk_pass.txt'
+
+# Tray app API key (create_tickets scope) — baked in at build time
+_TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
+_tray_setup_done = False  # only run _setup_tray once per agent process
+_TRAY_PY_PATH = r'C:\CirqueRMM\tray.py'
+_TRAY_CFG_PATH = r'C:\CirqueRMM\tray_config.json'
+
+
+def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
+    """Download tray.py, write tray_config.json, install pip deps, and create
+    a per-user Startup shortcut so the tray runs at login.
+    Safe to call repeatedly — skips steps already done."""
+    import subprocess as _sp, glob as _glob
+    try:
+        agent_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # 1. Download / refresh tray.py from tracker
+        tray_url = f"{tracker_url}/rmm/agent/tray?agent_id={agent_id}&token={token}"
+        import urllib.request as _ur, ssl as _ssl
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        try:
+            req = _ur.Request(tray_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req, timeout=20, context=ctx) as resp:
+                new_src = resp.read()
+            # Only write if changed
+            existing = b''
+            if os.path.isfile(_TRAY_PY_PATH):
+                with open(_TRAY_PY_PATH, 'rb') as fh:
+                    existing = fh.read()
+            if new_src != existing:
+                os.makedirs(os.path.dirname(_TRAY_PY_PATH), exist_ok=True)
+                with open(_TRAY_PY_PATH, 'wb') as fh:
+                    fh.write(new_src)
+                print('[tray] tray.py updated', flush=True)
+        except Exception as dl_err:
+            print(f'[tray] download failed: {dl_err}', flush=True)
+
+        # 2. Get asset info for the config (asset_id, asset_tag)
+        asset_id_num = ''
+        asset_tag    = ''
+        it_contact   = 'IT Support'
+        try:
+            info_url = f"{tracker_url}/api/rmm/agent-info/{agent_id}?token={token}"
+            req2 = _ur.Request(info_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req2, timeout=10, context=ctx) as r2:
+                info = json.loads(r2.read())
+            asset_id_num = str(info.get('asset_id') or '')
+            asset_tag    = str(info.get('asset_tag') or '')
+        except Exception:
+            pass
+
+        # 3. Write tray_config.json
+        cfg = {
+            'tracker_url':  tracker_url,
+            'tray_api_key': _TRAY_API_KEY,
+            'agent_id':     agent_id,
+            'asset_id':     asset_id_num,
+            'asset_tag':    asset_tag,
+            'it_contact':   it_contact,
+        }
+        os.makedirs(os.path.dirname(_TRAY_CFG_PATH), exist_ok=True)
+        with open(_TRAY_CFG_PATH, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=2)
+
+        # 4. Install pystray + pillow into the user-accessible Python
+        #    Use the same Python the agent runs under, then also try a user-level install
+        pip_targets = [
+            [sys.executable, '-m', 'pip', 'install', '--quiet', 'pystray', 'pillow'],
+        ]
+        # Find Python installs for interactive users (C:\Users\*\AppData\Local\Programs\Python)
+        import glob as _glob
+        for py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\python.exe'):
+            pip_targets.append([py, '-m', 'pip', 'install', '--quiet', 'pystray', 'pillow'])
+        for cmd in pip_targets:
+            try:
+                _sp.run(cmd, capture_output=True, timeout=120)
+            except Exception:
+                pass
+
+        # 5. Create Startup shortcut for every user profile
+        #    We write a .bat launcher + a .lnk pointing to it
+        bat_path = r'C:\CirqueRMM\start_tray.bat'
+        bat_src = (
+            '@echo off\r\n'
+            'if exist "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\CirqueTray.lnk" exit /b 0\r\n'
+        )
+        # Write the bat that creates the shortcut for the currently logged-in user
+        ps_lnk = r"""
+$WS = New-Object -ComObject WScript.Shell
+$startup = [System.Environment]::GetFolderPath('Startup')
+$lnk = $WS.CreateShortcut("$startup\CirqueTray.lnk")
+$lnk.TargetPath = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+if (-not $lnk.TargetPath) {
+    $lnk.TargetPath = (Get-ChildItem "C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe" | Select-Object -First 1).FullName
+}
+if (-not $lnk.TargetPath) { exit 1 }
+$lnk.Arguments = "C:\CirqueRMM\tray.py"
+$lnk.WorkingDirectory = "C:\CirqueRMM"
+$lnk.WindowStyle = 7  # minimized
+$lnk.Description = "Cirque IT Support Tray"
+$lnk.Save()
+Write-Host "Shortcut created: $startup\CirqueTray.lnk"
+"""
+        # Run the shortcut-creation script for every currently logged-in user session
+        # via scheduled task so it runs in the user context
+        task_xml_template = r"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
+  <Actions Context="InteractiveToken">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -WindowStyle Hidden -Command "{PS}"</Arguments>
+    </Exec>
+  </Actions>
+</Task>"""
+        import re as _re
+        ps_oneliner = ' '.join(ps_lnk.strip().splitlines())
+        xml_src = task_xml_template.replace('{PS}', ps_oneliner.replace('"', '&quot;'))
+        xml_path = r'C:\CirqueRMM\create_tray_lnk.xml'
+        with open(xml_path, 'w', encoding='utf-16') as fh:
+            fh.write(xml_src)
+        _sp.run(
+            ['schtasks', '/Create', '/F', '/TN', 'CirqueTraySetup', '/XML', xml_path],
+            capture_output=True, timeout=15
+        )
+        _sp.run(['schtasks', '/Run', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
+        print('[tray] Startup shortcut task triggered', flush=True)
+
+        # 6. Launch the tray right now in the interactive user's desktop session.
+        #    We MUST use a scheduled task with Context="InteractiveToken" because the
+        #    agent runs as SYSTEM (Session 0) and any direct Popen would be invisible.
+        pythonw_path = ''
+        for _py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe'):
+            pythonw_path = _py
+            break
+        if pythonw_path:
+            launch_xml = (
+                '<?xml version="1.0" encoding="UTF-16"?>\n'
+                '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+                '  <Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>\n'
+                '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>'
+                '<ExecutionTimeLimit>PT5M</ExecutionTimeLimit></Settings>\n'
+                '  <Actions Context="InteractiveToken">\n'
+                '    <Exec>\n'
+                f'      <Command>{pythonw_path}</Command>\n'
+                f'      <Arguments>C:\\CirqueRMM\\tray.py</Arguments>\n'
+                '    </Exec>\n'
+                '  </Actions>\n'
+                '</Task>'
+            )
+            launch_xml_path = r'C:\CirqueRMM\launch_tray.xml'
+            with open(launch_xml_path, 'w', encoding='utf-16') as fh:
+                fh.write(launch_xml)
+            _sp.run(
+                ['schtasks', '/Create', '/F', '/TN', 'CirqueTrayLaunch', '/XML', launch_xml_path],
+                capture_output=True, timeout=15
+            )
+            _sp.run(['schtasks', '/Run', '/TN', 'CirqueTrayLaunch'], capture_output=True, timeout=10)
+            print(f'[tray] Launch task triggered (InteractiveToken) with {pythonw_path}', flush=True)
+        else:
+            print('[tray] No user pythonw.exe found, tray not launched immediately', flush=True)
+
+    except Exception as e:
+        print(f'[tray] _setup_tray error: {e}', flush=True)
+
+
+def _ensure_rustdesk_password() -> str:
+    """Return the permanent RustDesk access password for this machine.
+    If no password has been set yet, generate a random 12-char one,
+    save it to disk, and configure RustDesk to use it.
+    Always returns the plaintext password string (or '' on failure)."""
+    import string as _string, secrets as _secrets, subprocess as _sp
+    try:
+        # 1. Try to read an existing password from the local file
+        pw = ''
+        if os.path.isfile(_RUSTDESK_PASS_FILE):
+            with open(_RUSTDESK_PASS_FILE, 'r', encoding='utf-8') as fh:
+                pw = fh.read().strip()
+
+        # 2. Generate a new password if missing / too short
+        if len(pw) < 8:
+            alphabet = _string.ascii_letters + _string.digits
+            pw = ''.join(_secrets.choice(alphabet) for _ in range(12))
+            # Persist before calling --password so we don't lose it
+            os.makedirs(os.path.dirname(_RUSTDESK_PASS_FILE), exist_ok=True)
+            with open(_RUSTDESK_PASS_FILE, 'w', encoding='utf-8') as fh:
+                fh.write(pw)
+            print(f'[rustdesk] Generated new access password', flush=True)
+
+        # 3. Set the password in RustDesk (idempotent — safe to call every time)
+        exe = _rustdesk_exe()
+        if exe and os.path.isfile(exe):
+            _sp.run([exe, '--password', pw], capture_output=True, timeout=10)
+
+        return pw
+    except Exception as e:
+        print(f'[rustdesk] _ensure_rustdesk_password error: {e}', flush=True)
+        return ''
+
+_RUSTDESK_IDENTITY_PATHS = [
+    r'C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk.toml',
+    r'C:\Windows\ServiceProfiles\NetworkService\AppData\Roaming\RustDesk\config\RustDesk.toml',
+    r'C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config\RustDesk.toml',
+    r'C:\ProgramData\RustDesk\config\RustDesk.toml',
+]
+
+
+def _fix_rustdesk_identity() -> bool:
+    """If RustDesk registered with the public server instead of ours,
+    delete the identity file and restart the service so it re-registers
+    with our private server.  Returns True if a reset was performed."""
+    import re as _re, subprocess as _sp, time as _time
+    for path in _RUSTDESK_IDENTITY_PATHS:
+        if not os.path.isfile(path):
+            continue
+        try:
+            content = open(path, encoding='utf-8', errors='replace').read()
+            # Find the [keys_confirmed] section
+            m = _re.search(r'\[keys_confirmed\](.*?)(?:\[|\Z)', content, _re.DOTALL)
+            if m:
+                confirmed = m.group(1).strip()
+                if not confirmed:
+                    # Empty = service just started, hasn't confirmed any server yet
+                    # Don't delete — just wait for it to confirm
+                    return False
+                # Has our server confirmed? First segment of rust.corp.cirque.com = 'rust'
+                our_name = _RUSTDESK_SERVER.split('.')[0].lower()
+                if our_name in confirmed.lower():
+                    return False  # already confirmed against our server
+                # Has a FOREIGN server (e.g. rs-ny from public RustDesk)
+                print(f'[rustdesk] Foreign server in identity at {path}: {confirmed.strip()} — resetting', flush=True)
+            else:
+                # No [keys_confirmed] section at all — new file, leave it alone
+                return False
+            os.remove(path)
+            # Restart the service so it regenerates identity against our server
+            _sp.run(['sc.exe', 'stop', 'RustDesk'], capture_output=True, timeout=10)
+            _time.sleep(3)
+            _sp.run(['sc.exe', 'start', 'RustDesk'], capture_output=True, timeout=10)
+            _time.sleep(10)
+            print('[rustdesk] Identity reset — service restarted', flush=True)
+            return True
+        except Exception as e:
+            print(f'[rustdesk] identity check error: {e}', flush=True)
+    return False
+
+
+def _rustdesk_exe() -> str:
+    """Return path to RustDesk.exe if installed, else empty string."""
+    pf   = os.environ.get('ProgramFiles', r'C:\Program Files')
+    pf86 = os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')
+    lad  = os.environ.get('LOCALAPPDATA', '')
+    candidates = [
+        r'C:\Program Files\RustDesk\RustDesk.exe',           # machine-scope install
+        r'C:\Program Files (x86)\RustDesk\RustDesk.exe',
+        os.path.join(pf,   'RustDesk', 'RustDesk.exe'),
+        os.path.join(pf86, 'RustDesk', 'RustDesk.exe'),
+        os.path.join(lad,  'Programs', 'RustDesk', 'RustDesk.exe') if lad else '',
+    ]
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return ''
+
+
+def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
+    """Install RustDesk and configure it to use the internal server if it is
+    not present (or has been uninstalled).  Safe to call repeatedly."""
+    import subprocess as _sp, time as _time
+    try:
+        if _rustdesk_exe():
+            # Already installed — just make sure config is correct
+            _write_rustdesk_config()
+            _fix_rustdesk_identity()
+            _ensure_rustdesk_password()
+            sync_rustdesk_id(tracker_url, agent_id, token)
+            _setup_tray(tracker_url, agent_id, token)
+            return
+
+        print('[rustdesk] Not installed — installing...', flush=True)
+
+        # Try 1: winget with --scope machine (works from SYSTEM on most Win10/11)
+        _rustdesk_winget_install()
+
+        # Always verify exe exists after winget — it can exit 0 as SYSTEM
+        # without actually installing (stub/redirect issue)
+        if not _rustdesk_exe():
+            _rustdesk_direct_install()
+
+        _write_rustdesk_config()
+
+        # Start briefly to trigger peer-ID generation
+        exe = _rustdesk_exe()
+        if exe:
+            try:
+                proc = _sp.Popen([exe, '--minimized'], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                _time.sleep(12)
+                proc.terminate()
+                _time.sleep(1)
+            except Exception:
+                pass
+            sync_rustdesk_id(tracker_url, agent_id, token)
+            print('[rustdesk] Install complete.', flush=True)
+        else:
+            print('[rustdesk] Install failed — exe not found after attempts.', flush=True)
+    except Exception as e:
+        print(f'[rustdesk] ensure_rustdesk error: {e}', flush=True)
+
+
+def _rustdesk_winget_install() -> bool:
+    """Try to install RustDesk via winget. Returns True on success."""
+    import subprocess as _sp, glob as _glob
+    # winget may not be on SYSTEM's PATH — find it explicitly
+    winget = 'winget'
+    patterns = [
+        r'C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe',
+        r'C:\Users\*\AppData\Local\Microsoft\WindowsApps\winget.exe',
+    ]
+    for pat in patterns:
+        matches = _glob.glob(pat)
+        if matches:
+            winget = matches[0]
+            break
+    try:
+        r = _sp.run(
+            [winget, 'install', '--id', 'RustDesk.RustDesk',
+             '--silent', '--scope', 'machine',
+             '--accept-source-agreements', '--accept-package-agreements'],
+            capture_output=True, timeout=180
+        )
+        print(f'[rustdesk] winget exit={r.returncode}', flush=True)
+        return r.returncode == 0
+    except Exception as e:
+        print(f'[rustdesk] winget failed: {e}', flush=True)
+        return False
+
+
+def _rustdesk_direct_install() -> None:
+    """Download RustDesk MSI from GitHub and install silently."""
+    import subprocess as _sp, urllib.request as _ur, tempfile as _tmp, os as _os
+    MSI_URL = 'https://github.com/rustdesk/rustdesk/releases/download/1.4.6/rustdesk-1.4.6-x86_64.msi'
+    try:
+        print(f'[rustdesk] Downloading MSI: {MSI_URL}', flush=True)
+        tmp = _tmp.NamedTemporaryFile(suffix='.msi', delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        req = _ur.Request(MSI_URL, headers={'User-Agent': 'CirqueRMM'})
+        with _ur.urlopen(req, timeout=120) as resp, open(tmp_path, 'wb') as fh:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                fh.write(chunk)
+
+        size_mb = _os.path.getsize(tmp_path) / 1024 / 1024
+        print(f'[rustdesk] Downloaded {size_mb:.1f} MB', flush=True)
+        if size_mb < 5:
+            print('[rustdesk] Download too small — aborting', flush=True)
+            _os.unlink(tmp_path)
+            return
+
+        # msiexec /i <file> /qn = quiet, no UI
+        r = _sp.run(
+            ['msiexec', '/i', tmp_path, '/qn', '/norestart'],
+            capture_output=True, timeout=180
+        )
+        print(f'[rustdesk] msiexec exit={r.returncode}', flush=True)
+        if r.stderr:
+            print(f'[rustdesk] msiexec stderr: {r.stderr[:300]}', flush=True)
+        try:
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f'[rustdesk] direct install failed: {e}', flush=True)
+
+
+def _write_rustdesk_config() -> None:
+    """Write RustDesk2.toml server config to all relevant paths."""
+    cfg = (
+        f"rendezvous_server = '{_RUSTDESK_SERVER}'\n"
+        f"nat_type = 1\nserial = 0\n\n[options]\n"
+        f"custom-rendezvous-server = '{_RUSTDESK_SERVER}'\n"
+        f"key = '{_RUSTDESK_KEY}'\n"
+        f"relay-server = ''\napi-server = ''\n"
+    )
+    appdata  = os.environ.get('APPDATA', '')
+    progdata = os.environ.get('ProgramData', r'C:\ProgramData')
+    dirs = [
+        os.path.join(appdata, 'RustDesk', 'config') if appdata else '',
+        os.path.join(progdata, 'RustDesk', 'config'),
+        # MSI-installed RustDesk runs as NT AUTHORITY\LocalService
+        r'C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config',
+        r'C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config',
+    ]
+    for d in dirs:
+        if not d:
+            continue
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, 'RustDesk2.toml'), 'w', encoding='utf-8') as fh:
+                fh.write(cfg)
+        except Exception:
+            pass
+
+
 def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
     try:
         url = f"{tracker_url}/rmm/agent/version?agent_id={agent_id}&token={token}"
@@ -113,6 +612,11 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
     except Exception as e:
         print(f"[update] Check failed: {e}", flush=True)
         return False
+
+
+def _restart_after_update() -> None:
+    """Exit with a non-zero code so NSSM restarts the service after an update."""
+    sys.exit(7)  # arbitrary non-zero so NSSM always restarts
 
 
 # ---------------------------------------------------------------------------
@@ -1076,6 +1580,25 @@ def _collect_software() -> list:
             "install_date": (item.get("InstallDate")    or "").strip(),
         })
     return results
+
+
+def post_software_inventory(tracker_url: str, agent_id: str, token: str) -> None:
+    """Collect installed software and POST it to the tracker HTTP API.
+    Called on startup and every 24 hours. Silently ignores errors."""
+    try:
+        apps = _collect_software()
+        url = f"{tracker_url}/api/rmm/{agent_id}/software?token={token}"
+        import urllib.request as _ur
+        payload = json.dumps(apps).encode()
+        req = _ur.Request(url, data=payload,
+                          headers={"Content-Type": "application/json"},
+                          method="POST")
+        ssl_ctx = _ssl_ctx()
+        with _ur.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+            body = json.loads(resp.read())
+            print(f"[software] Posted {body.get('count', 0)} apps to tracker", flush=True)
+    except Exception as e:
+        print(f"[software] post_software_inventory failed: {e}", flush=True)
 
 
 def _collect_patches() -> list:
@@ -2149,7 +2672,10 @@ async def main() -> None:
 
     # Self-update check on startup
     if check_for_update(tracker_url, agent_id, token):
-        sys.exit(0)
+        sys.exit(7)  # non-zero so NSSM always restarts after update
+
+    # Sync RustDesk peer ID on startup (fast, non-blocking)
+    sync_rustdesk_id(tracker_url, agent_id, token)
 
     shells: Dict[int, ShellSession] = {}
     shell_tasks: Dict[int, asyncio.Task] = {}
@@ -2161,8 +2687,13 @@ async def main() -> None:
                                               ping_interval=None) as ws:
                 print(f"[agent] Connected to gateway as {agent_id}", flush=True)
 
-                # Collect extended info (hardware/OS/security) once on connect
                 loop = asyncio.get_event_loop()
+
+                # Ensure RustDesk is installed — runs in background after connect
+                # so it never blocks the WebSocket from establishing
+                loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
+
+                # Collect extended info (hardware/OS/security) once on connect
                 extended = await loop.run_in_executor(None, _collect_extended)
 
                 # Initial telemetry on connect
@@ -2216,6 +2747,56 @@ async def main() -> None:
                             break
 
                 telem_task = asyncio.create_task(telemetry_loop())
+
+                # RustDesk watchdog — reinstalls if user uninstalls it (check hourly)
+                async def rustdesk_watchdog():
+                    while True:
+                        await asyncio.sleep(3600)  # check every hour
+                        try:
+                            await loop.run_in_executor(
+                                None, ensure_rustdesk, tracker_url, agent_id, token
+                            )
+                        except Exception:
+                            pass
+
+                rustdesk_task = asyncio.create_task(rustdesk_watchdog())
+
+                # Software inventory — post on connect then refresh every 24h
+                async def software_inventory_loop():
+                    # Run immediately on first connect
+                    try:
+                        await loop.run_in_executor(
+                            None, post_software_inventory, tracker_url, agent_id, token
+                        )
+                    except Exception:
+                        pass
+                    while True:
+                        await asyncio.sleep(86400)  # re-collect every 24h
+                        try:
+                            await loop.run_in_executor(
+                                None, post_software_inventory, tracker_url, agent_id, token
+                            )
+                        except Exception:
+                            pass
+
+                asyncio.create_task(software_inventory_loop())
+
+                # Tray setup — runs once per agent process lifetime, then refreshes every 24h
+                global _tray_setup_done
+                if not _tray_setup_done:
+                    _tray_setup_done = True
+                    async def tray_watchdog():
+                        await asyncio.sleep(30)  # short delay after first connect
+                        while True:
+                            try:
+                                await loop.run_in_executor(
+                                    None, _setup_tray, tracker_url, agent_id, token
+                                )
+                            except Exception:
+                                pass
+                            await asyncio.sleep(86400)  # refresh every 24h
+
+                    asyncio.create_task(tray_watchdog())
 
                 # Eagle Eyes monitoring task (started on demand via eagle_eyes_config)
                 eagle_task: Optional[asyncio.Task] = None
@@ -2351,7 +2932,7 @@ async def main() -> None:
                         if msg_type == "update_now":
                             print("[agent] Received update_now — checking for new version...", flush=True)
                             if check_for_update(tracker_url, agent_id, token):
-                                sys.exit(0)   # NSSM will restart; new version will run
+                                sys.exit(7)   # non-zero so NSSM always restarts; new version will run
                             await ws.send(json.dumps({"type": "update_result", "updated": False, "version": AGENT_VERSION}))
                             continue
 
@@ -3209,6 +3790,7 @@ async def main() -> None:
 
                 finally:
                     telem_task.cancel()
+                    rustdesk_task.cancel()
                     if eagle_task and not eagle_task.done():
                         eagle_task.cancel()
 

@@ -68,6 +68,34 @@
         'value': data.total_employees,
         'label': 'Total Employees',
         'link': url_for('employees')
+    },
+    'tickets_open': {
+        'icon': 'bi-ticket-perforated',
+        'color': 'success',
+        'value': data.tickets_open,
+        'label': 'Open Tickets',
+        'link': url_for('tickets') + '?status=Open'
+    },
+    'tickets_inprog': {
+        'icon': 'bi-hourglass-split',
+        'color': 'primary',
+        'value': data.tickets_inprog,
+        'label': 'In Progress',
+        'link': url_for('tickets') + '?status=In+Progress'
+    },
+    'tickets_unassigned': {
+        'icon': 'bi-person-x',
+        'color': 'warning',
+        'value': data.tickets_unassigned,
+        'label': 'Unassigned',
+        'link': url_for('tickets') + '?assignee=unassigned'
+    },
+    'tickets_breached': {
+        'icon': 'bi-alarm',
+        'color': 'danger',
+        'value': data.tickets_breached,
+        'label': 'SLA Breached',
+        'link': url_for('tickets')
     }
 } %}
 

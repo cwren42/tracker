@@ -476,14 +476,35 @@ def store_screenshot(agent_id: str, user_id: Optional[int], b64: str, width: int
         conn.close()
 
 
-def store_eagle_event(agent_id: str, captured_at: str, process_name: str, window_title: str, duration_s: int) -> None:
+def store_eagle_event(agent_id: str, captured_at: str, process_name: str, window_title: str, duration_s: int, idle_s: int = 0) -> None:
     """Store a single Eagle Eyes window focus event."""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO rmm_eagle_event (agent_id, captured_at, process_name, window_title, duration_s) VALUES (?,?,?,?,?)",
-            (agent_id, captured_at, process_name, window_title, duration_s),
+            "INSERT INTO rmm_eagle_event (agent_id, captured_at, process_name, window_title, duration_s, idle_s) VALUES (?,?,?,?,?,?)",
+            (agent_id, captured_at, process_name, window_title, duration_s, idle_s),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_eagle_current(agent_id: str, process_name: str, window_title: str, idle_s: int, is_idle: bool, captured_at: str) -> None:
+    """Update the live 'right now' state for an agent (no history, just latest)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO rmm_eagle_current (agent_id, process_name, window_title, idle_s, is_idle, captured_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(agent_id) DO UPDATE SET
+                 process_name=excluded.process_name,
+                 window_title=excluded.window_title,
+                 idle_s=excluded.idle_s,
+                 is_idle=excluded.is_idle,
+                 captured_at=excluded.captured_at""",
+            (agent_id, process_name, window_title, idle_s, 1 if is_idle else 0, captured_at),
         )
         conn.commit()
     finally:
@@ -794,6 +815,41 @@ def get_patch_job(job_id: int) -> Optional[dict]:
             "titles":     json.loads(row[4] or "[]"),
             "status":     row[5],
         }
+    finally:
+        conn.close()
+
+
+def update_cve_patch_job(
+    job_id: int,
+    status: str,
+    result: Optional[dict] = None,
+    reboot_required: bool = False,
+) -> None:
+    """Update a cve_patch_job row with the result from the agent."""
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute(
+            """
+            UPDATE cve_patch_job
+            SET status          = ?,
+                result_json     = ?,
+                reboot_required = ?,
+                updated_at      = ?,
+                completed_at    = CASE WHEN ? IN ('installed','failed','no_patch')
+                                       THEN ? ELSE completed_at END
+            WHERE id = ?
+            """,
+            (
+                status,
+                json.dumps(result) if result is not None else None,
+                1 if reboot_required else 0,
+                now_iso(),
+                status, now_iso(),
+                job_id,
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
 

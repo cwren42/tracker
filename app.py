@@ -5,7 +5,7 @@ from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta, timezone
-import os, time as _time
+import os, time as _time, threading
 # ── Force server timezone to MST (Mountain Standard Time, UTC-7) ──────────
 os.environ['TZ'] = 'America/Denver'
 _time.tzset()
@@ -27,6 +27,10 @@ from m365_service import M365Service
 from sqlalchemy import text
 from api_system import require_api_key
 import secrets
+import alert_service as _alert_svc
+import workflow_engine as _wf_engine
+import ai_engine as _ai_engine
+import report_engine as _report_engine
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +63,7 @@ app.config['MAIL_USE_TLS'] = False
 app.config['MAIL_USE_SSL'] = False
 app.config['MAIL_USERNAME'] = None
 app.config['MAIL_PASSWORD'] = None
-app.config['MAIL_DEFAULT_SENDER'] = 'assettracker@cirque.com'
+app.config['MAIL_DEFAULT_SENDER'] = 'automated@cirque.com'
 app.config['SEND_EMPLOYEE_EMAILS'] = False  # Disabled for now
 
 db = SQLAlchemy(app)
@@ -68,6 +72,30 @@ login_manager = LoginManager(app)
 # Make now() available in all Jinja2 templates
 app.jinja_env.globals['now'] = now_mst
 login_manager.login_view = 'login'
+
+
+def category_badge_style(category):
+    """Return inline CSS style string for a category badge."""
+    styles = {
+        'Laptop':           'background:#0d6efd;color:#fff',
+        'Desktop':          'background:#0dcaf0;color:#000',
+        'Computer':         'background:#6f42c1;color:#fff',
+        'Server':           'background:#dc3545;color:#fff',
+        'Mini PC':          'background:#198754;color:#fff',
+        'Tablet':           'background:#fd7e14;color:#fff',
+        'Storage':          'background:#ffc107;color:#212529',
+        'SBC':              'background:#343a40;color:#fff',
+        'Monitor':          'background:#20c997;color:#fff',
+        'Network Equipment':'background:#0a58ca;color:#fff',
+        'Phone':            'background:#d63384;color:#fff',
+        'Printer':          'background:#6610f2;color:#fff',
+        'Other':            'background:#6c757d;color:#fff',
+        'Unknown':          'background:#adb5bd;color:#212529',
+    }
+    return styles.get(category, 'background:#6c757d;color:#fff')
+
+
+app.jinja_env.globals['category_badge_style'] = category_badge_style
 mail = Mail(app)
 
 # Import SOC2 models
@@ -172,6 +200,7 @@ class Asset(db.Model):
     last_teamviewer_sync = db.Column(db.DateTime)  # Last sync timestamp
     last_seen = db.Column(db.DateTime)  # Last seen timestamp from TeamViewer
     os_version = db.Column(db.String(100))  # Operating system version
+    device_type = db.Column(db.String(50))   # Windows PC, Windows Server, Linux Server, etc.
     online_state = db.Column(db.String(20))  # Online, Offline, Busy
     rustdesk_id = db.Column(db.String(100))  # RustDesk device ID
     rustdesk_password = db.Column(db.String(255))  # Optional (prefer OTP / user-confirmed)
@@ -649,9 +678,12 @@ def send_email(subject, recipients, text_body, html_body=None):
         if html_body:
             msg.html = html_body
         mail.send(msg)
+        app._last_mail_error = None
         return True
     except Exception as e:
-        app.logger.error(f"Failed to send email: {str(e)}")
+        err = str(e)
+        app.logger.error(f"Failed to send email: {err}")
+        app._last_mail_error = err
         return False
 
 def send_admin_notification(subject, message):
@@ -1491,31 +1523,35 @@ def settings():
         
         if action == 'test_email':
             # Test email to admin
-            test_email = request.form.get('test_email')
-            if test_email:
+            test_email_addr = request.form.get('test_email')
+            if test_email_addr:
                 try:
                     subject = "Asset Tracker - Test Email"
                     message = f"""
                     <p>This is a test email from the Asset Tracker system.</p>
                     <p><strong>Date/Time:</strong> {now_mst().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+                    <p><strong>SMTP Server:</strong> {app.config.get('MAIL_SERVER')}:{app.config.get('MAIL_PORT')}</p>
                     <p><strong>Sent by:</strong> {current_user.username}</p>
                     <p>If you received this email, your SMTP configuration is working correctly!</p>
                     """
                     
-                    if send_email(subject, [test_email], "Test email from Asset Tracker", message):
-                        flash('Test email sent successfully! Check your inbox.', 'success')
+                    if send_email(subject, [test_email_addr], "Test email from Asset Tracker", message):
+                        flash(f'✓ Test email sent successfully to {test_email_addr}! Check your inbox.', 'success')
                     else:
-                        flash('Failed to send test email. Check server logs for details.', 'danger')
+                        err = getattr(app, '_last_mail_error', None) or 'Unknown error'
+                        flash(f'✗ Failed to send test email — {err}', 'danger')
                 except Exception as e:
-                    flash(f'Error sending test email: {str(e)}', 'danger')
+                    flash(f'✗ Error sending test email: {str(e)}', 'danger')
             else:
                 flash('Please enter an email address for testing.', 'warning')
+            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'toggle_employee_emails':
             # Toggle employee email notifications
             app.config['SEND_EMPLOYEE_EMAILS'] = not app.config['SEND_EMPLOYEE_EMAILS']
             status = "enabled" if app.config['SEND_EMPLOYEE_EMAILS'] else "disabled"
             flash(f'Employee email notifications {status}.', 'success')
+            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'update_sender':
             # Update default sender email
@@ -1523,6 +1559,7 @@ def settings():
             if new_sender:
                 app.config['MAIL_DEFAULT_SENDER'] = new_sender
                 flash('Default sender email updated.', 'success')
+            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'update_smtp':
             # Update SMTP settings
@@ -1560,7 +1597,7 @@ def settings():
                 
                 db.session.commit()
                 
-                # Update app config
+                # Update app config immediately (already persisted to DB above)
                 app.config['MAIL_SERVER'] = smtp_server
                 app.config['MAIL_PORT'] = int(smtp_port) if smtp_port else 25
                 app.config['MAIL_USERNAME'] = smtp_username if smtp_username else None
@@ -1570,10 +1607,11 @@ def settings():
                 app.config['MAIL_USE_SSL'] = use_ssl
                 app.config['MAIL_DEFAULT_SENDER'] = sender_email
                 
-                flash('SMTP settings updated successfully!', 'success')
+                flash(f'SMTP settings saved — now using {smtp_server}:{smtp_port}', 'success')
             except Exception as e:
                 db.session.rollback()
                 flash(f'Error updating SMTP settings: {str(e)}', 'danger')
+            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'update_teamviewer':
             # Update TeamViewer settings
@@ -4229,6 +4267,295 @@ def rmm_eagle_eyes_dashboard(agent_id):
                            tz_offset_h=tz_offset_h, tz_label=tz_label)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — Live current state
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rmm/eagle-eyes/<agent_id>/current')
+@login_required
+def api_eagle_current(agent_id):
+    try:
+        row = db.session.execute(
+            text("SELECT process_name, window_title, idle_s, is_idle, captured_at FROM rmm_eagle_current WHERE agent_id = :aid"),
+            {"aid": agent_id}
+        ).mappings().fetchone()
+        if row:
+            return jsonify(ok=True, current=dict(row))
+        return jsonify(ok=True, current=None)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — Focus Sessions (consecutive uninterrupted blocks per app)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rmm/eagle-eyes/<agent_id>/focus-sessions')
+@login_required
+def api_eagle_focus_sessions(agent_id):
+    date_clause, date_params = _eagle_date_params(default_days=7)
+    try:
+        rows = db.session.execute(
+            text(f"""
+                SELECT process_name, window_title, duration_s, captured_at
+                FROM rmm_eagle_event
+                WHERE agent_id = :aid AND {date_clause}
+                ORDER BY captured_at
+            """),
+            {"aid": agent_id, **date_params}
+        ).mappings().fetchall()
+        # Group consecutive events on the same process into focus sessions
+        sessions = []
+        FOCUS_MIN_S = 600   # only surface sessions ≥ 10 min
+        BREAK_S     = 120   # gap ≥ 2 min breaks the session
+        if rows:
+            cur_proc  = rows[0]['process_name']
+            cur_title = rows[0]['window_title']
+            cur_start = rows[0]['captured_at']
+            cur_dur   = rows[0]['duration_s'] or 0
+            for r in rows[1:]:
+                if r['process_name'] == cur_proc:
+                    cur_dur += r['duration_s'] or 0
+                else:
+                    if cur_dur >= FOCUS_MIN_S:
+                        sessions.append({'process_name': cur_proc, 'window_title': cur_title,
+                                         'started_at': cur_start, 'duration_s': cur_dur})
+                    cur_proc  = r['process_name']
+                    cur_title = r['window_title']
+                    cur_start = r['captured_at']
+                    cur_dur   = r['duration_s'] or 0
+            if cur_dur >= FOCUS_MIN_S:
+                sessions.append({'process_name': cur_proc, 'window_title': cur_title,
+                                 'started_at': cur_start, 'duration_s': cur_dur})
+        sessions.sort(key=lambda s: s['duration_s'], reverse=True)
+        return jsonify(ok=True, sessions=sessions[:50])
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — App Classifications
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rmm/eagle-eyes/app-classifications', methods=['GET', 'POST'])
+@login_required
+def api_eagle_app_classifications():
+    if request.method == 'GET':
+        try:
+            rows = db.session.execute(
+                text("SELECT id, process_pattern, label, productivity, created_at FROM rmm_eagle_app_class ORDER BY process_pattern")
+            ).mappings().fetchall()
+            return jsonify(ok=True, classifications=[dict(r) for r in rows])
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    # POST — add or update
+    data = request.get_json() or {}
+    pattern = (data.get('process_pattern') or '').strip().lower()
+    label   = (data.get('label') or '').strip()
+    prod    = (data.get('productivity') or 'neutral').strip()
+    if not pattern:
+        return jsonify(ok=False, error='process_pattern required')
+    if prod not in ('productive','unproductive','neutral'):
+        return jsonify(ok=False, error='Invalid productivity value')
+    try:
+        db.session.execute(text("""
+            INSERT INTO rmm_eagle_app_class (process_pattern, label, productivity, created_at)
+            VALUES (:p, :l, :pr, :ca)
+            ON CONFLICT(process_pattern) DO UPDATE SET label=excluded.label, productivity=excluded.productivity
+        """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat()})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route('/api/rmm/eagle-eyes/app-classifications/<int:cid>', methods=['DELETE'])
+@login_required
+def api_eagle_app_class_delete(cid):
+    try:
+        db.session.execute(text("DELETE FROM rmm_eagle_app_class WHERE id = :id"), {'id': cid})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — Alert Rules
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rmm/eagle-eyes/alerts', methods=['GET', 'POST'])
+@login_required
+def api_eagle_alerts():
+    if request.method == 'GET':
+        try:
+            rows = db.session.execute(
+                text("SELECT id, agent_id, alert_type, threshold, process_pattern, email_notify, enabled, last_fired_at, created_at FROM rmm_eagle_alert_rule ORDER BY id DESC")
+            ).mappings().fetchall()
+            logs = db.session.execute(
+                text("SELECT rule_id, agent_id, message, fired_at FROM rmm_eagle_alert_log ORDER BY fired_at DESC LIMIT 50")
+            ).mappings().fetchall()
+            return jsonify(ok=True, rules=[dict(r) for r in rows], log=[dict(l) for l in logs])
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    data = request.get_json() or {}
+    alert_type = (data.get('alert_type') or '').strip()
+    if alert_type not in ('productivity_below','app_used','idle_over','unproductive_app'):
+        return jsonify(ok=False, error='Invalid alert_type')
+    try:
+        db.session.execute(text("""
+            INSERT INTO rmm_eagle_alert_rule (agent_id, alert_type, threshold, process_pattern, email_notify, enabled, created_at)
+            VALUES (:aid, :at, :th, :pp, :en, 1, :ca)
+        """), {
+            'aid': data.get('agent_id') or None,
+            'at':  alert_type,
+            'th':  data.get('threshold') or None,
+            'pp':  (data.get('process_pattern') or '').strip().lower() or None,
+            'en':  1 if data.get('email_notify', True) else 0,
+            'ca':  datetime.utcnow().isoformat()
+        })
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route('/api/rmm/eagle-eyes/alerts/<int:rid>', methods=['PUT', 'DELETE'])
+@login_required
+def api_eagle_alert_rule(rid):
+    if request.method == 'DELETE':
+        try:
+            db.session.execute(text("DELETE FROM rmm_eagle_alert_rule WHERE id = :id"), {'id': rid})
+            db.session.commit()
+            return jsonify(ok=True)
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    data = request.get_json() or {}
+    try:
+        db.session.execute(text("""
+            UPDATE rmm_eagle_alert_rule SET
+              enabled=:en, threshold=:th, email_notify=:email
+            WHERE id=:id
+        """), {'en': 1 if data.get('enabled',True) else 0, 'th': data.get('threshold'), 'email': 1 if data.get('email_notify',True) else 0, 'id': rid})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — Report Schedules
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rmm/eagle-eyes/report-schedules', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def api_eagle_report_schedules():
+    if request.method == 'GET':
+        try:
+            rows = db.session.execute(
+                text("SELECT id, agent_id, frequency, day_of_week, send_time, email_to, last_sent_at, enabled, created_at FROM rmm_eagle_report_schedule ORDER BY id DESC")
+            ).mappings().fetchall()
+            return jsonify(ok=True, schedules=[dict(r) for r in rows])
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    if request.method == 'DELETE':
+        sid = request.args.get('id')
+        try:
+            db.session.execute(text("DELETE FROM rmm_eagle_report_schedule WHERE id = :id"), {'id': sid})
+            db.session.commit()
+            return jsonify(ok=True)
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    data = request.get_json() or {}
+    try:
+        db.session.execute(text("""
+            INSERT INTO rmm_eagle_report_schedule (agent_id, frequency, day_of_week, send_time, email_to, enabled, created_at)
+            VALUES (:aid, :freq, :dow, :st, :email, 1, :ca)
+        """), {
+            'aid':   data.get('agent_id') or None,
+            'freq':  data.get('frequency','weekly'),
+            'dow':   data.get('day_of_week', 1),
+            'st':    data.get('send_time','08:00'),
+            'email': data.get('email_to',''),
+            'ca':    datetime.utcnow().isoformat()
+        })
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eagle Eyes — Multi-agent comparison page + data
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/rmm/eagle-eyes/compare')
+@login_required
+def rmm_eagle_compare():
+    agents = db.session.execute(
+        text("""
+            SELECT a.agent_id, COALESCE(t.hostname, a.agent_id) as hostname
+            FROM rmm_agent a
+            LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
+            WHERE a.enabled = 1
+            ORDER BY hostname
+        """)
+    ).mappings().fetchall()
+    return render_template('compare_agents.html', agents=[dict(a) for a in agents])
+
+
+@app.route('/api/rmm/eagle-eyes/compare-data')
+@login_required
+def api_eagle_compare_data():
+    agent_ids = request.args.get('agents','').split(',')
+    agent_ids = [a.strip() for a in agent_ids if a.strip()]
+    days      = int(request.args.get('days', 7))
+    if not agent_ids:
+        return jsonify(ok=False, error='No agents specified')
+    results = {}
+    for aid in agent_ids:
+        try:
+            summary = db.session.execute(text(f"""
+                SELECT process_name, SUM(duration_s) as total_s, COUNT(*) as events
+                FROM rmm_eagle_event
+                WHERE agent_id = :aid AND captured_at >= datetime('now','-{days} days')
+                GROUP BY process_name ORDER BY total_s DESC LIMIT 10
+            """), {'aid': aid}).mappings().fetchall()
+            daily = db.session.execute(text(f"""
+                SELECT DATE(captured_at) as day, SUM(duration_s) as total_s
+                FROM rmm_eagle_event
+                WHERE agent_id = :aid AND captured_at >= datetime('now','-{days} days')
+                GROUP BY day ORDER BY day
+            """), {'aid': aid}).mappings().fetchall()
+            hostname = db.session.execute(
+                text("SELECT hostname FROM rmm_telemetry WHERE agent_id = :aid LIMIT 1"), {'aid': aid}
+            ).scalar() or aid
+            results[aid] = {
+                'hostname': hostname,
+                'summary':  [dict(r) for r in summary],
+                'daily':    [dict(r) for r in daily],
+                'total_s':  sum(r['total_s'] or 0 for r in summary),
+            }
+        except Exception as e:
+            results[aid] = {'hostname': aid, 'error': str(e)}
+    return jsonify(ok=True, results=results, days=days)
+
+
+@app.route('/api/rmm/eagle-eyes/<agent_id>/gantt')
+@login_required
+def api_eagle_gantt(agent_id):
+    """Return events for a specific day as a gantt-ready list."""
+    day = request.args.get('day')  # YYYY-MM-DD
+    if not day:
+        from datetime import date
+        day = date.today().isoformat()
+    try:
+        rows = db.session.execute(text("""
+            SELECT process_name, window_title, duration_s, idle_s, captured_at
+            FROM rmm_eagle_event
+            WHERE agent_id = :aid
+              AND DATE(captured_at) = :day
+            ORDER BY captured_at
+        """), {'aid': agent_id, 'day': day}).mappings().fetchall()
+        return jsonify(ok=True, day=day, events=[dict(r) for r in rows])
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
 @app.route('/api/rmm/screenshot/<agent_id>', methods=['POST'])
 @login_required
 def api_rmm_screenshot_request(agent_id):
@@ -4267,12 +4594,14 @@ def api_rmm_screenshot_latest(agent_id):
         return jsonify({'ok': False, 'error': 'No screenshot yet'}), 404
     return jsonify({
         'ok': True,
-        'id': row[0],
-        'image_b64': row[1],
-        'format': row[2],
-        'width': row[3],
-        'height': row[4],
-        'captured_at': row[5],
+        'screenshot': {
+            'id': row[0],
+            'image_b64': row[1],
+            'format': row[2],
+            'width': row[3],
+            'height': row[4],
+            'captured_at': row[5],
+        },
     })
 
 
@@ -4748,6 +5077,7 @@ def assets():
         'asset_tag': Asset.asset_tag,
         'name': Asset.name,
         'category': Asset.category,
+        'device_type': Asset.device_type,
         'manufacturer': Asset.manufacturer,
         'serial_number': Asset.serial_number,
         'status': Asset.status,
@@ -4857,6 +5187,7 @@ def add_asset():
             expected_life_years=expected_life_years,
             replacement_date=replacement_date,
             condition=request.form.get('condition', 'Good'),
+            device_type=request.form.get('device_type') or None,
             rustdesk_id=(request.form.get('rustdesk_id') or '').strip() or None
         )
         
@@ -4946,11 +5277,23 @@ def view_asset(asset_id):
     ).order_by(AssetLoan.checked_out_at.desc()).limit(20).all()
     installed_apps = InstalledApp.query.filter_by(asset_id=asset.id).order_by(InstalledApp.name).all()
 
+    # Vulnerability exposure count for this asset
+    vuln_count = 0
+    try:
+        _vcon = _alert_svc._get_db()
+        vuln_count = _vcon.execute(
+            "SELECT COUNT(*) FROM device_vulnerability WHERE asset_id=? AND status='Open'",
+            (asset_id,)
+        ).fetchone()[0]
+        _vcon.close()
+    except Exception:
+        pass
+
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
                          now=now_mst, intune_device=intune_device, intune_error=intune_error,
                          rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele,
                          active_loan=active_loan, loan_history=loan_history,
-                         installed_apps=installed_apps)
+                         installed_apps=installed_apps, vuln_count=vuln_count)
 
 @app.route('/assets/<int:asset_id>/edit', methods=['GET', 'POST'])
 @login_required
@@ -4963,7 +5306,13 @@ def edit_asset(asset_id):
         asset.model = 'XPS 15 9520'
         asset.serial_number = 'GJBBLR3'
         db.session.commit()
-    
+
+    # Lock hardware identity fields when asset is managed by an RMM agent
+    rmm_row = db.session.execute(
+        text("SELECT id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
+        {'aid': asset.id}).fetchone()
+    rmm_linked = rmm_row is not None
+
     if request.method == 'POST':
         old_status = asset.status
         
@@ -4984,11 +5333,13 @@ def edit_asset(asset_id):
                 asset.photo = photo_filename
         
         asset.asset_tag = request.form.get('asset_tag')
-        asset.name = request.form.get('name')
+        # Hardware identity fields are read-only when managed by an RMM agent
+        if not rmm_linked:
+            asset.name = request.form.get('name')
+            asset.manufacturer = request.form.get('manufacturer')
+            asset.model = request.form.get('model')
+            asset.serial_number = request.form.get('serial_number')
         asset.category = request.form.get('category')
-        asset.manufacturer = request.form.get('manufacturer')
-        asset.model = request.form.get('model')
-        asset.serial_number = request.form.get('serial_number')
         asset.purchase_date = datetime.strptime(request.form.get('purchase_date'), '%Y-%m-%d').date() if request.form.get('purchase_date') else None
         asset.purchase_cost = float(request.form.get('purchase_cost')) if request.form.get('purchase_cost') else None
         asset.warranty_expiry = datetime.strptime(request.form.get('warranty_expiry'), '%Y-%m-%d').date() if request.form.get('warranty_expiry') else None
@@ -4996,6 +5347,7 @@ def edit_asset(asset_id):
         asset.location = request.form.get('location')
         asset.notes = request.form.get('notes')
         asset.rustdesk_id = (request.form.get('rustdesk_id') or '').strip() or None
+        asset.rustdesk_password = (request.form.get('rustdesk_password') or '').strip() or None
         asset.vendor = request.form.get('vendor') or None
         asset.expected_life_years = int(request.form.get('expected_life_years', 3))
         # Auto-compute replacement_date from purchase_date + expected_life_years
@@ -5008,6 +5360,7 @@ def edit_asset(asset_id):
         elif request.form.get('replacement_date'):
             asset.replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date()
         asset.condition = request.form.get('condition', 'Good')
+        asset.device_type = request.form.get('device_type') or None
         # Auto-set disposal_date when status transitions to Disposed or Retired
         if asset.status in ('Disposed', 'Retired') and not asset.disposal_date:
             asset.disposal_date = now_mst().date()
@@ -5030,7 +5383,7 @@ def edit_asset(asset_id):
         return redirect(url_for('view_asset', asset_id=asset.id))
     
     employees = Employee.query.all()
-    return render_template('edit_asset.html', asset=asset, employees=employees)
+    return render_template('edit_asset.html', asset=asset, employees=employees, rmm_linked=rmm_linked)
 
 
 @app.route('/assets/<int:asset_id>/remote/rustdesk/start', methods=['POST'])
@@ -8390,8 +8743,609 @@ def _rebuild_msi_if_stale():
     threading.Thread(target=_worker, name='msi-rebuild', daemon=True).start()
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALERT CENTER
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/alerts/center')
+@login_required
+def alert_center():
+    from sqlalchemy import text as _t
+    users = db.session.execute(_t("SELECT id, username, full_name FROM user ORDER BY username")).mappings().fetchall()
+    return render_template('alert_center.html', users=[dict(u) for u in users])
+
+
+@app.route('/api/alerts/rules', methods=['GET', 'POST'])
+@login_required
+def api_alert_rules():
+    con = _alert_svc._get_db()
+    try:
+        if request.method == 'GET':
+            cat = request.args.get('category')
+            if cat:
+                rows = con.execute("SELECT * FROM alert_rule WHERE category=? ORDER BY alert_type", (cat,)).fetchall()
+            else:
+                rows = con.execute("SELECT * FROM alert_rule ORDER BY category, alert_type").fetchall()
+            return jsonify(ok=True, rules=[dict(r) for r in rows])
+        # POST – create
+        d = request.get_json(force=True)
+        con.execute(
+            """INSERT INTO alert_rule (category, alert_type, label, threshold_value, threshold_unit,
+               enabled, auto_ticket, ticket_priority, assigned_to_user_id, email_notify,
+               teams_notify, teams_webhook_url, cooldown_minutes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (d.get('category','agent'), d.get('alert_type',''), d.get('label',''),
+             d.get('threshold_value',0), d.get('threshold_unit',''),
+             1 if d.get('enabled',True) else 0,
+             1 if d.get('auto_ticket') else 0,
+             d.get('ticket_priority','Normal'), d.get('assigned_to_user_id'),
+             1 if d.get('email_notify',True) else 0,
+             1 if d.get('teams_notify') else 0,
+             d.get('teams_webhook_url',''), d.get('cooldown_minutes',60))
+        )
+        con.commit()
+        return jsonify(ok=True)
+    finally:
+        con.close()
+
+
+@app.route('/api/alerts/rules/<int:rid>', methods=['PUT', 'DELETE'])
+@login_required
+def api_alert_rule(rid):
+    con = _alert_svc._get_db()
+    try:
+        if request.method == 'DELETE':
+            con.execute("DELETE FROM alert_rule WHERE id=?", (rid,))
+            con.commit()
+            return jsonify(ok=True)
+        # PUT – update
+        d = request.get_json(force=True)
+        con.execute(
+            """UPDATE alert_rule SET label=?, threshold_value=?, threshold_unit=?,
+               enabled=?, auto_ticket=?, ticket_priority=?, assigned_to_user_id=?,
+               email_notify=?, teams_notify=?, teams_webhook_url=?, cooldown_minutes=?
+               WHERE id=?""",
+            (d.get('label',''), d.get('threshold_value',0), d.get('threshold_unit',''),
+             1 if d.get('enabled',True) else 0,
+             1 if d.get('auto_ticket') else 0,
+             d.get('ticket_priority','Normal'), d.get('assigned_to_user_id'),
+             1 if d.get('email_notify',True) else 0,
+             1 if d.get('teams_notify') else 0,
+             d.get('teams_webhook_url',''), d.get('cooldown_minutes',60), rid)
+        )
+        con.commit()
+        return jsonify(ok=True)
+    finally:
+        con.close()
+
+
+@app.route('/api/alerts/rules/<int:rid>/toggle', methods=['POST'])
+@login_required
+def api_alert_rule_toggle(rid):
+    con = _alert_svc._get_db()
+    try:
+        row = con.execute("SELECT enabled FROM alert_rule WHERE id=?", (rid,)).fetchone()
+        if not row:
+            return jsonify(ok=False, error='Not found'), 404
+        new_state = 0 if row['enabled'] else 1
+        con.execute("UPDATE alert_rule SET enabled=? WHERE id=?", (new_state, rid))
+        con.commit()
+        return jsonify(ok=True, enabled=bool(new_state))
+    finally:
+        con.close()
+
+
+@app.route('/api/alerts/log')
+@login_required
+def api_alert_log():
+    con = _alert_svc._get_db()
+    try:
+        cat = request.args.get('category')
+        limit = int(request.args.get('limit', 100))
+        if cat:
+            rows = con.execute(
+                "SELECT * FROM alert_log WHERE category=? ORDER BY fired_at DESC LIMIT ?",
+                (cat, limit)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM alert_log ORDER BY fired_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return jsonify(ok=True, log=[dict(r) for r in rows])
+    finally:
+        con.close()
+
+
+# ── Notification bell ────────────────────────────────────────────────────────
+
+@app.route('/api/notifications/bell')
+@login_required
+def api_notifications_bell():
+    con = _alert_svc._get_db()
+    try:
+        unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=0").fetchone()[0]
+        recent = con.execute(
+            "SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20"
+        ).fetchall()
+        return jsonify(ok=True, unread=unread, items=[dict(r) for r in recent])
+    finally:
+        con.close()
+
+
+@app.route('/api/notifications/mark-read', methods=['POST'])
+@login_required
+def api_notifications_mark_read():
+    con = _alert_svc._get_db()
+    try:
+        ids = (request.get_json(force=True) or {}).get('ids')
+        if ids:
+            con.execute(f"UPDATE notification_bell SET read_flag=1 WHERE id IN ({','.join('?'*len(ids))})", ids)
+        else:
+            con.execute("UPDATE notification_bell SET read_flag=1")
+        con.commit()
+        return jsonify(ok=True)
+    finally:
+        con.close()
+
+
+@app.route('/api/settings/<key>', methods=['GET'])
+@login_required
+def api_setting_get(key):
+    allowed = {'teams_webhook_url'}
+    if key not in allowed:
+        return jsonify(ok=False, error='Not allowed'), 403
+    s = db.session.execute(text("SELECT value FROM setting WHERE key=:k"), {'k': key}).fetchone()
+    return jsonify(ok=True, key=key, value=s[0] if s else '')
+
+
+@app.route('/api/settings', methods=['POST'])
+@login_required
+def api_setting_set():
+    data = request.get_json(force=True) or {}
+    key  = data.get('key', '')
+    val  = data.get('value', '')
+    allowed = {'teams_webhook_url'}
+    if key not in allowed:
+        return jsonify(ok=False, error='Not allowed'), 403
+    existing = db.session.execute(text("SELECT id FROM setting WHERE key=:k"), {'k': key}).fetchone()
+    if existing:
+        db.session.execute(text("UPDATE setting SET value=:v WHERE key=:k"), {'k': key, 'v': val})
+    else:
+        db.session.execute(text("INSERT INTO setting (key, value) VALUES (:k, :v)"), {'k': key, 'v': val})
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VULNERABILITY DASHBOARD
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/vulnerabilities')
+@login_required
+def vulnerability_dashboard():
+    con = _alert_svc._get_db()
+    try:
+        counts = {s: 0 for s in ('Critical', 'High', 'Medium', 'Low')}
+        for row in con.execute("""
+            SELECT vc.severity, COUNT(DISTINCT vc.cve_id) as c
+            FROM vulnerability_cache vc
+            INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+            GROUP BY vc.severity
+        """).fetchall():
+            sev = row['severity']
+            if sev in counts:
+                counts[sev] = row['c']
+        last_sync_raw = con.execute("SELECT MAX(synced_at) FROM vulnerability_cache").fetchone()[0]
+        device_count = con.execute("SELECT COUNT(DISTINCT asset_id) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
+        open_count   = con.execute("SELECT COUNT(*) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
+    finally:
+        con.close()
+    # Convert last_sync from UTC to MST (UTC-7)
+    last_sync = None
+    if last_sync_raw:
+        try:
+            _MST = timezone(timedelta(hours=-7))
+            _dt  = datetime.fromisoformat(last_sync_raw.replace('Z', '+00:00'))
+            if _dt.tzinfo is None:
+                _dt = _dt.replace(tzinfo=timezone.utc)
+            last_sync = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
+        except Exception:
+            last_sync = last_sync_raw[:16]
+    return render_template('vulnerability_dashboard.html',
+                           counts=counts, last_sync=last_sync,
+                           device_count=device_count, open_count=open_count)
+
+
+@app.route('/api/vulnerabilities/sync', methods=['POST'])
+@login_required
+def api_vuln_sync():
+    """Kick off Defender sync in a background thread so the worker isn't blocked."""
+    # `app` is the real Flask instance here (not a proxy), so pass it directly.
+    _app = app
+    def _bg():
+        with _app.app_context():
+            vc, dc, err = _alert_svc.sync_defender_vulnerabilities()
+            if err:
+                logger.error(f'Background Defender sync error: {err}')
+            else:
+                logger.info(f'Background Defender sync complete: {vc} CVEs, {dc} device exposures')
+    threading.Thread(target=_bg, daemon=True, name='defender-sync').start()
+    return jsonify(ok=True, message='Sync started')
+
+
+@app.route('/api/vulnerabilities/stats')
+@login_required
+def api_vuln_stats():
+    con = _alert_svc._get_db()
+    try:
+        # Count only CVEs that have at least one device with an Open exposure
+        counts = {}
+        for row in con.execute("""
+            SELECT vc.severity, COUNT(DISTINCT vc.cve_id) as c
+            FROM vulnerability_cache vc
+            INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+            GROUP BY vc.severity
+        """).fetchall():
+            counts[row['severity']] = row['c']
+        devices = con.execute("SELECT COUNT(DISTINCT asset_id) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
+        open_exp = con.execute("SELECT COUNT(*) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
+        last_sync_raw = con.execute("SELECT MAX(synced_at) FROM vulnerability_cache").fetchone()[0]
+        last_sync_mst = None
+        if last_sync_raw:
+            try:
+                _MST = timezone(timedelta(hours=-7))
+                _dt  = datetime.fromisoformat(last_sync_raw.replace('Z', '+00:00'))
+                if _dt.tzinfo is None:
+                    _dt = _dt.replace(tzinfo=timezone.utc)
+                last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
+            except Exception:
+                last_sync_mst = last_sync_raw[:16]
+        return jsonify(Critical=counts.get('Critical',0), High=counts.get('High',0),
+                       Medium=counts.get('Medium',0), Low=counts.get('Low',0),
+                       devices=devices, open_exposures=open_exp, last_sync=last_sync_mst)
+    finally:
+        con.close()
+
+@app.route('/api/vulnerabilities')
+@login_required
+def api_vulnerabilities():
+    con = _alert_svc._get_db()
+    try:
+        sev   = request.args.get('severity')
+        limit = int(request.args.get('limit', 500))
+        if sev:
+            rows = con.execute(
+                """SELECT vc.*, COUNT(DISTINCT dv.asset_id) AS device_count
+                   FROM vulnerability_cache vc
+                   INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+                   WHERE vc.severity=?
+                   GROUP BY vc.cve_id
+                   ORDER BY vc.cvss DESC LIMIT ?""",
+                (sev, limit)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT vc.*, COUNT(DISTINCT dv.asset_id) AS device_count
+                   FROM vulnerability_cache vc
+                   INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+                   GROUP BY vc.cve_id
+                   ORDER BY CASE vc.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
+                             WHEN 'Medium' THEN 3 ELSE 4 END, vc.cvss DESC LIMIT ?""",
+                (limit,)
+            ).fetchall()
+        return jsonify(ok=True, vulnerabilities=[dict(r) for r in rows])
+    finally:
+        con.close()
+
+
+@app.route('/api/vulnerabilities/devices')
+@login_required
+def api_vuln_devices():
+    con = _alert_svc._get_db()
+    try:
+        cve_id = request.args.get('cve_id')
+        asset_id = request.args.get('asset_id')
+        if cve_id:
+            rows = con.execute(
+                """SELECT dv.*, a.name as asset_name,
+                          COALESCE(rt.hostname, a.name) as display_name
+                   FROM device_vulnerability dv
+                   LEFT JOIN asset a ON a.id = dv.asset_id
+                   LEFT JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+                   LEFT JOIN rmm_telemetry rt ON rt.agent_id = ra.agent_id
+                   WHERE dv.cve_id=? ORDER BY dv.severity""",
+                (cve_id,)
+            ).fetchall()
+        elif asset_id:
+            rows = con.execute(
+                """SELECT dv.*, vc.name as vuln_name, vc.description
+                   FROM device_vulnerability dv
+                   LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
+                   WHERE dv.asset_id=? ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END""",
+                (asset_id,)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT dv.*, a.name as asset_name, a.hostname
+                   FROM device_vulnerability dv
+                   LEFT JOIN asset a ON a.id = dv.asset_id
+                   WHERE dv.status='Open'
+                   ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END
+                   LIMIT 500"""
+            ).fetchall()
+        return jsonify(ok=True, devices=[dict(r) for r in rows])
+    finally:
+        con.close()
+
+
+@app.route('/api/vulnerabilities/<cve_id>/status', methods=['PUT'])
+@login_required
+def api_vuln_status(cve_id):
+    d = request.get_json(force=True)
+    con = _alert_svc._get_db()
+    username = current_user.username if current_user.is_authenticated else 'system'
+    now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
+    try:
+        asset_id = d.get('asset_id')
+        status   = d.get('status', 'Open')
+        note     = d.get('remediation_note', '')
+        plan     = d.get('plan_date')
+        if asset_id:
+            con.execute(
+                """UPDATE device_vulnerability
+                   SET status=?, remediation_note=?, plan_date=?,
+                       updated_at=?, updated_by=?
+                   WHERE cve_id=? AND asset_id=?""",
+                (status, note, plan, now_str, username, cve_id, asset_id)
+            )
+            con.commit()
+            # Log to asset activity history
+            try:
+                asset = Asset.query.get(int(asset_id))
+                if asset:
+                    desc = f'Vulnerability {cve_id} marked {status}'
+                    if plan:
+                        desc += f' — remediation planned {plan}'
+                    if note:
+                        desc += f'. Note: {note}'
+                    db.session.add(AssetHistory(
+                        asset_id=asset.id,
+                        action='Vulnerability',
+                        description=desc,
+                        user_id=current_user.id if current_user.is_authenticated else None,
+                        timestamp=now_mst()
+                    ))
+                    db.session.commit()
+            except Exception:
+                pass
+        else:
+            # Bulk update — get all affected asset_ids first for logging
+            affected = con.execute(
+                "SELECT DISTINCT asset_id FROM device_vulnerability WHERE cve_id=?",
+                (cve_id,)
+            ).fetchall()
+            con.execute(
+                """UPDATE device_vulnerability
+                   SET status=?, remediation_note=?, plan_date=?,
+                       updated_at=?, updated_by=?
+                   WHERE cve_id=?""",
+                (status, note, plan, now_str, username, cve_id)
+            )
+            con.commit()
+            # Log to each affected asset
+            try:
+                desc = f'Vulnerability {cve_id} marked {status} (bulk update)'
+                if plan:
+                    desc += f' — remediation planned {plan}'
+                if note:
+                    desc += f'. Note: {note}'
+                for row in affected:
+                    if row[0]:
+                        db.session.add(AssetHistory(
+                            asset_id=row[0],
+                            action='Vulnerability',
+                            description=desc,
+                            user_id=current_user.id if current_user.is_authenticated else None,
+                            timestamp=now_mst()
+                        ))
+                db.session.commit()
+            except Exception:
+                pass
+        return jsonify(ok=True)
+    finally:
+        con.close()
+
+
+@app.route('/api/vulnerabilities/<cve_id>/deploy', methods=['POST'])
+@login_required
+def api_vuln_deploy(cve_id):
+    """Create and dispatch CVE patch deployment job(s) to device agent(s).
+
+    Body (JSON):
+      asset_id  — optional int; if omitted deploys to ALL devices with this CVE
+    """
+    import json as _json, urllib.request as _req, urllib.error as _err
+    data     = request.get_json(force=True) or {}
+    asset_id = data.get('asset_id')
+    username = current_user.username if current_user.is_authenticated else 'system'
+    con      = _alert_svc._get_db()
+    now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
+
+    try:
+        if asset_id:
+            rows = con.execute(
+                """SELECT dv.asset_id, ra.agent_id
+                   FROM device_vulnerability dv
+                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+                   WHERE dv.cve_id = ? AND dv.asset_id = ?
+                   LIMIT 1""",
+                (cve_id, asset_id)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT DISTINCT dv.asset_id, ra.agent_id
+                   FROM device_vulnerability dv
+                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+                   WHERE dv.cve_id = ? AND dv.status = 'Open'""",
+                (cve_id,)
+            ).fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        return jsonify(ok=False, error='No connected agents found for this CVE'), 404
+
+    dispatched = []
+    errors     = []
+    for (aid, agent_id) in rows:
+        # Create job record
+        try:
+            raw = db.session.execute(
+                text("""INSERT INTO cve_patch_job
+                        (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
+                        VALUES (:aid, :agent, :cve, 'queued', :who, :now, :now, :now)"""),
+                {'aid': aid, 'agent': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
+            )
+            db.session.commit()
+            job_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
+        except Exception as e:
+            errors.append({'agent_id': agent_id, 'error': f'DB error: {e}'})
+            continue
+
+        # Dispatch to gateway
+        payload = _json.dumps({'job_id': job_id, 'cve_ids': [cve_id]}).encode()
+        try:
+            req = _req.Request(
+                f"{RMM_GATEWAY_INTERNAL}/deploy-cve-patches/{agent_id}",
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with _req.urlopen(req, timeout=10) as resp:
+                result = _json.loads(resp.read())
+            if result.get('ok'):
+                dispatched.append({'asset_id': aid, 'agent_id': agent_id, 'job_id': job_id})
+                # Mark deploying
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='deploying', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+            else:
+                errors.append({'agent_id': agent_id, 'error': result.get('error', 'gateway error')})
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+        except Exception as e:
+            # Agent offline or gateway error — mark queued (will retry when online)
+            errors.append({'agent_id': agent_id, 'error': str(e)})
+
+    return jsonify(ok=True, dispatched=dispatched, errors=errors,
+                   total=len(rows), sent=len(dispatched))
+
+
+@app.route('/api/vulnerabilities/cve-patch-jobs')
+@login_required
+def api_cve_patch_jobs():
+    """Poll CVE patch job status.
+
+    Query params:
+      cve_id   — required
+      asset_id — optional, filter to one device
+    """
+    import json as _json
+    cve_id   = request.args.get('cve_id')
+    asset_id = request.args.get('asset_id')
+    if not cve_id:
+        return jsonify(ok=False, error='cve_id required'), 400
+    con = _alert_svc._get_db()
+    try:
+        if asset_id:
+            rows = con.execute(
+                """SELECT j.id, j.asset_id, j.agent_id, j.cve_id, j.status,
+                          j.deployed_by, j.deployed_at, j.completed_at,
+                          j.result_json, j.reboot_required, j.updates_found,
+                          j.created_at, a.name as asset_name
+                   FROM cve_patch_job j
+                   LEFT JOIN asset a ON a.id = j.asset_id
+                   WHERE j.cve_id = ? AND j.asset_id = ?
+                   ORDER BY j.id DESC LIMIT 1""",
+                (cve_id, asset_id)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT j.id, j.asset_id, j.agent_id, j.cve_id, j.status,
+                          j.deployed_by, j.deployed_at, j.completed_at,
+                          j.result_json, j.reboot_required, j.updates_found,
+                          j.created_at, a.name as asset_name
+                   FROM cve_patch_job j
+                   LEFT JOIN asset a ON a.id = j.asset_id
+                   WHERE j.cve_id = ?
+                   ORDER BY j.id DESC LIMIT 50""",
+                (cve_id,)
+            ).fetchall()
+        jobs = []
+        for r in rows:
+            res = _json.loads(r[8]) if r[8] else None
+            jobs.append({
+                'id':              r[0],
+                'asset_id':        r[1],
+                'agent_id':        r[2],
+                'cve_id':          r[3],
+                'status':          r[4],
+                'deployed_by':     r[5],
+                'deployed_at':     r[6],
+                'completed_at':    r[7],
+                'result':          res,
+                'reboot_required': bool(r[9]),
+                'updates_found':   r[10],
+                'created_at':      r[11],
+                'asset_name':      r[12],
+            })
+        return jsonify(ok=True, jobs=jobs)
+    finally:
+        con.close()
+
+
 # Auto-rebuild MSI whenever the service starts (non-blocking background thread)
 _rebuild_msi_if_stale()
+
+# Start alert evaluator background thread
+_alert_svc.start_background_thread()
+
+# Start workflow schedule runner
+_wf_engine.start_schedule_runner()
+
+# Load SMTP settings from DB into app.config so they survive restarts
+def _load_smtp_from_db():
+    try:
+        mappings = [
+            ('smtp_server',   'MAIL_SERVER',         None,  False),
+            ('smtp_port',     'MAIL_PORT',            None,  True),
+            ('smtp_username', 'MAIL_USERNAME',        None,  False),
+            ('smtp_password', 'MAIL_PASSWORD',        None,  False),
+            ('smtp_use_tls',  'MAIL_USE_TLS',         None,  'bool'),
+            ('smtp_use_ssl',  'MAIL_USE_SSL',         None,  'bool'),
+            ('smtp_sender',   'MAIL_DEFAULT_SENDER',  None,  False),
+        ]
+        with app.app_context():
+            for db_key, cfg_key, default, cast in mappings:
+                row = Setting.query.filter_by(key=db_key).first()
+                if row and row.value and row.value.strip():
+                    v = row.value.strip()
+                    if cast == 'bool':
+                        app.config[cfg_key] = (v == 'true')
+                    elif cast is True:
+                        app.config[cfg_key] = int(v)
+                    else:
+                        app.config[cfg_key] = v if v else None
+    except Exception as exc:
+        app.logger.warning(f'Could not load SMTP settings from DB at startup: {exc}')
+
+_load_smtp_from_db()
 
 
 if __name__ == '__main__':
@@ -8405,3 +9359,432 @@ if __name__ == '__main__':
         license_service.start_periodic_check()
         
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+
+# ── Helper for new feature routes (raw sqlite3, same DB file) ─────────────────
+def get_db():
+    import sqlite3 as _sq3
+    _conn = _sq3.connect('/var/www/tracker/assets.db')
+    _conn.row_factory = _sq3.Row
+    return _conn
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKFLOW ROUTES
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route('/workflows')
+@login_required
+def workflows():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    return render_template('workflows.html')
+
+
+@app.route('/api/workflows', methods=['GET'])
+@login_required
+def api_workflows_list():
+    db_conn = get_db()
+    rows = db_conn.execute(
+        "SELECT id, name, description, trigger_type, enabled, created_by, created_at FROM workflow_definitions ORDER BY id DESC"
+    ).fetchall()
+    db_conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/workflows', methods=['POST'])
+@login_required
+def api_workflow_create():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    data = request.get_json()
+    if not data.get('name') or not data.get('trigger_type'):
+        return jsonify({'error': 'name and trigger_type required'}), 400
+    db_conn = get_db()
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    cur = db_conn.execute(
+        """INSERT INTO workflow_definitions
+           (name, description, trigger_type, trigger_config, nodes, edges, enabled, created_by, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,1,?,?,?)""",
+        (data['name'], data.get('description',''), data['trigger_type'],
+         json.dumps(data.get('trigger_config', {})),
+         json.dumps(data.get('nodes', [])),
+         json.dumps(data.get('edges', [])),
+         current_user.username, now, now)
+    )
+    wf_id = cur.lastrowid
+    db_conn.commit(); db_conn.close()
+    return jsonify({'id': wf_id, 'ok': True})
+
+
+@app.route('/api/workflows/<int:wf_id>', methods=['GET'])
+@login_required
+def api_workflow_get(wf_id):
+    db_conn = get_db()
+    row = db_conn.execute("SELECT * FROM workflow_definitions WHERE id=?", (wf_id,)).fetchone()
+    db_conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    r = dict(row)
+    r['nodes']          = json.loads(r['nodes'] or '[]')
+    r['edges']          = json.loads(r['edges'] or '[]')
+    r['trigger_config'] = json.loads(r['trigger_config'] or '{}')
+    return jsonify(r)
+
+
+@app.route('/api/workflows/<int:wf_id>', methods=['PUT'])
+@login_required
+def api_workflow_update(wf_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    data = request.get_json()
+    now  = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    db_conn = get_db()
+    db_conn.execute(
+        """UPDATE workflow_definitions
+           SET name=?, description=?, trigger_type=?, trigger_config=?,
+               nodes=?, edges=?, enabled=?, updated_at=?
+           WHERE id=?""",
+        (data.get('name'), data.get('description',''), data.get('trigger_type'),
+         json.dumps(data.get('trigger_config',{})),
+         json.dumps(data.get('nodes',[])),
+         json.dumps(data.get('edges',[])),
+         1 if data.get('enabled', True) else 0,
+         now, wf_id)
+    )
+    db_conn.commit(); db_conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/workflows/<int:wf_id>', methods=['DELETE'])
+@login_required
+def api_workflow_delete(wf_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    db_conn = get_db()
+    db_conn.execute("DELETE FROM workflow_definitions WHERE id=?", (wf_id,))
+    db_conn.commit(); db_conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/workflows/<int:wf_id>/toggle', methods=['POST'])
+@login_required
+def api_workflow_toggle(wf_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    db_conn = get_db()
+    row = db_conn.execute("SELECT enabled FROM workflow_definitions WHERE id=?", (wf_id,)).fetchone()
+    if not row:
+        db_conn.close()
+        return jsonify({'error': 'Not found'}), 404
+    new_val = 0 if row['enabled'] else 1
+    db_conn.execute("UPDATE workflow_definitions SET enabled=? WHERE id=?", (new_val, wf_id))
+    db_conn.commit(); db_conn.close()
+    return jsonify({'enabled': new_val})
+
+
+@app.route('/api/workflows/<int:wf_id>/run', methods=['POST'])
+@login_required
+def api_workflow_run(wf_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    ctx = request.get_json() or {}
+    ctx['triggered_by'] = current_user.username
+    try:
+        run_id = _wf_engine.execute_workflow(wf_id, ctx)
+        return jsonify({'ok': True, 'run_id': run_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/workflows/<int:wf_id>/runs', methods=['GET'])
+@login_required
+def api_workflow_runs(wf_id):
+    db_conn = get_db()
+    rows = db_conn.execute(
+        "SELECT id, status, started_at, completed_at, error FROM workflow_runs WHERE workflow_id=? ORDER BY id DESC LIMIT 50",
+        (wf_id,)
+    ).fetchall()
+    db_conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/workflows/ai-generate', methods=['POST'])
+@login_required
+def api_workflow_ai_generate():
+    """Use AI to generate a workflow from a plain-English prompt."""
+    data   = request.get_json(force=True) or {}
+    prompt = (data.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'ok': False, 'error': 'prompt required'}), 400
+    result = _ai_engine.generate_workflow(prompt)
+    return jsonify(result)
+
+
+@app.route('/api/workflows/runs/<int:run_id>/steps', methods=['GET'])
+@login_required
+def api_workflow_run_steps(run_id):
+    db_conn = get_db()
+    steps = db_conn.execute(
+        "SELECT * FROM workflow_run_steps WHERE run_id=? ORDER BY id",
+        (run_id,)
+    ).fetchall()
+    db_conn.close()
+    result = []
+    for s in steps:
+        r = dict(s)
+        r['output_data'] = json.loads(r.get('output_data') or '{}')
+        result.append(r)
+    return jsonify(result)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# AI ROUTES
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/ai/ticket/<int:ticket_id>/suggest', methods=['POST'])
+@login_required
+def api_ai_ticket_suggest(ticket_id):
+    try:
+        result = _ai_engine.suggest_ticket_resolution(ticket_id)
+        # Parse JSON suggestion for frontend
+        if result.get('suggestion'):
+            try:
+                result['parsed'] = json.loads(result['suggestion'])
+            except Exception:
+                result['parsed'] = {'diagnosis': result['suggestion']}
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai/suggestions/<int:sug_id>/apply', methods=['POST'])
+@login_required
+def api_ai_suggestion_apply(sug_id):
+    try:
+        _ai_engine.apply_ticket_suggestion(sug_id)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/ai/suggestions/<int:sug_id>/dismiss', methods=['POST'])
+@login_required
+def api_ai_suggestion_dismiss(sug_id):
+    _ai_engine.dismiss_ticket_suggestion(sug_id)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/ai/ticket/<int:ticket_id>/suggestions', methods=['GET'])
+@login_required
+def api_ai_ticket_suggestions(ticket_id):
+    db_conn = get_db()
+    rows = db_conn.execute(
+        "SELECT * FROM ai_ticket_suggestions WHERE ticket_id=? ORDER BY id DESC LIMIT 10",
+        (ticket_id,)
+    ).fetchall()
+    db_conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d['parsed'] = json.loads(d['suggestion'])
+        except Exception:
+            d['parsed'] = {'diagnosis': d['suggestion']}
+        result.append(d)
+    return jsonify(result)
+
+
+@app.route('/api/ai/security-summary', methods=['GET'])
+@login_required
+def api_ai_security_summary_get():
+    summary = _ai_engine.get_latest_security_summary()
+    return jsonify(summary or {})
+
+
+@app.route('/api/ai/security-summary/generate', methods=['POST'])
+@login_required
+def api_ai_security_summary_generate():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    try:
+        result = _ai_engine.generate_security_summary()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai/settings', methods=['GET'])
+@login_required
+def api_ai_settings_get():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    db_conn = get_db()
+    keys = ['openai_api_key', 'openai_model', 'ai_ticket_enabled',
+            'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
+    result = {}
+    for key in keys:
+        row = db_conn.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
+        val = row['value'] if row else ''
+        # Mask API key
+        if key == 'openai_api_key' and val:
+            val = val[:8] + '…' + val[-4:]
+        result[key] = val
+    db_conn.close()
+    return jsonify(result)
+
+
+@app.route('/api/ai/settings', methods=['POST'])
+@login_required
+def api_ai_settings_save():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    data = request.get_json()
+    db_conn = get_db()
+    allowed = ['openai_api_key', 'openai_model', 'ai_ticket_enabled',
+               'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
+    for key in allowed:
+        if key in data:
+            # Don't overwrite masked key
+            if key == 'openai_api_key' and '…' in str(data[key]):
+                continue
+            existing = db_conn.execute("SELECT id FROM setting WHERE key=?", (key,)).fetchone()
+            if existing:
+                db_conn.execute("UPDATE setting SET value=? WHERE key=?", (data[key], key))
+            else:
+                db_conn.execute("INSERT INTO setting (key, value) VALUES (?,?)", (key, data[key]))
+    db_conn.commit(); db_conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/ai/test', methods=['POST'])
+@login_required
+def api_ai_test():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    try:
+        import openai as _oai
+        db_conn = get_db()
+        row = db_conn.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
+        model_row = db_conn.execute("SELECT value FROM setting WHERE key='openai_model'").fetchone()
+        db_conn.close()
+        api_key = row['value'] if row else None
+        model   = (model_row['value'] if model_row else None) or 'gpt-4o'
+        if not api_key:
+            return jsonify({'ok': False, 'error': 'No API key saved. Add your key and hit Save first.'}), 400
+        client = _oai.OpenAI(api_key=api_key)
+        resp   = client.chat.completions.create(
+            model=model,
+            messages=[{'role':'user', 'content':'Reply with just the word OK.'}],
+            max_tokens=5
+        )
+        reply = resp.choices[0].message.content.strip()
+        return jsonify({'ok': True, 'model': model, 'reply': reply})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# REPORT ROUTES
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route('/reports/advanced')
+@login_required
+def reports_advanced():
+    return render_template('reports_advanced.html')
+
+
+@app.route('/api/reports/templates', methods=['GET'])
+@login_required
+def api_report_templates():
+    db_conn = get_db()
+    rows = db_conn.execute(
+        "SELECT id, name, description, report_type, is_builtin, created_at FROM report_templates ORDER BY is_builtin DESC, name"
+    ).fetchall()
+    db_conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/reports/runs', methods=['GET'])
+@login_required
+def api_report_runs_list():
+    db_conn = get_db()
+    rows = db_conn.execute(
+        "SELECT id, name, report_type, status, row_count, file_csv, file_pdf, generated_by, generated_at, completed_at FROM report_runs ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+    db_conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/reports/run', methods=['POST'])
+@login_required
+def api_report_run():
+    data       = request.get_json()
+    rtype      = data.get('report_type')
+    name       = data.get('name') or rtype
+    config     = data.get('config', {})
+    tmpl_id    = data.get('template_id')
+    if not rtype:
+        return jsonify({'error': 'report_type required'}), 400
+
+    db_conn = get_db()
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    cur = db_conn.execute(
+        "INSERT INTO report_runs (template_id, name, report_type, config, status, generated_by, generated_at) VALUES (?,?,?,?,?,?,?)",
+        (tmpl_id, name, rtype, json.dumps(config), 'pending', current_user.username, now)
+    )
+    run_id = cur.lastrowid
+    db_conn.commit(); db_conn.close()
+
+    # Run in background
+    def _bg():
+        _report_engine.run_report(run_id, tmpl_id, name, rtype, config, current_user.username)
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({'ok': True, 'run_id': run_id})
+
+
+@app.route('/api/reports/runs/<int:run_id>', methods=['GET'])
+@login_required
+def api_report_run_status(run_id):
+    db_conn = get_db()
+    row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
+    db_conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(dict(row))
+
+
+@app.route('/api/reports/runs/<int:run_id>/data', methods=['GET'])
+@login_required
+def api_report_run_data(run_id):
+    """Return in-browser table data for a completed report."""
+    db_conn = get_db()
+    row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
+    db_conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['status'] != 'ready':
+        return jsonify({'error': 'Report not ready yet', 'status': row['status']}), 202
+
+    rtype  = row['report_type']
+    config = json.loads(row['config'] or '{}')
+    fetcher = _report_engine.FETCHERS.get(rtype)
+    if not fetcher:
+        return jsonify({'error': 'Unknown report type'}), 400
+    cols, rows = fetcher(config)
+    return jsonify({'cols': cols, 'rows': rows, 'count': len(rows)})
+
+
+@app.route('/api/reports/download/<string:filename>')
+@login_required
+def api_report_download(filename):
+    safe = os.path.basename(filename)
+    path = os.path.join(_report_engine.REPORT_DIR, safe)
+    if not os.path.exists(path):
+        return jsonify({'error': 'File not found'}), 404
+    mimetype = 'text/csv' if safe.endswith('.csv') else 'application/pdf' if safe.endswith('.pdf') else 'text/html'
+    return send_file(path, as_attachment=True, download_name=safe, mimetype=mimetype)
+

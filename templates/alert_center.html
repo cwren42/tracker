@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+{% block title %}Alert Center{% endblock %}
+
+{% block content %}
+<style>
+  .rule-card { background:#0f1923; border:1px solid #1a2d3d; border-radius:10px; transition:border-color .15s; }
+  .rule-card:hover { border-color:#2a4a6a; }
+  .form-switch .form-check-input { width:2.5em; height:1.3em; cursor:pointer; }
+  .form-check-input:checked { background-color:#28a745 !important; border-color:#28a745 !important; }
+  .form-check-input:focus { box-shadow:0 0 0 .25rem rgba(40,167,69,.25); }
+  .badge-cat { font-size:.65rem; letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; border-radius:10px; }
+  .sev-Urgent { color:#ff6b6b; } .sev-High { color:#ff8c42; }
+  .sev-Normal { color:#fcc419; } .sev-Low { color:#74c0fc; }
+  .log-row-Critical td { border-left:3px solid #ff6b6b; }
+  .log-row-High      td { border-left:3px solid #ff8c42; }
+  .log-row-Normal    td:first-child { border-left:3px solid #fcc419; }
+  /* Bootstrap 5 doesn't have btn-xs — define it */
+  .btn-xs { padding:.15rem .45rem; font-size:.72rem; line-height:1.3; border-radius:.25rem; }
+  /* Nav tab active highlight matches per-category color (set via JS) */
+  #alertTabs .nav-link { color:#8899aa; border-bottom:2px solid transparent; }
+  #alertTabs .nav-link.active { color:#fff; background:transparent; }
+  #alertTabs .nav-link:hover { color:#cdd9e5; }
+</style>
+
+<div class="container-fluid py-3" style="max-width:1400px;">
+
+  <!-- Header -->
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h5 class="mb-0 fw-bold"><i class="bi bi-bell-fill me-2 text-warning"></i>Alert Center</h5>
+    <span class="text-muted small">Configure alerts, notification rules, and auto-ticketing</span>
+    <div class="ms-auto d-flex gap-2">
+      <a href="/vulnerabilities" class="btn btn-sm btn-outline-danger">
+        <i class="bi bi-shield-exclamation me-1"></i>Vulnerabilities
+      </a>
+      <button class="btn btn-sm btn-warning" onclick="showAddRule()">
+        <i class="bi bi-plus-lg me-1"></i>Add Rule
+      </button>
+    </div>
+  </div>
+
+  <!-- Teams Webhook setting -->
+  <div class="card border-0 shadow-sm mb-3" style="background:#0a1420;border:1px solid #1a2535 !important;">
+    <div class="card-body py-2 px-3 d-flex flex-wrap align-items-center gap-3">
+      <i class="bi bi-microsoft-teams text-primary"></i>
+      <span class="small text-muted">Teams Webhook:</span>
+      <input type="url" id="global-teams-wh" class="form-control form-control-sm" placeholder="https://outlook.office.com/webhook/..."
+             style="max-width:420px;" />
+      <button class="btn btn-sm btn-outline-primary" onclick="saveTeamsWebhook()">Save</button>
+      <span class="text-muted small ms-auto">Used by all rules with Teams notify enabled unless overridden per-rule</span>
+    </div>
+  </div>
+
+  <!-- Nav tabs -->
+  <ul class="nav nav-tabs mb-3" id="alertTabs">
+    <li class="nav-item"><button class="nav-link active" data-cat="agent"        onclick="switchCat('agent',this)">
+      <i class="bi bi-pc-display me-1"></i>Agent / RMM</button></li>
+    <li class="nav-item"><button class="nav-link"         data-cat="asset"        onclick="switchCat('asset',this)">
+      <i class="bi bi-hdd me-1"></i>Asset Lifecycle</button></li>
+    <li class="nav-item"><button class="nav-link"         data-cat="vulnerability" onclick="switchCat('vulnerability',this)">
+      <i class="bi bi-shield-exclamation me-1"></i>Vulnerabilities</button></li>
+    <li class="nav-item"><button class="nav-link"         data-cat="eagle_eyes"   onclick="switchCat('eagle_eyes',this)">
+      <i class="bi bi-eye me-1"></i>Eagle Eyes</button></li>
+    <li class="nav-item ms-auto"><button class="nav-link" data-cat="__log"        onclick="switchCat('__log',this)">
+      <i class="bi bi-clock-history me-1"></i>Alert Log</button></li>
+  </ul>
+
+  <!-- Rules panel -->
+  <div id="rules-panel">
+    <div class="row g-3" id="rules-grid"></div>
+    <p id="rules-empty" class="text-muted text-center py-4" style="display:none;">No rules in this category.</p>
+    <div id="rules-spinner" class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>
+  </div>
+
+  <!-- Log panel -->
+  <div id="log-panel" style="display:none;">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle" style="font-size:.82rem;">
+        <thead><tr class="text-muted">
+          <th>Time</th><th>Category</th><th>Type</th><th>Message</th><th>Ticket</th>
+        </tr></thead>
+        <tbody id="log-tbody"><tr><td colspan="5" class="text-center text-muted py-4">
+          <span class="spinner-border spinner-border-sm"></span>
+        </td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Edit / Add Rule Modal -->
+<div class="modal fade" id="ruleModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="background:#0f1923;border:1px solid #1a3050;">
+      <div class="modal-header border-0 pb-0">
+        <h6 class="modal-title fw-bold"><i class="bi bi-pencil me-2"></i><span id="ruleModal-title">Edit Alert Rule</span></h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="r-id">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label small text-muted">Label</label>
+            <input type="text" id="r-label" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Category</label>
+            <select id="r-category" class="form-select form-select-sm">
+              <option value="agent">Agent / RMM</option>
+              <option value="asset">Asset</option>
+              <option value="vulnerability">Vulnerability</option>
+              <option value="eagle_eyes">Eagle Eyes</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Type Key</label>
+            <input type="text" id="r-type" class="form-control form-control-sm" placeholder="e.g. cpu_high">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Threshold</label>
+            <input type="number" id="r-threshold" class="form-control form-control-sm" step="any" min="0">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Unit</label>
+            <select id="r-unit" class="form-select form-select-sm">
+              <option value="">—</option>
+              <option value="percent">percent</option>
+              <option value="minutes">minutes</option>
+              <option value="days">days</option>
+              <option value="hours">hours</option>
+              <option value="count">count</option>
+              <option value="gb">GB</option>
+              <option value="years">years</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Cooldown (min)</label>
+            <input type="number" id="r-cooldown" class="form-control form-control-sm" min="1">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small text-muted">Ticket Priority</label>
+            <select id="r-priority" class="form-select form-select-sm">
+              <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-muted">Auto-assign Ticket To</label>
+            <select id="r-assign" class="form-select form-select-sm">
+              <option value="">— None —</option>
+              {% for u in users %}
+              <option value="{{ u.id }}">{{ u.full_name or u.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted">Teams Webhook Override (leave blank to use global)</label>
+            <input type="url" id="r-teams-wh" class="form-control form-control-sm" placeholder="https://...">
+          </div>
+          <!-- Toggles -->
+          <div class="col-12">
+            <div class="d-flex flex-wrap gap-4 mt-1">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="r-enabled">
+                <label class="form-check-label small" for="r-enabled">Enabled</label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="r-email">
+                <label class="form-check-label small" for="r-email">Email notify</label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="r-teams">
+                <label class="form-check-label small" for="r-teams">Teams notify</label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="r-ticket">
+                <label class="form-check-label small" for="r-ticket">Auto-create ticket</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer border-0">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm btn-primary px-4" onclick="saveRule()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _currentCat = 'agent';
+let _ruleModal;
+
+const CAT_LABELS  = {agent:'Agent / RMM', asset:'Asset Lifecycle', vulnerability:'Vulnerability', eagle_eyes:'Eagle Eyes'};
+const CAT_ICONS   = {agent:'bi-pc-display', asset:'bi-hdd', vulnerability:'bi-shield-exclamation', eagle_eyes:'bi-eye'};
+const CAT_COLORS  = {agent:'#4dabf7', asset:'#69db7c', vulnerability:'#ff6b6b', eagle_eyes:'#da77f2'};
+const PRIO_COLORS = {Urgent:'#ff6b6b', High:'#ff8c42', Normal:'#fcc419', Low:'#74c0fc'};
+
+function switchCat(cat, btn) {
+  document.querySelectorAll('#alertTabs .nav-link').forEach(b => {
+    b.classList.remove('active');
+    b.style.borderBottomColor = 'transparent';
+  });
+  btn.classList.add('active');
+  btn.style.borderBottomColor = CAT_COLORS[cat] || '#4dabf7';
+  _currentCat = cat;
+  if (cat === '__log') {
+    document.getElementById('rules-panel').style.display = 'none';
+    document.getElementById('log-panel').style.display   = '';
+    loadLog();
+  } else {
+    document.getElementById('rules-panel').style.display = '';
+    document.getElementById('log-panel').style.display   = 'none';
+    loadRules(cat);
+  }
+}
+
+async function loadRules(cat) {
+  const grid    = document.getElementById('rules-grid');
+  const empty   = document.getElementById('rules-empty');
+  const spinner = document.getElementById('rules-spinner');
+  grid.innerHTML = ''; empty.style.display='none'; spinner.style.display='';
+  try {
+    const r = await fetch(`/api/alerts/rules?category=${cat}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    spinner.style.display = 'none';
+    if (!d.ok || !d.rules.length) { empty.style.display=''; return; }
+
+  grid.innerHTML = d.rules.map(rule => {
+    const col   = CAT_COLORS[rule.category] || '#888';
+    const pCol  = PRIO_COLORS[rule.ticket_priority] || '#aaa';
+    const thresh = rule.threshold_value > 0 ? `${rule.threshold_value} ${rule.threshold_unit||''}` : '—';
+    const badges = [
+      rule.email_notify  ? `<span class="badge bg-secondary"><i class="bi bi-envelope-fill me-1"></i>Email</span>` : '',
+      rule.teams_notify  ? `<span class="badge" style="background:#5865f2;"><i class="bi bi-microsoft me-1"></i>Teams</span>` : '',
+      rule.auto_ticket   ? `<span class="badge" style="background:#2a4a6a;"><i class="bi bi-ticket-perforated me-1"></i>Ticket</span>` : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="col-lg-4 col-md-6">
+      <div class="rule-card p-3 h-100" id="rcard-${rule.id}">
+        <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+          <div class="flex-grow-1 overflow-hidden">
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:6px;height:6px;border-radius:50%;background:${col};flex-shrink:0;"></div>
+              <span class="fw-semibold text-white text-truncate" style="font-size:.85rem;" title="${rule.label||rule.alert_type}">${rule.label||rule.alert_type}</span>
+            </div>
+            <div class="text-muted mt-1" style="font-size:.7rem;">
+              Threshold: <span class="text-white">${thresh}</span>
+              &nbsp;·&nbsp;Cooldown: <span class="text-white">${rule.cooldown_minutes}m</span>
+              &nbsp;·&nbsp;Priority: <span style="color:${pCol};">${rule.ticket_priority}</span>
+            </div>
+          </div>
+          <div class="form-check form-switch mb-0 flex-shrink-0">
+            <input class="form-check-input" type="checkbox" ${rule.enabled?'checked':''} onchange="toggleRule(${rule.id},this)">
+          </div>
+        </div>
+        <div class="mb-2" style="min-height:22px;">${badges}</div>
+        <div class="d-flex gap-2 mt-auto">
+          <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.72rem;" onclick="editRule(${JSON.stringify(rule).replace(/"/g,'&quot;')})">
+            <i class="bi bi-pencil"></i> Edit
+          </button>
+          <button class="btn btn-xs btn-outline-danger py-0 px-2 ms-auto" style="font-size:.72rem;" onclick="deleteRule(${rule.id})">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  } catch(e) {
+    spinner.style.display = 'none';
+    grid.innerHTML = `<div class="col-12"><div class="alert alert-danger py-2 small">Failed to load rules: ${e.message}</div></div>`;
+  }
+}
+
+async function toggleRule(id, cb) {
+  const r = await fetch(`/api/alerts/rules/${id}/toggle`, {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) { cb.checked = !cb.checked; }
+  // Visual pulse
+  const card = document.getElementById(`rcard-${id}`);
+  if (card) {
+    card.style.transition='opacity .2s';
+    card.style.opacity = d.enabled ? '1' : '0.45';
+  }
+}
+
+async function deleteRule(id) {
+  if (!confirm('Delete this alert rule?')) return;
+  await fetch(`/api/alerts/rules/${id}`, {method:'DELETE'});
+  loadRules(_currentCat);
+}
+
+function showAddRule() {
+  document.getElementById('ruleModal-title').textContent = 'Add Alert Rule';
+  document.getElementById('r-id').value        = '';
+  document.getElementById('r-label').value     = '';
+  document.getElementById('r-type').value      = '';
+  document.getElementById('r-threshold').value = 0;
+  document.getElementById('r-cooldown').value  = 60;
+  document.getElementById('r-enabled').checked = true;
+  document.getElementById('r-email').checked   = true;
+  document.getElementById('r-teams').checked   = false;
+  document.getElementById('r-ticket').checked  = false;
+  document.getElementById('r-priority').value  = 'Normal';
+  document.getElementById('r-category').value  = _currentCat !== '__log' ? _currentCat : 'agent';
+  document.getElementById('r-teams-wh').value  = '';
+  document.getElementById('r-assign').value    = '';
+  _ruleModal.show();
+}
+
+function editRule(r) {
+  document.getElementById('ruleModal-title').textContent = 'Edit Alert Rule';
+  document.getElementById('r-id').value        = r.id;
+  document.getElementById('r-label').value     = r.label || '';
+  document.getElementById('r-type').value      = r.alert_type || '';
+  document.getElementById('r-threshold').value = r.threshold_value || 0;
+  document.getElementById('r-unit').value      = r.threshold_unit || '';
+  document.getElementById('r-cooldown').value  = r.cooldown_minutes || 60;
+  document.getElementById('r-enabled').checked = !!r.enabled;
+  document.getElementById('r-email').checked   = !!r.email_notify;
+  document.getElementById('r-teams').checked   = !!r.teams_notify;
+  document.getElementById('r-ticket').checked  = !!r.auto_ticket;
+  document.getElementById('r-priority').value  = r.ticket_priority || 'Normal';
+  document.getElementById('r-category').value  = r.category || 'agent';
+  document.getElementById('r-teams-wh').value  = r.teams_webhook_url || '';
+  document.getElementById('r-assign').value    = r.assigned_to_user_id || '';
+  _ruleModal.show();
+}
+
+async function saveRule() {
+  const id = document.getElementById('r-id').value;
+  const payload = {
+    label:               document.getElementById('r-label').value,
+    alert_type:          document.getElementById('r-type').value,
+    category:            document.getElementById('r-category').value,
+    threshold_value:     parseFloat(document.getElementById('r-threshold').value)||0,
+    threshold_unit:      document.getElementById('r-unit').value,
+    cooldown_minutes:    parseInt(document.getElementById('r-cooldown').value)||60,
+    enabled:             document.getElementById('r-enabled').checked,
+    email_notify:        document.getElementById('r-email').checked,
+    teams_notify:        document.getElementById('r-teams').checked,
+    auto_ticket:         document.getElementById('r-ticket').checked,
+    ticket_priority:     document.getElementById('r-priority').value,
+    teams_webhook_url:   document.getElementById('r-teams-wh').value,
+    assigned_to_user_id: document.getElementById('r-assign').value || null,
+  };
+  const url    = id ? `/api/alerts/rules/${id}` : '/api/alerts/rules';
+  const method = id ? 'PUT' : 'POST';
+  await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  _ruleModal.hide();
+  if (_currentCat !== '__log') loadRules(_currentCat);
+}
+
+async function loadLog() {
+  const tbody = document.getElementById('log-tbody');
+  tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
+  const r = await fetch('/api/alerts/log?limit=200');
+  const d = await r.json();
+  if (!d.ok || !d.log.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No alerts logged yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.log.map(l => {
+    const catIcon = CAT_ICONS[l.category] || 'bi-bell';
+    const catCol  = CAT_COLORS[l.category] || '#888';
+    const ts = (l.fired_at||'').slice(0,16).replace('T',' ');
+    const ticket = l.ticket_id
+      ? `<a href="/tickets/${l.ticket_id}" class="badge bg-primary text-decoration-none">#${l.ticket_id}</a>` : '';
+    return `<tr>
+      <td class="text-muted" style="white-space:nowrap;">${ts}</td>
+      <td><i class="bi ${catIcon} me-1" style="color:${catCol};"></i><span class="text-muted" style="font-size:.75rem;">${l.category||''}</span></td>
+      <td><code style="font-size:.72rem;">${l.alert_type||''}</code></td>
+      <td style="max-width:400px;" class="text-truncate" title="${l.message||''}">${l.message||''}</td>
+      <td>${ticket}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveTeamsWebhook() {
+  const val = document.getElementById('global-teams-wh').value.trim();
+  await fetch('/api/settings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({key:'teams_webhook_url', value:val})
+  });
+}
+
+// Load global Teams webhook on page load
+async function loadTeamsWebhook() {
+  try {
+    const r = await fetch('/api/settings/teams_webhook_url');
+    const d = await r.json();
+    if (d.value) document.getElementById('global-teams-wh').value = d.value;
+  } catch(_) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  _ruleModal = new bootstrap.Modal(document.getElementById('ruleModal'));
+  // Default to Alert Log so users see fired alerts, not rules
+  const logBtn = document.querySelector('#alertTabs .nav-link[data-cat="__log"]');
+  if (logBtn) {
+    document.querySelectorAll('#alertTabs .nav-link').forEach(b => b.classList.remove('active'));
+    logBtn.classList.add('active');
+    switchCat('__log', logBtn);
+  } else {
+    const firstTab = document.querySelector('#alertTabs .nav-link.active');
+    if (firstTab) firstTab.style.borderBottomColor = CAT_COLORS[_currentCat] || '#4dabf7';
+    loadRules('agent');
+  }
+  loadTeamsWebhook();
+});
+</script>
+{% endblock %}

@@ -3,84 +3,56 @@
 {% block title %}Assets - Asset Tracker{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h1 class="mb-1">Assets</h1>
-        {% if request.args.get('category') or request.args.get('status') or request.args.get('lifecycle') or request.args.get('filter') %}
-        <div class="mb-0">
-            <small class="text-muted">Active filters: </small>
-            {% if request.args.get('filter') %}
-            <span class="badge bg-primary">
-                Quick Filter: {{ request.args.get('filter')|replace('_', ' ')|title }}
-                <a href="{{ url_for('assets', search=request.args.get('search', ''), status=request.args.get('status', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
-            </span>
-            {% endif %}
-            {% if request.args.get('category') %}
-            <span class="badge bg-secondary">
-                Category: {{ request.args.get('category') }}
-                <a href="{{ url_for('assets', search=request.args.get('search', ''), status=request.args.get('status', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
-            </span>
-            {% endif %}
-            {% if request.args.get('status') %}
-            <span class="badge bg-info">
-                Status: {{ request.args.get('status') }}
-                <a href="{{ url_for('assets', search=request.args.get('search', ''), category=request.args.get('category', ''), lifecycle=request.args.get('lifecycle', '')) }}" class="text-white ms-1">×</a>
-            </span>
-            {% endif %}
-            {% if request.args.get('lifecycle') %}
-            <span class="badge bg-warning">
-                Lifecycle: {{ request.args.get('lifecycle') }}
-                <a href="{{ url_for('assets', search=request.args.get('search', ''), category=request.args.get('category', ''), status=request.args.get('status', '')) }}" class="text-white ms-1">×</a>
-            </span>
-            {% endif %}
-            <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-secondary ms-2">Clear All</a>
+        <h1 class="mb-0">Assets</h1>
+        {% set any_filter = request.args.get('category') or request.args.get('status') or request.args.get('lifecycle') or request.args.get('filter') or request.args.get('search') or request.args.get('warranty_status') %}
+        {% if any_filter %}
+        <div class="mt-1">
+            <small class="text-muted me-1">Filtered:</small>
+            {% if request.args.get('filter') %}<span class="badge bg-primary me-1">{{ request.args.get('filter')|replace('_',' ')|title }}</span>{% endif %}
+            {% if request.args.get('search') %}<span class="badge bg-secondary me-1">"{{ request.args.get('search') }}"</span>{% endif %}
+            {% if request.args.get('category') %}<span class="badge bg-secondary me-1">{{ request.args.get('category') }}</span>{% endif %}
+            {% if request.args.get('status') %}<span class="badge bg-info me-1">{{ request.args.get('status') }}</span>{% endif %}
+            {% if request.args.get('lifecycle') %}<span class="badge bg-warning text-dark me-1">{{ request.args.get('lifecycle') }}</span>{% endif %}
+            {% if request.args.get('warranty_status') %}<span class="badge bg-secondary me-1">Warranty: {{ request.args.get('warranty_status') }}</span>{% endif %}
+            <a href="{{ url_for('assets') }}" class="text-muted small">✕ clear</a>
         </div>
         {% endif %}
     </div>
-    <div>
-        {% if current_user.role in ['admin', 'manager'] %}
-        <a href="{{ url_for('find_duplicate_assets') }}" class="btn btn-warning">
-            <i class="bi bi-files"></i> Find Duplicates
-        </a>
-        <form method="POST" action="{{ url_for('sync_assets_from_intune') }}" style="display: inline;" onsubmit="return confirm('Sync all devices from Microsoft Intune? This will create new assets or update existing ones based on serial numbers.');">
-            <button type="submit" class="btn btn-secondary">
-                <i class="bi bi-arrow-repeat"></i> Sync from Intune
-            </button>
-        </form>
-        <a href="{{ url_for('bulk_assign_csv') }}" class="btn btn-primary">
-            <i class="bi bi-file-earmark-spreadsheet"></i> Assign from CSV
-        </a>
-        <a href="{{ url_for('import_assets') }}" class="btn btn-info">
-            <i class="bi bi-upload"></i> Import Assets
-        </a>
-        {% endif %}
-        <a href="{{ url_for('export_assets_csv') }}" class="btn btn-success">
-            <i class="bi bi-download"></i> Export CSV
-        </a>
+    <div class="d-flex gap-2 align-items-center">
         {% if current_user.role in ['admin', 'manager'] %}
         <a href="{{ url_for('add_asset') }}" class="btn btn-primary">
             <i class="bi bi-plus-circle"></i> Add Asset
         </a>
-        <div class="btn-group" role="group">
-            <a href="{{ url_for('download_agent_installer') }}" class="btn btn-outline-secondary" title="Download Windows MSI installer for RMM agent">
-                <i class="bi bi-robot"></i> Download Agent
-            </a>
-            <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
-                <span class="visually-hidden">Toggle Dropdown</span>
+        <!-- Actions dropdown -->
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                <i class="bi bi-three-dots"></i> Actions
             </button>
             <ul class="dropdown-menu dropdown-menu-end">
+                <li><h6 class="dropdown-header">Import / Export</h6></li>
+                <li><a class="dropdown-item" href="{{ url_for('import_assets') }}"><i class="bi bi-upload me-2"></i>Import Assets</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('bulk_assign_csv') }}"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Assign from CSV</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('export_assets_csv') }}"><i class="bi bi-download me-2"></i>Export CSV</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><h6 class="dropdown-header">Maintenance</h6></li>
+                <li><a class="dropdown-item" href="{{ url_for('find_duplicate_assets') }}"><i class="bi bi-files me-2"></i>Find Duplicates</a></li>
                 <li>
-                    <a class="dropdown-item" href="{{ url_for('download_agent_installer') }}">
-                        <i class="bi bi-box-arrow-in-down"></i> MSI Installer <small class="text-muted">(recommended)</small>
-                    </a>
+                    <form method="POST" action="{{ url_for('sync_assets_from_intune') }}" onsubmit="return confirm('Sync all devices from Intune?');">
+                        <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat me-2"></i>Sync from Intune</button>
+                    </form>
                 </li>
-                <li>
-                    <a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}">
-                        <i class="bi bi-terminal"></i> PowerShell Script <small class="text-muted">(.ps1)</small>
-                    </a>
-                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li><h6 class="dropdown-header">RMM Agent</h6></li>
+                <li><a class="dropdown-item" href="{{ url_for('download_agent_installer') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Agent (MSI)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}"><i class="bi bi-terminal me-2"></i>Download Agent (PS1)</a></li>
             </ul>
         </div>
+        {% else %}
+        <a href="{{ url_for('export_assets_csv') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-download"></i> Export CSV
+        </a>
         {% endif %}
     </div>
 </div>
@@ -112,22 +84,14 @@
 </div>
 
 <!-- Advanced Search & Filters -->
-<div class="card mb-4">
-    <div class="card-header">
-        <button class="btn btn-sm btn-link text-decoration-none p-0" type="button" data-bs-toggle="collapse" data-bs-target="#advancedFilters">
-            <i class="bi bi-funnel"></i> Advanced Search & Filters
-            <i class="bi bi-chevron-down"></i>
+<div class="card mb-3">
+    <div class="card-header py-2">
+        <button class="btn btn-sm btn-link text-decoration-none p-0 text-start w-100" type="button" data-bs-toggle="collapse" data-bs-target="#advancedFilters">
+            <i class="bi bi-funnel me-1"></i> Search &amp; Filters
+            <i class="bi bi-chevron-down ms-1" style="font-size:.75rem;"></i>
         </button>
-        <span class="float-end">
-            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="saveCurrentFilters()">
-                <i class="bi bi-bookmark"></i> Save Search
-            </button>
-            <button type="button" class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#savedFiltersModal">
-                <i class="bi bi-bookmarks"></i> Saved Filters
-            </button>
-        </span>
     </div>
-    <div class="collapse show" id="advancedFilters">
+    <div class="collapse {% if request.args.get('search') or request.args.get('status') or request.args.getlist('categories') or request.args.get('purchase_from') or request.args.get('purchase_to') or request.args.get('warranty_status') or request.args.get('lifecycle') %}show{% endif %}" id="advancedFilters">
         <div class="card-body">
             <form method="GET" id="filterForm" class="row g-3">
                 <!-- Row 1: Text Search and Multi-select Categories -->
@@ -187,13 +151,23 @@
                 </div>
                 
                 <!-- Row 3: Action Buttons -->
-                <div class="col-12">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-search"></i> Apply Filters
-                    </button>
-                    <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
-                        <i class="bi bi-x-circle"></i> Clear All
-                    </a>
+                <div class="col-12 d-flex justify-content-between align-items-center">
+                    <div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-search"></i> Apply Filters
+                        </button>
+                        <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-x-circle"></i> Clear All
+                        </a>
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="saveCurrentFilters()">
+                            <i class="bi bi-bookmark"></i> Save Search
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-bs-toggle="modal" data-bs-target="#savedFiltersModal">
+                            <i class="bi bi-bookmarks"></i> Saved
+                        </button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -268,6 +242,14 @@
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
+                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('device_type')">
+                            Type
+                            {% if request.args.get('sort') == 'device_type' %}
+                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
+                            {% else %}
+                                <i class="bi bi-arrow-down-up text-muted"></i>
+                            {% endif %}
+                        </th>
                         <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('manufacturer')">
                             Manufacturer
                             {% if request.args.get('sort') == 'manufacturer' %}
@@ -313,7 +295,8 @@
                                title="Age: {{ '%.1f'|format(asset.get_age_years()) }} years | Replacement: {{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else 'Not set' }}"></i>
                             {% endif %}
                         </td>
-                        <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                        <td><span class="badge" style="{{ category_badge_style(asset.category) }}">{{ asset.category }}</span></td>
+                        <td class="mobile-hide">{% if asset.device_type %}<span class="badge bg-secondary">{{ asset.device_type }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
                         <td class="mobile-hide">{{ asset.manufacturer or '-' }}</td>
                         <td class="mobile-hide"><small class="text-muted">{{ asset.serial_number or '-' }}</small></td>
                         <td>

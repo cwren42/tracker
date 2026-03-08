@@ -4,33 +4,11 @@
 
 {% block content %}
 <style>
-    /* Custom tab styling for settings */
-    #settingsTabs .nav-link {
-        color: #6c757d;
-        border: 1px solid transparent;
-        border-bottom: 3px solid transparent;
-        transition: all 0.2s ease;
-    }
-    
-    #settingsTabs .nav-link:hover {
-        border-bottom-color: #dee2e6;
-        color: #495057;
-    }
-    
-    #settingsTabs .nav-link.active {
-        color: var(--bs-primary, #0d6efd);
-        border-bottom-color: var(--bs-primary, #0d6efd);
-        background-color: transparent;
-        font-weight: 600;
-    }
-    
-    #settingsTabs .nav-link i {
-        margin-right: 5px;
-    }
-    
-    .tab-content {
-        min-height: 400px;
-    }
+    #settingsTabs .nav-link { color:#8899aa; border-bottom:2px solid transparent; }
+    #settingsTabs .nav-link.active { color:#fff; background:transparent; }
+    #settingsTabs .nav-link:hover { color:#cdd9e5; }
+    #settingsTabs .nav-link i { margin-right: 5px; }
+    .tab-content { min-height: 400px; }
 </style>
 
 <div class="container-fluid">
@@ -67,23 +45,13 @@
         <div class="col-12">
             <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="theme-tab" data-bs-toggle="tab" data-bs-target="#theme" type="button" role="tab">
-                        <i class="bi bi-palette-fill"></i> Appearance
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="license-tab" data-bs-toggle="tab" data-bs-target="#license" type="button" role="tab">
+                    <button class="nav-link active" id="license-tab" data-bs-toggle="tab" data-bs-target="#license" type="button" role="tab">
                         <i class="bi bi-key-fill"></i> License
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="email-tab" data-bs-toggle="tab" data-bs-target="#email" type="button" role="tab">
                         <i class="bi bi-envelope-fill"></i> Email
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="teamviewer-tab" data-bs-toggle="tab" data-bs-target="#teamviewer" type="button" role="tab">
-                        <i class="bi bi-display"></i> TeamViewer
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -96,69 +64,20 @@
                         <i class="bi bi-robot"></i> RMM Agent
                     </button>
                 </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="ai-tab" data-bs-toggle="tab" data-bs-target="#ai" type="button" role="tab">
+                        <i class="bi bi-stars"></i> AI
+                    </button>
+                </li>
             </ul>
 
             <div class="tab-content mt-4" id="settingsTabContent">
-                <!-- Theme Settings Tab -->
-                <div class="tab-pane fade show active" id="theme" role="tabpanel">
-                    <div class="row">
-                        <div class="col-lg-8">
-                            <div class="card shadow-sm">
-                                <div class="card-header bg-primary text-white">
-                                    <h5 class="mb-0"><i class="bi bi-palette-fill"></i> Appearance Theme</h5>
-                                </div>
-                                <div class="card-body">
-                                    <form method="POST" id="themeForm">
-                                        <input type="hidden" name="action" value="update_theme">
-                                        <div class="row">
-                                            <div class="col-md-12 mb-3">
-                                                <label class="form-label">Select Theme</label>
-                                                <select class="form-select form-select-lg" name="theme" id="themeSelector" onchange="previewTheme(this.value)">
-                                                    <option value="default" {% if not current_user.theme or current_user.theme == 'default' %}selected{% endif %}>Default (Bootstrap Blue)</option>
-                                                    <option value="deep-forest" {% if current_user.theme == 'deep-forest' %}selected{% endif %}>Deep Forest (Dark)</option>
-                                                    <option value="modern-naturalist" {% if current_user.theme == 'modern-naturalist' %}selected{% endif %}>Modern Naturalist (Light)</option>
-                                                    <option value="heritage" {% if current_user.theme == 'heritage' %}selected{% endif %}>Heritage (Classic)</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- Theme Preview Cards -->
-                                        <div class="row mb-3">
-                                            <div class="col-md-6">
-                                                <div class="card border" id="themePreview">
-                                                    <div class="card-body">
-                                                        <h6 class="card-title">Preview</h6>
-                                                        <p class="card-text">This is how your interface will look.</p>
-                                                        <button type="button" class="btn btn-primary btn-sm">Sample Button</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <div id="themeDescription"></div>
-                                            </div>
-                                        </div>
-                                        
-                                        <div class="d-flex gap-2">
-                                            <button type="submit" class="btn btn-success">
-                                                <i class="bi bi-check-circle"></i> Apply Theme
-                                            </button>
-                                            <button type="button" class="btn btn-secondary" onclick="resetThemePreview()">
-                                                <i class="bi bi-arrow-counterclockwise"></i> Reset Preview
-                                            </button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- License Management Tab -->
-                <div class="tab-pane fade" id="license" role="tabpanel">
+                <div class="tab-pane fade show active" id="license" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                                <div class="card-header d-flex justify-content-between align-items-center">
                                     <h5 class="mb-0"><i class="bi bi-key-fill"></i> License Management</h5>
                                     <button type="button" class="btn btn-sm btn-light" onclick="verifyLicense()">
                                         <i class="bi bi-arrow-clockwise"></i> Verify Now
@@ -215,7 +134,7 @@
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                                <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-envelope-fill"></i> Email Configuration</h5>
                     <button type="button" class="btn btn-sm btn-light" onclick="toggleSmtpEdit()">
                         <i class="bi bi-pencil-square"></i> Edit
@@ -355,7 +274,7 @@
 
                                     <!-- Email Notifications -->
                                     <div class="card shadow-sm mt-4">
-                                        <div class="card-header bg-info text-white">
+                                        <div class="card-header">
                                             <h5 class="mb-0"><i class="bi bi-bell-fill"></i> Email Notifications</h5>
                                         </div>
                                         <div class="card-body">
@@ -392,108 +311,10 @@
                                                     <i class="bi bi-check-circle-fill text-success"></i> 
                                                     Warranty expiring alerts
                                                 </li>
-
-                                                <!-- Directory / AD / LDAP Tab -->
-                                                <div class="tab-pane fade" id="directory" role="tabpanel">
-                                                    <div class="row">
-                                                        <div class="col-lg-8">
-                                                            <div class="card shadow-sm">
-                                                                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                                                                    <h5 class="mb-0"><i class="bi bi-server"></i> On-Prem Active Directory (LDAP)</h5>
-                                                                    <button type="button" class="btn btn-sm btn-light" onclick="testADConnection()">
-                                                                        <i class="bi bi-lightning"></i> Test Connection
-                                                                    </button>
-                                                                </div>
-                                                                <div class="card-body">
-                                                                    <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
-
-                                                                    <form method="POST">
-                                                                        <input type="hidden" name="action" value="update_ad">
-
-                                                                        <div class="row">
-                                                                            <div class="col-md-8 mb-3">
-                                                                                <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
-                                                                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.example.com or 10.0.0.10" required>
-                                                                            </div>
-                                                                            <div class="col-md-4 mb-3">
-                                                                                <label class="form-label">LDAP Port <span class="text-danger">*</span></label>
-                                                                                <input type="number" class="form-control" name="ad_port" value="{{ ad_config.ad_port }}" placeholder="636" required>
-                                                                                <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        <div class="mb-3">
-                                                                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
-                                                                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
-                                                                            <small class="form-text text-muted">Base DN for user searches.</small>
-                                                                        </div>
-
-                                                                        <div class="row">
-                                                                            <div class="col-md-6 mb-3">
-                                                                                <label class="form-label">Service Account Username (Bind DN) <span class="text-danger">*</span></label>
-                                                                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
-                                                                            </div>
-                                                                            <div class="col-md-6 mb-3">
-                                                                                <label class="form-label">Service Account Password</label>
-                                                                                <input type="password" class="form-control" name="ad_bind_password" value="" placeholder="Leave blank to keep existing">
-                                                                                <small class="form-text text-muted">Leave blank to keep the existing password.</small>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        <div class="mb-3">
-                                                                            <label class="form-label">User OU DN (optional)</label>
-                                                                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
-                                                                            <small class="form-text text-muted">If set, new users can be created under this OU.</small>
-                                                                        </div>
-
-                                                                        <div class="form-check mb-2">
-                                                                            <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
-                                                                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
-                                                                        </div>
-
-                                                                        <div class="form-check mb-3">
-                                                                            <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
-                                                                            <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
-                                                                        </div>
-
-                                                                        <button type="submit" class="btn btn-success">
-                                                                            <i class="bi bi-save"></i> Save Directory Settings
-                                                                        </button>
-                                                                    </form>
-
-                                                                    <div class="mt-3" id="adTestResult" style="display:none;"></div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
                                                 <li class="mb-2">
                                                     <i class="bi bi-check-circle-fill text-success"></i> 
                                                     Asset lifecycle alerts (replacement needed)
                                                 </li>
-
-                                <script>
-                                async function testADConnection() {
-                                    const resultEl = document.getElementById('adTestResult');
-                                    resultEl.style.display = 'block';
-                                    resultEl.className = 'alert alert-info';
-                                    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
-                                    try {
-                                        const res = await fetch('{{ url_for("api_ad_test") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}});
-                                        const data = await res.json();
-                                        if (data.success) {
-                                            resultEl.className = 'alert alert-success';
-                                            resultEl.textContent = data.message || 'Connected';
-                                        } else {
-                                            resultEl.className = 'alert alert-danger';
-                                            resultEl.textContent = data.error || 'Connection failed';
-                                        }
-                                    } catch (e) {
-                                        resultEl.className = 'alert alert-danger';
-                                        resultEl.textContent = e?.message || 'Connection failed';
-                                    }
-                                }
-                                </script>
                                                 <li class="mb-2">
                                                     <i class="bi bi-check-circle-fill text-success"></i> 
                                                     System notifications
@@ -507,7 +328,7 @@
                                 <div class="col-lg-4">
                                     <!-- Admin Recipients -->
                                     <div class="card shadow-sm mb-4">
-                                        <div class="card-header bg-secondary text-white">
+                                        <div class="card-header">
                                             <h5 class="mb-0"><i class="bi bi-people-fill"></i> Admin Recipients</h5>
                                         </div>
                                         <div class="card-body">
@@ -538,7 +359,7 @@
 
                                     <!-- Email Types -->
                                     <div class="card shadow-sm mb-4">
-                                        <div class="card-header bg-dark text-white">
+                                        <div class="card-header">
                                             <h5 class="mb-0"><i class="bi bi-info-circle-fill"></i> Email Types</h5>
                                         </div>
                                         <div class="card-body">
@@ -560,7 +381,7 @@
 
                                     <!-- SMTP Info -->
                                     <div class="card shadow-sm">
-                                        <div class="card-header bg-light">
+                                        <div class="card-header">
                                             <h6 class="mb-0"><i class="bi bi-server"></i> SMTP Server Info</h6>
                                         </div>
                                         <div class="card-body">
@@ -588,105 +409,66 @@
                     </div>
                 </div>
 
-                <!-- TeamViewer Integration Tab -->
-                <div class="tab-pane fade" id="teamviewer" role="tabpanel">
+                <!-- Directory / AD / LDAP Tab -->
+                <div class="tab-pane fade" id="directory" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header bg-primary text-white">
-                                    <h5 class="mb-0"><i class="bi bi-camera-video-fill"></i> TeamViewer Tensor Integration</h5>
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-server"></i> On-Prem Active Directory (LDAP)</h5>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="testADConnection()">
+                                        <i class="bi bi-lightning"></i> Test Connection
+                                    </button>
                                 </div>
                                 <div class="card-body">
-                                    <form method="POST" id="teamviewerForm">
-                                        <input type="hidden" name="action" value="update_teamviewer">
-                                        
-                                        <div class="form-check form-switch mb-3">
-                                            <input class="form-check-input" type="checkbox" id="teamviewer_enabled" name="teamviewer_enabled" 
-                                                   {% if tv_enabled %}checked{% endif %} onchange="toggleTeamViewerFields()">
-                                            <label class="form-check-label" for="teamviewer_enabled">
-                                                <strong>Enable TeamViewer Integration</strong>
-                                            </label>
+                                    <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="update_ad">
+                                        <div class="row">
+                                            <div class="col-md-8 mb-3">
+                                                <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
+                                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.example.com or 10.0.0.10" required>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label">LDAP Port <span class="text-danger">*</span></label>
+                                                <input type="number" class="form-control" name="ad_port" value="{{ ad_config.ad_port }}" placeholder="636" required>
+                                                <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
+                                            </div>
                                         </div>
-                                        
-                                        <div id="teamviewerFields" style="{% if not tv_enabled %}display: none;{% endif %}">
-                                            <div class="alert alert-info">
-                                                <i class="bi bi-info-circle"></i> <strong>Setup Instructions:</strong>
-                                                <ol class="mb-0 mt-2 small">
-                                                    <li>Log in to your <a href="https://login.teamviewer.com" target="_blank">TeamViewer Management Console</a></li>
-                                                    <li>Go to <strong>Settings → Apps → Create script token</strong></li>
-                                                    <li>Name it "Asset Tracker"</li>
-                                                    <li>Grant these permissions (select all "View" options):
-                                                        <ul>
-                                                            <li><strong>User management → View users</strong></li>
-                                                            <li><strong>Group management → View groups</strong></li>
-                                                            <li><strong>Connection reporting → View connection reports</strong></li>
-                                                            <li>Any "View devices/computers" option if available</li>
-                                                        </ul>
-                                                    </li>
-                                                    <li>Copy the token and paste it below</li>
-                                                </ol>
-                                            </div>
-                                            
-                                            <div class="mb-3">
-                                                <label for="teamviewer_token" class="form-label">API Token (Script Token)</label>
-                                                <div class="input-group">
-                                                    <input type="password" class="form-control" id="teamviewer_token" name="teamviewer_token" 
-                                                           value="{{ tv_token }}" placeholder="Paste your TeamViewer script token here">
-                                                    <button class="btn btn-outline-secondary" type="button" onclick="toggleTokenVisibility()">
-                                                        <i class="bi bi-eye" id="toggleIcon"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            
-                                            <div class="d-flex align-items-center gap-2">
-                                                <button type="button" class="btn btn-info btn-sm" onclick="testConnection()">
-                                                    <i class="bi bi-wifi"></i> Test Connection
-                                                </button>
-                                                <button type="submit" class="btn btn-success btn-sm">
-                                                    <i class="bi bi-check-circle"></i> Save
-                                                </button>
-                                                <div id="testResult" class="ms-2"></div>
-                                            </div>
-                                            
-                                            {% if tv_enabled and tv_token %}
-                                            <hr>
-                                            <div class="row text-center">
-                                                <div class="col-6">
-                                                    <h6 class="text-muted">Last Sync</h6>
-                                                    <p class="mb-0">
-                                                        {% if last_sync_time %}
-                                                            {{ last_sync_time.strftime('%Y-%m-%d %H:%M') }}
-                                                        {% else %}
-                                                            Never
-                                                        {% endif %}
-                                                    </p>
-                                                </div>
-                                                <div class="col-6">
-                                                    <h6 class="text-muted">Linked Assets</h6>
-                                                    <p class="mb-0"><strong>{{ tv_asset_count }}</strong></p>
-                                                </div>
-                                            </div>
-                                            {% endif %}
+                                        <div class="mb-3">
+                                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
+                                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
+                                            <small class="form-text text-muted">Base DN for user searches.</small>
                                         </div>
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Bind DN (Service Account) <span class="text-danger">*</span></label>
+                                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Service Account Password</label>
+                                                <input type="password" class="form-control" name="ad_bind_password" value="" placeholder="Leave blank to keep existing">
+                                                <small class="form-text text-muted">Leave blank to keep the existing password.</small>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">User OU DN (optional)</label>
+                                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
+                                            <small class="form-text text-muted">If set, new users can be created under this OU.</small>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
+                                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
+                                        </div>
+                                        <div class="form-check mb-3">
+                                            <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
+                                            <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
+                                        </div>
+                                        <button type="submit" class="btn btn-success">
+                                            <i class="bi bi-save"></i> Save Directory Settings
+                                        </button>
                                     </form>
-                                    
-                                    {% if tv_enabled and tv_token %}
-                                    <hr>
-                                    <div class="d-grid gap-2 mt-3">
-                                        <form method="POST" action="{{ url_for('teamviewer_sync') }}">
-                                            <button type="submit" class="btn btn-primary w-100">
-                                                <i class="bi bi-arrow-repeat"></i> Sync TeamViewer Connections
-                                            </button>
-                                        </form>
-                                        <a href="{{ url_for('teamviewer_diagnostic') }}" class="btn btn-info">
-                                            <i class="bi bi-bug"></i> View API Data (Diagnostic)
-                                        </a>
-                                        <small class="text-muted mt-2">
-                                            <i class="bi bi-info-circle"></i> TeamViewer sync adds connection IDs to existing assets. 
-                                            Device status and monitoring are managed through Microsoft Intune.
-                                        </small>
-                                    </div>
-                                    {% endif %}
+                                    <div class="mt-3" id="adTestResult" style="display:none;"></div>
                                 </div>
                             </div>
                         </div>
@@ -698,7 +480,7 @@
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm mb-4">
-                                <div class="card-header bg-dark text-white">
+                                <div class="card-header">
                                     <h5 class="mb-0"><i class="bi bi-robot"></i> Cirque RMM Agent</h5>
                                 </div>
                                 <div class="card-body">
@@ -719,8 +501,8 @@
                                         <li>The installer registers and starts the <strong>CirqueRMM</strong> Windows service automatically.</li>
                                     </ol>
 
-                                    <a href="{{ url_for('rmm_agent_download') }}" class="btn btn-success">
-                                        <i class="bi bi-download"></i> Download Agent Bundle (.zip)
+                                    <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success">
+                                        <i class="bi bi-download"></i> Download Agent Installer (.msi)
                                     </a>
                                 </div>
                             </div>
@@ -728,7 +510,7 @@
 
                         <div class="col-lg-4">
                             <div class="card shadow-sm mb-3">
-                                <div class="card-header bg-secondary text-white">
+                                <div class="card-header">
                                     <h6 class="mb-0"><i class="bi bi-key-fill"></i> Token Management</h6>
                                 </div>
                                 <div class="card-body">
@@ -738,12 +520,124 @@
                             </div>
 
                             <div class="card shadow-sm">
-                                <div class="card-header bg-secondary text-white">
+                                <div class="card-header">
                                     <h6 class="mb-0"><i class="bi bi-terminal"></i> Tech API Key</h6>
                                 </div>
                                 <div class="card-body">
                                     <p class="small text-muted mb-2">Technicians need an API key with the <code>rmm_connect</code> permission to open remote sessions:</p>
                                     <code class="d-block p-2 bg-light border rounded small">python scripts/create_api_key.py &lt;username&gt; rmm_connect</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Settings Tab -->
+                <div class="tab-pane fade" id="ai" role="tabpanel">
+                    <style>
+                        #ai .card-header { background:#212d42; border-bottom:1px solid #2d3a50; }
+                        #ai .card-header h5,
+                        #ai .card-header h6 { color:#cdd9e5; }
+                        #ai .form-label { color:#cdd9e5; font-weight:500; }
+                        #ai .form-text { color:#8899aa; }
+                        #ai .form-select,
+                        #ai .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
+                        #ai .form-select:focus,
+                        #ai .form-control:focus { border-color:#0d6efd; box-shadow:none; }
+                        #ai .form-select option { background:#1a2233; }
+                        #ai hr { border-color:#2d3a50; }
+                        #ai-key-status { font-size:.82rem; }
+                    </style>
+                    <div class="row">
+                        <div class="col-lg-7">
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-stars" style="color:#a855f7"></i> AI Configuration (OpenAI)</h5>
+                                </div>
+                                <div class="card-body">
+
+                                    <!-- API Key row -->
+                                    <div class="mb-3">
+                                        <label class="form-label">OpenAI API Key</label>
+                                        <div class="d-flex gap-2 align-items-center mb-1">
+                                            <span id="ai-key-status" class="badge bg-secondary">No key saved</span>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="toggleKeyInput()" id="btn-change-key">
+                                                <i class="bi bi-pencil-fill"></i> Change Key
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-info py-0 px-2" onclick="testAiConnection()" id="btn-test-ai">
+                                                <i class="bi bi-plug-fill"></i> Test
+                                            </button>
+                                        </div>
+                                        <div id="ai-key-input-wrap" style="display:none">
+                                            <input type="password" class="form-control" id="ai-api-key" placeholder="Paste new key: sk-proj-…">
+                                            <div class="form-text">Get your key from <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#6aacf8">platform.openai.com</a>. Stored server-side, never exposed in full.</div>
+                                        </div>
+                                        <div id="ai-test-result" class="mt-2" style="display:none"></div>
+                                    </div>
+
+                                    <!-- Model -->
+                                    <div class="mb-3">
+                                        <label class="form-label">Model</label>
+                                        <select class="form-select" id="ai-model">
+                                            <option value="gpt-4o">gpt-4o (recommended)</option>
+                                            <option value="gpt-4-turbo">gpt-4-turbo</option>
+                                            <option value="gpt-4">gpt-4</option>
+                                            <option value="gpt-3.5-turbo">gpt-3.5-turbo (faster / cheaper)</option>
+                                        </select>
+                                    </div>
+
+                                    <hr>
+
+                                    <!-- Toggles -->
+                                    <div class="mb-3 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Ticket AI Suggestions</label>
+                                            <div class="form-text">Show an AI suggestion panel on every ticket page.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-ticket-enabled">
+                                        </div>
+                                    </div>
+                                    <div class="mb-3 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Auto-Apply High-Confidence Suggestions</label>
+                                            <div class="form-text">When confidence &ge; 85% and ticket allows it, AI applies the suggestion automatically.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-auto-mode">
+                                        </div>
+                                    </div>
+                                    <div class="mb-4 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Security Monitor</label>
+                                            <div class="form-text">Periodically generate AI security summaries shown on the dashboard.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-security-monitor">
+                                        </div>
+                                    </div>
+
+                                    <button class="btn btn-primary" onclick="saveAiSettings()" id="btn-save-ai">
+                                        <i class="bi bi-floppy-fill me-1"></i>Save AI Settings
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="bi bi-shield-check" style="color:#5fcf8b"></i> AI Security Summary</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p style="color:#8899aa" class="small">Generate an AI-powered security posture summary from your current vulnerability, patch, and alert data.</p>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="generateSecuritySummary()" id="btn-gen-summary">
+                                        <i class="bi bi-lightning-fill me-1"></i>Generate Now
+                                    </button>
+                                    <div id="ai-summary-result" class="mt-3" style="display:none">
+                                        <div class="p-2 rounded" style="background:#1e2d45;border:1px solid #2d3a50">
+                                            <div id="ai-summary-text" class="small" style="color:#cdd9e5"></div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -759,7 +653,6 @@
 function toggleSmtpEdit() {
     const viewMode = document.getElementById('smtpViewMode');
     const editMode = document.getElementById('smtpEditMode');
-    
     if (viewMode.style.display === 'none') {
         viewMode.style.display = 'block';
         editMode.style.display = 'none';
@@ -769,93 +662,29 @@ function toggleSmtpEdit() {
     }
 }
 
-// Theme preview functionality
-const themes = {
-    'default': {
-        name: 'Default',
-        description: 'Clean, professional Bootstrap theme with familiar blue accents.',
-        colors: {
-            bg: '#ffffff',
-            text: '#212529',
-            accent: '#0d6efd'
+async function testADConnection() {
+    const resultEl = document.getElementById('adTestResult');
+    resultEl.style.display = 'block';
+    resultEl.className = 'alert alert-info';
+    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
+    try {
+        const res = await fetch('{{ url_for("api_ad_test") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+        const data = await res.json();
+        if (data.success) {
+            resultEl.className = 'alert alert-success';
+            resultEl.textContent = data.message || 'Connected';
+        } else {
+            resultEl.className = 'alert alert-danger';
+            resultEl.textContent = data.error || 'Connection failed';
         }
-    },
-    'deep-forest': {
-        name: 'Deep Forest',
-        description: 'Dark, sophisticated theme with forest green accents and warm tan text.',
-        colors: {
-            bg: '#0D0D0D',
-            text: '#F2E8CF',
-            accent: '#BC986A'
-        }
-    },
-    'modern-naturalist': {
-        name: 'Modern Naturalist',
-        description: 'Light, natural theme with soft sand background and forest green headers.',
-        colors: {
-            bg: '#F5F2ED',
-            text: '#1A1A1A',
-            accent: '#2D4639'
-        }
-    },
-    'heritage': {
-        name: 'Heritage',
-        description: 'Classic theme with hunter green hero sections and desert tan highlights.',
-        colors: {
-            bg: '#FAF9F6',
-            text: '#000000',
-            accent: '#C2B280'
-        }
+    } catch (e) {
+        resultEl.className = 'alert alert-danger';
+        resultEl.textContent = e?.message || 'Connection failed';
     }
-};
-
-function previewTheme(themeKey) {
-    const theme = themes[themeKey];
-    if (!theme) return;
-    
-    // Apply theme to body for preview
-    if (themeKey === 'default') {
-        document.body.removeAttribute('data-theme');
-    } else {
-        document.body.setAttribute('data-theme', themeKey);
-    }
-    
-    // Update description
-    const descDiv = document.getElementById('themeDescription');
-    descDiv.innerHTML = `
-        <div class="alert alert-info">
-            <h6><i class="bi bi-info-circle"></i> ${theme.name}</h6>
-            <p class="mb-2">${theme.description}</p>
-            <div class="d-flex gap-2 mt-2">
-                <div class="d-flex align-items-center">
-                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.bg}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
-                    <small>Background</small>
-                </div>
-                <div class="d-flex align-items-center">
-                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.text}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
-                    <small>Text</small>
-                </div>
-                <div class="d-flex align-items-center">
-                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.accent}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
-                    <small>Accent</small>
-                </div>
-            </div>
-        </div>
-    `;
 }
 
-function resetThemePreview() {
-    const currentTheme = '{{ current_user.theme if current_user.theme else "default" }}';
-    document.getElementById('themeSelector').value = currentTheme;
-    previewTheme(currentTheme);
-}
-
-// Initialize theme description on page load
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    const currentTheme = document.getElementById('themeSelector').value;
-    previewTheme(currentTheme);
-    
-    // Load license info
     loadLicenseInfo();
 });
 
@@ -1086,57 +915,6 @@ function deleteLicense(licenseId) {
     });
 }
 
-function toggleTeamViewerFields() {
-    const enabled = document.getElementById('teamviewer_enabled').checked;
-    const fields = document.getElementById('teamviewerFields');
-    fields.style.display = enabled ? 'block' : 'none';
-}
-
-function toggleTokenVisibility() {
-    const input = document.getElementById('teamviewer_token');
-    const icon = document.getElementById('toggleIcon');
-    
-    if (input.type === 'password') {
-        input.type = 'text';
-        icon.className = 'bi bi-eye-slash';
-    } else {
-        input.type = 'password';
-        icon.className = 'bi bi-eye';
-    }
-}
-
-function testConnection() {
-    const token = document.getElementById('teamviewer_token').value;
-    const resultDiv = document.getElementById('testResult');
-    
-    if (!token) {
-        resultDiv.innerHTML = '<span class="text-danger"><small>Please enter a token first</small></span>';
-        return;
-    }
-    
-    resultDiv.innerHTML = '<span class="text-info"><small><i class="bi bi-hourglass-split"></i> Testing...</small></span>';
-    
-    fetch('/settings/teamviewer/test', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token: token })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            const className = data.warning ? 'text-warning' : 'text-success';
-            resultDiv.innerHTML = `<span class="${className}"><small><i class="bi bi-check-circle"></i> ${data.message}</small></span>`;
-        } else {
-            resultDiv.innerHTML = `<span class="text-danger"><small><i class="bi bi-x-circle"></i> ${data.message}</small></span>`;
-        }
-    })
-    .catch(error => {
-        resultDiv.innerHTML = `<span class="text-danger"><small><i class="bi bi-x-circle"></i> Error: ${error}</small></span>`;
-    });
-}
-
 // Tab persistence - remember which tab was active
 document.addEventListener('DOMContentLoaded', function() {
     // Check if URL has a hash for direct tab navigation (e.g., #license-tab)
@@ -1202,5 +980,119 @@ function checkAndShowLicenseWarning() {
             console.error('Error checking license status:', error);
         });
 }
+
+// ── AI Settings ───────────────────────────────────────────────────────────────
+async function loadAiSettings() {
+    try {
+        const resp = await fetch('/api/ai/settings');
+        if (!resp.ok) return;
+        const d = await resp.json();
+        // Show masked key status badge
+        const statusEl = document.getElementById('ai-key-status');
+        if (d.openai_api_key) {
+            statusEl.textContent = d.openai_api_key;
+            statusEl.className = 'badge bg-success';
+        } else {
+            statusEl.textContent = 'No key saved';
+            statusEl.className = 'badge bg-secondary';
+        }
+        if (d.openai_model) document.getElementById('ai-model').value = d.openai_model;
+        document.getElementById('ai-ticket-enabled').checked   = d.ai_ticket_enabled === '1';
+        document.getElementById('ai-auto-mode').checked        = d.ai_ticket_auto_mode === '1';
+        document.getElementById('ai-security-monitor').checked = d.ai_security_monitor_enabled === '1';
+    } catch(e) {}
+}
+
+function toggleKeyInput() {
+    const wrap = document.getElementById('ai-key-input-wrap');
+    const show = wrap.style.display === 'none';
+    wrap.style.display = show ? 'block' : 'none';
+    document.getElementById('btn-change-key').innerHTML = show
+        ? '<i class="bi bi-x-lg"></i> Cancel'
+        : '<i class="bi bi-pencil-fill"></i> Change Key';
+    if (show) document.getElementById('ai-api-key').focus();
+}
+
+async function saveAiSettings() {
+    const key = document.getElementById('ai-api-key').value.trim();
+    const btn = document.getElementById('btn-save-ai');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
+    const payload = {
+        openai_model:                document.getElementById('ai-model').value,
+        ai_ticket_enabled:           document.getElementById('ai-ticket-enabled').checked ? '1' : '0',
+        ai_ticket_auto_mode:         document.getElementById('ai-auto-mode').checked ? '1' : '0',
+        ai_security_monitor_enabled: document.getElementById('ai-security-monitor').checked ? '1' : '0'
+    };
+    if (key) payload.openai_api_key = key;
+    const resp = await fetch('/api/ai/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+    const d = await resp.json();
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-floppy-fill me-1"></i>Save AI Settings';
+    if (resp.ok) {
+        document.getElementById('ai-api-key').value = '';
+        // Hide key input and reload status badge
+        document.getElementById('ai-key-input-wrap').style.display = 'none';
+        document.getElementById('btn-change-key').innerHTML = '<i class="bi bi-pencil-fill"></i> Change Key';
+        loadAiSettings();
+        showSettingsToast('AI settings saved.', 'success');
+    } else {
+        showSettingsToast(d.error || 'Save failed', 'danger');
+    }
+}
+
+async function testAiConnection() {
+    const resultEl = document.getElementById('ai-test-result');
+    const btn = document.getElementById('btn-test-ai');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    resultEl.style.display = 'none';
+    try {
+        const resp = await fetch('/api/ai/test', { method: 'POST' });
+        const d    = await resp.json();
+        resultEl.style.display = 'block';
+        if (resp.ok && d.ok) {
+            resultEl.innerHTML = `<div class="alert alert-success p-2 small mb-0"><i class="bi bi-check-circle-fill me-1"></i><strong>Connected</strong> — Model: ${d.model || '?'}, response OK.</div>`;
+        } else {
+            resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0"><i class="bi bi-x-circle-fill me-1"></i><strong>Failed:</strong> ${d.error || 'Unknown error'}</div>`;
+        }
+    } catch(e) {
+        resultEl.style.display = 'block';
+        resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0">Network error: ${e.message}</div>`;
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-plug-fill"></i> Test';
+}
+
+async function generateSecuritySummary() {
+    const btn = document.getElementById('btn-gen-summary');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Generating…';
+    try {
+        const resp = await fetch('/api/ai/security-summary/generate', { method: 'POST' });
+        const d    = await resp.json();
+        if (resp.ok && d.summary) {
+            const riskColors = { High:'#f87171', Medium:'#f8a84a', Low:'#5fcf8b', Critical:'#e879f9' };
+            const col = riskColors[d.risk_level] || '#8899aa';
+            document.getElementById('ai-summary-text').innerHTML =
+                `<span style="color:${col};font-weight:600">Risk Level: ${d.risk_level||'?'}</span><br><br>${(d.summary||'').replace(/\n/g,'<br>')}`;
+            document.getElementById('ai-summary-result').style.display = 'block';
+        } else {
+            showSettingsToast(d.error || 'Generation failed', 'danger');
+        }
+    } catch(e) { showSettingsToast('Error: ' + e.message, 'danger'); }
+    btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-fill me-1"></i>Generate Now';
+}
+
+function showSettingsToast(msg, type) {
+    const t = document.createElement('div');
+    t.className = `alert alert-${type} position-fixed`;
+    t.style.cssText = 'bottom:20px;right:20px;z-index:9999;min-width:220px;font-size:.88rem';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+}
+
+// Load AI settings when AI tab is shown
+document.getElementById('ai-tab')?.addEventListener('shown.bs.tab', loadAiSettings);
 </script>
 {% endblock %}

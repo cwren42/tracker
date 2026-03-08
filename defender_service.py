@@ -61,12 +61,27 @@ class DefenderService:
         except requests.exceptions.RequestException as e:
             logger.error(f'Error fetching {endpoint}: {str(e)}')
             raise
+
+    def _get_paged(self, endpoint, params=None):
+        """Fetch all pages from a Defender API endpoint that uses @odata.nextLink pagination."""
+        if not self.token:
+            self._authenticate()
+        url = f"{self.base_url}/{endpoint}"
+        headers = {'Authorization': f'Bearer {self.token}'}
+        results = []
+        while url:
+            response = requests.get(url, headers=headers, params=params, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            results.extend(data.get('value', []))
+            url = data.get('@odata.nextLink')  # follow next page if present
+            params = None  # params already encoded in nextLink
+        return results
     
     def get_machines(self):
-        """Get all machines/devices from Defender"""
+        """Get all machines/devices from Defender (paginated)"""
         try:
-            data = self._get('machines')
-            machines = data.get('value', [])
+            machines = self._get_paged('machines')
             logger.info(f'Fetched {len(machines)} machines from Defender')
             return machines
         except Exception as e:
@@ -91,6 +106,19 @@ class DefenderService:
             return data.get('value', [])
         except Exception as e:
             logger.error(f'Error fetching vulnerabilities for machine {machine_id}: {str(e)}')
+            return []
+
+    def get_all_machine_vulnerabilities(self):
+        """Bulk fetch all machine-vulnerability pairs using the org-wide endpoint.
+        Returns a list of dicts with machineId, cveId, severity, etc.
+        Much faster than calling get_machine_vulnerabilities() per machine.
+        """
+        try:
+            rows = self._get_paged('vulnerabilities/machinesVulnerabilities')
+            logger.info(f'Fetched {len(rows)} machine-CVE pairs from Defender (bulk)')
+            return rows
+        except Exception as e:
+            logger.error(f'Error fetching bulk machine vulnerabilities: {str(e)}')
             return []
     
     def get_software(self):

@@ -119,8 +119,17 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
             except Exception:
                 continue
 
-        # Fallback: ask the running RustDesk process via --get-id (works when
-        # the service is running but the TOML hasn't been written yet)
+        # Fallback 1: check cached peer ID file (avoids repeated --get-id on every start)
+        if not peer_id and os.path.isfile(_RUSTDESK_PEER_ID_FILE):
+            try:
+                cached = open(_RUSTDESK_PEER_ID_FILE, 'r', encoding='utf-8').read().strip()
+                if _re.match(r'^[0-9a-zA-Z_\-]+$', cached):
+                    peer_id = cached
+            except Exception:
+                pass
+
+        # Fallback 2: ask the running RustDesk process via --get-id
+        # Only run if TOML not found AND cache is empty/missing
         if not peer_id:
             try:
                 exe = _rustdesk_exe()
@@ -128,10 +137,15 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
                     import subprocess as _sp
                     r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
                     out = (r.stdout or "").strip()
-                    # Output is just the numeric/alphanumeric ID, possibly with trailing newline
                     if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
                         peer_id = out
-                        print(f"[rustdesk] Got peer ID via --get-id: {peer_id}", flush=True)
+                        # Cache it so we don't need to call --get-id again next restart
+                        try:
+                            os.makedirs(os.path.dirname(_RUSTDESK_PEER_ID_FILE), exist_ok=True)
+                            open(_RUSTDESK_PEER_ID_FILE, 'w').write(peer_id)
+                        except Exception:
+                            pass
+                        print(f"[rustdesk] Got peer ID via --get-id: {peer_id} (cached)", flush=True)
             except Exception as ge:
                 print(f"[rustdesk] --get-id fallback failed: {ge}", flush=True)
 
@@ -160,11 +174,13 @@ _RUSTDESK_SERVER = 'rust.corp.cirque.com'
 _RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo'
 
 # File on disk where we persist the plaintext password so it survives restarts.
-_RUSTDESK_PASS_FILE = r'C:\CirqueRMM\rustdesk_pass.txt'
+_RUSTDESK_PASS_FILE    = r'C:\CirqueRMM\rustdesk_pass.txt'
+_RUSTDESK_PEER_ID_FILE = r'C:\CirqueRMM\rustdesk_peer_id.txt'  # cached so --get-id only runs once
 
 # Tray app API key (create_tickets scope) — baked in at build time
 _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
-_tray_setup_done = False  # only run _setup_tray once per agent process
+_tray_setup_done    = False  # only run _setup_tray once per agent process
+_rustdesk_setup_done = False  # only do full rustdesk ensure once per process
 _TRAY_PY_PATH = r'C:\CirqueRMM\tray.py'
 _TRAY_CFG_PATH = r'C:\CirqueRMM\tray_config.json'
 
@@ -243,14 +259,24 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
                 pass
 
         # 5. Create Startup shortcut for every user profile
-        #    We write a .bat launcher + a .lnk pointing to it
-        bat_path = r'C:\CirqueRMM\start_tray.bat'
-        bat_src = (
-            '@echo off\r\n'
-            'if exist "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\CirqueTray.lnk" exit /b 0\r\n'
+        #    Skip entirely if the shortcut already exists for any logged-in user
+        import glob as _glob2
+        existing_shortcuts = _glob2.glob(
+            r'C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CirqueTray.lnk'
         )
-        # Write the bat that creates the shortcut for the currently logged-in user
-        ps_lnk = r"""
+        if existing_shortcuts:
+            print(f'[tray] Startup shortcut already exists ({len(existing_shortcuts)} user(s)) — skipping task', flush=True)
+        else:
+            _create_startup_shortcut_task()
+
+    except Exception as e:
+        print(f'[tray] _setup_tray error: {e}', flush=True)
+
+
+def _create_startup_shortcut_task():
+    """Register and run the CirqueTraySetup schtask to create the per-user startup shortcut."""
+    import subprocess as _sp, re as _re, glob as _glob
+    ps_lnk = r"""
 $WS = New-Object -ComObject WScript.Shell
 $startup = [System.Environment]::GetFolderPath('Startup')
 $lnk = $WS.CreateShortcut("$startup\CirqueTray.lnk")
@@ -266,9 +292,7 @@ $lnk.Description = "Cirque IT Support Tray"
 $lnk.Save()
 Write-Host "Shortcut created: $startup\CirqueTray.lnk"
 """
-        # Run the shortcut-creation script for every currently logged-in user session
-        # via scheduled task so it runs in the user context
-        task_xml_template = r"""<?xml version="1.0" encoding="UTF-16"?>
+    task_xml_template = r"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
@@ -279,27 +303,32 @@ Write-Host "Shortcut created: $startup\CirqueTray.lnk"
     </Exec>
   </Actions>
 </Task>"""
-        import re as _re
-        ps_oneliner = ' '.join(ps_lnk.strip().splitlines())
-        xml_src = task_xml_template.replace('{PS}', ps_oneliner.replace('"', '&quot;'))
-        xml_path = r'C:\CirqueRMM\create_tray_lnk.xml'
-        with open(xml_path, 'w', encoding='utf-16') as fh:
-            fh.write(xml_src)
+    ps_oneliner = ' '.join(ps_lnk.strip().splitlines())
+    xml_src = task_xml_template.replace('{PS}', ps_oneliner.replace('"', '&quot;'))
+    xml_path = r'C:\CirqueRMM\create_tray_lnk.xml'
+    with open(xml_path, 'w', encoding='utf-16') as fh:
+        fh.write(xml_src)
+    setup_q = _sp.run(['schtasks', '/Query', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
+    if setup_q.returncode != 0:
         _sp.run(
             ['schtasks', '/Create', '/F', '/TN', 'CirqueTraySetup', '/XML', xml_path],
             capture_output=True, timeout=15
         )
-        _sp.run(['schtasks', '/Run', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
-        print('[tray] Startup shortcut task triggered', flush=True)
+    _sp.run(['schtasks', '/Run', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
+    print('[tray] Startup shortcut task triggered', flush=True)
 
-        # 6. Launch the tray right now in the interactive user's desktop session.
-        #    We MUST use a scheduled task with Context="InteractiveToken" because the
-        #    agent runs as SYSTEM (Session 0) and any direct Popen would be invisible.
-        pythonw_path = ''
-        for _py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe'):
-            pythonw_path = _py
-            break
-        if pythonw_path:
+    # Launch the tray right now in the interactive user desktop session
+    pythonw_path = ''
+    for _py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe'):
+        pythonw_path = _py
+        break
+    if pythonw_path:
+        query = _sp.run(
+            ['schtasks', '/Query', '/TN', 'CirqueTrayLaunch', '/FO', 'LIST'],
+            capture_output=True, timeout=10
+        )
+        tray_task_exists = query.returncode == 0 and b'CirqueTrayLaunch' in (query.stdout or b'')
+        if not tray_task_exists:
             launch_xml = (
                 '<?xml version="1.0" encoding="UTF-16"?>\n'
                 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -324,11 +353,9 @@ Write-Host "Shortcut created: $startup\CirqueTray.lnk"
             _sp.run(['schtasks', '/Run', '/TN', 'CirqueTrayLaunch'], capture_output=True, timeout=10)
             print(f'[tray] Launch task triggered (InteractiveToken) with {pythonw_path}', flush=True)
         else:
-            print('[tray] No user pythonw.exe found, tray not launched immediately', flush=True)
-
-    except Exception as e:
-        print(f'[tray] _setup_tray error: {e}', flush=True)
-
+            print('[tray] Tray launch task already registered — skipping', flush=True)
+    else:
+        print('[tray] No user pythonw.exe found, tray not launched immediately', flush=True)
 
 def _ensure_rustdesk_password() -> str:
     """Return the permanent RustDesk access password for this machine.
@@ -432,16 +459,21 @@ def _rustdesk_exe() -> str:
 def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
     """Install RustDesk and configure it to use the internal server if it is
     not present (or has been uninstalled).  Safe to call repeatedly."""
+    global _rustdesk_setup_done
     import subprocess as _sp, time as _time
     try:
         if _rustdesk_exe():
-            # Already installed — just make sure config is correct
+            if _rustdesk_setup_done:
+                # Already fully set up — only sync ID (fast, idempotent)
+                sync_rustdesk_id(tracker_url, agent_id, token)
+                return
+            # First run: do full config check
             _write_rustdesk_config()
             _fix_rustdesk_identity()
             _ensure_rustdesk_password()
             sync_rustdesk_id(tracker_url, agent_id, token)
-            _setup_tray(tracker_url, agent_id, token)
-            return
+            _rustdesk_setup_done = True
+            return  # tray_watchdog handles tray setup separately
 
         print('[rustdesk] Not installed — installing...', flush=True)
 
@@ -1938,6 +1970,78 @@ try {{
     }
 
 
+def _find_and_install_cve_patches(cve_ids: list) -> dict:
+    """Search Windows Update Agent for uninstalled patches that cover the given
+    CVE IDs, download, and install them.  Returns a summary dict compatible with
+    the patch_install_result message schema."""
+    if not cve_ids:
+        return {"installed": 0, "reboot_required": False, "error": "No CVE IDs provided",
+                "updates_found": 0, "titles": [], "kb_ids": []}
+    cves_ps = ", ".join(f"'{c}'" for c in cve_ids)
+    script = f"""
+$targetCVEs = @({cves_ps})
+try {{
+    $Sess   = New-Object -ComObject Microsoft.Update.Session
+    $Search = $Sess.CreateUpdateSearcher()
+    $Found  = $Search.Search("IsInstalled=0 and IsHidden=0")
+    $coll   = New-Object -ComObject Microsoft.Update.UpdateColl
+    $titles = @(); $kbids = @()
+    foreach ($u in $Found.Updates) {{
+        $match = $false
+        foreach ($cve in $u.CVEIDs) {{
+            if ($targetCVEs -contains $cve) {{ $match = $true; break }}
+        }}
+        if ($match) {{
+            [void]$coll.Add($u)
+            $titles += $u.Title
+            foreach ($kb in $u.KBArticleIDs) {{ $kbids += $kb }}
+        }}
+    }}
+    if ($coll.Count -eq 0) {{
+        @{{installed=0;reboot_required=$false;updates_found=0;
+           titles=@();kb_ids=@();error="No pending patches found for these CVEs"}} | ConvertTo-Json -Compress
+        exit
+    }}
+    $dl = $Sess.CreateUpdateDownloader()
+    $dl.Updates = $coll
+    [void]$dl.Download()
+    $inst = $Sess.CreateUpdateInstaller()
+    $inst.Updates = $coll
+    $res  = $inst.Install()
+    @{{
+        installed       = $coll.Count
+        updates_found   = $coll.Count
+        reboot_required = $res.RebootRequired
+        result_code     = $res.ResultCode
+        titles          = $titles
+        kb_ids          = $kbids
+        error           = ""
+    }} | ConvertTo-Json -Compress
+}} catch {{
+    @{{installed=0;reboot_required=$false;updates_found=0;titles=@();kb_ids=@();
+       error=$_.Exception.Message}} | ConvertTo-Json -Compress
+}}
+""".strip()
+    result = _ps_json(script, timeout=30 * 60)
+    if result is None:
+        return {"installed": 0, "reboot_required": False, "updates_found": 0,
+                "titles": [], "kb_ids": [], "error": "No output from WUA"}
+    # Normalise list fields that PowerShell may return as a single string
+    def _to_list(v):
+        if isinstance(v, list): return v
+        if v: return [v]
+        return []
+    return {
+        "installed":       int(result.get("installed") or 0),
+        "updates_found":   int(result.get("updates_found") or 0),
+        "reboot_required": bool(result.get("reboot_required")),
+        "result_code":     result.get("result_code"),
+        "titles":          _to_list(result.get("titles")),
+        "kb_ids":          _to_list(result.get("kb_ids")),
+        "error":           result.get("error") or "",
+    }
+
+
 async def _do_reboot_sequence():
     """Show reboot countdown dialog in user's session, then reboot when it closes."""
     loop = asyncio.get_event_loop()
@@ -2662,6 +2766,25 @@ def _get_active_window_info() -> tuple:
         return ("", "")
 
 
+def _get_idle_seconds() -> int:
+    """Return seconds since last mouse/keyboard activity (Windows only).
+    Uses GetLastInputInfo to query the system idle timer."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            elapsed_ms = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return max(0, elapsed_ms // 1000)
+    except Exception:
+        pass
+    return 0
+
+
 async def main() -> None:
     gateway = get_env("RMM_GATEWAY_URL").rstrip("/")
     agent_id = os.environ.get("RMM_AGENT_ID") or socket.gethostname()
@@ -2805,17 +2928,18 @@ async def main() -> None:
                 async def eagle_monitor_loop():
                     """Poll active window every 10s; screenshot every N minutes.
 
-                    Emits an eagle_event:
-                      - When the foreground window changes (records how long the old window was active)
-                      - Every HEARTBEAT_S seconds on the *current* window (so duration accumulates even
-                        when the user stays in one app the whole time)
-                      - Once immediately on first detection (duration_s=0, marks session start)
+                    Emits:
+                      eagle_event     - on window change or every HEARTBEAT_S (recorded to DB)
+                      eagle_heartbeat - every LIVE_PING_S (live 'right now' panel, no DB write)
                     """
-                    HEARTBEAT_S    = 300          # emit current-window event every 5 minutes
+                    HEARTBEAT_S    = 60           # emit DB event every 1 minute on same window
+                    LIVE_PING_S    = 30           # send live heartbeat every 30 seconds
+                    IDLE_THRESH_S  = 300          # 5 min idle = consider user idle
                     last_process   = ""
                     last_title     = ""
                     last_change_at = datetime.now()
                     last_emit_at   = datetime.now()
+                    last_ping_at   = datetime.min
                     last_shot_at   = datetime.min   # fire screenshot on first loop iteration
                     poll_s         = 10
                     first_poll     = True
@@ -2824,8 +2948,10 @@ async def main() -> None:
                         await asyncio.sleep(poll_s)
                         now = datetime.now()
 
-                        # Active window
+                        # Active window + idle state
                         proc, title = await loop.run_in_executor(None, _get_active_window_info)
+                        idle_s      = await loop.run_in_executor(None, _get_idle_seconds)
+                        is_idle     = idle_s >= IDLE_THRESH_S
 
                         if proc != last_process or title != last_title:
                             # Emit event for the window we're LEAVING (skip on very first poll)
@@ -2837,6 +2963,7 @@ async def main() -> None:
                                         "process":    last_process,
                                         "title":      last_title,
                                         "duration_s": dur_s,
+                                        "idle_s":     idle_s,
                                         "captured_at": last_emit_at.strftime("%Y-%m-%dT%H:%M:%S"),
                                     }))
                                 except Exception:
@@ -2846,7 +2973,7 @@ async def main() -> None:
                             last_change_at = now
                             last_emit_at   = now
 
-                        # Heartbeat: emit current window every HEARTBEAT_S even without a change
+                        # Heartbeat: emit DB event on same window every HEARTBEAT_S
                         elif (last_process or last_title) and not first_poll:
                             elapsed = (now - last_emit_at).total_seconds()
                             if elapsed >= HEARTBEAT_S:
@@ -2857,13 +2984,14 @@ async def main() -> None:
                                         "process":    last_process,
                                         "title":      last_title,
                                         "duration_s": dur_s,
+                                        "idle_s":     idle_s,
                                         "captured_at": last_emit_at.strftime("%Y-%m-%dT%H:%M:%S"),
                                     }))
                                 except Exception:
                                     return
                                 last_emit_at = now
 
-                        # After first successful window detection, send an immediate "current window" event
+                        # After first successful window detection, send an immediate event
                         if first_poll and (proc or title):
                             first_poll = False
                             try:
@@ -2872,12 +3000,28 @@ async def main() -> None:
                                     "process":    proc,
                                     "title":      title,
                                     "duration_s": 0,
+                                    "idle_s":     idle_s,
                                     "captured_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
                                 }))
                             except Exception:
                                 return
                         elif first_poll:
                             first_poll = False
+
+                        # Live ping every LIVE_PING_S — updates 'right now' panel without a DB write
+                        if (now - last_ping_at).total_seconds() >= LIVE_PING_S:
+                            last_ping_at = now
+                            try:
+                                await ws.send(json.dumps({
+                                    "type":        "eagle_heartbeat",
+                                    "process":     proc,
+                                    "title":       title,
+                                    "idle_s":      idle_s,
+                                    "is_idle":     is_idle,
+                                    "captured_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+                                }))
+                            except Exception:
+                                return
 
                         # Periodic screenshot
                         interval_s = _eagle_cfg.get("screenshot_interval_min", 30) * 60
@@ -3018,6 +3162,24 @@ async def main() -> None:
                             result = await loop2.run_in_executor(None, _install_patches_wua, update_ids)
                             await ws.send(json.dumps({
                                 "type":   "patch_install_result",
+                                "job_id": job_id,
+                                "result": result,
+                            }))
+                            if result.get("reboot_required") and not result.get("error"):
+                                asyncio.create_task(_do_reboot_sequence())
+                            continue
+
+                        # --- Deploy patches by CVE ID (WUA searches locally) ---
+                        if msg_type == "install_cve_patches":
+                            job_id  = payload.get("job_id")
+                            cve_ids = payload.get("cve_ids") or []
+                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids}", flush=True)
+                            loop2 = asyncio.get_event_loop()
+                            result = await loop2.run_in_executor(
+                                None, _find_and_install_cve_patches, cve_ids
+                            )
+                            await ws.send(json.dumps({
+                                "type":   "cve_patch_result",
                                 "job_id": job_id,
                                 "result": result,
                             }))

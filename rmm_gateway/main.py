@@ -14,6 +14,7 @@ from .db import (
     log_availability,
     log_rmm_event,
     store_eagle_event,
+    upsert_eagle_current,
     store_patches,
     store_pending_updates,
     store_screenshot,
@@ -23,6 +24,7 @@ from .db import (
     _utc_to_mst,
     update_patch_job,
     get_patch_job,
+    update_cve_patch_job,
     get_session_reason,
     store_rustdesk_id,
     validate_agent,
@@ -159,6 +161,32 @@ async def deploy_patches(agent_id: str, request: Request):
         }))
         update_patch_job(int(job_id), status="deploying")
         return JSONResponse({"ok": True, "message": f"Deploy command sent for job {job_id}"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/deploy-cve-patches/{agent_id}")
+async def deploy_cve_patches(agent_id: str, request: Request):
+    """Flask calls this to push a CVE patch job to a connected agent."""
+    agent_ws = agents.get(agent_id)
+    if not agent_ws:
+        return JSONResponse({"ok": False, "error": "Agent not connected"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    job_id  = body.get("job_id")
+    cve_ids = body.get("cve_ids") or []
+    if not job_id or not cve_ids:
+        return JSONResponse({"ok": False, "error": "job_id and cve_ids required"}, status_code=400)
+    try:
+        await agent_ws.send_text(json.dumps({
+            "type":    "install_cve_patches",
+            "job_id":  job_id,
+            "cve_ids": cve_ids,
+        }))
+        update_cve_patch_job(int(job_id), status="deploying")
+        return JSONResponse({"ok": True, "message": f"CVE patch deploy sent for job {job_id}"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -306,19 +334,54 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                         print(f"[gw] update_patch_job error: {e}", flush=True)
                 continue
 
+            # --- Result from a CVE patch deployment job ---
+            if msg_type == "cve_patch_result":
+                job_id = payload.get("job_id")
+                if job_id:
+                    result = payload.get("result") or {}
+                    installed = int(result.get("installed") or 0)
+                    error     = result.get("error") or ""
+                    status    = "installed" if installed > 0 and not error else (
+                                "no_patch" if "No pending patches" in error else "failed")
+                    try:
+                        update_cve_patch_job(
+                            int(job_id),
+                            status=status,
+                            result=result,
+                            reboot_required=bool(result.get("reboot_required")),
+                        )
+                    except Exception as e:
+                        print(f"[gw] update_cve_patch_job error: {e}", flush=True)
+                continue
+
             # --- Eagle Eyes: window focus event ---
             if msg_type == "eagle_event":
-                print(f"[gw] eagle_event from {agent_id}: {payload.get('process')} | {payload.get('title')}", flush=True)
+                proc  = payload.get("process") or ""
+                title = payload.get("title") or ""
+                idle_s = int(payload.get("idle_s") or 0)
+                ts    = _utc_to_mst(payload.get("captured_at") or "")
+                print(f"[gw] eagle_event from {agent_id}: {proc} | {title}", flush=True)
                 try:
-                    store_eagle_event(
-                        agent_id,
-                        _utc_to_mst(payload.get("captured_at") or ""),
-                        payload.get("process") or "",
-                        payload.get("title") or "",
-                        int(payload.get("duration_s") or 0),
-                    )
+                    store_eagle_event(agent_id, ts, proc, title, int(payload.get("duration_s") or 0), idle_s)
                 except Exception as e:
                     print(f"[gw] store_eagle_event error: {e}", flush=True)
+                try:
+                    upsert_eagle_current(agent_id, proc, title, idle_s, idle_s >= 300, ts)
+                except Exception as e:
+                    print(f"[gw] upsert_eagle_current error: {e}", flush=True)
+                continue
+
+            # --- Eagle Eyes: live heartbeat (no DB event, just update current state) ---
+            if msg_type == "eagle_heartbeat":
+                proc   = payload.get("process") or ""
+                title  = payload.get("title") or ""
+                idle_s = int(payload.get("idle_s") or 0)
+                is_idle = bool(payload.get("is_idle", False))
+                ts     = _utc_to_mst(payload.get("captured_at") or "")
+                try:
+                    upsert_eagle_current(agent_id, proc, title, idle_s, is_idle, ts)
+                except Exception as e:
+                    print(f"[gw] eagle_heartbeat upsert error: {e}", flush=True)
                 continue
 
             # --- Eagle Eyes: periodic screenshot ---

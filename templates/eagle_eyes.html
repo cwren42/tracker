@@ -49,6 +49,18 @@
           <li><a class="dropdown-item" href="#" onclick="exportCSV('sites');return false;"><i class="bi bi-globe me-2"></i>Top Sites CSV</a></li>
         </ul>
       </div>
+      <a href="/rmm/eagle-eyes/compare" class="btn btn-sm btn-outline-info" title="Compare Agents">
+        <i class="bi bi-layout-split me-1"></i>Compare
+      </a>
+      <button class="btn btn-sm btn-outline-secondary" title="App Classifications" data-bs-toggle="modal" data-bs-target="#ee-classify-modal">
+        <i class="bi bi-tags me-1"></i>Classify
+      </button>
+      <button class="btn btn-sm btn-outline-warning" title="Alert Rules" data-bs-toggle="modal" data-bs-target="#ee-alerts-modal">
+        <i class="bi bi-bell me-1"></i>Alerts
+      </button>
+      <button class="btn btn-sm btn-outline-primary" title="Scheduled Reports" data-bs-toggle="modal" data-bs-target="#ee-schedule-modal">
+        <i class="bi bi-calendar-check me-1"></i>Schedule
+      </button>
       <small class="text-muted" id="ee-last-updated"></small>
     </div>
   </div>
@@ -97,6 +109,31 @@
           <div class="small text-muted mb-1"><i class="bi bi-lightning-charge me-1"></i>Productivity</div>
           <div class="fw-bold fs-4" id="stat-prod-score" style="color:#51cf66;">—</div>
           <div class="small text-muted" id="stat-prod-sub"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Now — Live Activity Panel -->
+  <div class="row g-2 mb-3">
+    <div class="col-12">
+      <div class="card border-0" id="ee-now-card" style="background:linear-gradient(90deg,#12181f,#0d1117);">
+        <div class="card-body py-2 px-3 d-flex align-items-center gap-3" style="min-height:46px;">
+          <div class="d-flex align-items-center gap-2 flex-shrink-0">
+            <span id="ee-now-dot" class="rounded-circle d-inline-block" style="width:9px;height:9px;background:#495057;flex-shrink:0;transition:background .4s;"></span>
+            <span class="text-muted" style="font-size:.7rem;letter-spacing:.05em;">RIGHT NOW</span>
+          </div>
+          <div class="d-flex align-items-center gap-2 flex-grow-1 overflow-hidden">
+            <i class="bi bi-window text-warning flex-shrink-0" style="font-size:.85rem;"></i>
+            <span id="ee-now-app" class="fw-bold text-warning" style="font-size:.9rem;">—</span>
+            <span class="text-muted flex-shrink-0">·</span>
+            <span id="ee-now-title" class="text-muted text-truncate" style="font-size:.78rem;"></span>
+          </div>
+          <div class="d-flex align-items-center gap-2 flex-shrink-0">
+            <span id="ee-now-idle-badge" class="badge bg-secondary d-none" style="font-size:.68rem;">💤 Idle</span>
+            <span id="ee-now-idle-dur" class="text-muted" style="font-size:.75rem;"></span>
+            <span id="ee-now-age" class="text-muted" style="font-size:.68rem;"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -151,6 +188,27 @@
     </div>
   </div>
 
+  <!-- Gantt Day Timeline -->
+  <div class="row g-3 mb-3">
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-calendar3 me-1 text-warning"></i>Day Timeline</span>
+          <div class="d-flex align-items-center gap-1">
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="ganttPrevDay()"><i class="bi bi-chevron-left"></i></button>
+            <input type="date" id="ee-gantt-day" class="form-control form-control-sm" style="width:135px;" onchange="loadGantt()">
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="ganttNextDay()"><i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="card-body py-2" style="min-height:70px;overflow-x:auto;">
+          <div id="ee-gantt-spin" class="text-center py-3"><span class="spinner-border spinner-border-sm"></span></div>
+          <div id="ee-gantt-chart" style="display:none;"></div>
+          <p id="ee-gantt-empty" class="text-muted text-center small mt-3" style="display:none;">No activity data for this day.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Row 3: Daily + Hourly -->
   <div class="row g-3 mb-3">
     <div class="col-12 col-xl-7">
@@ -178,6 +236,29 @@
           <p id="ee-hourly-empty" class="text-muted text-center small mt-4" style="display:none;">No hourly data.</p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Focus Sessions -->
+  <div class="card shadow-sm mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between py-2">
+      <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-bullseye me-1 text-success"></i>Deep Focus Sessions</span>
+      <span id="ee-focus-count" class="badge bg-secondary fw-normal"></span>
+    </div>
+    <div class="card-body p-0" style="max-height:220px;overflow-y:auto;">
+      <div id="ee-focus-spin" class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>
+      <table class="table table-sm table-hover mb-0" id="ee-focus-table" style="font-size:.78rem;display:none;">
+        <thead class="sticky-top table-dark">
+          <tr>
+            <th style="width:130px;">Application</th>
+            <th style="width:145px;">Started</th>
+            <th class="text-end" style="width:110px;">Duration</th>
+            <th class="text-center" style="width:90px;">Level</th>
+          </tr>
+        </thead>
+        <tbody id="ee-focus-body"></tbody>
+      </table>
+      <p id="ee-focus-empty" class="text-muted text-center small mt-3" style="display:none;">No focus sessions ≥10 min in this period.</p>
     </div>
   </div>
 
@@ -229,6 +310,140 @@
     </div>
   </div>
 
+</div>
+
+<!-- App Classification Modal -->
+<div class="modal fade" id="ee-classify-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="bi bi-tags me-2"></i>App Productivity Classifications</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div class="p-3 border-bottom">
+          <div class="row g-2 align-items-end">
+            <div class="col">
+              <label class="form-label small mb-1">Process name (e.g. <code>chrome</code>)</label>
+              <input type="text" id="cls-pattern" class="form-control form-control-sm" placeholder="process_name (lowercase)">
+            </div>
+            <div class="col">
+              <label class="form-label small mb-1">Label</label>
+              <input type="text" id="cls-label" class="form-control form-control-sm" placeholder="Google Chrome">
+            </div>
+            <div class="col-auto">
+              <label class="form-label small mb-1">Productivity</label>
+              <select id="cls-prod" class="form-select form-select-sm">
+                <option value="productive">&#x2705; Productive</option>
+                <option value="neutral" selected>&#x26AA;&#xFE0F; Neutral</option>
+                <option value="unproductive">&#x274C; Unproductive</option>
+              </select>
+            </div>
+            <div class="col-auto">
+              <button class="btn btn-sm btn-primary" onclick="clsSave()">Add / Update</button>
+            </div>
+          </div>
+        </div>
+        <div style="max-height:380px;overflow-y:auto;">
+          <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
+            <thead class="sticky-top table-dark"><tr><th>Process</th><th>Label</th><th>Productivity</th><th></th></tr></thead>
+            <tbody id="cls-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Alert Rules Modal -->
+<div class="modal fade" id="ee-alerts-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="bi bi-bell me-2"></i>Eagle Eyes Alert Rules</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div class="p-3 border-bottom">
+          <div class="row g-2 align-items-end">
+            <div class="col-auto">
+              <label class="form-label small mb-1">Alert Type</label>
+              <select id="alr-type" class="form-select form-select-sm" onchange="alrTypeChange()">
+                <option value="productivity_below">Productivity Below %</option>
+                <option value="idle_over">Idle Over Minutes</option>
+                <option value="app_used">App Used</option>
+                <option value="unproductive_app">Any Unproductive App</option>
+              </select>
+            </div>
+            <div class="col" id="alr-thresh-col">
+              <label class="form-label small mb-1">Threshold</label>
+              <input type="number" id="alr-thresh" class="form-control form-control-sm" placeholder="e.g. 50">
+            </div>
+            <div class="col" id="alr-proc-col" style="display:none;">
+              <label class="form-label small mb-1">Process (e.g. spotify)</label>
+              <input type="text" id="alr-proc" class="form-control form-control-sm" placeholder="process_name">
+            </div>
+            <div class="col-auto">
+              <div class="form-check mt-3"><input class="form-check-input" type="checkbox" id="alr-email" checked><label class="form-check-label small" for="alr-email">Email</label></div>
+            </div>
+            <div class="col-auto">
+              <button class="btn btn-sm btn-warning" onclick="alrSave()">Add Rule</button>
+            </div>
+          </div>
+        </div>
+        <div style="max-height:200px;overflow-y:auto;" class="border-bottom">
+          <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
+            <thead class="sticky-top table-dark"><tr><th>Type</th><th>Threshold</th><th>Process</th><th>Email</th><th>Last Fired</th><th></th></tr></thead>
+            <tbody id="alr-tbody"></tbody>
+          </table>
+        </div>
+        <div class="p-2">
+          <div class="small text-muted fw-semibold mb-1">Recent Alert Log</div>
+          <div style="max-height:120px;overflow-y:auto;" id="alr-log" class="small text-muted">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule Report Modal -->
+<div class="modal fade" id="ee-schedule-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="bi bi-calendar-check me-2"></i>Schedule Activity Report</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label small">Frequency</label>
+          <select id="sch-freq" class="form-select form-select-sm" onchange="schFreqChange()">
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+          </select>
+        </div>
+        <div class="mb-2" id="sch-dow-row">
+          <label class="form-label small">Day of week</label>
+          <select id="sch-dow" class="form-select form-select-sm">
+            <option value="0">Monday</option><option value="1" selected>Tuesday</option><option value="2">Wednesday</option>
+            <option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small">Send time</label>
+          <input type="time" id="sch-time" class="form-control form-control-sm" value="08:00">
+        </div>
+        <div class="mb-2">
+          <label class="form-label small">Email to</label>
+          <input type="email" id="sch-email" class="form-control form-control-sm" placeholder="admin@example.com">
+        </div>
+        <div id="sch-list" class="small text-muted mb-2">Loading…</div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-primary" onclick="schSave()">Save Schedule</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Screenshot Modal -->
@@ -674,9 +889,257 @@ window.eeLoad = async function() {
   const t = now.toLocaleTimeString('en-US',{timeZone:'UTC',hour:'numeric',minute:'2-digit'});
   const upd = document.getElementById('ee-last-updated');
   if (upd) upd.textContent = `Updated ${t} ${agentTzLabel}`;
+  loadFocusSessions();
+  loadGantt();
 };
 
-document.addEventListener('DOMContentLoaded', eeLoad);
+/* ── Right Now ─────────────────────────────────────────────────────── */
+async function eeLoadCurrent() {
+  try {
+    const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/current`);
+    const data = await res.json();
+    const dot  = document.getElementById('ee-now-dot');
+    const app  = document.getElementById('ee-now-app');
+    const ttl  = document.getElementById('ee-now-title');
+    const ib   = document.getElementById('ee-now-idle-badge');
+    const idr  = document.getElementById('ee-now-idle-dur');
+    const age  = document.getElementById('ee-now-age');
+    if (!data.ok || !data.current) {
+      dot.style.background = '#495057';
+      app.textContent = '— offline —'; ttl.textContent = ''; ib.classList.add('d-none');
+      return;
+    }
+    const c = data.current;
+    // Dot = green if fresh (< 90s), yellow if stale-ish, grey if very old
+    const ageS = c.captured_at ? (Date.now() - new Date(c.captured_at + (c.captured_at.endsWith('Z')?'':'Z')).getTime()) / 1000 : 9999;
+    dot.style.background = ageS < 90 ? '#51cf66' : ageS < 300 ? '#fcc419' : '#495057';
+    app.textContent  = c.process_name || '—';
+    ttl.textContent  = c.window_title || '';
+    if (c.is_idle) {
+      ib.classList.remove('d-none');
+      idr.textContent = c.idle_s ? fmtDuration(c.idle_s) + ' idle' : '';
+    } else { ib.classList.add('d-none'); idr.textContent = ''; }
+    age.textContent = c.captured_at ? fmtTs(c.captured_at) : '';
+  } catch(_){}
+}
+
+/* ── Gantt Day Timeline ────────────────────────────────────────────── */
+const GANTT_COLORS = ['#4dabf7','#69db7c','#f783ac','#ffa94d','#cc5de8','#20c997','#a9e34b','#ff8787','#74c0fc','#e599f7'];
+const _gc = {};
+function ganttColor(proc) {
+  if (!_gc[proc]) _gc[proc] = GANTT_COLORS[Object.keys(_gc).length % GANTT_COLORS.length];
+  return _gc[proc];
+}
+async function loadGantt() {
+  const day = document.getElementById('ee-gantt-day').value;
+  if (!day) return;
+  document.getElementById('ee-gantt-spin').style.display = '';
+  document.getElementById('ee-gantt-chart').style.display = 'none';
+  document.getElementById('ee-gantt-empty').style.display = 'none';
+  try {
+    const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/gantt?day=${day}`);
+    const data = await res.json();
+    document.getElementById('ee-gantt-spin').style.display = 'none';
+    if (!data.ok || !data.events.length) { document.getElementById('ee-gantt-empty').style.display=''; return; }
+    renderGantt(data.events, day);
+  } catch(_){ document.getElementById('ee-gantt-spin').style.display='none'; document.getElementById('ee-gantt-empty').style.display=''; }
+}
+function renderGantt(events, day) {
+  const el = document.getElementById('ee-gantt-chart');
+  el.style.display = '';
+  // Build hour buckets 0-23
+  const hourBuckets = Array.from({length:24}, (_,h) => ({hour:h, segs:[]}));
+  let dayStart = null, dayEnd = null;
+  for (const ev of events) {
+    if (!ev.captured_at) continue;
+    const ts  = new Date(ev.captured_at + (ev.captured_at.endsWith('Z')?'':'Z'));
+    const h   = ts.getUTCHours();
+    const dur = ev.duration_s || 0;
+    hourBuckets[h].segs.push({proc: ev.process_name||'unknown', dur, ts});
+    if (!dayStart || ts < dayStart) dayStart = ts;
+    if (!dayEnd || ts > dayEnd) dayEnd = ts;
+  }
+  const activeHours = hourBuckets.filter(b=>b.segs.length);
+  if (!activeHours.length) { el.style.display='none'; document.getElementById('ee-gantt-empty').style.display=''; return; }
+  const minH = activeHours[0].hour, maxH = activeHours[activeHours.length-1].hour + 1;
+  let html = `<div style="overflow-x:auto;"><div style="min-width:600px;">`;
+  // Hour labels + bars
+  for (let h = minH; h <= maxH; h++) {
+    const bucket = hourBuckets[h] || {segs:[]};
+    const totalH = bucket.segs.reduce((a,s)=>a+s.dur, 0) || 3600;
+    const label  = fmtHour(h);
+    html += `<div class="d-flex align-items-center mb-1" style="gap:6px;">`;
+    html += `<span style="width:46px;font-size:.68rem;color:#868e96;flex-shrink:0;text-align:right;">${label}</span>`;
+    html += `<div class="flex-grow-1 d-flex" style="height:20px;border-radius:4px;overflow:hidden;background:#1a1a2e;">`;
+    for (const seg of bucket.segs) {
+      const pct = Math.max(1, Math.round(seg.dur / totalH * 100));
+      const col = ganttColor(seg.proc);
+      html += `<div title="${seg.proc} · ${fmtDuration(seg.dur)}" style="width:${pct}%;background:${col};height:100%;"></div>`;
+    }
+    html += `</div></div>`;
+  }
+  // Legend
+  const seen = {};
+  for (const b of hourBuckets) for (const s of b.segs) if (!seen[s.proc]) seen[s.proc] = true;
+  html += `<div class="d-flex flex-wrap gap-2 mt-2">`;
+  for (const proc of Object.keys(seen)) {
+    html += `<span style="font-size:.68rem;color:${ganttColor(proc)}"><i class="bi bi-square-fill me-1"></i>${proc}</span>`;
+  }
+  html += `</div></div></div>`;
+  el.innerHTML = html;
+}
+function ganttPrevDay() {
+  const inp = document.getElementById('ee-gantt-day');
+  const d = new Date(inp.value + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  inp.value = d.toISOString().slice(0, 10);
+  loadGantt();
+}
+function ganttNextDay() {
+  const inp = document.getElementById('ee-gantt-day');
+  const d = new Date(inp.value + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  inp.value = d.toISOString().slice(0, 10);
+  loadGantt();
+}
+
+/* ── Focus Sessions ────────────────────────────────────────────────── */
+async function loadFocusSessions() {
+  const dp = dateParams();
+  document.getElementById('ee-focus-spin').style.display = '';
+  document.getElementById('ee-focus-table').style.display = 'none';
+  document.getElementById('ee-focus-empty').style.display = 'none';
+  try {
+    const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/focus-sessions?${dp}`);
+    const data = await res.json();
+    document.getElementById('ee-focus-spin').style.display = 'none';
+    if (!data.ok || !data.sessions.length) { document.getElementById('ee-focus-empty').style.display=''; return; }
+    document.getElementById('ee-focus-count').textContent = data.sessions.length + ' sessions';
+    document.getElementById('ee-focus-body').innerHTML = data.sessions.map(s => {
+      const dur = s.duration_s;
+      const lvl = dur >= 7200 ? ['bg-success','Deep'] : dur >= 3600 ? ['bg-info text-dark','Flow'] : ['bg-secondary','Focus'];
+      return `<tr>
+        <td style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><i class="bi bi-window me-1 text-muted"></i>${s.process_name||'—'}</td>
+        <td class="text-muted" style="font-size:.75rem;">${fmtTs(s.started_at)}</td>
+        <td class="text-end fw-bold">${fmtDuration(dur)}</td>
+        <td class="text-center"><span class="badge ${lvl[0]}" style="font-size:.68rem;">${lvl[1]}</span></td>
+      </tr>`;
+    }).join('');
+    document.getElementById('ee-focus-table').style.display = '';
+  } catch(_){ document.getElementById('ee-focus-spin').style.display='none'; document.getElementById('ee-focus-empty').style.display=''; }
+}
+
+/* ── App Classifications ───────────────────────────────────────────── */
+async function loadClassifications() {
+  const res  = await fetch('/api/rmm/eagle-eyes/app-classifications');
+  const data = await res.json();
+  if (!data.ok) return;
+  const PROD_BADGE = {productive:'<span class="badge bg-success">✅ Productive</span>', unproductive:'<span class="badge bg-danger">❌ Unproductive</span>', neutral:'<span class="badge bg-secondary">⚪ Neutral</span>'};
+  document.getElementById('cls-tbody').innerHTML = data.classifications.map(c =>
+    `<tr><td><code>${c.process_pattern}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
+     <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})">✕</button></td></tr>`
+  ).join('');
+}
+async function clsSave() {
+  const pattern = document.getElementById('cls-pattern').value.trim().toLowerCase();
+  const label   = document.getElementById('cls-label').value.trim();
+  const prod    = document.getElementById('cls-prod').value;
+  if (!pattern) return;
+  await fetch('/api/rmm/eagle-eyes/app-classifications', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({process_pattern:pattern,label,productivity:prod})});
+  document.getElementById('cls-pattern').value = '';
+  document.getElementById('cls-label').value = '';
+  loadClassifications();
+}
+async function clsDelete(id) {
+  await fetch(`/api/rmm/eagle-eyes/app-classifications/${id}`, {method:'DELETE'});
+  loadClassifications();
+}
+
+/* ── Alert Rules ───────────────────────────────────────────────────── */
+function alrTypeChange() {
+  const t = document.getElementById('alr-type').value;
+  document.getElementById('alr-thresh-col').style.display = (t === 'app_used') ? 'none' : '';
+  document.getElementById('alr-proc-col').style.display   = (t === 'app_used') ? '' : 'none';
+}
+async function loadAlerts() {
+  const res  = await fetch('/api/rmm/eagle-eyes/alerts');
+  const data = await res.json();
+  if (!data.ok) return;
+  document.getElementById('alr-tbody').innerHTML = data.rules.map(r =>
+    `<tr><td>${r.alert_type}</td><td>${r.threshold??'—'}</td><td>${r.process_pattern??'—'}</td>
+     <td>${r.email_notify?'Yes':'No'}</td><td class="text-muted small">${r.last_fired_at??'Never'}</td>
+     <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="alrDelete(${r.id})">✕</button></td></tr>`
+  ).join('') || '<tr><td colspan="6" class="text-muted text-center">No rules</td></tr>';
+  const log = data.log || [];
+  document.getElementById('alr-log').innerHTML = log.length
+    ? log.map(l=>`<div>${fmtTs(l.fired_at)} — ${l.alert_type}: ${l.message}</div>`).join('')
+    : 'No alerts fired yet.';
+}
+async function alrSave() {
+  const t = document.getElementById('alr-type').value;
+  await fetch('/api/rmm/eagle-eyes/alerts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+    alert_type: t,
+    threshold:  t!=='app_used' ? parseInt(document.getElementById('alr-thresh').value)||null : null,
+    process_pattern: t==='app_used' ? document.getElementById('alr-proc').value.trim().toLowerCase() : null,
+    email_notify: document.getElementById('alr-email').checked,
+    agent_id: agentId,
+  })});
+  loadAlerts();
+}
+async function alrDelete(id) {
+  await fetch(`/api/rmm/eagle-eyes/alerts/${id}`, {method:'DELETE'});
+  loadAlerts();
+}
+
+/* ── Scheduled Reports ─────────────────────────────────────────────── */
+function schFreqChange() {
+  const freq = document.getElementById('sch-freq').value;
+  document.getElementById('sch-dow-row').style.display = freq==='weekly' ? '' : 'none';
+}
+async function loadSchedules() {
+  const res  = await fetch('/api/rmm/eagle-eyes/report-schedules');
+  const data = await res.json();
+  if (!data.ok) return;
+  const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  document.getElementById('sch-list').innerHTML = data.schedules.length
+    ? data.schedules.map(s => `<div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+        <span>${s.frequency==='weekly'?DAYS[s.day_of_week]+' ':''}${s.send_time} → ${s.email_to||'—'}</span>
+        <button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="schDelete(${s.id})">✕</button>
+      </div>`).join('')
+    : '<p class="text-muted small">No schedules.</p>';
+}
+async function schSave() {
+  const email = document.getElementById('sch-email').value.trim();
+  if (!email) return;
+  await fetch('/api/rmm/eagle-eyes/report-schedules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+    agent_id: agentId,
+    frequency: document.getElementById('sch-freq').value,
+    day_of_week: parseInt(document.getElementById('sch-dow').value),
+    send_time: document.getElementById('sch-time').value,
+    email_to: email,
+  })});
+  document.getElementById('sch-email').value='';
+  loadSchedules();
+}
+async function schDelete(id) {
+  await fetch(`/api/rmm/eagle-eyes/report-schedules?id=${id}`, {method:'DELETE'});
+  loadSchedules();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Set gantt to today (agent local time)
+  const agentNow = new Date(Date.now() + agentTzOffsetH * 3600000);
+  document.getElementById('ee-gantt-day').value = agentNow.toISOString().slice(0, 10);
+
+  eeLoad();
+  eeLoadCurrent();
+  setInterval(eeLoadCurrent, 30000);  // live poll every 30s
+
+  // Lazy-load modals on first open
+  document.getElementById('ee-classify-modal').addEventListener('show.bs.modal', () => loadClassifications(), {once:false});
+  document.getElementById('ee-alerts-modal').addEventListener('show.bs.modal', () => loadAlerts(), {once:false});
+  document.getElementById('ee-schedule-modal').addEventListener('show.bs.modal', () => loadSchedules(), {once:false});
+});
 </script>
 
 <style>

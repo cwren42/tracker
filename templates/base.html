@@ -523,6 +523,7 @@
             border-radius: 8px;
         }
     </style>
+    {% block styles %}{% endblock %}
 </head>
 <body {% if current_user.is_authenticated and current_user.theme %}data-theme="{{ current_user.theme }}"{% endif %}>
     {% if current_user.is_authenticated %}
@@ -574,23 +575,51 @@
                             <li><a class="dropdown-item" href="{{ url_for('custom_reports') }}">
                                 <i class="bi bi-file-earmark-bar-graph"></i> Custom Reports
                             </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('reports_advanced') }}">
+                                <i class="bi bi-file-earmark-spreadsheet"></i> Advanced Reports
+                            </a></li>
                         </ul>
                     </li>
                     {% if current_user.role == 'admin' %}
+                    <!-- Security dropdown -->
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="soc2Dropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-shield-check"></i> SOC2 Compliance
+                        <a class="nav-link dropdown-toggle" href="#" id="securityDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-shield-exclamation"></i> Security
                         </a>
                         <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="/vulnerabilities">
+                                <i class="bi bi-bug"></i> Vulnerabilities
+                            </a></li>
+                            <li><a class="dropdown-item" href="/alerts/center">
+                                <i class="bi bi-bell-fill"></i> Alerts
+                            </a></li>
+                        </ul>
+                    </li>
+                    <!-- Admin dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-gear-fill"></i> Admin
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{{ url_for('users') }}">
+                                <i class="bi bi-people-fill"></i> Users
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('settings') }}">
+                                <i class="bi bi-sliders"></i> Settings
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('workflows') }}">
+                                <i class="bi bi-diagram-3-fill"></i> Workflows
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">SOC2 Compliance</h6></li>
                             <li><a class="dropdown-item" href="{{ url_for('soc2_dashboard') }}">
-                                <i class="bi bi-speedometer2"></i> Dashboard
+                                <i class="bi bi-speedometer2"></i> SOC2 Dashboard
                             </a></li>
                             <li><a class="dropdown-item" href="{{ url_for('soc2_strikegraph') }}">
                                 <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
                             </a></li>
-                            <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item" href="{{ url_for('management_risk_review') }}">
-                                <i class="bi bi-clipboard-check"></i> Risk Assessment Review
+                                <i class="bi bi-clipboard-check"></i> Risk Assessment
                             </a></li>
                             <li><a class="dropdown-item" href="{{ url_for('system_description') }}">
                                 <i class="bi bi-file-earmark-text"></i> System Description
@@ -606,16 +635,6 @@
                             </a></li>
                         </ul>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('users') }}">
-                            <i class="bi bi-people-fill"></i> Users
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('settings') }}">
-                            <i class="bi bi-gear-fill"></i> Settings
-                        </a>
-                    </li>
                     {% endif %}
                 </ul>
                 <form class="d-flex me-2" action="{{ url_for('global_search') }}" method="GET" role="search">
@@ -626,6 +645,24 @@
                     </div>
                 </form>
                 <ul class="navbar-nav">
+                    <!-- Notification Bell -->
+                    <li class="nav-item dropdown" id="bell-nav">
+                        <a class="nav-link position-relative" href="#" id="bellDropdown" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false" onclick="bellMarkRead(event)">
+                            <i class="bi bi-bell-fill"></i>
+                            <span id="bell-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                                  style="display:none;font-size:.6rem;"></span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end p-0" id="bell-menu"
+                            style="width:340px;max-height:420px;overflow-y:auto;">
+                            <li class="px-3 py-2 d-flex justify-content-between align-items-center"
+                                style="border-bottom:1px solid #2a3a4a;">
+                                <strong style="font-size:.85rem;">Notifications</strong>
+                                <a href="/alerts/center" class="text-muted" style="font-size:.75rem;">View all</a>
+                            </li>
+                            <div id="bell-items"><li class="px-3 py-3 text-muted text-center" style="font-size:.8rem;">No notifications</li></div>
+                        </ul>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="https://incident.corp.cirque.com" target="_blank" rel="noopener">
                             <i class="bi bi-shield-exclamation"></i> Incident
@@ -839,5 +876,59 @@
         }
     </script>
     {% block scripts %}{% endblock %}
+
+    <!-- Notification Bell -->
+    <script>
+    (function() {
+      const SEV_COLOR = {danger:'#ff6b6b', warning:'#fcc419', info:'#4dabf7', success:'#51cf66'};
+      function bellLoad() {
+        fetch('/api/notifications/bell').then(r=>r.json()).then(d=>{
+          if (!d.ok) return;
+          const badge = document.getElementById('bell-badge');
+          const items = document.getElementById('bell-items');
+          if (!badge || !items) return;
+          if (d.unread > 0) {
+            badge.textContent = d.unread > 99 ? '99+' : d.unread;
+            badge.style.display = '';
+          } else {
+            badge.style.display = 'none';
+          }
+          if (!d.items || !d.items.length) {
+            items.innerHTML = '<li class="px-3 py-3 text-muted text-center" style="font-size:.8rem;">No notifications</li>';
+            return;
+          }
+          items.innerHTML = d.items.map(n => {
+            const dot = n.read_flag ? '' : `<span style="width:7px;height:7px;border-radius:50%;background:#4dabf7;flex-shrink:0;"></span>`;
+            const ts  = n.created_at ? n.created_at.slice(5,16).replace('T',' ') : '';
+            const col = SEV_COLOR[n.color] || '#fcc419';
+            const href = n.link || '/alerts/center';
+            return `<li style="border-bottom:1px solid #1a2535;">
+              <a href="${href}" class="d-flex align-items-start gap-2 px-3 py-2 text-decoration-none"
+                 style="background:${n.read_flag?'transparent':'rgba(77,171,247,.05)'};">
+                <i class="bi ${n.icon||'bi-bell'} mt-1 flex-shrink-0" style="color:${col};font-size:.9rem;"></i>
+                <div class="flex-grow-1 overflow-hidden">
+                  <div class="d-flex justify-content-between align-items-center gap-1">
+                    <strong style="font-size:.78rem;color:#dde;">${n.title||'Alert'}</strong>
+                    <span class="text-muted flex-shrink-0" style="font-size:.65rem;">${ts}</span>
+                  </div>
+                  <div class="text-muted text-truncate" style="font-size:.72rem;">${n.body||''}</div>
+                </div>
+                ${dot}
+              </a>
+            </li>`;
+          }).join('');
+        }).catch(()=>{});
+      }
+      function bellMarkRead(e) {
+        // Mark all read when opening the dropdown
+        fetch('/api/notifications/mark-read', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+          .then(()=>{ setTimeout(bellLoad, 500); });
+      }
+      window.bellMarkRead = bellMarkRead;
+      // Load on page ready and every 60 s
+      document.addEventListener('DOMContentLoaded', bellLoad);
+      setInterval(bellLoad, 60000);
+    })();
+    </script>
 </body>
 </html>

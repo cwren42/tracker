@@ -1,0 +1,373 @@
+"""
+Cirque RMM — AI Engine
+Wraps OpenAI API for ticket assistant and security monitoring.
+API key stored in setting table (key='openai_api_key').
+"""
+import json, logging, sqlite3, urllib.request, urllib.error
+from datetime import datetime
+
+log = logging.getLogger("ai_engine")
+DB_PATH = "/var/www/tracker/assets.db"
+
+
+def _db():
+    db = sqlite3.connect(DB_PATH, timeout=15)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+def _now():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _get_api_key() -> str | None:
+    db = _db()
+    row = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
+    db.close()
+    return row["value"] if row and row["value"] else None
+
+
+def _get_setting(key: str, default: str = "") -> str:
+    db = _db()
+    row = db.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
+    db.close()
+    return row["value"] if row else default
+
+
+def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> str:
+    """Call OpenAI chat completions. Raises on failure."""
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError("OpenAI API key not configured — add it in Settings → AI tab")
+    model = model or _get_setting("openai_model", "gpt-4o")
+    payload = json.dumps({
+        "model":      model,
+        "messages":   messages,
+        "max_tokens": max_tokens,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=payload,
+        headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        resp = json.loads(r.read())
+    return resp["choices"][0]["message"]["content"].strip()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ticket assistant
+# ──────────────────────────────────────────────────────────────────────────────
+def suggest_ticket_resolution(ticket_id: int) -> dict:
+    """
+    Generate an AI resolution suggestion for a ticket.
+    Returns the saved suggestion dict or raises on error.
+    """
+    db = _db()
+    ticket = db.execute("SELECT * FROM support_ticket WHERE id=?", (ticket_id,)).fetchone()
+    db.close()
+    if not ticket:
+        raise ValueError(f"Ticket {ticket_id} not found")
+
+    # Check if we already have a recent pending suggestion
+    db2 = _db()
+    existing = db2.execute(
+        "SELECT * FROM ai_ticket_suggestions WHERE ticket_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+        (ticket_id,)
+    ).fetchone()
+    db2.close()
+    if existing:
+        return dict(existing)
+
+    system_prompt = (
+        "You are an expert IT support engineer. When given a support ticket, respond with a JSON object:\n"
+        '{"diagnosis": "...", "resolution_steps": ["step1","step2",...], '
+        '"can_auto_resolve": true/false, "category": "hardware|software|network|account|security|other", '
+        '"confidence": 0.0-1.0, "estimated_minutes": N}'
+    )
+    user_prompt = (
+        f"Ticket #{ticket_id}\n"
+        f"Title: {ticket['title']}\n"
+        f"Description: {ticket['description'] or 'N/A'}\n"
+        f"Priority: {ticket['priority']}\n"
+        f"Category: {ticket.get('category', 'N/A')}"
+    )
+
+    model = _get_setting("openai_model", "gpt-4o")
+    raw = _openai_chat(
+        [{"role": "system", "content": system_prompt},
+         {"role": "user",   "content": user_prompt}],
+        model=model,
+        max_tokens=600
+    )
+
+    # Parse JSON (model should return JSON)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Fallback: wrap raw text
+        parsed = {"diagnosis": raw, "resolution_steps": [], "can_auto_resolve": False,
+                  "category": "other", "confidence": 0.5, "estimated_minutes": None}
+
+    suggestion_text = json.dumps(parsed)
+    auto_mode = 1 if _get_setting("ai_ticket_auto_mode") == "1" else 0
+
+    db3 = _db()
+    cur = db3.execute(
+        """INSERT INTO ai_ticket_suggestions
+           (ticket_id, model, suggestion, confidence, category, auto_mode, status, created_at)
+           VALUES (?,?,?,?,?,?,'pending',?)""",
+        (ticket_id, model, suggestion_text,
+         parsed.get("confidence", 0.5),
+         parsed.get("category", "other"),
+         auto_mode, _now())
+    )
+    sug_id = cur.lastrowid
+    db3.commit()
+    row = db3.execute("SELECT * FROM ai_ticket_suggestions WHERE id=?", (sug_id,)).fetchone()
+    db3.close()
+
+    # Auto-apply if mode is on and confidence is high
+    if auto_mode and parsed.get("confidence", 0) >= 0.85 and parsed.get("can_auto_resolve"):
+        try:
+            apply_ticket_suggestion(sug_id, auto=True)
+        except Exception:
+            log.exception("Auto-apply failed for suggestion %s", sug_id)
+
+    return dict(row)
+
+
+def apply_ticket_suggestion(suggestion_id: int, auto: bool = False) -> bool:
+    """Mark suggestion as applied and add a note to the ticket."""
+    db = _db()
+    sug = db.execute("SELECT * FROM ai_ticket_suggestions WHERE id=?", (suggestion_id,)).fetchone()
+    if not sug:
+        db.close()
+        raise ValueError("Suggestion not found")
+    parsed = json.loads(sug["suggestion"])
+    ticket_id = sug["ticket_id"]
+
+    note_text = f"**AI Resolution Suggestion** {'(auto-applied)' if auto else '(tech-approved)'}\n\n"
+    note_text += f"**Diagnosis:** {parsed.get('diagnosis','')}\n\n"
+    if parsed.get("resolution_steps"):
+        note_text += "**Steps:**\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(parsed["resolution_steps"]))
+
+    db.execute(
+        "INSERT INTO ticket_note (ticket_id, content, created_by, created_at) VALUES (?,?,?,?)",
+        (ticket_id, note_text, "AI Assistant", _now())
+    )
+    reviewer = "system" if auto else "technician"
+    db.execute(
+        "UPDATE ai_ticket_suggestions SET status='approved', reviewed_by=?, reviewed_at=? WHERE id=?",
+        (reviewer, _now(), suggestion_id)
+    )
+    db.commit(); db.close()
+    return True
+
+
+def dismiss_ticket_suggestion(suggestion_id: int) -> bool:
+    db = _db()
+    db.execute("UPDATE ai_ticket_suggestions SET status='rejected', reviewed_at=? WHERE id=?",
+               (_now(), suggestion_id))
+    db.commit(); db.close()
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Security monitor
+# ──────────────────────────────────────────────────────────────────────────────
+def generate_security_summary() -> dict:
+    """
+    Analyse current vulnerability + patch posture and return an AI summary.
+    """
+    db = _db()
+
+    # Collect raw data
+    vuln_rows = db.execute(
+        """SELECT severity, status, COUNT(*) as cnt
+           FROM device_vulnerability GROUP BY severity, status"""
+    ).fetchall()
+    patch_rows = db.execute(
+        """SELECT COUNT(*) as total,
+           SUM(CASE WHEN status='installed' THEN 1 ELSE 0 END) as installed
+           FROM rmm_patch"""
+    ).fetchone()
+    offline_agents = db.execute(
+        "SELECT COUNT(*) as cnt FROM rmm_agent WHERE online=0"
+    ).fetchone()
+    open_tickets = db.execute(
+        "SELECT COUNT(*) as cnt FROM support_ticket WHERE status='open'"
+    ).fetchone()
+    recent_alerts = db.execute(
+        "SELECT rule_name, COUNT(*) as cnt FROM alert_log GROUP BY rule_name ORDER BY cnt DESC LIMIT 5"
+    ).fetchall()
+    db.close()
+
+    # Summarise numbers
+    vuln_by_sev = {}
+    total_open  = 0
+    for row in vuln_rows:
+        sev = (row["severity"] or "unknown").lower()
+        if row["status"] == "open":
+            vuln_by_sev[sev] = vuln_by_sev.get(sev, 0) + row["cnt"]
+            total_open += row["cnt"]
+
+    total_patches  = patch_rows["total"]    if patch_rows else 0
+    installed_p    = patch_rows["installed"] if patch_rows else 0
+    compliance_pct = int(installed_p / total_patches * 100) if total_patches else 100
+    critical_count = vuln_by_sev.get("critical", 0)
+
+    raw_data = {
+        "vuln_by_severity": vuln_by_sev,
+        "total_open_vulns": total_open,
+        "critical_vulns": critical_count,
+        "patch_compliance_pct": compliance_pct,
+        "offline_agents": offline_agents["cnt"] if offline_agents else 0,
+        "open_tickets": open_tickets["cnt"] if open_tickets else 0,
+        "top_alerts": [dict(r) for r in recent_alerts],
+    }
+
+    prompt = (
+        "You are a cybersecurity analyst reviewing an IT environment. "
+        "Analyse this data and return a JSON object:\n"
+        '{"summary": "2-3 sentence executive summary", '
+        '"risk_level": "low|medium|high|critical", '
+        '"action_items": ["item1","item2",...], '
+        '"positive_notes": ["thing going well",...], '
+        '"priority_cves_note": "any commentary on critical CVEs"}\n\n'
+        f"Data: {json.dumps(raw_data)}"
+    )
+
+    model = _get_setting("openai_model", "gpt-4o")
+    raw = _openai_chat(
+        [{"role": "user", "content": prompt}],
+        model=model,
+        max_tokens=500
+    )
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = {"summary": raw, "risk_level": "unknown", "action_items": [], "positive_notes": []}
+
+    db2 = _db()
+    db2.execute(
+        """INSERT INTO ai_security_summaries
+           (summary, vuln_count, critical_count, patch_compliance_pct, action_items, raw_data)
+           VALUES (?,?,?,?,?,?)""",
+        (json.dumps(parsed), total_open, critical_count, compliance_pct,
+         json.dumps(parsed.get("action_items", [])), json.dumps(raw_data))
+    )
+    db2.commit(); db2.close()
+    return {**parsed, **raw_data}
+
+
+def get_latest_security_summary() -> dict | None:
+    db = _db()
+    row = db.execute(
+        "SELECT * FROM ai_security_summaries ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    db.close()
+    if not row:
+        return None
+    result = dict(row)
+    result["parsed"] = json.loads(result["summary"])
+    result["action_items"] = json.loads(result["action_items"] or "[]")
+    result["raw_data"] = json.loads(result["raw_data"] or "{}")
+    return result
+
+
+# ── Workflow generation ────────────────────────────────────────────────────────
+
+_WF_SYSTEM = """You are an IT automation workflow designer for a corporate IT helpdesk and RMM system.
+Given a plain-English description, output a JSON object with "nodes" and "edges" arrays
+that represent an automation workflow.
+
+Available node types and actions:
+
+TRIGGERS (always use as first node):
+- type="trigger" — config: {trigger_type: manual|schedule|ticket_created|ticket_updated|vulnerability_detected|patch_failed|user_offboarded|alert_triggered}
+
+TICKET MANAGEMENT:
+- type="action", action="create_ticket"    config: {title, description, priority (Low|Medium|High|Critical)}
+- type="action", action="update_ticket"    config: {status, note, assigned_to}
+- type="action", action="close_ticket"     config: {resolution}
+- type="action", action="assign_ticket"    config: {assigned_to}
+
+NOTIFICATIONS:
+- type="action", action="send_notification" config: {message, user}
+- type="action", action="send_email"        config: {to, subject, body}
+- type="action", action="send_teams"        config: {webhook_url, title, message}
+- type="action", action="send_slack"        config: {webhook_url, channel, message}
+
+ACTIVE DIRECTORY / IDENTITY:
+- type="action", action="create_user"       config: {username, first_name, last_name, password, ou}
+- type="action", action="disable_ad_user"   config: {username}
+- type="action", action="enable_ad_user"    config: {username}
+- type="action", action="reset_password"    config: {username, new_password}
+- type="action", action="unlock_account"    config: {username}
+- type="action", action="add_to_group"      config: {username, group_name}
+- type="action", action="remove_from_group" config: {username, group_name}
+- type="action", action="azure_sync"        config: {}
+
+DEVICE MANAGEMENT (requires RMM agent online):
+- type="action", action="deploy_software"    config: {asset_id, method (chocolatey|winget|msi|exe), package, args}
+- type="action", action="uninstall_software" config: {asset_id, method, package}
+- type="action", action="run_script"         config: {asset_id, language (powershell|bash), script}
+- type="action", action="deploy_patch"       config: {cve_id, asset_id}
+- type="action", action="reboot_device"      config: {asset_id, delay_seconds}
+- type="action", action="shutdown_device"    config: {asset_id}
+- type="action", action="lock_device"        config: {asset_id, mode (lock|bitlocker)}
+- type="action", action="apply_gpo"          config: {asset_id, force (true|false)}
+
+INTEGRATION / FLOW:
+- type="action", action="webhook"            config: {url, method (POST|GET), body}
+- type="action", action="http_request"       config: {url, method (GET|POST|PUT|PATCH|DELETE), headers, body}
+- type="action", action="ai_suggest"         config: {}
+- type="action", action="wait"               config: {seconds}
+- type="condition"                           config: {field, operator (==|!=|>|<|contains|not_contains), value}
+    condition nodes have output ports "true" and "false"
+
+Layout rules:
+- First node (trigger) at x=80, y=200
+- Space nodes ~250px apart horizontally, ~150px vertically for branches
+- Each node needs a unique id like "n1","n2",...
+- Each edge needs id "e1","e2",... fromNode, fromPort (out|true|false), toNode
+- Use {{username}}, {{asset_id}}, {{ticket_id}}, {{cve_id}} for dynamic context values
+
+Return ONLY valid JSON (no markdown fences). Structure:
+{
+  "name": "Descriptive workflow name",
+  "trigger_type": "alert_triggered",
+  "nodes": [
+    {"id":"n1","type":"trigger","action":"","label":"Trigger","x":80,"y":200,"config":{"trigger_type":"alert_triggered"}},
+    {"id":"n2","type":"action","action":"create_ticket","label":"Create Ticket","x":330,"y":200,"config":{"title":"Alert: {{cve_id}}","priority":"High"}}
+  ],
+  "edges": [
+    {"id":"e1","fromNode":"n1","fromPort":"out","toNode":"n2","label":""}
+  ]
+}"""
+
+
+def generate_workflow(prompt: str) -> dict:
+    """Ask the AI to generate a workflow from a plain-English prompt."""
+    try:
+        raw = _openai_chat([
+            {"role": "system",  "content": _WF_SYSTEM},
+            {"role": "user",    "content": prompt},
+        ], max_tokens=2000)
+        # Strip markdown fences if present
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        wf = json.loads(raw.strip())
+        return {"ok": True, "workflow": wf}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"AI generation failed: {e}"}

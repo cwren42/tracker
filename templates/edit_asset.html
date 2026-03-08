@@ -2,6 +2,25 @@
 
 {% block title %}Edit {{ asset.asset_tag }} - Asset Tracker{% endblock %}
 
+{% block styles %}
+<style>
+/* Make the browser-native file picker button respect the current theme */
+input[type="file"]::file-selector-button {
+    background: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius) 0 0 var(--bs-border-radius);
+    padding: .375rem .75rem;
+    margin-right: .75rem;
+    cursor: pointer;
+    transition: background .15s;
+}
+input[type="file"]::file-selector-button:hover {
+    background: var(--bs-tertiary-bg);
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <div class="col-md-8 offset-md-2">
@@ -14,6 +33,14 @@
 
         <div class="card">
             <div class="card-body">
+                {% if rmm_linked %}
+                <div class="alert alert-warning d-flex align-items-center mb-3" role="alert">
+                    <i class="bi bi-robot fs-5 me-2"></i>
+                    <div>
+                        <strong>RMM-managed device</strong> — Name, Manufacturer, Model and Serial Number are synced from the agent and cannot be edited here.
+                    </div>
+                </div>
+                {% endif %}
                 <form method="POST" enctype="multipart/form-data">
                     <div class="row g-3">
                         <div class="col-md-6">
@@ -21,8 +48,10 @@
                             <input type="text" class="form-control" id="asset_tag" name="asset_tag" value="{{ asset.asset_tag }}" required>
                         </div>
                         <div class="col-md-6">
-                            <label for="name" class="form-label">Asset Name *</label>
-                            <input type="text" class="form-control" id="name" name="name" value="{{ asset.name }}" required>
+                            <label for="name" class="form-label">Asset Name *
+                                {% if rmm_linked %}<span class="badge bg-warning text-dark ms-1" title="Managed by RMM agent"><i class="bi bi-robot"></i> RMM</span>{% endif %}
+                            </label>
+                            <input type="text" class="form-control" id="name" name="name" value="{{ asset.name }}" {% if rmm_linked %}readonly style="opacity:.55;cursor:not-allowed" title="Controlled by RMM agent"{% else %}required{% endif %}>
                         </div>
                         <div class="col-md-6">
                             <label for="category" class="form-label">Category *</label>
@@ -41,6 +70,21 @@
                             </select>
                         </div>
                         <div class="col-md-6">
+                            <label for="device_type" class="form-label">Device Type</label>
+                            <select class="form-select" id="device_type" name="device_type">
+                                <option value="">— Select Type —</option>
+                                <option value="Windows PC" {% if asset.device_type == 'Windows PC' %}selected{% endif %}>Windows PC</option>
+                                <option value="Mac" {% if asset.device_type == 'Mac' %}selected{% endif %}>Mac</option>
+                                <option value="Windows Server" {% if asset.device_type == 'Windows Server' %}selected{% endif %}>Windows Server</option>
+                                <option value="Linux Server" {% if asset.device_type == 'Linux Server' %}selected{% endif %}>Linux Server</option>
+                                <option value="Virtual Machine" {% if asset.device_type == 'Virtual Machine' %}selected{% endif %}>Virtual Machine</option>
+                                <option value="Network Device" {% if asset.device_type == 'Network Device' %}selected{% endif %}>Network Device</option>
+                                <option value="Printer / Scanner" {% if asset.device_type == 'Printer / Scanner' %}selected{% endif %}>Printer / Scanner</option>
+                                <option value="Mobile Device" {% if asset.device_type == 'Mobile Device' %}selected{% endif %}>Mobile Device</option>
+                                <option value="Other" {% if asset.device_type == 'Other' %}selected{% endif %}>Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
                             <label for="status" class="form-label">Status *</label>
                             <select class="form-select" id="status" name="status" required>
                                 <option value="Available" {% if asset.status == 'Available' %}selected{% endif %}>Available</option>
@@ -51,16 +95,22 @@
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label for="manufacturer" class="form-label">Manufacturer</label>
-                            <input type="text" class="form-control" id="manufacturer" name="manufacturer" value="{{ asset.manufacturer or '' }}">
+                            <label for="manufacturer" class="form-label">Manufacturer
+                                {% if rmm_linked %}<span class="badge bg-warning text-dark ms-1"><i class="bi bi-robot"></i> RMM</span>{% endif %}
+                            </label>
+                            <input type="text" class="form-control" id="manufacturer" name="manufacturer" value="{{ asset.manufacturer or '' }}" {% if rmm_linked %}readonly style="opacity:.55;cursor:not-allowed" title="Controlled by RMM agent"{% endif %}>
                         </div>
                         <div class="col-md-6">
-                            <label for="model" class="form-label">Model</label>
-                            <input type="text" class="form-control" id="model" name="model" value="{{ asset.model or '' }}">
+                            <label for="model" class="form-label">Model
+                                {% if rmm_linked %}<span class="badge bg-warning text-dark ms-1"><i class="bi bi-robot"></i> RMM</span>{% endif %}
+                            </label>
+                            <input type="text" class="form-control" id="model" name="model" value="{{ asset.model or '' }}" {% if rmm_linked %}readonly style="opacity:.55;cursor:not-allowed" title="Controlled by RMM agent"{% endif %}>
                         </div>
                         <div class="col-md-6">
-                            <label for="serial_number" class="form-label">Serial Number</label>
-                            <input type="text" class="form-control" id="serial_number" name="serial_number" value="{{ asset.serial_number or '' }}">
+                            <label for="serial_number" class="form-label">Serial Number
+                                {% if rmm_linked %}<span class="badge bg-warning text-dark ms-1"><i class="bi bi-robot"></i> RMM</span>{% endif %}
+                            </label>
+                            <input type="text" class="form-control" id="serial_number" name="serial_number" value="{{ asset.serial_number or '' }}" {% if rmm_linked %}readonly style="opacity:.55;cursor:not-allowed" title="Controlled by RMM agent"{% endif %}>
                         </div>
                         <div class="col-md-6">
                             <label for="location" class="form-label">Location</label>
@@ -73,6 +123,14 @@
                             <label for="rustdesk_id" class="form-label">RustDesk ID</label>
                             <input type="text" class="form-control" id="rustdesk_id" name="rustdesk_id" value="{{ asset.rustdesk_id or '' }}" placeholder="e.g. 123 456 789">
                             <small class="text-muted">Open RustDesk on the device — the large number on the left is the ID.</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="rustdesk_password" class="form-label">RustDesk Password</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="rustdesk_password" name="rustdesk_password" value="{{ asset.rustdesk_password or '' }}" placeholder="One-time or permanent password" autocomplete="new-password">
+                                <button class="btn btn-outline-secondary" type="button" onclick="var f=document.getElementById('rustdesk_password');f.type=f.type==='password'?'text':'password'" title="Show/hide password"><i class="bi bi-eye"></i></button>
+                            </div>
+                            <small class="text-muted">Stored for reference — enter it the first time you connect or set a fixed password in RustDesk settings.</small>
                         </div>
                         <div class="col-md-4">
                             <label for="vendor" class="form-label">Vendor / Supplier</label>
@@ -102,7 +160,7 @@
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">EOL / Replace By <small class="text-muted">(auto)</small></label>
-                            <input type="text" class="form-control" readonly value="{{ asset.computed_eol_date.strftime('%Y-%m-%d') if asset.computed_eol_date else 'Set purchase date + life years' }}" style="background:rgba(0,0,0,.06);cursor:default;">
+                            <input type="text" class="form-control" readonly value="{{ asset.computed_eol_date.strftime('%Y-%m-%d') if asset.computed_eol_date else 'Set purchase date + life years' }}" style="opacity:.6;cursor:default;">
                             <small class="text-muted">Auto-calculated: purchase date + expected life</small>
                         </div>
                         <div class="col-md-4">
@@ -115,15 +173,20 @@
                             </select>
                         </div>
                         <div class="col-md-12">
-                            <label for="photo" class="form-label">Asset Photo</label>
+                            <label class="form-label d-block">Asset Photo</label>
                             {% if asset.photo %}
                             <div class="mb-2">
-                                <img src="{{ url_for('static', filename='uploads/' + asset.photo) }}" alt="Current photo" style="max-width: 200px; max-height: 200px;" class="img-thumbnail">
+                                <img src="{{ url_for('static', filename='uploads/' + asset.photo) }}" alt="Current photo" style="max-width: 200px; max-height: 200px;" class="img-thumbnail d-block mb-1">
                                 <p class="text-muted small">Upload a new photo to replace the current one</p>
                             </div>
                             {% endif %}
-                            <input type="file" class="form-control" id="photo" name="photo" accept="image/*">
-                            <small class="text-muted">Accepted formats: JPG, PNG, GIF (Max 16MB)</small>
+                            <label class="btn btn-outline-secondary btn-sm mb-1" for="photo" style="cursor:pointer;">
+                                <i class="bi bi-folder2-open me-1"></i> Choose File
+                            </label>
+                            <span id="photoFileName" class="ms-2 text-muted small">No file chosen</span>
+                            <input type="file" class="d-none" id="photo" name="photo" accept="image/*"
+                                   onchange="document.getElementById('photoFileName').textContent = this.files[0]?.name || 'No file chosen'">
+                            <div><small class="text-muted">Accepted formats: JPG, PNG, GIF (Max 16MB)</small></div>
                         </div>
                         <div class="col-md-12">
                             <label for="notes" class="form-label">Notes</label>

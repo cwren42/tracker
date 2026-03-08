@@ -278,8 +278,7 @@ class M365Service:
             'freeStorageSpaceInBytes',
             'wiFiMacAddress',
             'ethernetMacAddress',
-            'tpmVersion',
-            'hardwareInformation'
+            'tpmVersion'
         ]
         endpoint = 'deviceManagement/managedDevices?$select=' + ','.join(select_fields)
         devices = self._get_all_pages(endpoint, use_beta=True)

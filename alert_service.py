@@ -31,12 +31,9 @@ def _now():
 
 
 def _get_db():
-    """Return a raw sqlite3 connection to assets.db (thread-safe)."""
-    import sqlite3, os
-    db_path = os.path.join(os.path.dirname(__file__), 'assets.db')
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    return con
+    """Return a PostgreSQL connection (thread-safe)."""
+    from pg_db import pg_connect
+    return pg_connect()
 
 
 def _send_email(subject, body_html):
@@ -441,7 +438,7 @@ def _eval_vulnerability_alerts(con, rules_by_type):
         new_crits = con.execute(
             """SELECT cve_id, name, exposed_machines FROM vulnerability_cache
                WHERE severity='Critical'
-               AND synced_at > datetime('now','-1 day')"""
+               AND synced_at::timestamp > NOW() - INTERVAL '1 day'"""
         ).fetchall()
         for v in new_crits:
             if not (v["exposed_machines"] and int(v["exposed_machines"]) > 0):
@@ -455,7 +452,7 @@ def _eval_vulnerability_alerts(con, rules_by_type):
         new_highs = con.execute(
             """SELECT cve_id, name, exposed_machines FROM vulnerability_cache
                WHERE severity='High'
-               AND synced_at > datetime('now','-1 day')"""
+               AND synced_at::timestamp > NOW() - INTERVAL '1 day'"""
         ).fetchall()
         for v in new_highs:
             if not (v["exposed_machines"] and int(v["exposed_machines"]) > 0):
@@ -468,12 +465,11 @@ def _eval_vulnerability_alerts(con, rules_by_type):
     if rule_old and rule_old['enabled']:
         thresh_days = int(rule_old['threshold_value'] or 30)
         old_open = con.execute(
-            """SELECT dv.cve_id, dv.severity, dv.asset_id, a.name as aname
+            f"""SELECT dv.cve_id, dv.severity, dv.asset_id, a.name as aname
                FROM device_vulnerability dv
                LEFT JOIN asset a ON a.id = dv.asset_id
                WHERE dv.status='Open'
-               AND dv.synced_at < datetime('now', ?)""",
-            (f'-{thresh_days} days',)
+               AND dv.synced_at::timestamp < NOW() - INTERVAL '{thresh_days} days'"""
         ).fetchall()
         for v in old_open:
             _fire_alert(con, rule_old,

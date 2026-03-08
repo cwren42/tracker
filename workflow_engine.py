@@ -3,23 +3,20 @@ Cirque RMM — Workflow Engine
 Executes visual workflow definitions stored in workflow_definitions table.
 Runs as a background thread inside the Flask app.
 """
-import json, logging, sqlite3, threading, time, traceback
+import json, logging, threading, time, traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("workflow_engine")
+from pg_db import pg_connect
 
-DB_PATH = "/var/www/tracker/assets.db"
+log = logging.getLogger("workflow_engine")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DB helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def _db():
-    db = sqlite3.connect(DB_PATH, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    return db
+    return pg_connect()
 
 
 def _now():
@@ -840,12 +837,12 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
             label  = node.get("label", ntype)
 
             db = _db()
-            db.execute(
+            cur = db.execute(
                 "INSERT INTO workflow_run_steps (run_id, node_id, node_type, node_label, status, started_at) VALUES (?,?,?,?,?,?)",
                 (run_id, node_id, ntype, label, "running", _now())
             )
             db.commit()
-            step_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            step_id = cur.lastrowid
             db.close()
 
             success, output = True, {}

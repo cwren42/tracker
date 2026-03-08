@@ -8,20 +8,17 @@ Permissions are stored as a JSON array of strings in `api_keys.permissions`.
 
 import json
 import secrets
-import sqlite3
 import time
 from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import request, jsonify
 
-DB_PATH = '/var/www/tracker/assets.db'
+from pg_db import pg_connect
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return pg_connect()
 
 
 def generate_api_key():

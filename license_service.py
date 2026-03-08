@@ -5,7 +5,7 @@ Handles license verification with remote license server
 
 import requests
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import socket
@@ -122,8 +122,12 @@ class LicenseService:
                 }
             
             # Check if expired
+            _now = datetime.now(timezone.utc)
             if license_info.expiry_date:
-                if license_info.expiry_date < datetime.utcnow():
+                exp = license_info.expiry_date
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp < _now:
                     return {
                         'valid': False,
                         'message': 'License expired',
@@ -132,7 +136,10 @@ class LicenseService:
             
             # Check grace period if server was unreachable
             if license_info.grace_period_ends:
-                if license_info.grace_period_ends < datetime.utcnow():
+                gpe = license_info.grace_period_ends
+                if gpe.tzinfo is None:
+                    gpe = gpe.replace(tzinfo=timezone.utc)
+                if gpe < _now:
                     return {
                         'valid': False,
                         'message': 'License grace period expired, server unreachable',

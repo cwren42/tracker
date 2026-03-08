@@ -3,19 +3,18 @@ Cirque RMM — Report Engine
 Generates in-browser, CSV, and PDF reports.
 PDF uses weasyprint if available, falls back to HTML.
 """
-import csv, io, json, logging, os, sqlite3
+import csv, io, json, logging, os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from pg_db import pg_connect
+
 log = logging.getLogger("report_engine")
-DB_PATH = "/var/www/tracker/assets.db"
 REPORT_DIR = "/var/www/tracker/static/reports"
 
 
 def _db():
-    db = sqlite3.connect(DB_PATH, timeout=15)
-    db.row_factory = sqlite3.Row
-    return db
+    return pg_connect()
 
 
 def _now():
@@ -107,7 +106,7 @@ def _fetch_tickets(cfg: dict) -> tuple:
     rows = db.execute("""
         SELECT t.id, t.title, t.status, t.priority, t.category,
                t.created_at, t.updated_at,
-               CAST((julianday(COALESCE(t.updated_at, datetime('now'))) - julianday(t.created_at)) * 24 AS INTEGER) as age_hours
+               EXTRACT(EPOCH FROM (COALESCE(t.updated_at, NOW()) - t.created_at::timestamp)) / 3600 AS age_hours
         FROM support_ticket t
         WHERE t.created_at >= ?
         ORDER BY t.created_at DESC

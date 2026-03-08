@@ -3,17 +3,16 @@ Cirque RMM — AI Engine
 Wraps OpenAI API for ticket assistant and security monitoring.
 API key stored in setting table (key='openai_api_key').
 """
-import json, logging, sqlite3, urllib.request, urllib.error
+import json, logging, urllib.request, urllib.error
 from datetime import datetime
 
+from pg_db import pg_connect
+
 log = logging.getLogger("ai_engine")
-DB_PATH = "/var/www/tracker/assets.db"
 
 
 def _db():
-    db = sqlite3.connect(DB_PATH, timeout=15)
-    db.row_factory = sqlite3.Row
-    return db
+    return pg_connect()
 
 
 def _now():

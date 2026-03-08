@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production-2024')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////var/www/tracker/assets.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://tracker_user:tracker_secure_2026@localhost/tracker'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SESSION_COOKIE_SECURE'] = True  # Enable secure cookies for HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -4296,7 +4296,7 @@ def api_rmm_eagle_eyes(agent_id):
     interval = int(data.get('screenshot_interval_min', 30))
     db.session.execute(
         text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, updated_at)
-                VALUES (:aid, :en, :iv, datetime('now', '-7 hours'))
+                VALUES (:aid, :en, :iv, NOW() - INTERVAL '7 hours')
                 ON CONFLICT(agent_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     screenshot_interval_min = excluded.screenshot_interval_min,
@@ -4342,12 +4342,12 @@ def _eagle_date_params(default_days: int = 7) -> tuple:
     to_date   = request.args.get('to_date', '').strip()
     if from_date and to_date:
         return (
-            "captured_at >= :from_date AND captured_at < datetime(:to_date, '+1 day')",
+            "captured_at >= :from_date AND captured_at < (:to_date::date + INTERVAL '1 day')",
             {'from_date': from_date, 'to_date': to_date}
         )
     days = int(request.args.get('days', default_days))
     # datetime('now','-7 hours') = current MST time (server clock is UTC)
-    return ("captured_at >= datetime('now', '-7 hours', :since)", {'since': f'-{days} days'})
+    return ("captured_at >= NOW() - INTERVAL '7 hours' + :since::interval", {'since': f'{days} days'})
 
 
 @app.route('/api/rmm/eagle-eyes/<agent_id>/events')
@@ -4812,13 +4812,13 @@ def api_eagle_compare_data():
             summary = db.session.execute(text(f"""
                 SELECT process_name, SUM(duration_s) as total_s, COUNT(*) as events
                 FROM rmm_eagle_event
-                WHERE agent_id = :aid AND captured_at >= datetime('now','-{days} days')
+                WHERE agent_id = :aid AND captured_at >= NOW() - INTERVAL '{days} days'
                 GROUP BY process_name ORDER BY total_s DESC LIMIT 10
             """), {'aid': aid}).mappings().fetchall()
             daily = db.session.execute(text(f"""
                 SELECT DATE(captured_at) as day, SUM(duration_s) as total_s
                 FROM rmm_eagle_event
-                WHERE agent_id = :aid AND captured_at >= datetime('now','-{days} days')
+                WHERE agent_id = :aid AND captured_at >= NOW() - INTERVAL '{days} days'
                 GROUP BY day ORDER BY day
             """), {'aid': aid}).mappings().fetchall()
             hostname = db.session.execute(
@@ -8048,7 +8048,10 @@ def get_license():
         # Calculate days remaining if expiry date exists
         days_remaining = None
         if license_info.expiry_date:
-            delta = license_info.expiry_date - datetime.utcnow()
+            exp = license_info.expiry_date
+            from datetime import timezone as _tz
+            now = datetime.now(_tz.utc) if (exp.tzinfo is not None) else datetime.utcnow()
+            delta = exp - now
             days_remaining = max(0, delta.days)
         
         return jsonify({
@@ -8508,7 +8511,7 @@ def api_rmm_metrics_history(agent_id):
         text("""SELECT recorded_at, cpu_percent, memory_percent
                 FROM rmm_metrics_history
                 WHERE agent_id = :aid
-                  AND recorded_at >= datetime('now', :delta)
+                  AND recorded_at >= NOW() + :delta::interval
                 ORDER BY recorded_at ASC"""),
         {'aid': agent_id, 'delta': f'-{hours} hours'}
     ).fetchall()
@@ -8674,7 +8677,8 @@ def api_rmm_patch_jobs_create(agent_id):
     db.session.execute(
         text("""INSERT INTO rmm_patch_job
                     (agent_id, update_ids, kb_ids, titles, status, approved_by, approved_at)
-                VALUES (:aid, :uids, :kbids, :titles, 'queued', :uid, datetime('now', '-7 hours'))"""),
+                VALUES (:aid, :uids, :kbids, :titles, 'queued', :uid, NOW() - INTERVAL '7 hours')
+                RETURNING id"""),
         {
             'aid':    agent_id,
             'uids':   _json.dumps(update_ids),
@@ -8684,7 +8688,7 @@ def api_rmm_patch_jobs_create(agent_id):
         }
     )
     db.session.commit()
-    job_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
+    job_id = db.session.execute(text("SELECT lastval()")).scalar()
     return jsonify({'ok': True, 'job_id': job_id})
 
 
@@ -8701,11 +8705,11 @@ def api_rmm_cmd(agent_id):
     if not session_id:
         try:
             res = db.session.execute(
-                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, datetime('now', '-7 hours'))"),
+                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, NOW() - INTERVAL '7 hours') RETURNING id"),
                 {'aid': None, 'uid': current_user.id, 'reason': data.get('type', 'cmd')}
             )
             db.session.commit()
-            session_id = res.lastrowid
+            session_id = res.scalar()
         except Exception:
             session_id = 0
     data['session_id'] = session_id
@@ -8845,11 +8849,11 @@ Write-Host 'Done.'
 
     try:
         session_row = db.session.execute(
-            text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, 'Deploy RustDesk', datetime('now','-7 hours'))"),
+            text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, 'Deploy RustDesk', NOW() - INTERVAL '7 hours') RETURNING id"),
             {'aid': row[0], 'uid': current_user.id}
         )
         db.session.commit()
-        session_id = session_row.lastrowid
+        session_id = session_row.scalar()
     except Exception:
         session_id = 0
 
@@ -8911,7 +8915,7 @@ def api_rmm_patch_jobs_deploy(agent_id, job_id):
 
     # Mark as deploying
     db.session.execute(
-        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=datetime('now', '-7 hours'), updated_at=datetime('now', '-7 hours') WHERE id=:jid"),
+        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW() - INTERVAL '7 hours', updated_at=NOW() - INTERVAL '7 hours' WHERE id=:jid"),
         {'jid': job_id}
     )
     db.session.commit()
@@ -9126,10 +9130,8 @@ def api_ai_triage_ticket(ticket_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_db():
-    import sqlite3 as _sq3
-    _conn = _sq3.connect('/var/www/tracker/assets.db')
-    _conn.row_factory = _sq3.Row
-    return _conn
+    from pg_db import pg_connect
+    return pg_connect()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -9522,14 +9524,15 @@ def api_vuln_deploy(cve_id):
     errors     = []
     for (aid, agent_id) in rows:
         try:
-            db.session.execute(
+            result = db.session.execute(
                 text("""INSERT INTO cve_patch_job
                         (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
-                        VALUES (:aid, :agent, :cve, 'queued', :who, :now, :now, :now)"""),
+                        VALUES (:aid, :agent, :cve, 'queued', :who, :now, :now, :now)
+                        RETURNING id"""),
                 {'aid': aid, 'agent': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
             )
             db.session.commit()
-            job_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
+            job_id = result.scalar()
         except Exception as e:
             errors.append({'agent_id': agent_id, 'error': f'DB error: {e}'})
             continue

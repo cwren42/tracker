@@ -7,11 +7,47 @@ require minimal code changes for the SQLite → PostgreSQL migration.
 """
 
 import re
+import datetime as _dt
 
 import psycopg2
 import psycopg2.extras
 
 DB_DSN = "postgresql://tracker_user:tracker_secure_2026@localhost/tracker"
+
+
+# ─── Strip timezone from all TIMESTAMPTZ reads ────────────────────────────────
+# pgloader migrated SQLite text columns to PostgreSQL TIMESTAMP WITH TIME ZONE.
+# The app was written for SQLite which returns naive datetimes; to avoid
+# changing every datetime.utcnow() call we strip tzinfo globally on read.
+#
+# psycopg2 calls new_type adapters with the RAW TEXT string from PostgreSQL,
+# not a pre-parsed object.  We set timezone=UTC on every connection so PG
+# always sends "YYYY-MM-DD HH:MM:SS[.ffffff]+00" — then we just strip the
+# offset suffix instead of doing tz conversion arithmetic.
+#
+# OIDs: 1184 = timestamptz, 1185 = timestamptz[] (array)
+_TS_RE = re.compile(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(\.\d+)?')
+
+def _strip_tz(val, cur):
+    """Parse raw PostgreSQL TIMESTAMPTZ string into naive UTC datetime."""
+    if val is None:
+        return None
+    m = _TS_RE.match(val)
+    if not m:
+        return None
+    base = m.group(1)
+    frac = m.group(2) or ''
+    fmt = '%Y-%m-%d %H:%M:%S' + ('.%f' if frac else '')
+    return _dt.datetime.strptime(base + frac, fmt)
+
+try:
+    _NAIVE_TS = psycopg2.extensions.new_type(
+        (1184, 1185), 'NAIVE_TIMESTAMPTZ', _strip_tz
+    )
+    psycopg2.extensions.register_type(_NAIVE_TS)
+except Exception as _e:
+    import logging as _log
+    _log.getLogger('pg_db').warning('TIMESTAMPTZ adapter failed: %s', _e)
 
 
 # ─── SQL dialect converter ────────────────────────────────────────────────────
@@ -104,7 +140,7 @@ class _Conn:
     """Wraps a psycopg2 connection to mimic the sqlite3.Connection API."""
 
     def __init__(self):
-        self._conn = psycopg2.connect(DB_DSN)
+        self._conn = psycopg2.connect(DB_DSN, options="-c timezone=UTC")
 
     def cursor(self) -> _Cursor:
         return _Cursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))

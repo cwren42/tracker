@@ -100,8 +100,14 @@ class _Row(dict):
 
     list(row)   → list of values in column order (for CSV/table export).
     row['col']  → value by column name.
+    row[0]      → first column value (positional, like sqlite3.Row).
     dict(row)   → plain dict copy.
     """
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
     def __iter__(self):
         return iter(self.values())
 

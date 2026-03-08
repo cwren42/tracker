@@ -193,7 +193,7 @@ def _eval_agent_alerts(con, rules_by_type):
                   t.disk_json, t.security_json, a.last_seen_at
            FROM rmm_agent a
            LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
-           WHERE a.enabled = 1"""
+           WHERE a.enabled = true"""
     ).fetchall()
 
     for ag in agents:
@@ -338,7 +338,7 @@ def _eval_asset_alerts(con, rules_by_type):
                   a.purchase_date, a.expected_life_years, a.replacement_date, a.last_seen,
                   CASE WHEN ra.asset_id IS NOT NULL THEN 1 ELSE 0 END AS has_rmm
            FROM asset a
-           LEFT JOIN rmm_agent ra ON ra.asset_id = a.id AND ra.enabled = 1
+           LEFT JOIN rmm_agent ra ON ra.asset_id = a.id AND ra.enabled = true
            WHERE a.status != 'Disposed'"""
     ).fetchall()
 

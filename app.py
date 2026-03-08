@@ -4121,7 +4121,7 @@ def api_linux_agent_checks():
             FROM monitoring_check mc
             JOIN profile_check pc ON mc.id = pc.check_id
             JOIN asset_monitoring_profile amp ON pc.profile_id = amp.profile_id
-            WHERE amp.asset_id = :asset_id AND mc.enabled = 1
+            WHERE amp.asset_id = :asset_id AND mc.enabled = true
         """), {'asset_id': asset_id})
         
         checks = []
@@ -4223,7 +4223,7 @@ def _verify_agent_token(agent_id: str, token: str) -> bool:
     import hashlib
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     row = db.session.execute(
-        text("SELECT id FROM rmm_agent WHERE agent_id = :aid AND agent_token_sha256 = :h AND enabled = 1"),
+        text("SELECT id FROM rmm_agent WHERE agent_id = :aid AND agent_token_sha256 = :h AND enabled = true"),
         {'aid': agent_id, 'h': token_hash}
     ).fetchone()
     return row is not None
@@ -4280,7 +4280,7 @@ def api_rmm_agent_status(agent_id):
         pass
     # Gateway doesn't have a live WS for HTTP-based agents — check DB freshness instead
     row = db.session.execute(
-        text("SELECT last_seen_at FROM rmm_agent WHERE agent_id = :aid AND enabled = 1"),
+        text("SELECT last_seen_at FROM rmm_agent WHERE agent_id = :aid AND enabled = true"),
         {'aid': agent_id}
     ).fetchone()
     if row and row[0]:
@@ -4875,7 +4875,7 @@ def rmm_eagle_compare():
             SELECT a.agent_id, COALESCE(t.hostname, a.agent_id) as hostname
             FROM rmm_agent a
             LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
-            WHERE a.enabled = 1
+            WHERE a.enabled = true
             ORDER BY hostname
         """)
     ).mappings().fetchall()
@@ -5327,7 +5327,7 @@ def assets():
     # Also query gateway for live WebSocket-connected agents (covers Windows agents that don't POST telemetry)
     cutoff = datetime.utcnow() - timedelta(seconds=300)
     rmm_rows = db.session.execute(
-        text("SELECT agent_id, asset_id, last_seen_at FROM rmm_agent WHERE enabled = 1 AND asset_id IS NOT NULL")
+        text("SELECT agent_id, asset_id, last_seen_at FROM rmm_agent WHERE enabled = true AND asset_id IS NOT NULL")
     ).fetchall()
 
     # Get live gateway connections
@@ -5464,7 +5464,7 @@ def view_asset(asset_id):
     rmm_agent_id = None
     try:
         rmm_row = db.session.execute(
-            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
             {'aid': asset_id}
         ).fetchone()
         if rmm_row:
@@ -5547,7 +5547,7 @@ def edit_asset(asset_id):
     rmm_agent_id = None
     try:
         rmm_row = db.session.execute(
-            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
             {'aid': asset_id}
         ).fetchone()
         if rmm_row:
@@ -8370,7 +8370,7 @@ def rmm_update_software(agent_id):
         return jsonify({'error': 'Unauthorized'}), 401
     # Look up the asset linked to this agent
     row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = true LIMIT 1"),
         {'aid': agent_id}
     ).fetchone()
     if not row or not row[0]:
@@ -8847,7 +8847,7 @@ def api_rmm_deploy_rustdesk(agent_id):
 
     # Find the linked asset so we can update rustdesk_id after install
     row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = true LIMIT 1"),
         {'aid': agent_id}
     ).fetchone()
     if not row:
@@ -9028,7 +9028,7 @@ def api_rmm_rustdesk_sync(agent_id):
 
     # Find the asset linked to this agent
     row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = true LIMIT 1"),
         {'aid': agent_id}
     ).fetchone()
     if not row or not row[0]:
@@ -9068,7 +9068,7 @@ def api_rmm_agent_info(agent_id):
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'ok': False, 'error': 'unauthorized'}), 401
     row = db.session.execute(
-        text("SELECT a.id, a.asset_tag, a.name FROM rmm_agent ra LEFT JOIN asset a ON a.id = ra.asset_id WHERE ra.agent_id = :aid AND ra.enabled = 1 LIMIT 1"),
+        text("SELECT a.id, a.asset_tag, a.name FROM rmm_agent ra LEFT JOIN asset a ON a.id = ra.asset_id WHERE ra.agent_id = :aid AND ra.enabled = true LIMIT 1"),
         {'aid': agent_id}
     ).fetchone()
     if not row:
@@ -9332,7 +9332,7 @@ def api_alert_log():
 def api_notifications_bell():
     con = _alert_svc._get_db()
     try:
-        unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=0").fetchone()[0]
+        unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=false").fetchone()[0]
         recent = con.execute("SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20").fetchall()
         return jsonify(ok=True, unread=unread, items=[dict(r) for r in recent])
     finally:
@@ -9346,9 +9346,9 @@ def api_notifications_mark_read():
     try:
         ids = (request.get_json(force=True) or {}).get('ids')
         if ids:
-            con.execute(f"UPDATE notification_bell SET read_flag=1 WHERE id IN ({','.join('?'*len(ids))})", ids)
+            con.execute(f"UPDATE notification_bell SET read_flag=true WHERE id IN ({','.join('?'*len(ids))})", ids)
         else:
-            con.execute("UPDATE notification_bell SET read_flag=1")
+            con.execute("UPDATE notification_bell SET read_flag=true")
         con.commit()
         return jsonify(ok=True)
     finally:
@@ -9596,7 +9596,7 @@ def api_vuln_deploy(cve_id):
             rows = con.execute(
                 """SELECT dv.asset_id, ra.agent_id
                    FROM device_vulnerability dv
-                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
                    WHERE dv.cve_id = ? AND dv.asset_id = ? LIMIT 1""",
                 (cve_id, asset_id)
             ).fetchall()
@@ -9604,7 +9604,7 @@ def api_vuln_deploy(cve_id):
             rows = con.execute(
                 """SELECT DISTINCT dv.asset_id, ra.agent_id
                    FROM device_vulnerability dv
-                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
                    WHERE dv.cve_id = ? AND dv.status = 'Open'""",
                 (cve_id,)
             ).fetchall()
@@ -9734,7 +9734,7 @@ def api_patch_all_by_app():
         rows = con.execute("""
             SELECT DISTINCT dv.cve_id, dv.asset_id, ra.agent_id
             FROM device_vulnerability dv
-            JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+            JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
             WHERE dv.product_name = ? AND dv.status = 'Open'
         """, (product_name,)).fetchall()
     finally:
@@ -10231,7 +10231,7 @@ def _eagle_report_scheduler():
             with app.app_context():
                 schedules = db.session.execute(text("""
                     SELECT id, agent_id, frequency, day_of_week, send_time, email_to, last_sent_at
-                    FROM rmm_eagle_report_schedule WHERE enabled = 1
+                    FROM rmm_eagle_report_schedule WHERE enabled = true
                 """)).mappings().fetchall()
 
                 for sch in schedules:

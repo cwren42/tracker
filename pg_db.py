@@ -91,6 +91,10 @@ def _fix_sql(sql: str) -> str:
     _has_or_ignore = bool(re.search(r'(?i)\bOR\s+IGNORE\b', sql))
     if _has_or_ignore:
         sql = re.sub(r'(?i)\bOR\s+IGNORE\b', '', sql)
+    # 4e. boolean column = 1/0  →  col = true/false
+    _BOOL_COLS = r'(?:enabled|is_active|is_idle|is_current|is_admin|is_template|is_builtin|read_flag|resolved|active|auto_ticket|auto_mode|email_notify|teams_notify|use_ssl|use_tls|allow_patching|allow_reboots|suppress_alerts|notification_required|notification_sent|acknowledged|rollback_possible|completed|reboot_required|battery_charging|battery_present|success)'
+    sql = re.sub(rf'(\b{_BOOL_COLS}\b)\s*=\s*1\b', r'\1 = true', sql, flags=re.IGNORECASE)
+    sql = re.sub(rf'(\b{_BOOL_COLS}\b)\s*=\s*0\b', r'\1 = false', sql, flags=re.IGNORECASE)
     # 5. Escape bare % in SQL (LIKE wildcards) so psycopg2 won't misread them
     #    Replace % with %% — but only when it is NOT already %% and NOT %s
     sql = re.sub(r"(?<!%)%(?![%s(])", "%%", sql)

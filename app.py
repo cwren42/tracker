@@ -278,6 +278,19 @@ class SupportTicket(db.Model):
     csat_score = db.Column(db.Integer)       # 1=positive, 0=negative
     csat_comment = db.Column(db.Text)
 
+    _SLA_HOURS = {'Low': 120, 'Normal': 72, 'High': 24, 'Urgent': 4}
+
+    @property
+    def sla_target_hours(self):
+        return self._SLA_HOURS.get(self.priority, 72)
+
+    @property
+    def sla_hours_remaining(self):
+        if not self.created_at:
+            return self.sla_target_hours
+        elapsed = (datetime.utcnow() - self.created_at).total_seconds() / 3600
+        return max(0.0, self.sla_target_hours - elapsed)
+
 
 class TicketNote(db.Model):
     __tablename__ = 'ticket_note'
@@ -459,6 +472,13 @@ class Risk(db.Model):
     active_controls = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ControlRiskMapping(db.Model):
+    __tablename__ = 'control_risk_mapping'
+    id = db.Column(db.Integer, primary_key=True)
+    control_id = db.Column(db.Integer, db.ForeignKey('control.id', ondelete='CASCADE'))
+    risk_id = db.Column(db.Integer, db.ForeignKey('risk.id', ondelete='CASCADE'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class DashboardWidget(db.Model):
     id = db.Column(db.Integer, primary_key=True)

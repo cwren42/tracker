@@ -110,6 +110,10 @@ class User(UserMixin, db.Model):
         }
         return permission in permissions.get(self.role, [])
 
+    @property
+    def display_name(self):
+        return self.full_name or self.username
+
 class AzureIntegrationConfig(db.Model):
     __tablename__ = 'azure_integration_config'
     id = db.Column(db.Integer, primary_key=True)
@@ -3128,10 +3132,61 @@ def return_license(assignment_id):
 @manager_required
 @license_required
 def tickets():
+    from collections import defaultdict
+    from types import SimpleNamespace
     tickets = SupportTicket.query.order_by(SupportTicket.created_at.desc()).all()
     total_closed = SupportTicket.query.filter_by(status='Closed').count()
     total_open = SupportTicket.query.filter(SupportTicket.status.in_(['Open', 'In Progress'])).count()
-    return render_template('tickets.html', tickets=tickets, total_closed=total_closed, total_open=total_open)
+
+    # Chart: tickets created per day for last 30 days
+    today = datetime.utcnow().date()
+    chart_labels = [
+        (today - timedelta(days=29 - i)).strftime('%Y-%m-%d') for i in range(30)
+    ]
+    label_set = set(chart_labels)
+    counts_by_date = defaultdict(int)
+    for t in tickets:
+        if t.created_at:
+            d = t.created_at.date() if hasattr(t.created_at, 'date') else t.created_at
+            key = d.strftime('%Y-%m-%d')
+            if key in label_set:
+                counts_by_date[key] += 1
+    chart_data = [counts_by_date[d] for d in chart_labels]
+
+    # Technician workload
+    users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(User.full_name).all()
+    user_map = {u.id: u for u in users}
+    tech_stats = defaultdict(lambda: {'open': 0, 'in_progress': 0, 'closed': 0, 'res_hours': []})
+    for t in tickets:
+        if t.assigned_to_user_id and t.assigned_to_user_id in user_map:
+            s = tech_stats[t.assigned_to_user_id]
+            if t.status == 'Open':
+                s['open'] += 1
+            elif t.status == 'In Progress':
+                s['in_progress'] += 1
+            elif t.status in ('Closed', 'Merged'):
+                s['closed'] += 1
+                if t.created_at and t.updated_at:
+                    hours = (t.updated_at - t.created_at).total_seconds() / 3600
+                    if hours >= 0:
+                        s['res_hours'].append(hours)
+    tech_loads = []
+    for uid, s in tech_stats.items():
+        if uid not in user_map:
+            continue
+        avg_h = round(sum(s['res_hours']) / len(s['res_hours']), 1) if s['res_hours'] else None
+        tech_loads.append(SimpleNamespace(
+            user=user_map[uid],
+            open=s['open'],
+            in_progress=s['in_progress'],
+            closed=s['closed'],
+            avg_hours=avg_h,
+        ))
+    tech_loads.sort(key=lambda x: -(x.open + x.in_progress))
+
+    return render_template('tickets.html', tickets=tickets, total_closed=total_closed, total_open=total_open,
+                           chart_labels=chart_labels, chart_data=chart_data, tech_loads=tech_loads,
+                           now=datetime.utcnow())
 
 
 @app.route('/tickets/new', methods=['GET', 'POST'])
@@ -9356,12 +9411,15 @@ def vulnerability_dashboard():
     if last_sync_raw:
         try:
             _MST = timezone(timedelta(hours=-7))
-            _dt  = datetime.fromisoformat(last_sync_raw.replace('Z', '+00:00'))
-            if _dt.tzinfo is None:
-                _dt = _dt.replace(tzinfo=timezone.utc)
+            if isinstance(last_sync_raw, datetime):
+                _dt = last_sync_raw if last_sync_raw.tzinfo else last_sync_raw.replace(tzinfo=timezone.utc)
+            else:
+                _dt = datetime.fromisoformat(str(last_sync_raw).replace('Z', '+00:00'))
+                if _dt.tzinfo is None:
+                    _dt = _dt.replace(tzinfo=timezone.utc)
             last_sync = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
         except Exception:
-            last_sync = last_sync_raw[:16]
+            last_sync = str(last_sync_raw)[:16]
     return render_template('vulnerability_dashboard.html',
                            counts=counts, last_sync=last_sync,
                            device_count=device_count, open_count=open_count)
@@ -9402,12 +9460,15 @@ def api_vuln_stats():
         if last_sync_raw:
             try:
                 _MST = timezone(timedelta(hours=-7))
-                _dt  = datetime.fromisoformat(last_sync_raw.replace('Z', '+00:00'))
-                if _dt.tzinfo is None:
-                    _dt = _dt.replace(tzinfo=timezone.utc)
+                if isinstance(last_sync_raw, datetime):
+                    _dt = last_sync_raw if last_sync_raw.tzinfo else last_sync_raw.replace(tzinfo=timezone.utc)
+                else:
+                    _dt = datetime.fromisoformat(str(last_sync_raw).replace('Z', '+00:00'))
+                    if _dt.tzinfo is None:
+                        _dt = _dt.replace(tzinfo=timezone.utc)
                 last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
             except Exception:
-                last_sync_mst = last_sync_raw[:16]
+                last_sync_mst = str(last_sync_raw)[:16]
         return jsonify(Critical=counts.get('Critical', 0), High=counts.get('High', 0),
                        Medium=counts.get('Medium', 0), Low=counts.get('Low', 0),
                        devices=devices, open_exposures=open_exp, last_sync=last_sync_mst)

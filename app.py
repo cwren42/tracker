@@ -4467,7 +4467,7 @@ def api_rmm_eagle_app_summary(agent_id):
                 LIMIT 30"""),
         {'aid': agent_id, **date_params}
     ).fetchall()
-    summary = [{'process_name': r[0], 'events': r[1], 'total_s': r[2] or 0} for r in rows]
+    summary = [{'process_name': r[0], 'events': r[1], 'total_s': int(r[2] or 0)} for r in rows]
     return jsonify({'ok': True, 'summary': summary})
 
 
@@ -4485,7 +4485,7 @@ def api_rmm_eagle_hourly(agent_id):
                 GROUP BY hr ORDER BY hr"""),
         {'aid': agent_id, 'tz': tz_adj, **date_params}
     ).fetchall()
-    by_hour = {r[0]: r[1] or 0 for r in rows}
+    by_hour = {r[0]: int(r[1] or 0) for r in rows}
     result = [{'hour': h, 'total_s': by_hour.get(h, 0)} for h in range(24)]
     return jsonify({'ok': True, 'hourly': result})
 
@@ -4504,7 +4504,7 @@ def api_rmm_eagle_daily(agent_id):
                 GROUP BY day ORDER BY day"""),
         {'aid': agent_id, 'tz': tz_adj, **date_params}
     ).fetchall()
-    result = [{'day': str(r[0]), 'total_s': r[1] or 0} for r in rows]
+    result = [{'day': str(r[0]), 'total_s': int(r[1] or 0)} for r in rows]
     return jsonify({'ok': True, 'daily': result})
 
 
@@ -4536,7 +4536,7 @@ def api_rmm_eagle_top_sites(agent_id):
         site = (parts[-1] if len(parts) >= 2 else parts[0]).strip()
         if not site or site.lower() in ('new tab', 'about:blank', ''):
             continue
-        agg[site] = agg.get(site, 0) + (total_s or 0)
+        agg[site] = agg.get(site, 0) + int(total_s or 0)
     result = sorted([{'site': k, 'total_s': v} for k, v in agg.items()], key=lambda x: -x['total_s'])[:15]
     return jsonify({'ok': True, 'sites': result})
 
@@ -4899,7 +4899,7 @@ def api_eagle_compare_data():
                 GROUP BY process_name ORDER BY total_s DESC LIMIT 10
             """), {'aid': aid}).mappings().fetchall()
             daily = db.session.execute(text(f"""
-                SELECT DATE(captured_at) as day, SUM(duration_s) as total_s
+                SELECT CAST(captured_at AS DATE) as day, SUM(duration_s) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND captured_at >= NOW() - INTERVAL '{days} days'
                 GROUP BY day ORDER BY day
@@ -4909,9 +4909,9 @@ def api_eagle_compare_data():
             ).scalar() or aid
             results[aid] = {
                 'hostname': hostname,
-                'summary':  [dict(r) for r in summary],
-                'daily':    [dict(r) for r in daily],
-                'total_s':  sum(r['total_s'] or 0 for r in summary),
+                'summary':  [{'process_name': r['process_name'], 'total_s': int(r['total_s'] or 0), 'events': r['events']} for r in summary],
+                'daily':    [{'day': str(r['day']), 'total_s': int(r['total_s'] or 0)} for r in daily],
+                'total_s':  sum(int(r['total_s'] or 0) for r in summary),
             }
         except Exception as e:
             results[aid] = {'hostname': aid, 'error': str(e)}
@@ -4931,7 +4931,7 @@ def api_eagle_gantt(agent_id):
             SELECT process_name, window_title, duration_s, idle_s, captured_at
             FROM rmm_eagle_event
             WHERE agent_id = :aid
-              AND DATE(captured_at) = :day
+              AND CAST(captured_at AS DATE) = CAST(:day AS DATE)
             ORDER BY captured_at
         """), {'aid': agent_id, 'day': day}).mappings().fetchall()
         return jsonify(ok=True, day=day, events=[dict(r) for r in rows])

@@ -1,0 +1,21 @@
+[Unit]
+Description=Cirque RMM Check Execution Engine
+After=network.target tracker.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/tracker
+Environment="PATH=/var/www/tracker/venv/bin"
+ExecStart=/var/www/tracker/venv/bin/python3 /var/www/tracker/check_execution_engine.py --interval 60
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=check-engine
+
+[Install]
+WantedBy=multi-user.target

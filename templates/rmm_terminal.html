@@ -43,11 +43,9 @@
                 <button class="btn btn-outline-secondary" onclick="sendCtrlC()" title="Send Ctrl+C">
                     <i class="bi bi-x-octagon"></i> Ctrl+C
                 </button>
-                <button class="btn btn-outline-warning" onclick="restartShell('powershell')" title="New PowerShell">
-                    <i class="bi bi-terminal"></i> PS
+                <button class="btn btn-outline-warning" onclick="restartShell('bash')" title="New Bash Shell">
+                    <i class="bi bi-terminal"></i> Bash
                 </button>
-                <button class="btn btn-outline-secondary" onclick="restartShell('cmd')" title="New CMD">
-                    <i class="bi bi-window"></i> CMD
                 </button>
                 <button class="btn btn-outline-danger" onclick="disconnectAndClose()" title="Disconnect">
                     <i class="bi bi-power"></i>
@@ -203,62 +201,21 @@ function disconnectAndClose() {
     }
 }
 
-// Client-side line editor for dumb-pipe shell (no PTY = no terminal line discipline).
-// We buffer keystrokes locally, echo them ourselves, and send only complete lines.
-let lineBuffer = '';
-
-function shellSend(data) {
-    if (ws && ws.readyState === WebSocket.OPEN && sessionId) {
+// Send keystrokes to shell
+term.onData(data => {
+    if (ws && ws.readyState === WebSocket.OPEN && sessionId && shellActive) {
         ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: data}));
     }
-}
+});
 
-term.onData(data => {
-    if (!shellActive) return;
-
-    // Backspace / DEL — erase last buffered char visually
-    if (data === '\x7f' || data === '\x08') {
-        if (lineBuffer.length > 0) {
-            lineBuffer = lineBuffer.slice(0, -1);
-            term.write('\b \b');
-        }
-        return;
+// Resize PTY when xterm resizes
+term.onResize(({cols, rows}) => {
+    if (ws && ws.readyState === WebSocket.OPEN && sessionId) {
+        ws.send(JSON.stringify({type: 'shell_resize', session_id: sessionId, cols, rows}));
     }
-
-    // Enter — flush the buffered line to the shell
-    if (data === '\r') {
-        term.write('\r\n');
-        shellSend(lineBuffer + '\r\n');
-        lineBuffer = '';
-        return;
-    }
-
-    // Ctrl+C — interrupt; clear buffer and send immediately
-    if (data === '\x03') {
-        term.write('^C\r\n');
-        lineBuffer = '';
-        shellSend('\x03');
-        return;
-    }
-
-    // Ctrl+L — clear screen
-    if (data === '\x0c') {
-        term.clear();
-        return;
-    }
-
-    // Escape sequences (arrow keys, F-keys, etc.) — forward as-is, don't buffer
-    if (data.length > 1 || data.charCodeAt(0) < 32) {
-        shellSend(data);
-        return;
-    }
-
-    // Printable character — local echo and buffer
-    lineBuffer += data;
-    term.write(data);
 });
 
 // Auto-connect on page load
-connect('powershell');
+connect('bash');
 </script>
 {% endblock %}

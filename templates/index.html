@@ -5,14 +5,12 @@
 {% block content %}
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-4 border-bottom">
     <div>
-        <h1 class="h2 mb-0">Dashboard</h1>
-        <p class="text-muted mb-0 small">Overview of your IT assets and licenses</p>
+        <h1 class="h2 mb-0">Command Center</h1>
         <p class="text-muted mb-0 small">
-            <strong>Last report run:</strong>
             {% if last_report_run_display %}
-                {{ last_report_run_display }}
+                Last sync: {{ last_report_run_display }}
             {% else %}
-                Never
+                IT Asset &amp; Operations Dashboard
             {% endif %}
         </p>
     </div>
@@ -72,16 +70,113 @@
             {% elif widget_type == 'alert' %}
                 {% include 'widgets/alert_widget.html' %}
             {% elif widget_type == 'tickets_summary' %}
-                <div class="card h-100">
-                  <div class="card-header fw-semibold"><i class="bi bi-ticket-perforated me-2 text-primary"></i>Tickets Summary</div>
+                <div class="card h-100 shadow-sm">
+                  <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-ticket-perforated me-2 text-primary"></i>Tickets</span>
+                    {% if data.tickets_urgent > 0 %}<span class="badge bg-danger">{{ data.tickets_urgent }} Urgent</span>{% endif %}
+                  </div>
                   <div class="card-body">
                     <div class="row text-center g-2">
-                      <div class="col-6"><div class="fw-bold fs-4 text-success">{{ data.tickets_open }}</div><div class="small text-muted">Open</div></div>
-                      <div class="col-6"><div class="fw-bold fs-4 text-primary">{{ data.tickets_inprog }}</div><div class="small text-muted">In Progress</div></div>
-                      <div class="col-6"><div class="fw-bold fs-4 text-warning">{{ data.tickets_unassigned }}</div><div class="small text-muted">Unassigned</div></div>
-                      <div class="col-6"><div class="fw-bold fs-4 text-danger">{{ data.tickets_breached }}</div><div class="small text-muted">SLA Breached</div></div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.tickets_open > 10 %}text-warning{% else %}text-success{% endif %}">{{ data.tickets_open }}</div>
+                        <div class="small text-muted">Open</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 text-primary">{{ data.tickets_inprog }}</div>
+                        <div class="small text-muted">In Progress</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.tickets_unassigned > 0 %}text-warning{% else %}text-muted{% endif %}">{{ data.tickets_unassigned }}</div>
+                        <div class="small text-muted">Unassigned</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.tickets_urgent > 0 %}text-danger{% else %}text-muted{% endif %}">{{ data.tickets_urgent }}</div>
+                        <div class="small text-muted">Urgent</div>
+                      </div>
                     </div>
                     <a href="{{ url_for('tickets') }}" class="btn btn-sm btn-outline-primary w-100 mt-3">View All Tickets</a>
+                  </div>
+                </div>
+            {% elif widget_type == 'monitoring_summary' %}
+                <div class="card h-100 shadow-sm {% if data.alerts_critical > 0 %}border-danger{% elif data.alerts_warning > 0 %}border-warning{% else %}border-success{% endif %}">
+                  <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-bell me-2 {% if data.alerts_critical > 0 %}text-danger{% elif data.alerts_warning > 0 %}text-warning{% else %}text-success{% endif %}"></i>Monitoring</span>
+                    {% if data.alerts_open_total > 0 %}<span class="badge {% if data.alerts_critical > 0 %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ data.alerts_open_total }} Open</span>{% else %}<span class="badge bg-success">All Clear</span>{% endif %}
+                  </div>
+                  <div class="card-body">
+                    <div class="row text-center g-2">
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.alerts_critical > 0 %}text-danger{% else %}text-muted{% endif %}">{{ data.alerts_critical }}</div>
+                        <div class="small text-muted">Critical</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.alerts_warning > 0 %}text-warning{% else %}text-muted{% endif %}">{{ data.alerts_warning }}</div>
+                        <div class="small text-muted">Warning</div>
+                      </div>
+                    </div>
+                    {% if data.recent_alerts_list %}
+                    <ul class="list-unstyled mt-3 mb-0 small">
+                      {% for alert in data.recent_alerts_list[:3] %}
+                      <li class="d-flex align-items-start gap-1 mb-1">
+                        <i class="bi bi-circle-fill {% if alert.severity == 'critical' %}text-danger{% else %}text-warning{% endif %} mt-1" style="font-size:.5rem;"></i>
+                        <span class="text-truncate">{{ alert.message[:60] }}{% if alert.message|length > 60 %}…{% endif %}</span>
+                      </li>
+                      {% endfor %}
+                    </ul>
+                    {% endif %}
+                    <a href="{{ url_for('monitoring_alerts') }}" class="btn btn-sm btn-outline-secondary w-100 mt-3">View Alerts</a>
+                  </div>
+                </div>
+            {% elif widget_type == 'backup_summary' %}
+                <div class="card h-100 shadow-sm {% if data.proxmox_degraded_pools > 0 or data.proxmox_stale_vms > 5 %}border-warning{% elif data.proxmox_total_pools > 0 %}border-success{% endif %}">
+                  <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-hdd-stack me-2 text-secondary"></i>Backups</span>
+                    {% if data.proxmox_degraded_pools > 0 %}<span class="badge bg-danger">{{ data.proxmox_degraded_pools }} Degraded</span>
+                    {% elif data.proxmox_total_pools > 0 %}<span class="badge bg-success">Healthy</span>
+                    {% else %}<span class="badge bg-secondary">Not Configured</span>{% endif %}
+                  </div>
+                  <div class="card-body">
+                    {% if data.proxmox_total_pools > 0 %}
+                    <div class="row text-center g-2">
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.proxmox_degraded_pools > 0 %}text-danger{% else %}text-success{% endif %}">{{ data.proxmox_total_pools - data.proxmox_degraded_pools }}/{{ data.proxmox_total_pools }}</div>
+                        <div class="small text-muted">Pools Online</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.proxmox_stale_vms > 0 %}text-warning{% else %}text-success{% endif %}">{{ data.proxmox_stale_vms }}</div>
+                        <div class="small text-muted">Stale VMs</div>
+                      </div>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3">
+                      <i class="bi bi-hdd-stack" style="font-size:2rem;opacity:.3;"></i>
+                      <p class="small mt-2 mb-0">Configure Proxmox in Settings to see backup health</p>
+                    </div>
+                    {% endif %}
+                    <a href="{{ url_for('backups') }}" class="btn btn-sm btn-outline-secondary w-100 mt-3">View Backups</a>
+                  </div>
+                </div>
+            {% elif widget_type == 'licenses_summary' %}
+                <div class="card h-100 shadow-sm">
+                  <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-key me-2 text-info"></i>Licenses</span>
+                    {% if data.licenses_expiring_soon > 0 %}<span class="badge bg-warning text-dark">{{ data.licenses_expiring_soon }} Expiring</span>{% endif %}
+                  </div>
+                  <div class="card-body">
+                    <div class="row text-center g-2">
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 text-success">{{ data.active_licenses }}</div>
+                        <div class="small text-muted">Active</div>
+                      </div>
+                      <div class="col-6">
+                        <div class="fw-bold fs-3 {% if data.expired_licenses > 0 %}text-danger{% else %}text-muted{% endif %}">{{ data.expired_licenses }}</div>
+                        <div class="small text-muted">Expired</div>
+                      </div>
+                      <div class="col-12 mt-1">
+                        <div class="small text-muted">Annual Cost: <strong>${{ "{:,.0f}".format(data.total_annual_license_cost) }}</strong></div>
+                      </div>
+                    </div>
+                    <a href="{{ url_for('licenses') }}" class="btn btn-sm btn-outline-info w-100 mt-3">View Licenses</a>
                   </div>
                 </div>
             {% endif %}
@@ -125,6 +220,37 @@
         </div>
     </div>
     {% endif %}
+</div>
+
+<!-- AI Ask Panel -->
+<div class="card mb-4 mt-2 border-0 shadow-sm">
+    <div class="card-body py-3 px-4">
+        <div class="d-flex align-items-center gap-3">
+            <div class="text-primary" style="font-size:1.5rem;"><i class="bi bi-stars"></i></div>
+            <div class="flex-grow-1">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="aiAskInput"
+                           placeholder="Ask anything… e.g. Which devices are low on storage? How many urgent tickets?"
+                           maxlength="500">
+                    <button class="btn btn-primary" type="button" id="aiAskBtn">
+                        <i class="bi bi-send"></i> Ask AI
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div id="aiAskResult" class="mt-3" style="display:none;">
+            <div class="border rounded p-3 bg-body-tertiary">
+                <div class="d-flex align-items-start gap-2">
+                    <i class="bi bi-robot text-primary mt-1"></i>
+                    <div>
+                        <div id="aiAskAnswer" class="small" style="white-space:pre-wrap;"></div>
+                        <div class="mt-2" id="aiAskSources"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="aiAskError" class="mt-2 text-danger small" style="display:none;"></div>
+    </div>
 </div>
 
 <!-- Add Widget Modal -->
@@ -903,5 +1029,60 @@ function addWidgetToDashboard(widgetId, widgetType, widgetSize, widgetHeight) {
 }
 </script>
 {% endif %}
+
+<script>
+// AI Ask Panel
+(function () {
+    const input = document.getElementById('aiAskInput');
+    const btn = document.getElementById('aiAskBtn');
+    const result = document.getElementById('aiAskResult');
+    const answer = document.getElementById('aiAskAnswer');
+    const sources = document.getElementById('aiAskSources');
+    const errorDiv = document.getElementById('aiAskError');
+
+    if (!btn) return;
+
+    function ask() {
+        const q = input.value.trim();
+        if (!q) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Thinking…';
+        result.style.display = 'none';
+        errorDiv.style.display = 'none';
+
+        fetch('/api/ai/ask', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: q})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                errorDiv.textContent = data.error;
+                errorDiv.style.display = 'block';
+            } else {
+                answer.textContent = data.answer;
+                if (data.sources && data.sources.length) {
+                    sources.innerHTML = data.sources.map(s =>
+                        `<span class="badge bg-secondary me-1">${s}</span>`
+                    ).join('');
+                }
+                result.style.display = 'block';
+            }
+        })
+        .catch(() => {
+            errorDiv.textContent = 'Request failed. Check your AI API key in Settings.';
+            errorDiv.style.display = 'block';
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-send"></i> Ask AI';
+        });
+    }
+
+    btn.addEventListener('click', ask);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+})();
+</script>
 
 {% endblock %}

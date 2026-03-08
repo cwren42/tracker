@@ -570,7 +570,7 @@ const CAT = {
   comms:   { label:'Communication', color:'#69db7c', procs:['teams','slack','zoom','outlook','thunderbird','discord','lync','skype','mail','msteams'] },
   dev:     { label:'Development',   color:'#f783ac', procs:['code','devenv','rider','idea','pycharm','webstorm','androidstudio','gitbash','windowsterminal','cmd','powershell','git','notepad++','vim','nvim','sublime_text','atom','fleet'] },
   office:  { label:'Productivity',  color:'#ffa94d', procs:['winword','excel','powerpnt','onenote','access','msaccess','word','acrobat','acrord32','foxit','libreoffice','soffice','calc','impress','writer'] },
-  remote:  { label:'Remote / IT',   color:'#cc5de8', procs:['teamviewer','mstsc','anydesk','vnc','putty','winscp','filezilla','ssh'] },
+  remote:  { label:'Remote / IT',   color:'#cc5de8', procs:['mstsc','anydesk','vnc','putty','winscp','filezilla','ssh'] },
   media:   { label:'Media',         color:'#20c997', procs:['vlc','spotify','wmplayer','groove','itunes','mpc-hc','mpv'] },
   system:  { label:'System',        color:'#868e96', procs:['explorer','taskmgr','regedit','mmc','msiexec','svchost','control'] },
 };
@@ -763,7 +763,7 @@ function renderHourly(hourly) {
 function renderEvents(events) {
   if (!events.length) { spinSet('ee-evt','empty'); return; }
   document.getElementById('ee-evt-range').textContent = events.length + ' events';
-  const ICONS = {msedge:'browser-edge',chrome:'browser-chrome',firefox:'browser-firefox',teams:'chat-square-text',slack:'chat-left-dots',zoom:'camera-video',code:'code-slash',devenv:'code-slash',outlook:'envelope',excel:'file-earmark-spreadsheet',winword:'file-earmark-word',powerpnt:'file-earmark-slides',teamviewer:'display',mstsc:'display',explorer:'folder2-open'};
+  const ICONS = {msedge:'browser-edge',chrome:'browser-chrome',firefox:'browser-firefox',teams:'chat-square-text',slack:'chat-left-dots',zoom:'camera-video',code:'code-slash',devenv:'code-slash',outlook:'envelope',excel:'file-earmark-spreadsheet',winword:'file-earmark-word',powerpnt:'file-earmark-slides',mstsc:'display',explorer:'folder2-open'};
   function icon(p){ const k=(p||'').toLowerCase(); for(const[n,ic]of Object.entries(ICONS))if(k.startsWith(n))return `<i class="bi bi-${ic} me-1 text-muted"></i>`; return '<i class="bi bi-window me-1 text-muted"></i>'; }
   document.getElementById('ee-evt-body').innerHTML = events.map(e=>{
     const dur=e.duration_s||0;

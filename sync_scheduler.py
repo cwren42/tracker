@@ -26,6 +26,14 @@ M365_PHOTO_LOCK_PATH = os.environ.get('TRACKER_M365_PHOTO_LOCK_PATH', '/tmp/trac
 M365_PHOTO_REFRESH_INTERVAL_HOURS = int(os.environ.get('M365_EMPLOYEE_PHOTO_REFRESH_INTERVAL_HOURS', '24'))
 DISABLE_M365_EMPLOYEE_PHOTO_REFRESH = os.environ.get('DISABLE_M365_EMPLOYEE_PHOTO_REFRESH', '').strip() in ('1', 'true', 'yes', 'on')
 
+UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/tracker_unifi_sync.lock')
+UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '5'))
+DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
+PROXMOX_SYNC_LOCK_PATH = os.environ.get('TRACKER_PROXMOX_SYNC_LOCK_PATH', '/tmp/tracker_proxmox_sync.lock')
+PROXMOX_SYNC_INTERVAL_MINUTES = int(os.environ.get('PROXMOX_SYNC_INTERVAL_MINUTES', '15'))
+DISABLE_PROXMOX_SYNC = os.environ.get('DISABLE_PROXMOX_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
 _scheduler = None
 
 
@@ -86,6 +94,32 @@ def start_sync_scheduler(flask_app):
             max_instances=1,
             coalesce=True,
             misfire_grace_time=300,
+        )
+
+    if not DISABLE_UNIFI_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_unifi_sync_job(flask_app),
+            trigger='interval',
+            minutes=max(UNIFI_SYNC_INTERVAL_MINUTES, 1),
+            id='unifi_sync',
+            name='Periodic UniFi device sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
+    if not DISABLE_PROXMOX_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_proxmox_sync_job(flask_app),
+            trigger='interval',
+            minutes=max(PROXMOX_SYNC_INTERVAL_MINUTES, 1),
+            id='proxmox_sync',
+            name='Periodic Proxmox backup/ZFS sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
         )
 
     _scheduler.start()
@@ -260,3 +294,67 @@ def run_m365_employee_photo_refresh_job(flask_app):
                     db.session.remove()
                 except Exception:
                     pass
+
+
+def run_unifi_sync_job(flask_app_instance):
+    """Run the UniFi device sync with a cross-process lock."""
+    with _file_lock(UNIFI_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('UniFi sync already running in another worker — skipping')
+            return
+
+    with flask_app_instance.app_context():
+        try:
+            from app import db, Asset, Setting, AssetHistory, MonitoringAlert
+            from unifi_service import sync_unifi_assets
+            sync_unifi_assets(flask_app_instance, db, Asset, Setting, AssetHistory, MonitoringAlert)
+        except Exception:
+            logger.exception('UniFi sync job crashed')
+        finally:
+            try:
+                db.session.remove()
+            except Exception:
+                pass
+
+
+def run_proxmox_sync_job(flask_app_instance):
+    """Run the Proxmox backup/ZFS sync with a cross-process lock."""
+    with _file_lock(PROXMOX_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('Proxmox sync already running in another worker — skipping')
+            return
+
+    with flask_app_instance.app_context():
+        try:
+            from app import db, Setting, ProxmoxBackupJob, ProxmoxZfsPool, MonitoringAlert
+            from datetime import datetime
+            from proxmox_service import sync_proxmox
+
+            result = sync_proxmox(flask_app_instance, db, ProxmoxBackupJob,
+                                  ProxmoxZfsPool, Setting, MonitoringAlert)
+
+            # Record last sync time
+            row = Setting.query.filter_by(key='proxmox_last_sync').first()
+            if row is None:
+                row = Setting(key='proxmox_last_sync', value=datetime.utcnow().isoformat())
+                db.session.add(row)
+            else:
+                row.value = datetime.utcnow().isoformat()
+            db.session.commit()
+
+            logger.info(
+                'Proxmox sync complete: nodes=%d pools=%d vms=%d alerts=%d errors=%d',
+                result.get('nodes_synced', 0), result.get('pools_synced', 0),
+                result.get('vms_synced', 0), result.get('alerts_fired', 0),
+                len(result.get('errors', [])),
+            )
+            if result.get('errors'):
+                for err in result['errors']:
+                    logger.warning('Proxmox sync error: %s', err)
+        except Exception:
+            logger.exception('Proxmox sync job crashed')
+        finally:
+            try:
+                db.session.remove()
+            except Exception:
+                pass

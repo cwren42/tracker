@@ -371,3 +371,150 @@ def generate_workflow(prompt: str) -> dict:
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": f"AI generation failed: {e}"}
+
+
+# ── Cross-module AI Ask ────────────────────────────────────────────────────────
+
+def ask_ai(question: str) -> dict:
+    """
+    Answer a natural language question by pulling live context from all modules:
+    assets, employees, tickets, licenses, monitoring alerts, and backup health.
+    Returns {"answer": str, "sources": [str]} or raises on error.
+    """
+    db = _db()
+
+    # --- Assets ---
+    asset_total = db.execute("SELECT COUNT(*) FROM asset").fetchone()[0]
+    asset_in_use = db.execute("SELECT COUNT(*) FROM asset WHERE status='In Use'").fetchone()[0]
+    asset_offline = db.execute(
+        "SELECT COUNT(*) FROM asset WHERE intune_last_seen IS NOT NULL AND "
+        "intune_last_seen < datetime('now', '-7 days')"
+    ).fetchone()[0]
+    asset_low_storage = db.execute(
+        "SELECT COUNT(*) FROM asset WHERE hardware_storage_total_gb > 0 AND "
+        "CAST(hardware_storage_free_gb AS REAL) / CAST(hardware_storage_total_gb AS REAL) < 0.20"
+    ).fetchone()[0]
+    low_storage_hosts = [r[0] for r in db.execute(
+        "SELECT hostname FROM asset WHERE hardware_storage_total_gb > 0 AND "
+        "CAST(hardware_storage_free_gb AS REAL) / CAST(hardware_storage_total_gb AS REAL) < 0.20 "
+        "AND hostname IS NOT NULL LIMIT 10"
+    ).fetchall()]
+
+    # --- Employees ---
+    emp_total = db.execute("SELECT COUNT(*) FROM employee").fetchone()[0]
+    departments = [r[0] for r in db.execute(
+        "SELECT DISTINCT department FROM employee WHERE department IS NOT NULL ORDER BY department"
+    ).fetchall()]
+
+    # --- Tickets ---
+    tickets_open = db.execute(
+        "SELECT COUNT(*) FROM support_ticket WHERE status='Open'"
+    ).fetchone()[0]
+    tickets_inprog = db.execute(
+        "SELECT COUNT(*) FROM support_ticket WHERE status='In Progress'"
+    ).fetchone()[0]
+    tickets_unassigned = db.execute(
+        "SELECT COUNT(*) FROM support_ticket WHERE status IN ('Open','In Progress') "
+        "AND assigned_to_user_id IS NULL"
+    ).fetchone()[0]
+    urgent_tickets = [dict(r) for r in db.execute(
+        "SELECT id, subject, priority, created_at FROM support_ticket "
+        "WHERE status IN ('Open','In Progress') AND priority='Urgent' LIMIT 5"
+    ).fetchall()]
+
+    # --- Licenses ---
+    licenses_active = db.execute("SELECT COUNT(*) FROM license WHERE status='Active'").fetchone()[0]
+    licenses_expired = db.execute("SELECT COUNT(*) FROM license WHERE status='Expired'").fetchone()[0]
+    licenses_expiring = db.execute(
+        "SELECT COUNT(*) FROM license WHERE status='Active' AND expiry_date IS NOT NULL "
+        "AND expiry_date <= date('now', '+30 days')"
+    ).fetchone()[0]
+    annual_cost = db.execute(
+        "SELECT COALESCE(SUM(annual_cost), 0) FROM license WHERE annual_cost IS NOT NULL"
+    ).fetchone()[0]
+
+    # --- Monitoring alerts ---
+    alerts_critical = db.execute(
+        "SELECT COUNT(*) FROM monitoring_alert WHERE status='open' AND severity='critical'"
+    ).fetchone()[0]
+    alerts_warning = db.execute(
+        "SELECT COUNT(*) FROM monitoring_alert WHERE status='open' AND severity='warning'"
+    ).fetchone()[0]
+    top_alerts = [dict(r) for r in db.execute(
+        "SELECT message, severity, triggered_at FROM monitoring_alert "
+        "WHERE status='open' ORDER BY triggered_at DESC LIMIT 5"
+    ).fetchall()]
+
+    # --- Backup health ---
+    pools_total = db.execute("SELECT COUNT(*) FROM proxmox_zfs_pool").fetchone()[0]
+    pools_degraded = db.execute(
+        "SELECT COUNT(*) FROM proxmox_zfs_pool WHERE health != 'ONLINE'"
+    ).fetchone()[0]
+    vms_stale = db.execute(
+        "SELECT COUNT(*) FROM proxmox_backup_job WHERE is_stale=1"
+    ).fetchone()[0]
+
+    db.close()
+
+    context = {
+        "assets": {
+            "total": asset_total, "in_use": asset_in_use,
+            "offline_7d": asset_offline, "low_storage_count": asset_low_storage,
+            "low_storage_hosts": low_storage_hosts,
+        },
+        "employees": {"total": emp_total, "departments": departments},
+        "tickets": {
+            "open": tickets_open, "in_progress": tickets_inprog,
+            "unassigned": tickets_unassigned, "urgent": urgent_tickets,
+        },
+        "licenses": {
+            "active": licenses_active, "expired": licenses_expired,
+            "expiring_in_30d": licenses_expiring, "annual_cost_usd": annual_cost,
+        },
+        "monitoring_alerts": {
+            "critical_open": alerts_critical, "warning_open": alerts_warning,
+            "recent": top_alerts,
+        },
+        "backups": {
+            "zfs_pools_total": pools_total, "zfs_pools_degraded": pools_degraded,
+            "vm_backups_stale": vms_stale,
+        },
+    }
+
+    system_prompt = (
+        "You are an expert IT administrator assistant for Cirque Corporation's internal IT tracker. "
+        "You have access to real-time data from all IT modules: assets, employees, tickets, licenses, "
+        "monitoring alerts, and backup health. Answer questions clearly and concisely. "
+        "If specific device names or ticket IDs are relevant, include them. "
+        "Format your answer in plain text suitable for display in a web UI — "
+        "use numbered lists or bullet points where helpful but avoid markdown headers."
+    )
+    user_prompt = (
+        f"Current IT environment data:\n{json.dumps(context, default=str, indent=2)}\n\n"
+        f"Question: {question}"
+    )
+
+    answer = _openai_chat(
+        [{"role": "system", "content": system_prompt},
+         {"role": "user", "content": user_prompt}],
+        max_tokens=600
+    )
+
+    sources = []
+    ctx_lower = question.lower()
+    if any(w in ctx_lower for w in ["asset", "device", "computer", "laptop", "storage", "offline"]):
+        sources.append("Assets")
+    if any(w in ctx_lower for w in ["ticket", "issue", "request", "help", "support"]):
+        sources.append("Tickets")
+    if any(w in ctx_lower for w in ["employee", "staff", "user", "department", "person"]):
+        sources.append("Employees")
+    if any(w in ctx_lower for w in ["license", "software", "cost", "expir"]):
+        sources.append("Licenses")
+    if any(w in ctx_lower for w in ["alert", "monitor", "warning", "critical"]):
+        sources.append("Monitoring")
+    if any(w in ctx_lower for w in ["backup", "zfs", "proxmox", "pool", "vm"]):
+        sources.append("Backups")
+    if not sources:
+        sources = ["Assets", "Tickets", "Licenses", "Monitoring", "Backups"]
+
+    return {"answer": answer, "sources": sources}

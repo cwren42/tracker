@@ -575,49 +575,71 @@
                             <li><a class="dropdown-item" href="{{ url_for('custom_reports') }}">
                                 <i class="bi bi-file-earmark-bar-graph"></i> Custom Reports
                             </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('reports_advanced') }}">
-                                <i class="bi bi-file-earmark-spreadsheet"></i> Advanced Reports
-                            </a></li>
                         </ul>
                     </li>
                     {% if current_user.role == 'admin' %}
-                    <!-- Security dropdown -->
+                    <!-- Monitoring dropdown -->
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="securityDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-shield-exclamation"></i> Security
+                        <a class="nav-link dropdown-toggle {% if request.endpoint and request.endpoint.startswith('monitoring') %}active{% endif %}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-activity"></i> Monitoring
                         </a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="/vulnerabilities">
-                                <i class="bi bi-bug"></i> Vulnerabilities
+                            <li><a class="dropdown-item" href="{{ url_for('monitoring_dashboard') }}">
+                                <i class="bi bi-speedometer2"></i> Dashboard
                             </a></li>
-                            <li><a class="dropdown-item" href="/alerts/center">
-                                <i class="bi bi-bell-fill"></i> Alerts
+                            <li><a class="dropdown-item" href="{{ url_for('monitoring_profiles') }}">
+                                <i class="bi bi-list-check"></i> Profiles
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('monitoring_alerts') }}">
+                                <i class="bi bi-exclamation-triangle"></i> Alerts
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('monitoring_maintenance_windows') }}">
+                                <i class="bi bi-calendar-week"></i> Maintenance Windows
                             </a></li>
                         </ul>
                     </li>
-                    <!-- Admin dropdown -->
+                    <!-- Backups -->
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'backups' %}active{% endif %}"
+                           href="{{ url_for('backups') }}">
+                            <i class="bi bi-hdd-stack"></i> Backups
+                        </a>
+                    </li>
+                    <!-- Security dropdown -->
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-gear-fill"></i> Admin
+                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}active{% endif %}"
+                           href="#" id="securityDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-shield-exclamation"></i> Security
                         </a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('users') }}">
-                                <i class="bi bi-people-fill"></i> Users
+                            <li><a class="dropdown-item" href="{{ url_for('vulnerability_dashboard') }}">
+                                <i class="bi bi-bug"></i> Vulnerabilities &amp; CVEs
                             </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('settings') }}">
-                                <i class="bi bi-sliders"></i> Settings
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('workflows') }}">
-                                <i class="bi bi-diagram-3-fill"></i> Workflows
+                            <li><a class="dropdown-item" href="{{ url_for('alert_center') }}">
+                                <i class="bi bi-bell-fill"></i> Alert Center
                             </a></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><h6 class="dropdown-header">SOC2 Compliance</h6></li>
+                            <li><a class="dropdown-item" href="{{ url_for('workflows') }}">
+                                <i class="bi bi-diagram-3"></i> Workflows
+                            </a></li>
+                        </ul>
+                    </li>
+                    <!-- Compliance dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}active{% endif %}"
+                           href="#" id="complianceDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-patch-check"></i> Compliance
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><h6 class="dropdown-header">SOC2</h6></li>
                             <li><a class="dropdown-item" href="{{ url_for('soc2_dashboard') }}">
                                 <i class="bi bi-speedometer2"></i> SOC2 Dashboard
                             </a></li>
                             <li><a class="dropdown-item" href="{{ url_for('soc2_strikegraph') }}">
                                 <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
                             </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">Governance</h6></li>
                             <li><a class="dropdown-item" href="{{ url_for('management_risk_review') }}">
                                 <i class="bi bi-clipboard-check"></i> Risk Assessment
                             </a></li>
@@ -635,8 +657,24 @@
                             </a></li>
                         </ul>
                     </li>
+                    <!-- Admin dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['users','settings'] %}active{% endif %}"
+                           href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-gear-fill"></i> Admin
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="{{ url_for('users') }}">
+                                <i class="bi bi-people-fill"></i> Users
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('settings') }}">
+                                <i class="bi bi-sliders"></i> Settings
+                            </a></li>
+                        </ul>
+                    </li>
                     {% endif %}
                 </ul>
+                {# Search form disabled - global_search endpoint not implemented
                 <form class="d-flex me-2" action="{{ url_for('global_search') }}" method="GET" role="search">
                     <div class="input-group input-group-sm" style="width:220px;">
                         <input class="form-control" type="search" name="q" placeholder="Search assets, tickets…"
@@ -644,6 +682,7 @@
                         <button class="btn btn-outline-light" type="submit"><i class="bi bi-search"></i></button>
                     </div>
                 </form>
+                #}
                 <ul class="navbar-nav">
                     <!-- Notification Bell -->
                     <li class="nav-item dropdown" id="bell-nav">

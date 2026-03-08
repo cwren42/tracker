@@ -193,6 +193,20 @@ input[type="file"]::file-selector-button:hover {
                             <textarea class="form-control" id="notes" name="notes" rows="3">{{ asset.notes or '' }}</textarea>
                         </div>
                     </div>
+                    
+                    {% if asset.category == 'Server' %}
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label for="service_urls" class="form-label">
+                                <i class="bi bi-link-45deg"></i> Service URLs
+                                <small class="text-muted">(comma-separated, e.g. tracker.corp.cirque.com,incident.corp.cirque.com)</small>
+                            </label>
+                            <input type="text" class="form-control" id="service_urls" name="service_urls" value="{{ asset.service_urls or '' }}" placeholder="service1.domain.com,service2.domain.com">
+                            <small class="form-text text-muted">Enter URLs without https:// prefix</small>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
                     <div class="mt-4">
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-check-circle"></i> Update Asset

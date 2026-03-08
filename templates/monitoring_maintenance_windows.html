@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Maintenance Windows - IT Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col">
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring_dashboard') }}">Monitoring</a></li>
+                    <li class="breadcrumb-item active">Maintenance Windows</li>
+                </ol>
+            </nav>
+            <h1 class="h3 mb-0"><i class="bi bi-calendar-week text-primary"></i> Maintenance Windows</h1>
+            <p class="text-muted">Scheduled maintenance periods for patching and updates</p>
+        </div>
+    </div>
+
+    {% if windows %}
+    <div class="card">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-list"></i> Configured Windows</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Schedule</th>
+                            <th>Time</th>
+                            <th>Actions Allowed</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for window in windows %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ window.name }}</div>
+                                {% if window.description %}
+                                <small class="text-muted">{{ window.description }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-primary">{{ window.window_type }}</span>
+                            </td>
+                            <td>
+                                <div>
+                                    {% if window.recurrence == 'weekly' %}
+                                        <i class="bi bi-arrow-repeat"></i> Weekly
+                                    {% elif window.recurrence == 'monthly' %}
+                                        <i class="bi bi-calendar3"></i> Monthly
+                                    {% elif window.recurrence == 'daily' %}
+                                        <i class="bi bi-calendar-day"></i> Daily
+                                    {% elif window.recurrence == 'once' %}
+                                        <i class="bi bi-calendar-event"></i> One-time
+                                    {% endif %}
+                                </div>
+                                {% if window.day_of_week %}
+                                <small class="text-muted">{{ window.day_of_week|title }}</small>
+                                {% endif %}
+                                {% if window.specific_date %}
+                                <small class="text-muted">{{ window.specific_date }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="font-monospace">
+                                    {{ window.start_time }} - {{ window.end_time }}
+                                </div>
+                                <small class="text-muted">{{ window.timezone }}</small>
+                            </td>
+                            <td>
+                                <div class="small">
+                                    {% if window.allow_patching %}
+                                    <span class="badge bg-success mb-1">
+                                        <i class="bi bi-check-circle"></i> Patching
+                                    </span>
+                                    {% endif %}
+                                    {% if window.allow_reboots %}
+                                    <span class="badge bg-warning mb-1">
+                                        <i class="bi bi-arrow-clockwise"></i> Reboots
+                                    </span>
+                                    {% endif %}
+                                    {% if window.suppress_alerts %}
+                                    <span class="badge bg-secondary mb-1">
+                                        <i class="bi bi-bell-slash"></i> Suppress Alerts
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                {% if window.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Disabled</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i> No maintenance windows configured yet.
+        <p class="mb-0 mt-2">Maintenance windows allow you to schedule specific times for patching, updates, and maintenance activities across your infrastructure.</p>
+    </div>
+    {% endif %}
+
+    <!-- Info Card -->
+    <div class="card mt-4 border-info">
+        <div class="card-header bg-info text-white">
+            <h6 class="mb-0"><i class="bi bi-info-circle"></i> About Maintenance Windows</h6>
+        </div>
+        <div class="card-body">
+            <p class="mb-2"><strong>Maintenance windows define specific time periods when:</strong></p>
+            <ul class="mb-0">
+                <li>Automatic patching and updates are allowed</li>
+                <li>System reboots can be performed</li>
+                <li>Monitoring alerts can be suppressed to reduce noise</li>
+                <li>Scheduled maintenance activities are preferred</li>
+            </ul>
+            <hr>
+            <p class="mb-2"><strong>Best Practices:</strong></p>
+            <ul class="mb-0">
+                <li><strong>Production Servers:</strong> Schedule during off-peak hours (e.g., Sunday 2:00 AM - 6:00 AM)</li>
+                <li><strong>Development/Test:</strong> More flexible windows during business hours</li>
+                <li><strong>Workstations:</strong> Evening or weekend windows when users are offline</li>
+                <li><strong>Critical Systems:</strong> Require manual approval even during windows</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

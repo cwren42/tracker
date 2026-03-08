@@ -45,8 +45,8 @@
                 </li>
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">RMM Agent</h6></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_installer') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Agent (MSI)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}"><i class="bi bi-terminal me-2"></i>Download Agent (PS1)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('agent_download') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Linux Agent</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('rmm_agent_download') }}"><i class="bi bi-terminal me-2"></i>Download Windows Agent (ZIP)</a></li>
             </ul>
         </div>
         {% else %}
@@ -274,6 +274,7 @@
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
+                        <th class="mobile-hide">Online</th>
                         <th class="mobile-hide">Lifecycle</th>
                         <th class="mobile-hide">Assigned To</th>
                         <th>Actions</th>
@@ -295,8 +296,8 @@
                                title="Age: {{ '%.1f'|format(asset.get_age_years()) }} years | Replacement: {{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else 'Not set' }}"></i>
                             {% endif %}
                         </td>
-                        <td><span class="badge" style="{{ category_badge_style(asset.category) }}">{{ asset.category }}</span></td>
-                        <td class="mobile-hide">{% if asset.device_type %}<span class="badge bg-secondary">{{ asset.device_type }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td><span class="badge bg-primary">{{ asset.category }}</span></td>
+                        <td class="mobile-hide">{% if asset.device_type %}<span class="badge bg-secondary">{{ asset.device_type }}</span>{% else %}<span class="text-muted">-</span>{% endif %}</td>
                         <td class="mobile-hide">{{ asset.manufacturer or '-' }}</td>
                         <td class="mobile-hide"><small class="text-muted">{{ asset.serial_number or '-' }}</small></td>
                         <td>
@@ -308,6 +309,23 @@
                                 <span class="badge bg-warning">{{ asset.status }}</span>
                             {% else %}
                                 <span class="badge bg-secondary">{{ asset.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.id in rmm_asset_ids %}
+                                {% if asset.id in rmm_online_ids %}
+                                    <span class="badge bg-success"><i class="bi bi-circle-fill me-1" style="font-size:.5rem;"></i>Online</span>
+                                {% else %}
+                                    <span class="badge bg-secondary"><i class="bi bi-circle me-1" style="font-size:.5rem;"></i>Offline</span>
+                                {% endif %}
+                            {% elif asset.unifi_device_id %}
+                                {% if asset.online_state == 'Online' %}
+                                    <span class="badge bg-success"><i class="bi bi-circle-fill me-1" style="font-size:.5rem;"></i>Online</span>
+                                {% else %}
+                                    <span class="badge bg-secondary"><i class="bi bi-circle me-1" style="font-size:.5rem;"></i>Offline</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">—</span>
                             {% endif %}
                         </td>
                         <td class="mobile-hide">

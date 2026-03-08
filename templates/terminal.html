@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+
+{% block title %}SSH Terminal - {{ asset.hostname }}{% endblock %}
+
+{% block extra_css %}
+<style>
+#terminal-container {
+    background-color: #000;
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    padding: 10px;
+    height: 600px;
+    overflow-y: auto;
+    border: 2px solid #333;
+    margin-bottom: 10px;
+}
+
+#terminal-output {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+#terminal-input {
+    background-color: #000;
+    color: #0f0;
+    border: 2px solid #333;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    padding: 5px;
+    width: 100%;
+}
+
+#terminal-input:focus {
+    outline: none;
+    border-color: #0f0;
+}
+
+.terminal-status {
+    padding: 5px 10px;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.status-connected {
+    background-color: #28a745;
+    color: white;
+}
+
+.status-disconnected {
+    background-color: #dc3545;
+    color: white;
+}
+
+.status-connecting {
+    background-color: #ffc107;
+    color: black;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h2>
+                        <i class="fas fa-terminal"></i>
+                        SSH Terminal - {{ asset.hostname }}
+                    </h2>
+                    <p class="text-muted mb-0">
+                        {{ asset.ip_address_1 }}
+                        {% if asset.location %} | {{ asset.location }}{% endif %}
+                    </p>
+                </div>
+                <div>
+                    <span id="connection-status" class="terminal-status status-disconnected">Disconnected</span>
+                    <a href="{{ url_for('edit_asset', id=asset.id) }}" class="btn btn-secondary ml-2">
+                        <i class="fas fa-arrow-left"></i> Back to Asset
+                    </a>
+                </div>
+            </div>
+
+            <!-- Connection Panel -->
+            <div id="connection-panel" class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">SSH Connection</h5>
+                    <form id="connection-form" class="form-inline">
+                        <div class="form-group mr-3">
+                            <label for="ssh-username" class="mr-2">Username:</label>
+                            <input type="text" id="ssh-username" class="form-control" value="root" required>
+                        </div>
+                        <div class="form-group mr-3">
+                            <label for="ssh-password" class="mr-2">Password:</label>
+                            <input type="password" id="ssh-password" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plug"></i> Connect
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Terminal -->
+            <div id="terminal-container">
+                <div id="terminal-output"></div>
+            </div>
+            <input type="text" id="terminal-input" placeholder="Type command and press Enter..." disabled>
+
+            <!-- Action Buttons -->
+            <div class="mt-2">
+                <button id="clear-btn" class="btn btn-secondary btn-sm" disabled>
+                    <i class="fas fa-eraser"></i> Clear
+                </button>
+                <button id="disconnect-btn" class="btn btn-danger btn-sm" disabled>
+                    <i class="fas fa-sign-out-alt"></i> Disconnect
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const assetId = {{ asset.id }};
+let sessionId = null;
+let outputIndex = 0;
+let pollInterval = null;
+let isConnected = false;
+
+const $connectionStatus = $('#connection-status');
+const $connectionPanel = $('#connection-panel');
+const $terminalOutput = $('#terminal-output');
+const $terminalInput = $('#terminal-input');
+const $connectionForm = $('#connection-form');
+const $clearBtn = $('#clear-btn');
+const $disconnectBtn = $('#disconnect-btn');
+
+// Update status UI
+function updateStatus(status) {
+    $connectionStatus.removeClass('status-connected status-disconnected status-connecting');
+    
+    if (status === 'connected') {
+        $connectionStatus.addClass('status-connected').text('Connected');
+        $terminalInput.prop('disabled', false);
+        $clearBtn.prop('disabled', false);
+        $disconnectBtn.prop('disabled', false);
+        $connectionPanel.hide();
+        isConnected = true;
+    } else if (status === 'connecting') {
+        $connectionStatus.addClass('status-connecting').text('Connecting...');
+        isConnected = false;
+    } else {
+        $connectionStatus.addClass('status-disconnected').text('Disconnected');
+        $terminalInput.prop('disabled', true);
+        $clearBtn.prop('disabled', true);
+        $disconnectBtn.prop('disabled', true);
+        $connectionPanel.show();
+        isConnected = false;
+    }
+}
+
+// Connect to SSH
+$connectionForm.on('submit', function(e) {
+    e.preventDefault();
+    
+    const username = $('#ssh-username').val();
+    const password = $('#ssh-password').val();
+    
+    if (!username || !password) {
+        alert('Username and password are required');
+        return;
+    }
+    
+    updateStatus('connecting');
+    
+    $.ajax({
+        url: '/api/terminal/connect',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            asset_id: assetId,
+            username: username,
+            password: password
+        }),
+        success: function(response) {
+            if (response.success) {
+                sessionId = response.session_id;
+                outputIndex = 0;
+                updateStatus('connected');
+                $terminalInput.focus();
+                
+                // Start polling for output
+                startPolling();
+            } else {
+                updateStatus('disconnected');
+                alert('Connection failed: ' + (response.error || 'Unknown error'));
+            }
+        },
+        error: function(xhr) {
+            updateStatus('disconnected');
+            alert('Connection failed: ' + (xhr.responseJSON?.error || 'Network error'));
+        }
+    });
+});
+
+// Send input to terminal
+$terminalInput.on('keypress', function(e) {
+    if (e.which === 13) {  // Enter key
+        const input = $(this).val();
+        sendInput(input + '\n');
+        $(this).val('');
+    }
+});
+
+function sendInput(data) {
+    if (!sessionId || !isConnected) return;
+    
+    $.ajax({
+        url: '/api/terminal/input',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            session_id: sessionId,
+            data: data
+        }),
+        error: function(xhr) {
+            console.error('Failed to send input:', xhr.responseJSON?.error);
+        }
+    });
+}
+
+// Poll for output
+function startPolling() {
+    pollInterval = setInterval(pollOutput, 500);  // Poll every 500ms
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
+
+function pollOutput() {
+    if (!sessionId || !isConnected) {
+        stopPolling();
+        return;
+    }
+    
+    $.ajax({
+        url: '/api/terminal/output',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            session_id: sessionId,
+            since_index: outputIndex
+        }),
+        success: function(response) {
+            if (response.success && response.output.length > 0) {
+                response.output.forEach(function(item) {
+                    appendOutput(item.data);
+                });
+                outputIndex = response.index;
+            }
+        },
+        error: function(xhr) {
+            if (xhr.status === 404) {
+                // Session not found, disconnect
+                disconnect();
+            }
+        }
+    });
+}
+
+function appendOutput(text) {
+    $terminalOutput.append(text);
+    
+    // Auto-scroll to bottom
+    const container = document.getElementById('terminal-container');
+    container.scrollTop = container.scrollHeight;
+}
+
+// Clear terminal
+$clearBtn.on('click', function() {
+    $terminalOutput.empty();
+});
+
+// Disconnect
+$disconnectBtn.on('click', function() {
+    disconnect();
+});
+
+function disconnect() {
+    if (!sessionId) return;
+    
+    stopPolling();
+    
+    $.ajax({
+        url: '/api/terminal/disconnect',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            session_id: sessionId
+        }),
+        complete: function() {
+            sessionId = null;
+            outputIndex = 0;
+            updateStatus('disconnected');
+            $terminalOutput.empty();
+        }
+    });
+}
+
+// Cleanup on page unload
+$(window).on('beforeunload', function() {
+    if (isConnected) {
+        disconnect();
+    }
+});
+
+// Initialize
+updateStatus('disconnected');
+</script>
+{% endblock %}

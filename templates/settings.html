@@ -65,6 +65,16 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="unifi-tab" data-bs-toggle="tab" data-bs-target="#unifi" type="button" role="tab">
+                        <i class="bi bi-router"></i> UniFi
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox" type="button" role="tab">
+                        <i class="bi bi-hdd-stack"></i> Proxmox
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="ai-tab" data-bs-toggle="tab" data-bs-target="#ai" type="button" role="tab">
                         <i class="bi bi-stars"></i> AI
                     </button>
@@ -501,7 +511,7 @@
                                         <li>The installer registers and starts the <strong>CirqueRMM</strong> Windows service automatically.</li>
                                     </ol>
 
-                                    <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success">
+                                    <a href="{{ url_for('rmm_agent_download') }}" class="btn btn-success">
                                         <i class="bi bi-download"></i> Download Agent Installer (.msi)
                                     </a>
                                 </div>
@@ -526,6 +536,276 @@
                                 <div class="card-body">
                                     <p class="small text-muted mb-2">Technicians need an API key with the <code>rmm_connect</code> permission to open remote sessions:</p>
                                     <code class="d-block p-2 bg-light border rounded small">python scripts/create_api_key.py &lt;username&gt; rmm_connect</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- UniFi Settings Tab -->
+                <div class="tab-pane fade" id="unifi" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-7">
+                            <div class="card bg-dark border-secondary mb-4">
+                                <div class="card-header d-flex align-items-center gap-2">
+                                    <i class="bi bi-router text-info fs-5"></i>
+                                    <h5 class="mb-0">UniFi Network Controller</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">Connect to the UniFi Network Application on your UDM Pro to auto-discover and monitor APs, switches, cameras, gateways, and storage devices.</p>
+                                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:0.85rem;">
+                                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                                        <strong>Use a local admin account</strong> &mdash; do not use your Ubiquiti SSO (ui.com) account.
+                                        SSO accounts require MFA and cannot be used for automated access.<br>
+                                        Create a local admin in <strong>UDM Pro &rarr; Settings &rarr; Admins &amp; Users &rarr; Add Admin</strong>
+                                        and choose <em>"Local Access Only"</em>.
+                                    </div>
+                                    <form method="POST" action="/settings">
+                                        <input type="hidden" name="action" value="update_unifi">
+                                        <div class="mb-3">
+                                            <label class="form-label">Controller URL</label>
+                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_host"
+                                                   value="{{ unifi_config.host }}" placeholder="https://192.168.1.1">
+                                            <small class="text-muted">The IP/hostname of your UDM Pro (no trailing slash)</small>
+                                        </div>
+                                        <div class="row g-3 mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Username</label>
+                                                <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_username"
+                                                       value="{{ unifi_config.username }}" placeholder="admin" autocomplete="off">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Password</label>
+                                                <input type="password" class="form-control bg-dark text-light border-secondary" name="unifi_password"
+                                                       placeholder="{{ '(saved)' if unifi_config.password_set else 'Enter password' }}" autocomplete="new-password">
+                                                <small class="text-muted">Leave blank to keep existing password</small>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Site Name</label>
+                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_site"
+                                                   value="{{ unifi_config.site or 'default' }}" placeholder="default">
+                                            <small class="text-muted">The site <strong>ID</strong> — almost always <code>default</code>. This is NOT the device model name. If unsure, use "Test Connection" to discover available site IDs.</small>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-primary btn-sm">
+                                                <i class="bi bi-save me-1"></i>Save Settings
+                                            </button>
+                                            <button type="button" class="btn btn-outline-info btn-sm" onclick="testUnifi()">
+                                                <i class="bi bi-plug me-1"></i>Test Connection
+                                            </button>
+                                            <button type="button" class="btn btn-outline-success btn-sm" onclick="syncUnifi(this)">
+                                                <i class="bi bi-arrow-clockwise me-1"></i>Sync Now
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card bg-dark border-secondary mb-4">
+                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-activity me-2 text-success"></i>Sync Status</h6></div>
+                                <div class="card-body">
+                                    {% if unifi_config.last_sync_time %}
+                                    <div class="mb-2">
+                                        <small class="text-muted">Last Sync</small><br>
+                                        <span class="text-light">{{ unifi_config.last_sync_time[:19].replace('T',' ') }} UTC</span>
+                                    </div>
+                                    <div class="mb-2">
+                                        <small class="text-muted">Status</small><br>
+                                        {% if unifi_config.last_sync_status == 'success' %}
+                                            <span class="badge bg-success">Success</span>
+                                        {% elif unifi_config.last_sync_status == 'error' %}
+                                            <span class="badge bg-danger">Error</span>
+                                        {% elif unifi_config.last_sync_status == 'skipped' %}
+                                            <span class="badge bg-secondary">Skipped</span>
+                                        {% endif %}
+                                    </div>
+                                    <div><small class="text-muted">{{ unifi_config.last_sync_message }}</small></div>
+                                    {% else %}
+                                    <p class="text-muted small mb-0">No sync has run yet. Save credentials and click <strong>Sync Now</strong>.</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="card bg-dark border-secondary">
+                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2 text-info"></i>What gets synced</h6></div>
+                                <div class="card-body">
+                                    <ul class="list-unstyled small text-muted mb-0">
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Gateways / UDM Pro</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Switches</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Access Points</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Cameras</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Storage (NVR)</li>
+                                        <li class="mt-2"><i class="bi bi-arrow-repeat text-info me-2"></i>Syncs every 5 minutes</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="unifi-test-result" class="mt-2"></div>
+                </div>
+
+
+                <!-- Proxmox Settings Tab -->
+                <div class="tab-pane fade" id="proxmox" role="tabpanel">
+                    <style>
+                        #proxmox .card-header { background:#1a2234; border-bottom:1px solid #2d3a50; }
+                        #proxmox .card-header h5,
+                        #proxmox .card-header h6 { color:#cdd9e5; }
+                        #proxmox .form-label { color:#cdd9e5; font-weight:500; }
+                        #proxmox .form-text { color:#8899aa; }
+                        #proxmox .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
+                        #proxmox .form-control:focus { border-color:#0d6efd; box-shadow:none; }
+                        #proxmox hr { border-color:#2d3a50; }
+                    </style>
+                    <div class="row">
+                        <div class="col-lg-7">
+
+                            <!-- Cluster -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Endor Cluster (Production)</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">
+                                        API token credentials for any node in the Endor cluster.
+                                        Use a <strong>PVEAuditor</strong> role token (read-only).
+                                        Token format: <code>user@pve!tokenname</code>
+                                    </p>
+                                    <div class="mb-3">
+                                        <label class="form-label">Cluster Host</label>
+                                        <input type="text" class="form-control" id="prox_cluster_host"
+                                               placeholder="192.168.1.10 or pve1.corp.cirque.com"
+                                               value="{{ proxmox_settings.cluster_host }}">
+                                        <div class="form-text">Hostname or IP of any cluster node (port 8006)</div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token ID</label>
+                                        <input type="text" class="form-control" id="prox_cluster_token_id"
+                                               placeholder="monitoring@pve!tracker"
+                                               value="{{ proxmox_settings.cluster_token_id }}" autocomplete="off">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token Secret</label>
+                                        <input type="password" class="form-control" id="prox_cluster_token_secret"
+                                               placeholder="{{ '(saved)' if proxmox_settings.cluster_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
+                                               autocomplete="new-password">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Verify SSL</label>
+                                        <select class="form-control" id="prox_cluster_verify_ssl">
+                                            <option value="0" {% if proxmox_settings.cluster_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
+                                            <option value="1" {% if proxmox_settings.cluster_verify_ssl == '1' %}selected{% endif %}>Yes</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="button" class="btn btn-outline-info btn-sm"
+                                                onclick="testProxmox('cluster')">
+                                            <i class="bi bi-plug"></i> Test Cluster
+                                        </button>
+                                        <button type="button" class="btn btn-success btn-sm"
+                                                onclick="saveProxmox()">
+                                            <i class="bi bi-check-circle"></i> Save
+                                        </button>
+                                    </div>
+                                    <div id="proxmox-cluster-result" class="mt-2"></div>
+                                </div>
+                            </div>
+
+                            <!-- Backup server -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Bespin Backup Server</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">
+                                        Optional: separate credentials for the standalone Bespin backup server.
+                                        Used to show backup storage pool usage.
+                                    </p>
+                                    <div class="mb-3">
+                                        <label class="form-label">Backup Server Host</label>
+                                        <input type="text" class="form-control" id="prox_backup_host"
+                                               placeholder="bespin.corp.cirque.com"
+                                               value="{{ proxmox_settings.backup_host }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token ID</label>
+                                        <input type="text" class="form-control" id="prox_backup_token_id"
+                                               placeholder="monitoring@pve!tracker"
+                                               value="{{ proxmox_settings.backup_token_id }}" autocomplete="off">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token Secret</label>
+                                        <input type="password" class="form-control" id="prox_backup_token_secret"
+                                               placeholder="{{ '(saved)' if proxmox_settings.backup_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
+                                               autocomplete="new-password">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Verify SSL</label>
+                                        <select class="form-control" id="prox_backup_verify_ssl">
+                                            <option value="0" {% if proxmox_settings.backup_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
+                                            <option value="1" {% if proxmox_settings.backup_verify_ssl == '1' %}selected{% endif %}>Yes</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="button" class="btn btn-outline-info btn-sm"
+                                                onclick="testProxmox('backup')">
+                                            <i class="bi bi-plug"></i> Test Backup Server
+                                        </button>
+                                        <button type="button" class="btn btn-success btn-sm"
+                                                onclick="saveProxmox()">
+                                            <i class="bi bi-check-circle"></i> Save
+                                        </button>
+                                    </div>
+                                    <div id="proxmox-backup-result" class="mt-2"></div>
+                                </div>
+                            </div>
+
+                            <!-- Alerting options -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-bell"></i> Alert Thresholds</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">Stale Backup Threshold (hours)</label>
+                                        <input type="number" class="form-control" id="prox_stale_hours"
+                                               min="1" max="168"
+                                               value="{{ proxmox_settings.stale_hours or '26' }}"
+                                               style="width:120px;">
+                                        <div class="form-text">Alert if a VM's newest auto-snapshot is older than this. Default: 26h (daily backup + 2h buffer).</div>
+                                    </div>
+                                    <button type="button" class="btn btn-success btn-sm" onclick="saveProxmox()">
+                                        <i class="bi bi-check-circle"></i> Save
+                                    </button>
+                                </div>
+                            </div>
+
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card shadow-sm">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="bi bi-info-circle"></i> Setup Instructions</h6>
+                                </div>
+                                <div class="card-body small text-muted">
+                                    <ol class="ps-3 mb-3">
+                                        <li class="mb-2">On any PVE node, create an API token user:<br>
+                                            <code>pveum user add monitoring@pve</code><br>
+                                            <code>pveum role add PVEReadOnly --privs "Datastore.Audit,Sys.Audit,VM.Audit"</code><br>
+                                            <code>pveum acl modify / -user monitoring@pve -role PVEReadOnly</code><br>
+                                            <code>pveum user token add monitoring@pve tracker</code>
+                                        </li>
+                                        <li class="mb-2">Copy the token ID (<code>monitoring@pve!tracker</code>) and secret UUID into the fields on the left.</li>
+                                        <li class="mb-2">Click <strong>Test</strong> to verify, then <strong>Save</strong>.</li>
+                                        <li>Go to <strong>Backups</strong> in the nav and click <strong>Sync Now</strong>.</li>
+                                    </ol>
+                                    <hr>
+                                    <p class="mb-1"><strong>What is synced:</strong></p>
+                                    <ul class="ps-3 mb-0">
+                                        <li>ZFS pool health &amp; usage per node</li>
+                                        <li>VM / LXC auto-snapshot freshness</li>
+                                        <li>Alerts on degraded pools, &gt;80% capacity, stale backups</li>
+                                    </ul>
                                 </div>
                             </div>
                         </div>
@@ -1094,5 +1374,156 @@ function showSettingsToast(msg, type) {
 
 // Load AI settings when AI tab is shown
 document.getElementById('ai-tab')?.addEventListener('shown.bs.tab', loadAiSettings);
+
+async function testUnifi() {
+    const res = document.getElementById('unifi-test-result');
+    res.innerHTML = '<span class="text-muted small">Testing...</span>';
+    try {
+        const r = await fetch('/api/unifi/test', {method:'POST'});
+        const d = await r.json();
+        res.innerHTML = d.success
+            ? `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>${d.message}</div>`
+            : `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
+    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
+}
+
+async function syncUnifi(btn) {
+    const res = document.getElementById('unifi-test-result');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing...';
+    res.innerHTML = '';
+    try {
+        const r = await fetch('/api/unifi/sync', {method:'POST'});
+        const d = await r.json();
+        if (d.success) {
+            const s = d.summary;
+            res.innerHTML = `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>Sync complete — created: ${s.created}, updated: ${s.updated}, errors: ${s.errors}</div>`;
+        } else {
+            res.innerHTML = `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
+        }
+    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Sync Now';
+}
+
+async function testProxmox(prefix) {
+    const resultId = `proxmox-${prefix}-result`;
+    const res = document.getElementById(resultId);
+    res.innerHTML = '<span class="text-muted">Testing…</span>';
+    try {
+        const r = await fetch('/api/proxmox/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prefix})
+        });
+        const d = await r.json();
+        if (d.success) {
+            res.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ${(d.nodes || []).join(', ')}</span>`;
+        } else {
+            res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
+        }
+    } catch(e) {
+        res.innerHTML = `<span class="text-danger">${e}</span>`;
+    }
+}
+
+async function saveProxmox() {
+    const payload = {};
+    const fields = {
+        'prox_cluster_host':         'proxmox_cluster_host',
+        'prox_cluster_token_id':     'proxmox_cluster_token_id',
+        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
+        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
+        'prox_backup_host':          'proxmox_backup_host',
+        'prox_backup_token_id':      'proxmox_backup_token_id',
+        'prox_backup_token_secret':  'proxmox_backup_token_secret',
+        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
+        'prox_stale_hours':          'proxmox_stale_hours',
+    };
+    for (const [elId, key] of Object.entries(fields)) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const val = el.value.trim();
+        if (val) payload[key] = val;
+    }
+    const r = await fetch('/api/proxmox/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    const res = document.getElementById('proxmox-cluster-result');
+    if (d.success) {
+        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
+    } else {
+        res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
+    }
+}
+
+// Jump to proxmox tab if URL has #proxmox
+if (window.location.hash === '#proxmox') {
+    const tab = document.getElementById('proxmox-tab');
+    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+}
+
+async function testProxmox(prefix) {
+    const resultId = 'proxmox-' + prefix + '-result';
+    const res = document.getElementById(resultId);
+    res.innerHTML = '<span class="text-muted">Testing…</span>';
+    try {
+        const r = await fetch('/api/proxmox/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prefix: prefix})
+        });
+        const d = await r.json();
+        if (d.success) {
+            res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ' + (d.nodes || []).join(', ') + '</span>';
+        } else {
+            res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
+        }
+    } catch(e) {
+        res.innerHTML = '<span class="text-danger">' + e + '</span>';
+    }
+}
+
+async function saveProxmox() {
+    const payload = {};
+    const fields = {
+        'prox_cluster_host':         'proxmox_cluster_host',
+        'prox_cluster_token_id':     'proxmox_cluster_token_id',
+        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
+        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
+        'prox_backup_host':          'proxmox_backup_host',
+        'prox_backup_token_id':      'proxmox_backup_token_id',
+        'prox_backup_token_secret':  'proxmox_backup_token_secret',
+        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
+        'prox_stale_hours':          'proxmox_stale_hours',
+    };
+    for (const [elId, key] of Object.entries(fields)) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const val = el.value.trim();
+        if (val) payload[key] = val;
+    }
+    const r = await fetch('/api/proxmox/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    const res = document.getElementById('proxmox-cluster-result');
+    if (d.success) {
+        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
+    } else {
+        res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
+    }
+}
+
+// Jump to proxmox tab if URL has #proxmox
+if (window.location.hash === '#proxmox') {
+    const tab = document.getElementById('proxmox-tab');
+    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+}
 </script>
 {% endblock %}

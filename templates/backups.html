@@ -1,0 +1,442 @@
+{% extends "base.html" %}
+
+{% block title %}Backups - IT Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+
+    <!-- Header -->
+    <div class="row mb-4">
+        <div class="col">
+            <h1 class="h3 mb-0">
+                <i class="bi bi-hdd-stack text-primary"></i> Backup &amp; ZFS Health
+            </h1>
+            <p class="text-muted mb-0">
+                Proxmox ZFS pool health and VM snapshot status
+                {% if last_sync %}
+                &mdash; last synced {{ last_sync[:16].replace('T', ' ') }} UTC
+                {% endif %}
+            </p>
+        </div>
+        <div class="col-auto d-flex gap-2 align-items-start">
+            {% if not cluster_configured %}
+            <a href="{{ url_for('settings') }}#proxmox" class="btn btn-outline-secondary">
+                <i class="bi bi-gear"></i> Configure Proxmox
+            </a>
+            {% endif %}
+            <button class="btn btn-primary" id="syncBtn" onclick="triggerSync()">
+                <i class="bi bi-arrow-repeat"></i> Sync Now
+            </button>
+        </div>
+    </div>
+
+    {% if not cluster_configured %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i>
+        Proxmox credentials are not configured yet.
+        <a href="{{ url_for('settings') }}#proxmox" class="alert-link">Go to Settings &rarr; Proxmox</a>
+        to set up the API token.
+    </div>
+    {% endif %}
+
+    <!-- Setup Instructions (collapsible) -->
+    <div class="card mb-4 border-secondary">
+        <div class="card-header bg-transparent" style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#setupInstructions">
+            <div class="d-flex justify-content-between align-items-center">
+                <h6 class="mb-0 text-muted">
+                    <i class="bi bi-terminal me-1"></i> Proxmox API Token Setup Instructions
+                </h6>
+                <i class="bi bi-chevron-down text-muted small"></i>
+            </div>
+        </div>
+        <div class="collapse {% if not cluster_configured %}show{% endif %}" id="setupInstructions">
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Run these commands on any Proxmox node (as <code>root</code> or via the PVE shell).
+                    This creates a <strong>read-only</strong> API token that the tracker uses — it cannot make any changes to Proxmox.
+                </p>
+
+                <div class="row g-4">
+                    <!-- Step 1 -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold"><span class="badge bg-primary me-2">1</span> Create the monitoring user</h6>
+                        <pre class="bg-dark text-light rounded p-3 small mb-0"><code>pveum user add monitoring@pve --comment "Tracker read-only"</code></pre>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold"><span class="badge bg-primary me-2">2</span> Create a read-only role</h6>
+                        <pre class="bg-dark text-light rounded p-3 small mb-0"><code>pveum role add PVEReadOnly \
+  --privs "Datastore.Audit,Sys.Audit,VM.Audit"</code></pre>
+                        <div class="form-text mt-1">
+                            Skip this step if you already have <code>PVEAuditor</code> — use that instead.
+                        </div>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold"><span class="badge bg-primary me-2">3</span> Assign the role at root level</h6>
+                        <pre class="bg-dark text-light rounded p-3 small mb-0"><code>pveum acl modify / \
+  --user monitoring@pve \
+  --role PVEReadOnly</code></pre>
+                    </div>
+
+                    <!-- Step 4 -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold"><span class="badge bg-primary me-2">4</span> Generate the API token</h6>
+                        <pre class="bg-dark text-light rounded p-3 small mb-0"><code>pveum user token add monitoring@pve tracker \
+  --privsep 0</code></pre>
+                        <div class="form-text mt-1">
+                            Copy the <strong>Token ID</strong> (<code>monitoring@pve!tracker</code>) and the <strong>Secret UUID</strong> shown — the secret is only displayed once.
+                        </div>
+                    </div>
+
+                    <!-- Step 5 -->
+                    <div class="col-12">
+                        <h6 class="fw-bold"><span class="badge bg-primary me-2">5</span> Verify the token works</h6>
+                        <pre class="bg-dark text-light rounded p-3 small mb-0"><code>curl -sk \
+  -H "Authorization: PVEAPIToken=monitoring@pve!tracker=&lt;your-secret-uuid&gt;" \
+  https://&lt;node-ip&gt;:8006/api2/json/nodes \
+  | python3 -m json.tool</code></pre>
+                        <div class="form-text mt-1">
+                            You should see a JSON list of your cluster nodes. If you get <code>401</code>, double-check the secret UUID.
+                        </div>
+                    </div>
+
+                    <!-- Step 6 -->
+                    <div class="col-12">
+                        <h6 class="fw-bold"><span class="badge bg-success me-2">6</span> Enter credentials in Settings</h6>
+                        <p class="small text-muted mb-0">
+                            Go to <a href="{{ url_for('settings') }}#proxmox"><strong>Settings &rarr; Proxmox</strong></a> and enter:
+                        </p>
+                        <ul class="small text-muted mt-1 mb-0">
+                            <li><strong>Cluster Host</strong> — IP or hostname of any cluster node (e.g. <code>10.10.1.10</code>)</li>
+                            <li><strong>Token ID</strong> — <code>monitoring@pve!tracker</code></li>
+                            <li><strong>Token Secret</strong> — the UUID shown in step 4</li>
+                            <li>Optionally repeat steps 1–4 on the <strong>Bespin backup server</strong> and fill in the Backup Server section</li>
+                        </ul>
+                        <a href="{{ url_for('settings') }}#proxmox" class="btn btn-sm btn-primary mt-2">
+                            <i class="bi bi-gear"></i> Go to Settings &rarr; Proxmox
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="row mb-4 g-3">
+        <div class="col-6 col-md-3">
+            <div class="card h-100 {% if summary.degraded_pools > 0 %}border-danger{% endif %}">
+                <div class="card-body text-center">
+                    <div class="fs-1 mb-1">
+                        {% if summary.degraded_pools > 0 %}
+                        <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+                        {% else %}
+                        <i class="bi bi-shield-check text-success"></i>
+                        {% endif %}
+                    </div>
+                    <div class="h4 mb-0">{{ summary.total_pools }}</div>
+                    <div class="text-muted small">ZFS Pools</div>
+                    {% if summary.degraded_pools > 0 %}
+                    <div class="badge bg-danger mt-1">{{ summary.degraded_pools }} degraded</div>
+                    {% elif summary.critical_pools > 0 %}
+                    <div class="badge bg-warning text-dark mt-1">{{ summary.critical_pools }} &gt;80% full</div>
+                    {% else %}
+                    <div class="badge bg-success mt-1">All healthy</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 {% if summary.ok_vms == summary.total_vms and summary.total_vms > 0 %}border-success{% elif summary.stale_vms > 0 or summary.missing_vms > 0 %}border-warning{% endif %}">
+                <div class="card-body text-center">
+                    <div class="fs-1 mb-1">
+                        <i class="bi bi-hdd-rack {% if summary.stale_vms > 0 or summary.missing_vms > 0 %}text-warning{% else %}text-success{% endif %}"></i>
+                    </div>
+                    <div class="h4 mb-0">{{ summary.ok_vms }}</div>
+                    <div class="text-muted small">VMs backed up</div>
+                    <div class="text-muted small">(of {{ summary.total_vms }} total)</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 {% if summary.stale_vms > 0 %}border-warning{% endif %}">
+                <div class="card-body text-center">
+                    <div class="fs-1 mb-1">
+                        <i class="bi bi-clock-history {% if summary.stale_vms > 0 %}text-warning{% else %}text-muted{% endif %}"></i>
+                    </div>
+                    <div class="h4 mb-0">{{ summary.stale_vms }}</div>
+                    <div class="text-muted small">Stale (&gt;{{ stale_hours }}h)</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 {% if summary.missing_vms > 0 %}border-danger{% endif %}">
+                <div class="card-body text-center">
+                    <div class="fs-1 mb-1">
+                        <i class="bi bi-x-circle {% if summary.missing_vms > 0 %}text-danger{% else %}text-muted{% endif %}"></i>
+                    </div>
+                    <div class="h4 mb-0">{{ summary.missing_vms }}</div>
+                    <div class="text-muted small">No snapshots</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ZFS Pool Health -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-database-fill"></i> ZFS Pool Health</h5>
+            <span class="badge bg-secondary">{{ pools | length }} pool{% if pools | length != 1 %}s{% endif %}</span>
+        </div>
+        <div class="card-body p-0">
+            {% if pools %}
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Server</th>
+                            <th>Node</th>
+                            <th>Pool</th>
+                            <th>Health</th>
+                            <th>Used</th>
+                            <th>Capacity</th>
+                            <th>Last Synced</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% set ns = namespace(current_server='', current_node='') %}
+                        {% for pool in pools %}
+                        <tr class="{% if pool.health not in ('ONLINE', 'AVAILABLE') %}table-danger{% elif pool.percent_used and pool.percent_used >= 80 %}table-warning{% endif %}">
+                            <td>
+                                {% if pool.server != ns.current_server %}
+                                    {% set ns.current_server = pool.server %}
+                                    <span class="fw-semibold">{{ pool.server }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if pool.node != ns.current_node or pool.server != ns.current_server %}
+                                    {% set ns.current_node = pool.node %}
+                                    <code>{{ pool.node }}</code>
+                                {% endif %}
+                            </td>
+                            <td><strong>{{ pool.pool_name }}</strong></td>
+                            <td>
+                                {% if pool.health in ('ONLINE', 'AVAILABLE') %}
+                                <span class="badge bg-success">{{ pool.health }}</span>
+                                {% elif pool.health == 'DEGRADED' %}
+                                <span class="badge bg-warning text-dark">DEGRADED</span>
+                                {% elif pool.health == 'FAULTED' or pool.health == 'OFFLINE' %}
+                                <span class="badge bg-danger">{{ pool.health }}</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ pool.health or 'UNKNOWN' }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {{ "%.1f"|format(pool.used_gb or 0) }} GB
+                                <span class="text-muted">/ {{ "%.1f"|format(pool.total_gb or 0) }} GB</span>
+                            </td>
+                            <td style="min-width:140px;">
+                                {% set pct = pool.percent_used or 0 %}
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="progress flex-grow-1" style="height:8px;">
+                                        <div class="progress-bar {% if pct >= 90 %}bg-danger{% elif pct >= 80 %}bg-warning{% else %}bg-success{% endif %}"
+                                             role="progressbar"
+                                             style="width:{{ [pct, 100]|min }}%"
+                                             aria-valuenow="{{ pct }}"
+                                             aria-valuemin="0" aria-valuemax="100">
+                                        </div>
+                                    </div>
+                                    <small class="text-nowrap {% if pct >= 80 %}text-danger fw-bold{% endif %}">
+                                        {{ "%.1f"|format(pct) }}%
+                                    </small>
+                                </div>
+                            </td>
+                            <td class="text-muted small">
+                                {% if pool.last_synced %}
+                                {{ pool.last_synced.strftime('%Y-%m-%d %H:%M') }}
+                                {% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-4 text-center text-muted">
+                <i class="bi bi-database-x fs-1 d-block mb-2"></i>
+                No ZFS pool data yet &mdash; configure Proxmox and click <strong>Sync Now</strong>.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- VM Backup Status -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-hdd-rack-fill"></i> VM / LXC Backup Status</h5>
+            <div class="d-flex gap-2 align-items-center">
+                <input type="text" class="form-control form-control-sm" id="vmSearch"
+                       placeholder="Filter VMs…" style="width:180px;" oninput="filterVMs()">
+                <span class="badge bg-secondary">{{ jobs | length }} VM{% if jobs | length != 1 %}s{% endif %}</span>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            {% if jobs %}
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="vmTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Node</th>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>State</th>
+                            <th>Backup Status</th>
+                            <th>Last Snapshot</th>
+                            <th>Age</th>
+                            <th>Snapshots</th>
+                        </tr>
+                    </thead>
+                    <tbody id="vmTableBody">
+                        {% for job in jobs %}
+                        <tr class="{% if job.backup_status == 'missing' %}table-danger{% elif job.backup_status == 'stale' %}table-warning{% endif %} vm-row"
+                            data-name="{{ job.vm_name or '' | lower }}" data-node="{{ job.node or '' | lower }}">
+                            <td><code>{{ job.node }}</code></td>
+                            <td>{{ job.vmid }}</td>
+                            <td><strong>{{ job.vm_name or '—' }}</strong></td>
+                            <td>
+                                {% if job.vm_type == 'lxc' %}
+                                <span class="badge bg-info text-dark">LXC</span>
+                                {% else %}
+                                <span class="badge bg-secondary">VM</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if job.vm_status == 'running' %}
+                                <span class="badge bg-success">running</span>
+                                {% elif job.vm_status == 'stopped' %}
+                                <span class="badge bg-secondary">stopped</span>
+                                {% else %}
+                                <span class="badge bg-light text-dark">{{ job.vm_status or '—' }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if job.backup_status == 'ok' %}
+                                <span class="badge bg-success"><i class="bi bi-check-circle"></i> OK</span>
+                                {% elif job.backup_status == 'stale' %}
+                                <span class="badge bg-warning text-dark"><i class="bi bi-clock-history"></i> Stale</span>
+                                {% elif job.backup_status == 'missing' %}
+                                <span class="badge bg-danger"><i class="bi bi-x-circle"></i> No Snapshots</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ job.backup_status or '—' }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="small text-monospace">
+                                {% if job.last_snapshot %}
+                                <span title="{{ job.last_snapshot }}">{{ job.last_snapshot }}</span>
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="small {% if job.backup_status == 'stale' %}text-warning fw-bold{% elif job.backup_status == 'missing' %}text-danger{% endif %}">
+                                {% if job.last_snapshot_time %}
+                                    {% set diff_sec = (now - job.last_snapshot_time).total_seconds() if job.last_snapshot_time else None %}
+                                    {{ job.last_snapshot_time.strftime('%Y-%m-%d %H:%M') }}
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if job.snapshot_count %}
+                                <span class="badge bg-light text-dark">{{ job.snapshot_count }}</span>
+                                {% else %}
+                                <span class="text-muted">0</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-4 text-center text-muted">
+                <i class="bi bi-hdd-x fs-1 d-block mb-2"></i>
+                No VM data yet &mdash; configure Proxmox and click <strong>Sync Now</strong>.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<!-- Sync status toast -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:1100">
+    <div id="syncToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header" id="syncToastHeader">
+            <i class="bi bi-arrow-repeat me-2"></i>
+            <strong class="me-auto" id="syncToastTitle">Syncing…</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body" id="syncToastBody">Starting sync…</div>
+    </div>
+</div>
+
+<script>
+function filterVMs() {
+    const q = document.getElementById('vmSearch').value.toLowerCase();
+    document.querySelectorAll('.vm-row').forEach(row => {
+        const name = row.dataset.name || '';
+        const node = row.dataset.node || '';
+        row.style.display = (name.includes(q) || node.includes(q)) ? '' : 'none';
+    });
+}
+
+function triggerSync() {
+    const btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Syncing…';
+
+    const toast = new bootstrap.Toast(document.getElementById('syncToast'), {autohide: false});
+    document.getElementById('syncToastTitle').textContent = 'Syncing…';
+    document.getElementById('syncToastBody').textContent = 'Contacting Proxmox API…';
+    document.getElementById('syncToastHeader').className = 'toast-header';
+    toast.show();
+
+    fetch('/api/proxmox/sync', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Sync Now';
+            if (data.success) {
+                document.getElementById('syncToastHeader').className = 'toast-header text-success';
+                document.getElementById('syncToastTitle').textContent = 'Sync complete';
+                const errs = (data.errors || []).length;
+                document.getElementById('syncToastBody').textContent =
+                    `Nodes: ${data.nodes_synced}, Pools: ${data.pools_synced}, ` +
+                    `VMs: ${data.vms_synced}, Alerts: ${data.alerts_fired}` +
+                    (errs ? `, Errors: ${errs}` : '');
+                // Reload after short delay so the table updates
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                document.getElementById('syncToastHeader').className = 'toast-header text-danger';
+                document.getElementById('syncToastTitle').textContent = 'Sync failed';
+                document.getElementById('syncToastBody').textContent = data.error || 'Unknown error';
+            }
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Sync Now';
+            document.getElementById('syncToastHeader').className = 'toast-header text-danger';
+            document.getElementById('syncToastTitle').textContent = 'Error';
+            document.getElementById('syncToastBody').textContent = err.toString();
+        });
+}
+</script>
+
+<style>
+.spin { animation: spin 1s linear infinite; display:inline-block; }
+@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+</style>
+{% endblock %}

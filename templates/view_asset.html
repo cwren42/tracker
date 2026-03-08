@@ -206,7 +206,7 @@
             <i class="bi bi-cash-coin sc-icon text-success"></i>
             <div>
                 <div class="sc-label">Cost</div>
-                <div class="sc-value">{% if asset.purchase_cost %}${{ '%.0f'|format(asset.purchase_cost) }}{% else %}&mdash;{% endif %}</div>
+                <div class="sc-value">{% if asset.purchase_cost %}${{ '%.0f'|format(asset.purchase_cost) }}{% else %}-{% endif %}</div>
             </div>
         </div>
     </div>
@@ -215,7 +215,7 @@
             <i class="bi bi-calendar-check sc-icon text-primary"></i>
             <div>
                 <div class="sc-label">Purchased</div>
-                <div class="sc-value">{% if asset.purchase_date %}{{ asset.purchase_date.strftime('%b %Y') }}{% else %}&mdash;{% endif %}</div>
+                <div class="sc-value">{% if asset.purchase_date %}{{ asset.purchase_date.strftime('%b %Y') }}{% else %}-{% endif %}</div>
             </div>
         </div>
     </div>
@@ -230,7 +230,7 @@
                         {% if asset.warranty_expiry < now().date() %}
                         <span class="badge bg-danger ms-1" style="font-size:.65rem;">Expired</span>
                         {% endif %}
-                    {% else %}&mdash;{% endif %}
+                    {% else %}-{% endif %}
                 </div>
             </div>
         </div>
@@ -244,7 +244,7 @@
                     {% if asset.purchase_date %}
                         {% set age_days = (now().date() - asset.purchase_date).days %}
                         {% if age_days >= 365 %}{{ (age_days // 365) }}y {{ ((age_days % 365) // 30) }}m{% else %}{{ age_days }} days{% endif %}
-                    {% else %}&mdash;{% endif %}
+                    {% else %}-{% endif %}
                 </div>
             </div>
         </div>
@@ -254,7 +254,7 @@
             <i class="bi bi-star sc-icon text-warning"></i>
             <div>
                 <div class="sc-label">Condition</div>
-                <div class="sc-value">{{ asset.condition or '&mdash;' }}</div>
+                <div class="sc-value">{{ asset.condition or '-' }}</div>
             </div>
         </div>
     </div>
@@ -263,7 +263,7 @@
             <i class="bi bi-cpu sc-icon text-primary"></i>
             <div>
                 <div class="sc-label">Device Type</div>
-                <div class="sc-value" style="font-size:.85rem;">{{ asset.device_type or '&mdash;' }}</div>
+                <div class="sc-value" style="font-size:.85rem;">{{ asset.device_type or '-' }}</div>
             </div>
         </div>
     </div>
@@ -272,7 +272,7 @@
             <i class="bi bi-geo-alt sc-icon text-secondary"></i>
             <div>
                 <div class="sc-label">Location</div>
-                <div class="sc-value" style="font-size:.85rem;">{{ asset.location or '&mdash;' }}</div>
+                <div class="sc-value" style="font-size:.85rem;">{{ asset.location or '-' }}</div>
             </div>
         </div>
     </div>
@@ -284,11 +284,18 @@
     {% if rmm_agent_id %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm" type="button"><i class="bi bi-robot me-1"></i>RMM Agent</button></li>
     {% endif %}
+    {% if asset.category not in ['Server'] %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-lifecycle" type="button"><i class="bi bi-recycle me-1"></i>Lifecycle</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-assignment" type="button"><i class="bi bi-person-badge me-1"></i>Assignment</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-checkout" type="button"><i class="bi bi-box-arrow-right me-1"></i>Checkout{% if active_loan %} <span class="badge bg-warning text-dark ms-1">Out</span>{% endif %}</button></li>
+    {% endif %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-software" type="button"><i class="bi bi-box-seam me-1"></i>Software{% if installed_apps %} <span class="badge bg-secondary ms-1">{{ installed_apps|length }}</span>{% endif %}</button></li>
+    {% if asset.category not in ['Server'] %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-intune" type="button"><i class="bi bi-microsoft me-1"></i>Intune</button></li>
+    {% endif %}
+    {% if asset.unifi_device_id %}
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-unifi" type="button"><i class="bi bi-router me-1"></i>UniFi</button></li>
+    {% endif %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-vulns" type="button" onclick="loadAssetVulns()"><i class="bi bi-shield-exclamation me-1 text-danger"></i>Vulnerabilities{% if vuln_count %} <span class="badge bg-danger ms-1">{{ vuln_count }}</span>{% endif %}</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" type="button"><i class="bi bi-clock-history me-1"></i>History</button></li>
 </ul>
@@ -404,6 +411,18 @@
                             <div class="field-label">Model</div>
                             <div class="field-value">{{ asset.model or '—' }}</div>
                         </div>
+                        {% if asset.category == 'Server' and asset.service_urls %}
+                        <div class="col-sm-12 col-md-8">
+                            <div class="field-label"><i class="bi bi-link-45deg"></i> Service URLs</div>
+                            <div class="field-value">
+                                {% for url in asset.service_urls.split(',') %}
+                                    <a href="https://{{ url.strip() }}" target="_blank" class="badge bg-primary text-decoration-none me-2 mb-1">
+                                        <i class="bi bi-box-arrow-up-right"></i> {{ url.strip() }}
+                                    </a>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
                         <div class="col-sm-6 col-md-4">
                             <div class="field-label">Serial Number</div>
                             <div class="field-value"><code>{{ asset.serial_number or '—' }}</code></div>
@@ -418,7 +437,13 @@
                         </div>
                         <div class="col-sm-6 col-md-4">
                             <div class="field-label">MAC Address</div>
-                            <div class="field-value"><code>{{ asset.mac_address or '—' }}</code></div>
+                            <div class="field-value">{% if asset.hardware_mac_ethernet %}
+                                    <code title="Ethernet">{{ asset.hardware_mac_ethernet }}</code>
+                                {% elif asset.hardware_mac_wifi %}
+                                    <code title="WiFi">{{ asset.hardware_mac_wifi }}</code>
+                                {% else %}
+                                    —
+                                {% endif %}</div>
                         </div>
                         {% if asset.purchase_date %}
                         <div class="col-sm-6 col-md-4">
@@ -461,6 +486,7 @@
             </div>
 
             <!-- Lifecycle -->
+            {% if asset.category not in ['Server'] %}
             <div class="card section-card mb-4">
                 <div class="card-header"><i class="bi bi-recycle me-2 text-success"></i>Lifecycle</div>
                 <div class="card-body">
@@ -499,6 +525,7 @@
                 </div>
             </div>
 
+            {% endif %}
             <!-- Intune Hardware Specs (from DB) -->
             {% if asset.hardware_cpu or asset.hardware_ram_gb or asset.hardware_storage_total_gb %}
             <div class="card section-card mb-4">
@@ -562,74 +589,17 @@
             </div>
             {% endif %}
 
-            <!-- Remote Access (RustDesk) -->
+            <!-- Remote Access -->
             {% if rmm_agent_id and not asset.rustdesk_id %}
             <div class="card section-card mb-4">
-                <div class="card-header"><i class="bi bi-display me-2 text-success"></i>Remote Access</div>
+                <div class="card-header"><i class="bi bi-terminal me-2 text-success"></i>Remote Shell Access</div>
                 <div class="card-body">
-                    <p class="text-muted mb-2">RustDesk is not yet configured for this device.</p>
-                    <button class="btn btn-success" id="deployRustdeskBtn" onclick="deployRustdesk('{{ rmm_agent_id }}')">
-                        <i class="bi bi-download me-1"></i> Deploy RustDesk
-                    </button>
-                    <div id="deployRustdeskStatus" class="mt-2 text-muted small d-none"></div>
+                    <p class="text-muted mb-3">This device is managed by Cirque RMM. Use the web shell for interactive remote access.</p>
+                    <a href="{{ url_for('rmm_terminal', agent_id=rmm_agent_id) }}" target="_blank" class="btn btn-success">
+                        <i class="bi bi-terminal-fill me-1"></i> Open Web Shell
+                    </a>
                 </div>
             </div>
-            <script>
-            async function deployRustdesk(agentId) {
-                const btn = document.getElementById('deployRustdeskBtn');
-                const status = document.getElementById('deployRustdeskStatus');
-                btn.disabled = true;
-                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Deploying...';
-                status.textContent = 'Sending install command to device...';
-                status.classList.remove('d-none');
-                try {
-                    const r = await fetch(`/api/rmm/deploy-rustdesk/${agentId}`, {method:'POST', headers:{'Content-Type':'application/json'}});
-                    const d = await r.json();
-                    if (!d.ok) { status.textContent = 'Error: ' + (d.error || 'unknown'); btn.disabled = false; btn.innerHTML = '<i class="bi bi-download me-1"></i> Deploy RustDesk'; return; }
-                    status.textContent = 'Install command sent — waiting for result (may take up to 2 minutes)...';
-                    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Installing...';
-                    // Poll for script_result
-                    const sessId = d.session_id;
-                    let polls = 0;
-                    const poll = setInterval(async () => {
-                        polls++;
-                        if (polls > 60) {
-                            clearInterval(poll);
-                            status.textContent = 'Timed out — the install may still complete. Refresh this page in a few minutes.';
-                            btn.innerHTML = '<i class="bi bi-download me-1"></i> Deploy RustDesk';
-                            btn.disabled = false;
-                            return;
-                        }
-                        try {
-                            const r2 = await fetch(`/api/rmm/cmd-result/${agentId}/${sessId}`);
-                            const d2 = await r2.json();
-                            if (!d2.ready) return;
-                            clearInterval(poll);
-                            if (d2.data && d2.data.exit_code === 0) {
-                                const idMatch = (d2.data.stdout || '').match(/RUSTDESK_ID=(\S+)/);
-                                if (idMatch) {
-                                    status.innerHTML = '<span class="text-success">Install complete! RustDesk ID: <strong>' + idMatch[1] + '</strong>. Reloading...</span>';
-                                } else {
-                                    status.textContent = 'Install complete — reloading...';
-                                }
-                                btn.innerHTML = '<i class="bi bi-check-circle me-1"></i> Done';
-                                setTimeout(() => location.reload(), 2500);
-                            } else {
-                                const ec = d2.data ? d2.data.exit_code : '?';
-                                const err = d2.data ? (d2.data.stderr || d2.data.stdout || '') : 'unknown';
-                                status.innerHTML = '<span class="text-warning">Script finished (exit ' + ec + '). ' + err.substring(0,200) + '</span>';
-                                btn.innerHTML = '<i class="bi bi-download me-1"></i> Retry';
-                                btn.disabled = false;
-                            }
-                        } catch(_) {}
-                    }, 3000);
-                } catch(e) {
-                    status.textContent = 'Request failed: ' + e;
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="bi bi-download me-1"></i> Deploy RustDesk';
-                }
-            }
-            </script>
             {% endif %}
             {% if asset.rustdesk_id %}
             <div class="card section-card mb-4">
@@ -716,6 +686,7 @@
         <!-- RIGHT COLUMN -->
         <div class="col-lg-4">
 
+            {% if asset.category not in ['Server'] %}
             <!-- Assignment -->
             <div class="card section-card mb-4">
                 <div class="card-header"><i class="bi bi-person-badge me-2 text-info"></i>Assignment</div>
@@ -750,6 +721,7 @@
                     {% endif %}
                 </div>
             </div>
+            {% endif %}
 
             <!-- Intune quick status -->
             {% if asset.intune_device_id %}
@@ -797,7 +769,7 @@
 <div class="tab-pane fade" id="tab-rmm" role="tabpanel">
     <div class="card section-card">
         <div class="card-header d-flex align-items-center gap-3 flex-wrap">
-            <span><i class="bi bi-robot me-2 text-success"></i>Cirque RMM Agent &mdash; <code class="fs-6">{{ rmm_agent_id }}</code></span>
+            <span><i class="bi bi-robot me-2 text-success"></i>Cirque RMM Agent - <code class="fs-6">{{ rmm_agent_id }}</code></span>
             <span id="rmm-status-badge" class="badge bg-secondary ms-1">
                 <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
             </span>
@@ -813,8 +785,6 @@
                     <i class="bi bi-cloud-download"></i> Update Agent</button>
                 <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
                     <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
-                <a href="{{ url_for('rmm_eagle_eyes_dashboard', agent_id=rmm_agent_id) }}"
-                   class="btn btn-sm btn-outline-primary"><i class="bi bi-eye me-1"></i>Eagle Eyes</a>
             </div>
         </div>
         <div class="card-body p-3" id="rmm-telemetry-panel" style="display:none;">
@@ -2339,6 +2309,7 @@
 {% endif %}
 
 <!-- ══ INTUNE TAB ═══════════════════════════════════════════ -->
+{% if asset.category not in ['Server'] %}
 <div class="tab-pane fade" id="tab-intune" role="tabpanel">
     {% if not asset.serial_number %}
     <div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No serial number on file. Add a serial number to enable Intune data comparison.</div>
@@ -2431,6 +2402,7 @@
     {% endif %}
 </div>
 
+{% endif %}
 <!-- ══ VULNERABILITIES TAB ══════════════════════════════════════ -->
 <div class="tab-pane fade" id="tab-vulns" role="tabpanel">
   <div class="card section-card">
@@ -2491,6 +2463,7 @@
 </div>
 
 <!-- ══ LIFECYCLE TAB ════════════════════════════════════════════ -->
+{% if asset.category not in ['Server'] %}
 <div class="tab-pane fade" id="tab-lifecycle" role="tabpanel">
     <div class="card section-card">
         <div class="card-header d-flex align-items-center justify-content-between">
@@ -2530,15 +2503,15 @@
                 <div class="col-12"><h6 class="text-muted fw-semibold text-uppercase mb-0" style="font-size:.7rem;letter-spacing:.08em;">Procurement</h6></div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Vendor / Supplier</div>
-                    <div class="field-value">{{ asset.vendor or '&mdash;' }}</div>
+                    <div class="field-value">{{ asset.vendor or '-' }}</div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Purchase Date</div>
-                    <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') if asset.purchase_date else '&mdash;' }}</div>
+                    <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') if asset.purchase_date else '-' }}</div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Purchase Cost</div>
-                    <div class="field-value">{{ ('$%.2f'|format(asset.purchase_cost)) if asset.purchase_cost else '&mdash;' }}</div>
+                    <div class="field-value">{{ ('$%.2f'|format(asset.purchase_cost)) if asset.purchase_cost else '-' }}</div>
                 </div>
 
                 <!-- Warranty & EOL -->
@@ -2553,12 +2526,12 @@
                             {% elif (asset.warranty_expiry - now().date()).days <= 90 %}
                             <span class="badge bg-warning text-dark ms-1">Expiring Soon</span>
                             {% endif %}
-                        {% else %}&mdash;{% endif %}
+                        {% else %}-{% endif %}
                     </div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Expected Life</div>
-                    <div class="field-value">{{ asset.expected_life_years or '&mdash;' }}{% if asset.expected_life_years %} yr{% if asset.expected_life_years != 1 %}s{% endif %}{% endif %}</div>
+                    <div class="field-value">{{ asset.expected_life_years or '-' }}{% if asset.expected_life_years %} yr{% if asset.expected_life_years != 1 %}s{% endif %}{% endif %}</div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">EOL / Replace By <small class="text-muted">(auto)</small></div>
@@ -2571,7 +2544,7 @@
                             {% elif (ceol - now().date()).days <= 180 %}
                             <span class="badge bg-warning text-dark ms-1">Coming Soon</span>
                             {% endif %}
-                        {% else %}&mdash;{% endif %}
+                        {% else %}-{% endif %}
                     </div>
                 </div>
 
@@ -2584,19 +2557,21 @@
                         {% elif asset.condition == 'Good' %}<span class="badge bg-primary">Good</span>
                         {% elif asset.condition == 'Fair' %}<span class="badge bg-warning text-dark">Fair</span>
                         {% elif asset.condition == 'Poor' %}<span class="badge bg-danger">Poor</span>
-                        {% else %}{{ asset.condition or '&mdash;' }}{% endif %}
+                        {% else %}{{ asset.condition or '-' }}{% endif %}
                     </div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Disposal Date <small class="text-muted">(auto-set)</small></div>
-                    <div class="field-value">{{ asset.disposal_date.strftime('%Y-%m-%d') if asset.disposal_date else '&mdash;' }}</div>
+                    <div class="field-value">{{ asset.disposal_date.strftime('%Y-%m-%d') if asset.disposal_date else '-' }}</div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
+{% endif %}
 <!-- ══ ASSIGNMENT TAB ═══════════════════════════════════════════ -->
+{% if asset.category not in ['Server'] %}
 <div class="tab-pane fade" id="tab-assignment" role="tabpanel">
     <div class="row g-4">
         <!-- Employee assignment -->
@@ -2659,6 +2634,8 @@
         </div>
     </div>
 </div>
+{% endif %}
+{% if asset.category not in ['Server'] %}
 
 <!-- ══ CHECKOUT TAB ════════════════════════════════════════════ -->
 <div class="tab-pane fade" id="tab-checkout" role="tabpanel">
@@ -2682,14 +2659,17 @@
             <tr><th>Notes</th><td>{{ active_loan.notes }}</td></tr>
             {% endif %}
           </table>
+          {# TODO: Implement asset_checkin endpoint
           {% if current_user.role in ['admin','manager'] %}
           <form method="POST" action="{{ url_for('asset_checkin', asset_id=asset.id, loan_id=active_loan.id) }}"
                 onsubmit="return confirm('Confirm check-in?')">
             <button type="submit" class="btn btn-success w-100"><i class="bi bi-box-arrow-in-left me-1"></i>Check In</button>
           </form>
           {% endif %}
+          #}
           {% else %}
           <div class="alert alert-success">Asset is currently <strong>available</strong>.</div>
+          {# TODO: Implement asset_checkout endpoint
           {% if current_user.role in ['admin','manager'] %}
           <form method="POST" action="{{ url_for('asset_checkout', asset_id=asset.id) }}">
             <div class="mb-2">
@@ -2707,10 +2687,8 @@
             <button type="submit" class="btn btn-warning w-100"><i class="bi bi-box-arrow-right me-1"></i>Check Out</button>
           </form>
           {% endif %}
+          #}
           {% endif %}
-        </div>
-      </div>
-    </div>
     <div class="col-lg-6">
       <div class="card section-card">
         <div class="card-header"><i class="bi bi-clock-history me-2 text-secondary"></i>Loan History</div>
@@ -2736,6 +2714,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <!-- ══ SOFTWARE TAB ════════════════════════════════════════════ -->
 <div class="tab-pane fade" id="tab-software" role="tabpanel">
@@ -2776,6 +2755,104 @@
     </div>
   </div>
 </div>
+
+{% if asset.unifi_device_id %}
+<div class="tab-pane fade" id="tab-unifi" role="tabpanel">
+<div class="row g-4 mt-1">
+
+  <!-- Status Card -->
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-router text-info"></i><strong>Device Status</strong>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          {% if asset.online_state == 'Online' %}
+            <span class="badge bg-success fs-6"><i class="bi bi-circle-fill me-1" style="font-size:.55rem"></i>Online</span>
+          {% else %}
+            <span class="badge bg-secondary fs-6"><i class="bi bi-circle me-1" style="font-size:.55rem"></i>Offline</span>
+          {% endif %}
+        </div>
+        <table class="table table-sm table-dark table-borderless mb-0">
+          <tr><td class="text-muted">Model</td><td>{{ asset.model or '—' }}</td></tr>
+          <tr><td class="text-muted">IP Address</td><td><code>{{ asset.ip_address or '—' }}</code></td></tr>
+          <tr><td class="text-muted">MAC</td><td><code>{{ asset.hardware_mac_ethernet or '—' }}</code></td></tr>
+          <tr><td class="text-muted">Firmware</td><td><small>{{ asset.os_version or '—' }}</small></td></tr>
+          <tr>
+            <td class="text-muted">Uptime</td>
+            <td>
+              {% if asset.unifi_uptime_secs %}
+                {% set d = asset.unifi_uptime_secs // 86400 %}
+                {% set h = (asset.unifi_uptime_secs % 86400) // 3600 %}
+                {% set m = (asset.unifi_uptime_secs % 3600) // 60 %}
+                {{ d }}d {{ h }}h {{ m }}m
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td class="text-muted">Last Sync</td>
+            <td><small>{{ asset.unifi_last_seen[:16].replace('T', ' ') if asset.unifi_last_seen else '—' }}</small></td>
+          </tr>
+          <tr><td class="text-muted">UniFi ID</td><td><small class="text-muted">{{ asset.unifi_device_id }}</small></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Device Type Info Card -->
+  <div class="col-md-8">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center gap-2">
+        {% if asset.category == 'Camera' %}
+          <i class="bi bi-camera-video text-warning"></i><strong>Camera Details</strong>
+        {% elif asset.device_type == 'Access Point' %}
+          <i class="bi bi-wifi text-success"></i><strong>Access Point Details</strong>
+        {% elif asset.device_type in ['Switch'] %}
+          <i class="bi bi-diagram-3 text-info"></i><strong>Switch Details</strong>
+        {% elif asset.device_type == 'Gateway' %}
+          <i class="bi bi-shield-check text-primary"></i><strong>Gateway Details</strong>
+        {% else %}
+          <i class="bi bi-hdd-network text-secondary"></i><strong>Network Device Details</strong>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-6">
+            <div class="p-3 rounded" style="background:rgba(255,255,255,.04)">
+              <div class="text-muted small">Category</div>
+              <div class="fw-semibold">{{ asset.category }}</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="p-3 rounded" style="background:rgba(255,255,255,.04)">
+              <div class="text-muted small">Type</div>
+              <div class="fw-semibold">{{ asset.device_type or '—' }}</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="p-3 rounded" style="background:rgba(255,255,255,.04)">
+              <div class="text-muted small">Manufacturer</div>
+              <div class="fw-semibold">{{ asset.manufacturer or 'Ubiquiti' }}</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="p-3 rounded" style="background:rgba(255,255,255,.04)">
+              <div class="text-muted small">Location</div>
+              <div class="fw-semibold">{{ asset.location or '—' }}</div>
+            </div>
+          </div>
+        </div>
+        {% if asset.notes %}
+        <div class="mt-3"><small class="text-muted">Notes:</small><p class="small mb-0 mt-1">{{ asset.notes }}</p></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+</div><!-- /#tab-unifi -->
+{% endif %}
 
 </div><!-- /.tab-content -->
 

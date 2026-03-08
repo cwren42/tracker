@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}{{ profile.name }} - Monitoring Profile{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col">
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring_dashboard') }}">Monitoring</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring_profiles') }}">Profiles</a></li>
+                    <li class="breadcrumb-item active">{{ profile.name }}</li>
+                </ol>
+            </nav>
+            <h1 class="h3 mb-0"><i class="bi bi-list-check text-primary"></i> {{ profile.name }}</h1>
+            <p class="text-muted">{{ profile.description }}</p>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <!-- Profile Information -->
+            <div class="card mb-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Profile Details</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <strong>Device Type:</strong><br>
+                            <span class="badge bg-primary">{{ profile.device_type }}</span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>OS Family:</strong><br>
+                            <span class="badge bg-secondary">{{ profile.os_family or 'Any' }}</span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Severity Level:</strong><br>
+                            <span class="badge bg-{{ 'danger' if profile.severity_level == 'critical' else 'warning' if profile.severity_level == 'high' else 'info' }}">
+                                {{ profile.severity_level|upper }}
+                            </span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Check Interval:</strong><br>
+                            <span class="badge bg-dark">{{ profile.check_interval_minutes }} minutes</span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Status:</strong><br>
+                            <span class="badge bg-{{ 'success' if profile.enabled else 'secondary' }}">
+                                {{ 'Enabled' if profile.enabled else 'Disabled' }}
+                            </span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Template:</strong><br>
+                            <span class="badge bg-info">{{ 'Yes' if profile.is_template else 'No' }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Monitoring Checks -->
+            <div class="card">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-check2-square"></i> Monitoring Checks ({{ checks|length }})</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Check Name</th>
+                                    <th>Type</th>
+                                    <th>Thresholds</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in checks %}
+                                <tr>
+                                    <td>
+                                        <div class="fw-semibold">{{ item.check.name }}</div>
+                                        {% if item.check.description %}
+                                        <small class="text-muted">{{ item.check.description }}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ item.check.check_type }}</span>
+                                    </td>
+                                    <td>
+                                        {% if item.warning_threshold %}
+                                        <span class="badge bg-warning text-dark" title="Warning">
+                                            <i class="bi bi-exclamation-triangle"></i> {{ item.warning_threshold }}
+                                        </span>
+                                        {% endif %}
+                                        {% if item.critical_threshold %}
+                                        <span class="badge bg-danger" title="Critical">
+                                            <i class="bi bi-x-circle"></i> {{ item.critical_threshold }}
+                                        </span>
+                                        {% endif %}
+                                        {% if not item.warning_threshold and not item.critical_threshold %}
+                                        <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if item.enabled %}
+                                        <span class="badge bg-success">
+                                            <i class="bi bi-check-circle"></i> Enabled
+                                        </span>
+                                        {% else %}
+                                        <span class="badge bg-secondary">
+                                            <i class="bi bi-dash-circle"></i> Disabled
+                                        </span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <!-- Assets Using This Profile -->
+            <div class="card sticky-top" style="top: 20px;">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Assets ({{ assets|length }})</h5>
+                </div>
+                <div class="card-body">
+                    {% if assets %}
+                    <div class="list-group list-group-flush">
+                        {% for asset in assets %}
+                        <a href="{{ url_for('view_asset', asset_id=asset.id) }}" 
+                           class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold">{{ asset.name }}</div>
+                                <small class="text-muted">{{ asset.asset_tag }}</small>
+                            </div>
+                            <i class="bi bi-chevron-right"></i>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3">
+                        <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                        No assets using this profile yet
+                    </div>
+                    {% endif %}
+                </div>
+                {% if assets %}
+                <div class="card-footer bg-transparent">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> Assign this profile from the Monitoring Dashboard
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

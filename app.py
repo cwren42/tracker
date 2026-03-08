@@ -5,7 +5,9 @@ from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta, timezone
-import os, time as _time, threading
+import os
+import time as _time
+import threading
 # ── Force server timezone to MST (Mountain Standard Time, UTC-7) ──────────
 os.environ['TZ'] = 'America/Denver'
 _time.tzset()
@@ -26,6 +28,7 @@ from openpyxl.utils import get_column_letter
 from m365_service import M365Service
 from sqlalchemy import text
 from api_system import require_api_key
+from ssh_manager import get_ssh_manager
 import secrets
 import alert_service as _alert_svc
 import workflow_engine as _wf_engine
@@ -48,7 +51,6 @@ app.config['REMEMBER_COOKIE_HTTPONLY'] = True
 app.config['PREFERRED_URL_SCHEME'] = 'https'  # Use HTTPS for URL generation
 app.config['UPLOAD_FOLDER'] = '/var/www/tracker/static/uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['TEMPLATES_AUTO_RELOAD'] = True
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 # --- HOTFIX: Restore asset 108 values on startup ---
@@ -63,39 +65,15 @@ app.config['MAIL_USE_TLS'] = False
 app.config['MAIL_USE_SSL'] = False
 app.config['MAIL_USERNAME'] = None
 app.config['MAIL_PASSWORD'] = None
-app.config['MAIL_DEFAULT_SENDER'] = 'automated@cirque.com'
+app.config['MAIL_DEFAULT_SENDER'] = 'assettracker@cirque.com'
 app.config['SEND_EMPLOYEE_EMAILS'] = False  # Disabled for now
+
+# Linux Agent Configuration
+app.config['LINUX_AGENT_API_KEY'] = os.environ.get('LINUX_AGENT_API_KEY', 'CirqueLinuxAgent2024!')
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
-
-# Make now() available in all Jinja2 templates
-app.jinja_env.globals['now'] = now_mst
 login_manager.login_view = 'login'
-
-
-def category_badge_style(category):
-    """Return inline CSS style string for a category badge."""
-    styles = {
-        'Laptop':           'background:#0d6efd;color:#fff',
-        'Desktop':          'background:#0dcaf0;color:#000',
-        'Computer':         'background:#6f42c1;color:#fff',
-        'Server':           'background:#dc3545;color:#fff',
-        'Mini PC':          'background:#198754;color:#fff',
-        'Tablet':           'background:#fd7e14;color:#fff',
-        'Storage':          'background:#ffc107;color:#212529',
-        'SBC':              'background:#343a40;color:#fff',
-        'Monitor':          'background:#20c997;color:#fff',
-        'Network Equipment':'background:#0a58ca;color:#fff',
-        'Phone':            'background:#d63384;color:#fff',
-        'Printer':          'background:#6610f2;color:#fff',
-        'Other':            'background:#6c757d;color:#fff',
-        'Unknown':          'background:#adb5bd;color:#212529',
-    }
-    return styles.get(category, 'background:#6c757d;color:#fff')
-
-
-app.jinja_env.globals['category_badge_style'] = category_badge_style
 mail = Mail(app)
 
 # Import SOC2 models
@@ -115,21 +93,10 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), default='viewer')  # admin, manager, viewer
     theme = db.Column(db.String(30), default='default')  # Theme preference
     last_login = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     azure_id = db.Column(db.String(100))  # Azure AD user object ID
     full_name = db.Column(db.String(200))  # User's display name from Azure AD
-    first_name = db.Column(db.String(100))
-    last_name = db.Column(db.String(100))
-
-    @property
-    def display_name(self):
-        """Return the best human-readable name for this user."""
-        if self.first_name or self.last_name:
-            return f"{self.first_name or ''} {self.last_name or ''}".strip()
-        if self.full_name:
-            return self.full_name
-        return self.username
-
+    
     def has_permission(self, permission):
         """Check if user has a specific permission"""
         permissions = {
@@ -147,8 +114,8 @@ class AzureIntegrationConfig(db.Model):
     client_secret = db.Column(db.String(500), nullable=False)
     enabled = db.Column(db.Boolean, default=True)
     app_name = db.Column(db.String(30), default='tracker')
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Employee(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -158,7 +125,7 @@ class Employee(db.Model):
     phone = db.Column(db.String(20))
     position = db.Column(db.String(100))
     photo = db.Column(db.String(255))
-    created_at = db.Column(db.DateTime, default=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
 
 class Asset(db.Model):
@@ -184,9 +151,6 @@ class Asset(db.Model):
     purchase_date = db.Column(db.Date)
     purchase_cost = db.Column(db.Float)
     warranty_expiry = db.Column(db.Date)
-    vendor = db.Column(db.String(100))       # Who the device was purchased from (e.g. CDW, Amazon)
-    eol_date = db.Column(db.Date)            # Manufacturer end-of-life date
-    disposal_date = db.Column(db.Date)       # Date device was disposed / retired
     status = db.Column(db.String(20), default='Available')
     location = db.Column(db.String(100))
     notes = db.Column(db.Text)
@@ -194,13 +158,9 @@ class Asset(db.Model):
     expected_life_years = db.Column(db.Integer, default=3)  # Expected useful life in years
     replacement_date = db.Column(db.Date)  # When asset should be replaced
     condition = db.Column(db.String(20), default='Good')  # Excellent, Good, Fair, Poor
+    device_type = db.Column(db.String(50))  # Windows PC, Mac, Linux Server, Virtual Machine, etc.
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'))
-    teamviewer_id = db.Column(db.String(100))  # TeamViewer device ID
-    teamviewer_link = db.Column(db.String(255))  # TeamViewer Easy Access link
-    last_teamviewer_sync = db.Column(db.DateTime)  # Last sync timestamp
-    last_seen = db.Column(db.DateTime)  # Last seen timestamp from TeamViewer
     os_version = db.Column(db.String(100))  # Operating system version
-    device_type = db.Column(db.String(50))   # Windows PC, Windows Server, Linux Server, etc.
     online_state = db.Column(db.String(20))  # Online, Offline, Busy
     rustdesk_id = db.Column(db.String(100))  # RustDesk device ID
     rustdesk_password = db.Column(db.String(255))  # Optional (prefer OTP / user-confirmed)
@@ -219,14 +179,20 @@ class Asset(db.Model):
     hardware_mac_ethernet = db.Column(db.String(50))  # Ethernet MAC address
     hardware_tpm_version = db.Column(db.String(50))  # TPM version
     azure_ad_device_id = db.Column(db.String(100))  # Azure AD device ID
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    ip_address = db.Column(db.String(50))  # Primary IP address
+    service_urls = db.Column(db.Text)  # Comma-separated list of service URLs
+    unifi_device_id = db.Column(db.String(100))  # UniFi device UUID / MAC
+    unifi_last_seen = db.Column(db.DateTime)  # Last seen from UniFi sync
+    unifi_uptime_secs = db.Column(db.Integer)  # Device uptime in seconds
+    last_seen = db.Column(db.DateTime)  # Last seen timestamp (RMM / TeamViewer / UniFi)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     history = db.relationship('AssetHistory', backref='asset', lazy=True, cascade='all, delete-orphan')
     
     def get_age_years(self):
         """Calculate asset age in years"""
         if self.purchase_date:
-            return (now_mst().date() - self.purchase_date).days / 365.25
+            return (datetime.utcnow().date() - self.purchase_date).days / 365.25
         return None
     
     def get_lifecycle_status(self):
@@ -248,34 +214,23 @@ class Asset(db.Model):
 
     def needs_replacement(self):
         """Return True if asset's replacement date is within 6 months or already past"""
-        today = now_mst().date()
+        today = datetime.utcnow().date()
         if self.replacement_date:
             from datetime import timedelta
             return self.replacement_date <= today + timedelta(days=182)
         # Fall back to lifecycle status if no replacement_date set
         return self.get_lifecycle_status() in ('Replace Soon', 'End of Life')
 
-    @property
-    def computed_eol_date(self):
-        """Auto-calculated EOL = purchase_date + expected_life_years (not manually stored)"""
-        if self.purchase_date and self.expected_life_years:
-            try:
-                return self.purchase_date.replace(year=self.purchase_date.year + self.expected_life_years)
-            except ValueError:
-                from datetime import timedelta
-                return self.purchase_date + timedelta(days=365 * self.expected_life_years)
-        return None
-
 
 class RemoteSession(db.Model):
     __tablename__ = 'remote_session'
     id = db.Column(db.Integer, primary_key=True)
-    tool = db.Column(db.String(50), nullable=False)  # rustdesk, teamviewer, etc.
+    tool = db.Column(db.String(50), nullable=False)  # rustdesk, anydesk, etc.
     asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
     started_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     ended_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     reason = db.Column(db.String(500))
-    started_at = db.Column(db.DateTime, default=now_mst, nullable=False)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     ended_at = db.Column(db.DateTime)
 
     asset = db.relationship('Asset', foreign_keys=[asset_id])
@@ -288,8 +243,8 @@ class SupportTicket(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     status = db.Column(db.String(20), default='Open')  # Open, In Progress, Closed, Merged
     priority = db.Column(db.String(20), default='Normal')  # Low, Normal, High, Urgent
-    category = db.Column(db.String(50), default='General')  # Hardware, Software, Network, Account, General
     source = db.Column(db.String(20), default='web')  # web, tray, api
+    category = db.Column(db.String(50), default='General')
 
     subject = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=False)
@@ -305,44 +260,16 @@ class SupportTicket(db.Model):
     closed_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     merged_into_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id'))
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     closed_at = db.Column(db.DateTime)
-
-    # CSAT
-    csat_token = db.Column(db.String(64), unique=True)
-    csat_score = db.Column(db.Integer)   # 1=positive, 0=negative, None=no response
-    csat_comment = db.Column(db.Text)
 
     asset = db.relationship('Asset', foreign_keys=[asset_id])
     created_by = db.relationship('User', foreign_keys=[created_by_user_id])
     closed_by = db.relationship('User', foreign_keys=[closed_by_user_id])
     assigned_to = db.relationship('User', foreign_keys=[assigned_to_user_id])
-    merged_into = db.relationship('SupportTicket', remote_side='SupportTicket.id', foreign_keys=[merged_into_id])
-
-    # SLA targets per priority (hours)
-    SLA_HOURS = {'Urgent': 4, 'High': 8, 'Normal': 24, 'Low': 72}
-
-    @property
-    def sla_target_hours(self):
-        return self.SLA_HOURS.get(self.priority, 24)
-
-    @property
-    def sla_elapsed_hours(self):
-        if not self.created_at:
-            return 0
-        end = self.closed_at if self.closed_at else now_mst()
-        return (end - self.created_at).total_seconds() / 3600.0
-
-    @property
-    def sla_breached(self):
-        if self.status in ('Closed', 'Merged'):
-            return False
-        return self.sla_elapsed_hours > self.sla_target_hours
-
-    @property
-    def sla_hours_remaining(self):
-        return round(self.sla_target_hours - self.sla_elapsed_hours, 1)
+    notes = db.relationship('TicketNote', backref='ticket', lazy='dynamic', cascade='all, delete-orphan')
+    activity = db.relationship('TicketActivity', backref='ticket', lazy='dynamic', cascade='all, delete-orphan')
 
 
 class TicketNote(db.Model):
@@ -351,9 +278,8 @@ class TicketNote(db.Model):
     ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    ticket = db.relationship('SupportTicket', backref='notes')
     author = db.relationship('User', foreign_keys=[user_id])
 
 
@@ -364,50 +290,9 @@ class TicketActivity(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     action = db.Column(db.String(50), nullable=False)
     detail = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    ticket = db.relationship('SupportTicket', backref='activities')
-    actor = db.relationship('User', foreign_keys=[user_id])
-
-
-class AssetLoan(db.Model):
-    """Tracks asset check-out / check-in for loaners and hot spares."""
-    __tablename__ = 'asset_loan'
-    id = db.Column(db.Integer, primary_key=True)
-    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
-    checked_out_to = db.Column(db.String(200))      # free-text borrower name
-    checked_out_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    checked_out_at = db.Column(db.DateTime, default=now_mst)
-    due_back_at = db.Column(db.Date)
-    checked_in_at = db.Column(db.DateTime)
-    checked_in_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    notes = db.Column(db.Text)
-
-    asset = db.relationship('Asset', backref=db.backref('loans', order_by='AssetLoan.checked_out_at.desc()'))
-    checked_out_by = db.relationship('User', foreign_keys=[checked_out_by_user_id])
-    checked_in_by = db.relationship('User', foreign_keys=[checked_in_by_user_id])
-
-    @property
-    def is_active(self):
-        return self.checked_in_at is None
-
-    @property
-    def overdue(self):
-        return self.is_active and self.due_back_at and self.due_back_at < now_mst().date()
-
-
-class InstalledApp(db.Model):
-    """Software inventory reported by the RMM agent."""
-    __tablename__ = 'installed_app'
-    id = db.Column(db.Integer, primary_key=True)
-    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
-    name = db.Column(db.String(200), nullable=False)
-    version = db.Column(db.String(100))
-    publisher = db.Column(db.String(200))
-    install_date = db.Column(db.String(20))   # kept as string (YYYYMMDD from registry)
-    recorded_at = db.Column(db.DateTime, default=now_mst)
-
-    asset = db.relationship('Asset', backref=db.backref('installed_apps', order_by='InstalledApp.name'))
+    user = db.relationship('User', foreign_keys=[user_id])
 
 
 class AssetHistory(db.Model):
@@ -416,7 +301,7 @@ class AssetHistory(db.Model):
     action = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    timestamp = db.Column(db.DateTime, default=now_mst)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
     @staticmethod
     def log_change(asset, username, action, description, old_values=None, new_values=None):
@@ -430,7 +315,7 @@ class AssetHistory(db.Model):
             action=action.capitalize(),
             description=description,
             user_id=user.id if user else None,
-            timestamp=now_mst()
+            timestamp=datetime.utcnow()
         )
         db.session.add(history)
         db.session.commit()
@@ -460,8 +345,8 @@ class License(db.Model):
     annual_cost = db.Column(db.Float)  # For subscriptions
     status = db.Column(db.String(20), default='Active')  # Active, Expired, Cancelled
     notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     assignments = db.relationship('LicenseAssignment', backref='license', lazy=True, cascade='all, delete-orphan')
     
     def get_available_licenses(self):
@@ -472,7 +357,7 @@ class License(db.Model):
     def is_expiring_soon(self, days=30):
         """Check if license expires within specified days"""
         if self.expiry_date:
-            days_until_expiry = (self.expiry_date - now_mst().date()).days
+            days_until_expiry = (self.expiry_date - datetime.utcnow().date()).days
             return 0 < days_until_expiry <= days
         return False
 
@@ -483,16 +368,16 @@ class LicenseAssignment(db.Model):
     asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'))
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'))
     product_component = db.Column(db.String(200))  # Specific product/component (e.g., "Adobe Acrobat Pro", "Full Suite")
-    assigned_date = db.Column(db.Date, default=now_mst)
+    assigned_date = db.Column(db.Date, default=datetime.utcnow)
     status = db.Column(db.String(20), default='Active')  # Active, Returned
     notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Setting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(100), unique=True, nullable=False)
     value = db.Column(db.Text)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.String(100))
 
 class SystemDescription(db.Model):
@@ -505,8 +390,8 @@ class SystemDescription(db.Model):
     content = db.Column(db.Text)
     auto_populated = db.Column(db.Boolean, default=False)
     template_content = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.String(100))
 
 class Policy(db.Model):
@@ -523,8 +408,8 @@ class Policy(db.Model):
     approved_by = db.Column(db.String(200))
     content = db.Column(db.Text)
     file_path = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.String(100))
     
     sections = db.relationship('PolicySection', backref='policy', lazy=True, cascade='all, delete-orphan')
@@ -548,8 +433,8 @@ class Control(db.Model):
     control_progress = db.Column(db.String(50))
     is_active = db.Column(db.Boolean, default=True)
     audit_alignment = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Risk(db.Model):
     __tablename__ = 'risk'
@@ -565,8 +450,8 @@ class Risk(db.Model):
     risk_combined_score = db.Column(db.String(20))
     risk_owner = db.Column(db.String(200))
     active_controls = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class DashboardWidget(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -578,8 +463,8 @@ class DashboardWidget(db.Model):
     position = db.Column(db.Integer, default=0)  # Order/position
     size = db.Column(db.String(20), default='col-md-3')  # Bootstrap grid class
     enabled = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class CustomReport(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -589,8 +474,8 @@ class CustomReport(db.Model):
     report_type = db.Column(db.String(20), nullable=False)  # stat, list, chart
     config = db.Column(db.Text, nullable=False)  # JSON config for report (fields, filters, etc.)
     is_public = db.Column(db.Boolean, default=False)  # Can other users see it
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class LicenseInfo(db.Model):
     __tablename__ = 'license_info'
@@ -606,8 +491,123 @@ class LicenseInfo(db.Model):
     last_checked = db.Column(db.DateTime)
     last_check_status = db.Column(db.String(50))  # success, invalid, server_unreachable
     grace_period_ends = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=now_mst)
-    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Monitoring models
+class MonitoringProfile(db.Model):
+    __tablename__ = 'monitoring_profile'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    device_type = db.Column(db.String(50), nullable=False)
+    os_family = db.Column(db.String(50))
+    severity_level = db.Column(db.String(20), default='standard')
+    check_interval_minutes = db.Column(db.Integer, default=15)
+    enabled = db.Column(db.Boolean, default=True)
+    is_template = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class MonitoringCheck(db.Model):
+    __tablename__ = 'monitoring_check'
+    id = db.Column(db.Integer, primary_key=True)
+    check_type = db.Column(db.String(50), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    script_type = db.Column(db.String(20))
+    script_content = db.Column(db.Text)
+    timeout_seconds = db.Column(db.Integer, default=30)
+    enabled = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class MonitoringAlert(db.Model):
+    __tablename__ = 'monitoring_alert'
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'), nullable=False)
+    check_id = db.Column(db.Integer, db.ForeignKey('monitoring_check.id'))
+    severity = db.Column(db.String(20), nullable=False)  # info, warning, critical
+    status = db.Column(db.String(20), default='open')  # open, acknowledged, resolved
+    message = db.Column(db.Text, nullable=False)
+    details = db.Column(db.Text)  # JSON with full check results
+    triggered_at = db.Column(db.DateTime, default=datetime.utcnow)
+    acknowledged_at = db.Column(db.DateTime)
+    acknowledged_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    resolved_at = db.Column(db.DateTime)
+    resolved_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    failure_count = db.Column(db.Integer, default=1)
+    first_failed_at = db.Column(db.DateTime)
+    last_failed_at = db.Column(db.DateTime)
+    asset = db.relationship('Asset', backref='monitoring_alerts')
+
+class MaintenanceWindow(db.Model):
+    __tablename__ = 'maintenance_window'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    window_type = db.Column(db.String(50), default='patching')
+    day_of_week = db.Column(db.String(20))
+    start_time = db.Column(db.String(5), nullable=False)
+    end_time = db.Column(db.String(5), nullable=False)
+    timezone = db.Column(db.String(50), default='America/Denver')
+    recurrence = db.Column(db.String(20), default='weekly')
+    specific_date = db.Column(db.Date)
+    allow_patching = db.Column(db.Boolean, default=True)
+    allow_reboots = db.Column(db.Boolean, default=True)
+    suppress_alerts = db.Column(db.Boolean, default=True)
+    notify_before_minutes = db.Column(db.Integer, default=60)
+    notify_emails = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ProxmoxZfsPool(db.Model):
+    __tablename__ = 'proxmox_zfs_pool'
+    id = db.Column(db.Integer, primary_key=True)
+    server = db.Column(db.String(100))       # cluster label or backup label
+    node = db.Column(db.String(100))         # PVE node hostname
+    pool_name = db.Column(db.String(100))    # ZFS pool name
+    health = db.Column(db.String(20))        # ONLINE, DEGRADED, FAULTED, etc.
+    used_gb = db.Column(db.Float, default=0.0)
+    total_gb = db.Column(db.Float, default=0.0)
+    percent_used = db.Column(db.Float, default=0.0)
+    fragmentation = db.Column(db.Integer, default=0)
+    last_synced = db.Column(db.DateTime)
+
+class ProxmoxBackupJob(db.Model):
+    __tablename__ = 'proxmox_backup_job'
+    id = db.Column(db.Integer, primary_key=True)
+    node = db.Column(db.String(100))
+    vmid = db.Column(db.Integer)
+    vm_name = db.Column(db.String(200))
+    vm_type = db.Column(db.String(10))       # qemu, lxc
+    vm_status = db.Column(db.String(20))     # running, stopped
+    last_snapshot = db.Column(db.String(200))
+    last_snapshot_time = db.Column(db.DateTime)
+    snapshot_count = db.Column(db.Integer, default=0)
+    backup_status = db.Column(db.String(20))  # ok, stale, missing
+    last_synced = db.Column(db.DateTime)
+
+# Association tables for many-to-many relationships
+ProfileCheck = db.Table('profile_check',
+    db.Column('id', db.Integer, primary_key=True),
+    db.Column('profile_id', db.Integer, db.ForeignKey('monitoring_profile.id'), nullable=False),
+    db.Column('check_id', db.Integer, db.ForeignKey('monitoring_check.id'), nullable=False),
+    db.Column('enabled', db.Boolean, default=True),
+    db.Column('check_interval_override', db.Integer),
+    db.Column('warning_threshold', db.String(50)),
+    db.Column('critical_threshold', db.String(50)),
+    db.Column('parameters', db.Text)
+)
+
+AssetMonitoringProfile = db.Table('asset_monitoring_profile',
+    db.Column('id', db.Integer, primary_key=True),
+    db.Column('asset_id', db.Integer, db.ForeignKey('asset.id'), nullable=False),
+    db.Column('profile_id', db.Integer, db.ForeignKey('monitoring_profile.id'), nullable=False),
+    db.Column('assigned_at', db.DateTime, default=datetime.utcnow),
+    db.Column('assigned_by', db.Integer),
+    db.Column('notes', db.Text)
+)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -678,12 +678,9 @@ def send_email(subject, recipients, text_body, html_body=None):
         if html_body:
             msg.html = html_body
         mail.send(msg)
-        app._last_mail_error = None
         return True
     except Exception as e:
-        err = str(e)
-        app.logger.error(f"Failed to send email: {err}")
-        app._last_mail_error = err
+        app.logger.error(f"Failed to send email: {str(e)}")
         return False
 
 def send_admin_notification(subject, message):
@@ -799,7 +796,7 @@ IT Asset Management Team
 def send_warranty_expiry_alert(asset):
     """Send alert to admins for expiring warranty"""
     try:
-        days_until_expiry = (asset.warranty_expiry - now_mst().date()).days
+        days_until_expiry = (asset.warranty_expiry - datetime.utcnow().date()).days
         
         subject = f"Warranty Expiring Soon: {asset.asset_tag}"
         message = f"""
@@ -867,23 +864,8 @@ def index():
                 return dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc)
 
-        tv_last_sync_setting = Setting.query.filter_by(key='teamviewer_last_sync').first()
-        if tv_last_sync_setting and tv_last_sync_setting.value:
-            try:
-                dt = datetime.fromisoformat(tv_last_sync_setting.value.replace('Z', '+00:00'))
-                dt_utc = _as_utc(dt)
-                if dt_utc:
-                    candidate_times_utc.append(dt_utc)
-            except Exception:
-                pass
-
         try:
             from sqlalchemy import func
-            max_tv = db.session.query(func.max(Asset.last_teamviewer_sync)).scalar()
-            max_tv_utc = _as_utc(max_tv) if max_tv else None
-            if max_tv_utc:
-                candidate_times_utc.append(max_tv_utc)
-
             max_intune = db.session.query(func.max(Asset.intune_last_sync)).scalar()
             max_intune_utc = _as_utc(max_intune) if max_intune else None
             if max_intune_utc:
@@ -906,17 +888,25 @@ def index():
 def get_default_widgets():
     """Return default dashboard widget configuration"""
     return [
-        {'id': 'total_assets', 'type': 'stat', 'title': 'Total Assets', 'size': 'col-md-2', 'position': 0},
-        {'id': 'available', 'type': 'stat', 'title': 'Available', 'size': 'col-md-2', 'position': 1},
-        {'id': 'in_use', 'type': 'stat', 'title': 'In Use', 'size': 'col-md-2', 'position': 2},
-        {'id': 'in_repair', 'type': 'stat', 'title': 'In Repair', 'size': 'col-md-2', 'position': 3},
-        {'id': 'avg_age', 'type': 'stat', 'title': 'Avg Age', 'size': 'col-md-2', 'position': 4},
-        {'id': 'replacement', 'type': 'stat', 'title': 'Need Replacement', 'size': 'col-md-2', 'position': 5},
-        {'id': 'noncompliant', 'type': 'alert', 'title': 'Non-Compliant Devices', 'size': 'col-md-3', 'position': 6, 'icon': 'bi-shield-exclamation'},
-        {'id': 'low_storage', 'type': 'alert', 'title': 'Low Storage (<20%)', 'size': 'col-md-3', 'position': 7, 'icon': 'bi-hdd'},
-        {'id': 'offline', 'type': 'alert', 'title': 'Offline 7+ Days', 'size': 'col-md-3', 'position': 8, 'icon': 'bi-wifi-off'},
-        {'id': 'warranty_expiring', 'type': 'alert', 'title': 'Warranty Expiring Soon', 'size': 'col-md-3', 'position': 9, 'icon': 'bi-calendar-x'},
-        {'id': 'incomplete_assets', 'type': 'list', 'title': 'Assets Needing Information', 'size': 'col-md-6', 'position': 10},
+        # Row 1 — system health cards
+        {'id': 'tickets_summary', 'type': 'tickets_summary', 'title': 'Tickets', 'size': 'col-md-3', 'position': 0},
+        {'id': 'monitoring_summary', 'type': 'monitoring_summary', 'title': 'Monitoring Alerts', 'size': 'col-md-3', 'position': 1},
+        {'id': 'backup_summary', 'type': 'backup_summary', 'title': 'Backup Health', 'size': 'col-md-3', 'position': 2},
+        {'id': 'licenses_summary', 'type': 'licenses_summary', 'title': 'Licenses', 'size': 'col-md-3', 'position': 3},
+        # Row 2 — asset stats
+        {'id': 'total_assets', 'type': 'stat', 'title': 'Total Assets', 'size': 'col-md-2', 'position': 4},
+        {'id': 'in_use', 'type': 'stat', 'title': 'In Use', 'size': 'col-md-2', 'position': 5},
+        {'id': 'available', 'type': 'stat', 'title': 'Available', 'size': 'col-md-2', 'position': 6},
+        {'id': 'in_repair', 'type': 'stat', 'title': 'In Repair', 'size': 'col-md-2', 'position': 7},
+        {'id': 'avg_age', 'type': 'stat', 'title': 'Avg Age', 'size': 'col-md-2', 'position': 8},
+        {'id': 'replacement', 'type': 'stat', 'title': 'Need Replacement', 'size': 'col-md-2', 'position': 9},
+        # Row 3 — alert cards
+        {'id': 'noncompliant', 'type': 'alert', 'title': 'Non-Compliant Devices', 'size': 'col-md-3', 'position': 10, 'icon': 'bi-shield-exclamation'},
+        {'id': 'low_storage', 'type': 'alert', 'title': 'Low Storage (<20%)', 'size': 'col-md-3', 'position': 11, 'icon': 'bi-hdd'},
+        {'id': 'offline', 'type': 'alert', 'title': 'Offline 7+ Days', 'size': 'col-md-3', 'position': 12, 'icon': 'bi-wifi-off'},
+        {'id': 'warranty_expiring', 'type': 'alert', 'title': 'Warranty Expiring Soon', 'size': 'col-md-3', 'position': 13, 'icon': 'bi-calendar-x'},
+        # Row 4 — activity
+        {'id': 'incomplete_assets', 'type': 'list', 'title': 'Assets Needing Information', 'size': 'col-md-6', 'position': 14},
     ]
 
 def get_dashboard_data():
@@ -940,11 +930,11 @@ def get_dashboard_data():
     in_repair = Asset.query.filter_by(status='In Repair').count()
     
     # Check warranty expiring soon (within 30 days)
-    thirty_days = now_mst().date() + timedelta(days=30)
+    thirty_days = datetime.utcnow().date() + timedelta(days=30)
     expiring_soon = Asset.query.filter(
         Asset.warranty_expiry.isnot(None),
         Asset.warranty_expiry <= thirty_days,
-        Asset.warranty_expiry >= now_mst().date()
+        Asset.warranty_expiry >= datetime.utcnow().date()
     ).count()
     
     # Check assets needing replacement (within 6 months)
@@ -995,7 +985,7 @@ def get_dashboard_data():
         noncompliant_last_updated = _format_dt_utc(max(noncompliant_sync_times))
     
     # NEW: Devices offline for 7+ days
-    seven_days_ago = now_mst() - timedelta(days=7)
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
     offline_assets = Asset.query.filter(
         Asset.last_seen.isnot(None),
         Asset.last_seen < seven_days_ago
@@ -1041,7 +1031,7 @@ def get_dashboard_data():
     warranty_expiring = Asset.query.filter(
         Asset.warranty_expiry.isnot(None),
         Asset.warranty_expiry <= thirty_days,
-        Asset.warranty_expiry >= now_mst().date()
+        Asset.warranty_expiry >= datetime.utcnow().date()
     ).limit(10).all()
     
     # Replacement needed assets
@@ -1120,7 +1110,49 @@ def get_dashboard_data():
             Asset.serial_number == ''
         )
     ).order_by(Asset.created_at.desc()).limit(10).all()
-    
+
+    # ── Tickets cross-module data ─────────────────────────────────────────────
+    tickets_open = SupportTicket.query.filter(SupportTicket.status == 'Open').count()
+    tickets_in_progress = SupportTicket.query.filter(SupportTicket.status == 'In Progress').count()
+    tickets_unassigned = SupportTicket.query.filter(
+        SupportTicket.status.in_(['Open', 'In Progress']),
+        SupportTicket.assigned_to_user_id.is_(None)
+    ).count()
+    # Urgent open tickets (treat Urgent priority as highest severity)
+    tickets_urgent = SupportTicket.query.filter(
+        SupportTicket.status.in_(['Open', 'In Progress']),
+        SupportTicket.priority == 'Urgent'
+    ).count()
+    recent_tickets = SupportTicket.query.filter(
+        SupportTicket.status.in_(['Open', 'In Progress'])
+    ).order_by(SupportTicket.created_at.desc()).limit(5).all()
+
+    # ── Monitoring alerts cross-module data ───────────────────────────────────
+    alerts_critical = MonitoringAlert.query.filter(
+        MonitoringAlert.status == 'open',
+        MonitoringAlert.severity == 'critical'
+    ).count()
+    alerts_warning = MonitoringAlert.query.filter(
+        MonitoringAlert.status == 'open',
+        MonitoringAlert.severity == 'warning'
+    ).count()
+    alerts_open_total = MonitoringAlert.query.filter(
+        MonitoringAlert.status == 'open'
+    ).count()
+    recent_alerts_list = MonitoringAlert.query.filter(
+        MonitoringAlert.status == 'open'
+    ).order_by(MonitoringAlert.triggered_at.desc()).limit(5).all()
+
+    # ── Proxmox / backup health cross-module data ─────────────────────────────
+    proxmox_degraded_pools = ProxmoxZfsPool.query.filter(
+        ProxmoxZfsPool.health != 'ONLINE'
+    ).count()
+    proxmox_total_pools = ProxmoxZfsPool.query.count()
+    proxmox_stale_vms = ProxmoxBackupJob.query.filter(
+        ProxmoxBackupJob.backup_status == 'stale'
+    ).count()
+    proxmox_total_vms = ProxmoxBackupJob.query.count()
+
     return {
         'total_assets': total_assets,
         'in_use': in_use,
@@ -1159,20 +1191,22 @@ def get_dashboard_data():
         'license_type_stats': license_type_stats,
         'license_utilization': license_utilization,
         'total_value': sum(row[2] if row[2] else 0 for row in category_counts),
-        # Ticket summary for dashboard widget
-        'tickets_open': SupportTicket.query.filter_by(status='Open').count(),
-        'tickets_inprog': SupportTicket.query.filter_by(status='In Progress').count(),
-        'tickets_unassigned': SupportTicket.query.filter(
-            SupportTicket.status.in_(['Open', 'In Progress']),
-            SupportTicket.assigned_to_user_id == None
-        ).count(),
-        'tickets_breached': sum(
-            1 for t in SupportTicket.query.filter(
-                SupportTicket.status.in_(['Open', 'In Progress'])
-            ).all() if t.sla_breached
-        ),
-        'tickets_csat_total': SupportTicket.query.filter(SupportTicket.csat_score != None).count(),
-        'tickets_csat_positive': SupportTicket.query.filter_by(csat_score=1).count(),
+        # Tickets
+        'tickets_open': tickets_open,
+        'tickets_inprog': tickets_in_progress,
+        'tickets_unassigned': tickets_unassigned,
+        'tickets_urgent': tickets_urgent,
+        'recent_tickets': recent_tickets,
+        # Monitoring
+        'alerts_critical': alerts_critical,
+        'alerts_warning': alerts_warning,
+        'alerts_open_total': alerts_open_total,
+        'recent_alerts_list': recent_alerts_list,
+        # Backups
+        'proxmox_degraded_pools': proxmox_degraded_pools,
+        'proxmox_total_pools': proxmox_total_pools,
+        'proxmox_stale_vms': proxmox_stale_vms,
+        'proxmox_total_vms': proxmox_total_vms,
     }
 
 @app.route('/dashboard/configure', methods=['GET', 'POST'])
@@ -1248,12 +1282,6 @@ def get_available_widgets():
         {'id': 'license_utilization_chart', 'name': 'License Utilization', 'type': 'chart', 'icon': 'bi-bar-chart', 'color': 'primary'},
         {'id': 'license_seat_table', 'name': 'License Seat Utilization', 'type': 'table', 'icon': 'bi-table', 'color': 'primary'},
         {'id': 'recent_employees', 'name': 'Recent Employees', 'type': 'list', 'icon': 'bi-people', 'color': 'info'},
-        # Ticket widgets
-        {'id': 'tickets_open', 'name': 'Open Tickets', 'type': 'stat', 'icon': 'bi-ticket-perforated', 'color': 'success'},
-        {'id': 'tickets_inprog', 'name': 'Tickets In Progress', 'type': 'stat', 'icon': 'bi-gear', 'color': 'primary'},
-        {'id': 'tickets_unassigned', 'name': 'Unassigned Tickets', 'type': 'stat', 'icon': 'bi-person-x', 'color': 'warning'},
-        {'id': 'tickets_breached', 'name': 'SLA Breached Tickets', 'type': 'stat', 'icon': 'bi-exclamation-triangle', 'color': 'danger'},
-        {'id': 'tickets_summary', 'name': 'Ticket Summary Panel', 'type': 'tickets_summary', 'icon': 'bi-kanban', 'color': 'primary'},
     ]
 
 @app.route('/dashboard/reset', methods=['POST'])
@@ -1354,7 +1382,7 @@ def login():
         
         if user and check_password_hash(user.password_hash, password):
             login_user(user)
-            user.last_login = now_mst()
+            user.last_login = datetime.utcnow()
             db.session.commit()
             flash('Logged in successfully!', 'success')
             return redirect(url_for('index'))
@@ -1472,12 +1500,10 @@ def login_microsoft_callback():
             username=username,
             email=email,
             full_name=display_name,
-            first_name=display_name.split(' ', 1)[0] if display_name else '',
-            last_name=display_name.split(' ', 1)[1] if display_name and ' ' in display_name else '',
             password_hash=generate_password_hash(str(uuid.uuid4())),
             role='viewer',  # Default role for new users
             azure_id=azure_id,
-            created_at=now_mst()
+            created_at=datetime.utcnow()
         )
         db.session.add(user)
         db.session.commit()
@@ -1487,19 +1513,13 @@ def login_microsoft_callback():
         # Update azure_id if not set
         if not user.azure_id:
             user.azure_id = azure_id
-        # Refresh name from Azure AD if not manually set
-        if display_name:
-            user.full_name = display_name
-            if not user.first_name and not user.last_name:
-                user.first_name = display_name.split(' ', 1)[0]
-                user.last_name = display_name.split(' ', 1)[1] if ' ' in display_name else ''
             db.session.commit()
-
+        
         flash(f'Welcome back, {display_name}!', 'success')
     
     # Log user in
     login_user(user)
-    user.last_login = now_mst()
+    user.last_login = datetime.utcnow()
     db.session.commit()
     
     return redirect(url_for('index'))
@@ -1523,35 +1543,31 @@ def settings():
         
         if action == 'test_email':
             # Test email to admin
-            test_email_addr = request.form.get('test_email')
-            if test_email_addr:
+            test_email = request.form.get('test_email')
+            if test_email:
                 try:
                     subject = "Asset Tracker - Test Email"
                     message = f"""
                     <p>This is a test email from the Asset Tracker system.</p>
-                    <p><strong>Date/Time:</strong> {now_mst().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-                    <p><strong>SMTP Server:</strong> {app.config.get('MAIL_SERVER')}:{app.config.get('MAIL_PORT')}</p>
+                    <p><strong>Date/Time:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
                     <p><strong>Sent by:</strong> {current_user.username}</p>
                     <p>If you received this email, your SMTP configuration is working correctly!</p>
                     """
                     
-                    if send_email(subject, [test_email_addr], "Test email from Asset Tracker", message):
-                        flash(f'✓ Test email sent successfully to {test_email_addr}! Check your inbox.', 'success')
+                    if send_email(subject, [test_email], "Test email from Asset Tracker", message):
+                        flash('Test email sent successfully! Check your inbox.', 'success')
                     else:
-                        err = getattr(app, '_last_mail_error', None) or 'Unknown error'
-                        flash(f'✗ Failed to send test email — {err}', 'danger')
+                        flash('Failed to send test email. Check server logs for details.', 'danger')
                 except Exception as e:
-                    flash(f'✗ Error sending test email: {str(e)}', 'danger')
+                    flash(f'Error sending test email: {str(e)}', 'danger')
             else:
                 flash('Please enter an email address for testing.', 'warning')
-            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'toggle_employee_emails':
             # Toggle employee email notifications
             app.config['SEND_EMPLOYEE_EMAILS'] = not app.config['SEND_EMPLOYEE_EMAILS']
             status = "enabled" if app.config['SEND_EMPLOYEE_EMAILS'] else "disabled"
             flash(f'Employee email notifications {status}.', 'success')
-            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'update_sender':
             # Update default sender email
@@ -1559,7 +1575,6 @@ def settings():
             if new_sender:
                 app.config['MAIL_DEFAULT_SENDER'] = new_sender
                 flash('Default sender email updated.', 'success')
-            return redirect(url_for('settings') + '#email-tab')
         
         elif action == 'update_smtp':
             # Update SMTP settings
@@ -1592,12 +1607,12 @@ def settings():
                         setting = Setting(key=key)
                     setting.value = value
                     setting.updated_by = current_user.username
-                    setting.updated_at = now_mst()
+                    setting.updated_at = datetime.utcnow()
                     db.session.add(setting)
                 
                 db.session.commit()
                 
-                # Update app config immediately (already persisted to DB above)
+                # Update app config
                 app.config['MAIL_SERVER'] = smtp_server
                 app.config['MAIL_PORT'] = int(smtp_port) if smtp_port else 25
                 app.config['MAIL_USERNAME'] = smtp_username if smtp_username else None
@@ -1607,38 +1622,34 @@ def settings():
                 app.config['MAIL_USE_SSL'] = use_ssl
                 app.config['MAIL_DEFAULT_SENDER'] = sender_email
                 
-                flash(f'SMTP settings saved — now using {smtp_server}:{smtp_port}', 'success')
+                flash('SMTP settings updated successfully!', 'success')
             except Exception as e:
                 db.session.rollback()
                 flash(f'Error updating SMTP settings: {str(e)}', 'danger')
-            return redirect(url_for('settings') + '#email-tab')
-        
-        elif action == 'update_teamviewer':
-            # Update TeamViewer settings
-            tv_enabled = request.form.get('teamviewer_enabled') == 'on'
-            tv_token = request.form.get('teamviewer_token', '').strip()
-            
-            # Update or create settings
-            setting_enabled = Setting.query.filter_by(key='teamviewer_enabled').first()
-            if not setting_enabled:
-                setting_enabled = Setting(key='teamviewer_enabled')
-            setting_enabled.value = 'true' if tv_enabled else 'false'
-            setting_enabled.updated_by = current_user.username
-            setting_enabled.updated_at = now_mst()
-            db.session.add(setting_enabled)
-            
-            if tv_token:
-                setting_token = Setting.query.filter_by(key='teamviewer_token').first()
-                if not setting_token:
-                    setting_token = Setting(key='teamviewer_token')
-                setting_token.value = tv_token
-                setting_token.updated_by = current_user.username
-                setting_token.updated_at = now_mst()
-                db.session.add(setting_token)
-            
+
+        elif action == 'update_unifi':
+            # Save UniFi credentials
+            def _save(key, val):
+                s = Setting.query.filter_by(key=key).first()
+                if not s:
+                    s = Setting(key=key)
+                    db.session.add(s)
+                s.value = val
+                s.updated_by = current_user.username
+                s.updated_at = datetime.utcnow()
+            raw_host = request.form.get('unifi_host', '').strip().rstrip('/')
+            # Normalize scheme
+            if raw_host and not raw_host.startswith(('http://', 'https://')):
+                raw_host = 'https://' + raw_host
+            _save('unifi_host', raw_host)
+            _save('unifi_username', request.form.get('unifi_username', '').strip())
+            pw = request.form.get('unifi_password', '')
+            if pw:  # only overwrite if a new password was submitted
+                _save('unifi_password', pw)
+            _save('unifi_site', request.form.get('unifi_site', 'default').strip() or 'default')
             db.session.commit()
-            flash('TeamViewer settings updated successfully!', 'success')
-        
+            flash('UniFi settings saved successfully!', 'success')
+
         elif action == 'update_theme':
             # Update user's theme preference
             theme = request.form.get('theme', 'default')
@@ -1672,7 +1683,7 @@ def settings():
                         setting = Setting(key=key)
                     setting.value = value
                     setting.updated_by = current_user.username
-                    setting.updated_at = now_mst()
+                    setting.updated_at = datetime.utcnow()
                     db.session.add(setting)
 
                 # Only update password if provided
@@ -1682,7 +1693,7 @@ def settings():
                         setting = Setting(key='ad_bind_password')
                     setting.value = ad_bind_password
                     setting.updated_by = current_user.username
-                    setting.updated_at = now_mst()
+                    setting.updated_at = datetime.utcnow()
                     db.session.add(setting)
 
                 db.session.commit()
@@ -1717,20 +1728,6 @@ def settings():
         'admin_count': User.query.filter_by(role='admin').count(),
         'admin_emails': [u.email for u in User.query.filter_by(role='admin').all() if u.email]
     }
-    
-    # Load TeamViewer settings
-    tv_enabled_setting = Setting.query.filter_by(key='teamviewer_enabled').first()
-    tv_token_setting = Setting.query.filter_by(key='teamviewer_token').first()
-    
-    tv_enabled = tv_enabled_setting.value == 'true' if tv_enabled_setting else False
-    tv_token = tv_token_setting.value if tv_token_setting else ''
-    
-    # Get last sync info
-    last_sync = Asset.query.filter(Asset.last_teamviewer_sync.isnot(None)).order_by(Asset.last_teamviewer_sync.desc()).first()
-    last_sync_time = last_sync.last_teamviewer_sync if last_sync else None
-    
-    # Count TeamViewer-linked assets
-    tv_asset_count = Asset.query.filter(Asset.teamviewer_id.isnot(None)).count()
 
     def get_setting_value(key, default=''):
         s = Setting.query.filter_by(key=key).first()
@@ -1746,14 +1743,61 @@ def settings():
         'ad_bind_password': get_setting_value('ad_bind_password', ''),
         'ad_user_ou_dn': get_setting_value('ad_user_ou_dn', ''),
     }
-    
-    return render_template('settings.html', 
+
+    unifi_config = {
+        'host': get_setting_value('unifi_host', ''),
+        'username': get_setting_value('unifi_username', ''),
+        'password_set': bool(get_setting_value('unifi_password', '')),
+        'site': get_setting_value('unifi_site', 'default'),
+        'last_sync_status': get_setting_value('unifi_last_sync_status', ''),
+        'last_sync_message': get_setting_value('unifi_last_sync_message', ''),
+        'last_sync_time': get_setting_value('unifi_last_sync_time', ''),
+    }
+
+    proxmox_settings = {
+        'cluster_host': get_setting_value('proxmox_cluster_host', ''),
+        'cluster_token_id': get_setting_value('proxmox_cluster_token_id', ''),
+        'cluster_token_set': bool(get_setting_value('proxmox_cluster_token_secret', '')),
+        'cluster_verify_ssl': get_setting_value('proxmox_cluster_verify_ssl', '0'),
+        'backup_host': get_setting_value('proxmox_backup_host', ''),
+        'backup_token_id': get_setting_value('proxmox_backup_token_id', ''),
+        'backup_token_set': bool(get_setting_value('proxmox_backup_token_secret', '')),
+        'backup_verify_ssl': get_setting_value('proxmox_backup_verify_ssl', '0'),
+        'stale_hours': get_setting_value('proxmox_stale_hours', '26'),
+    }
+
+    return render_template('settings.html',
                           config=config,
-                          tv_enabled=tv_enabled,
-                          tv_token=tv_token,
-                          last_sync_time=last_sync_time,
-                          tv_asset_count=tv_asset_count,
-                          ad_config=ad_config)
+                          ad_config=ad_config,
+                          unifi_config=unifi_config,
+                          proxmox_settings=proxmox_settings)
+
+
+@app.route('/api/unifi/test', methods=['POST'])
+@login_required
+@admin_required
+def api_unifi_test():
+    """Test UniFi controller connection."""
+    from unifi_service import UnifiService, load_unifi_config
+    config = load_unifi_config(Setting)
+    if not config:
+        return jsonify({'success': False, 'message': 'UniFi credentials not configured'})
+    svc = UnifiService(**config)
+    result = svc.test_connection()
+    return jsonify(result)
+
+
+@app.route('/api/unifi/sync', methods=['POST'])
+@login_required
+@admin_required
+def api_unifi_sync():
+    """Manually trigger a UniFi device sync."""
+    from unifi_service import sync_unifi_assets
+    try:
+        summary = sync_unifi_assets(app, db, Asset, Setting, AssetHistory, MonitoringAlert)
+        return jsonify({'success': True, 'summary': summary})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
 
 
 @app.route('/api/ad/test', methods=['POST'])
@@ -1995,7 +2039,7 @@ def soc2_strikegraph():
     
     # Items expiring soon (next 30 days)
     from datetime import timedelta
-    soon = now_mst().date() + timedelta(days=30)
+    soon = datetime.utcnow().date() + timedelta(days=30)
     expiring_soon = [e for e in evidence_items 
                      if e.expiration_date and e.expiration_date <= soon and e.is_active]
     
@@ -2145,15 +2189,6 @@ def vendor_risk_register_report():
             'data_access': 'Source Code'
         },
         {
-            'vendor_name': 'TeamViewer',
-            'service': 'Remote Support',
-            'risk_level': 'Medium',
-            'last_review': (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'),
-            'soc2_status': 'ISO 27001 Certified',
-            'criticality': 'Medium',
-            'data_access': 'Remote Desktop Access'
-        },
-        {
             'vendor_name': 'AWS (Amazon Web Services)',
             'service': 'Cloud Infrastructure',
             'risk_level': 'Low',
@@ -2292,7 +2327,7 @@ def soc2_export_control(control_id):
         ws.merge_cells('A1:F1')
         
         ws['A2'] = 'Generated:'
-        ws['B2'] = now_mst().strftime('%Y-%m-%d %H:%M:%S UTC')
+        ws['B2'] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         ws['A3'] = 'Control Name:'
         ws['B3'] = control.control_name
         ws['A4'] = 'Description:'
@@ -2366,7 +2401,7 @@ def soc2_export_control(control_id):
         wb.save(output)
         output.seek(0)
         
-        filename = f"SOC2_{control.control_name.replace(' ', '_')}_{now_mst().strftime('%Y%m%d')}.xlsx"
+        filename = f"SOC2_{control.control_name.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
         
         return send_file(
             output,
@@ -2410,7 +2445,7 @@ def soc2_export_all():
         ws_summary.merge_cells('A1:G1')
         
         ws_summary['A2'] = 'Generated:'
-        ws_summary['B2'] = now_mst().strftime('%Y-%m-%d %H:%M:%S UTC')
+        ws_summary['B2'] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         ws_summary['A3'] = 'Organization:'
         ws_summary['B3'] = 'Cirque Corporation'
         
@@ -2522,7 +2557,7 @@ def soc2_export_all():
         wb.save(output)
         output.seek(0)
         
-        filename = f"SOC2_Compliance_Report_{now_mst().strftime('%Y%m%d')}.xlsx"
+        filename = f"SOC2_Compliance_Report_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
         
         return send_file(
             output,
@@ -2633,7 +2668,7 @@ def api_download_control_evidence(control_id):
         
         # Create filename with control ID and name
         safe_control_name = control.control_id.replace(' ', '_').replace('/', '_')
-        filename = f"{safe_control_name}_Evidence_{now_mst().strftime('%Y%m%d')}.zip"
+        filename = f"{safe_control_name}_Evidence_{datetime.utcnow().strftime('%Y%m%d')}.zip"
         
         return send_file(
             zip_buffer,
@@ -2676,7 +2711,7 @@ def api_download_all_evidence():
         
         zip_buffer.seek(0)
         
-        filename = f"StrikeGraph_Evidence_{now_mst().strftime('%Y%m%d')}.zip"
+        filename = f"StrikeGraph_Evidence_{datetime.utcnow().strftime('%Y%m%d')}.zip"
         
         return send_file(
             zip_buffer,
@@ -2860,7 +2895,7 @@ def edit_license(license_id):
             license.annual_cost = float(request.form['annual_cost']) if request.form.get('annual_cost') else None
             license.status = request.form.get('status', 'Active')
             license.notes = request.form.get('notes')
-            license.updated_at = now_mst()
+            license.updated_at = datetime.utcnow()
             
             db.session.commit()
             flash('License updated successfully!', 'success')
@@ -2955,182 +2990,15 @@ def return_license(assignment_id):
 
 # ==================== SUPPORT TICKETS ====================
 
-def _log_ticket_activity(ticket_id, action, detail=None):
-    """Append an activity record to a ticket. Call before db.session.commit()."""
-    try:
-        user_id = current_user.id if current_user.is_authenticated else None
-    except Exception:
-        user_id = None
-    db.session.add(TicketActivity(
-        ticket_id=ticket_id,
-        user_id=user_id,
-        action=action,
-        detail=detail,
-        created_at=now_mst(),
-    ))
-
-
-def _send_ticket_closed_email(ticket):
-    """Send a closure confirmation email to the reporter (if they have an email)."""
-    if not ticket.reporter_email:
-        return
-    tracker_url = 'https://tracker.corp.cirque.com'
-    ticket_url  = f"{tracker_url}{url_for('view_ticket', ticket_id=ticket.id)}"
-    csat_yes = f"{tracker_url}/csat/{ticket.csat_token}/1" if ticket.csat_token else None
-    csat_no  = f"{tracker_url}/csat/{ticket.csat_token}/0" if ticket.csat_token else None
-
-    subject = f"Your IT support request #{ticket.id} has been resolved"
-    text = (
-        f"Hi {ticket.reporter_name or 'there'},\n\n"
-        f"Your support request \"{ticket.subject}\" (#{ticket.id}) has been marked as resolved.\n\n"
-        f"Was this resolved to your satisfaction?\n"
-        f"  Yes: {csat_yes}\n  No:  {csat_no}\n\n"
-        f"If you still need help, please reply to this email or submit a new request.\n\n"
-        f"— Cirque IT"
-    )
-    csat_html = ""
-    if csat_yes:
-        csat_html = f"""
-        <p style="margin-top:24px;"><strong>Was this resolved to your satisfaction?</strong></p>
-        <div style="display:flex;gap:12px;margin-top:8px;">
-          <a href="{csat_yes}" style="background:#198754;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-size:18px;">👍 Yes</a>
-          <a href="{csat_no}"  style="background:#dc3545;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-size:18px;">👎 No</a>
-        </div>"""
-    html = f"""
-    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;">
-      <div style="background:#8B1A2B;padding:20px 24px;border-radius:6px 6px 0 0;">
-        <span style="color:#fff;font-size:18px;font-weight:bold;">Cirque IT Support</span>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px;">
-        <p>Hi <strong>{ticket.reporter_name or 'there'}</strong>,</p>
-        <p>Your support request has been resolved:</p>
-        <div style="background:#f8f8f8;border-left:4px solid #8B1A2B;padding:12px 16px;margin:16px 0;border-radius:4px;">
-          <strong>#{ticket.id} — {ticket.subject}</strong>
-        </div>
-        <p>If you still need assistance, simply reply to this email or submit a new request.</p>
-        {csat_html}
-        <p style="color:#666;font-size:12px;margin-top:32px;">— Cirque IT Support Team</p>
-      </div>
-    </div>"""
-    try:
-        send_email(subject, [ticket.reporter_email], text, html)
-    except Exception as e:
-        app.logger.error(f"Ticket close email failed: {e}")
-
-
 @app.route('/tickets')
 @login_required
 @manager_required
 @license_required
 def tickets():
-    from datetime import timedelta, date
-    from sqlalchemy import func
-
-    # --- filters ---
-    f_status   = request.args.get('status', '')
-    f_priority = request.args.get('priority', '')
-    f_source   = request.args.get('source', '')
-    f_assignee = request.args.get('assignee', '')
-    f_category = request.args.get('category', '')
-
-    q = SupportTicket.query
-    if f_status:
-        q = q.filter(SupportTicket.status == f_status)
-    if f_priority:
-        q = q.filter(SupportTicket.priority == f_priority)
-    if f_source:
-        q = q.filter(SupportTicket.source == f_source)
-    if f_assignee == 'unassigned':
-        q = q.filter(SupportTicket.assigned_to_user_id == None)
-    elif f_assignee:
-        try:
-            q = q.filter(SupportTicket.assigned_to_user_id == int(f_assignee))
-        except ValueError:
-            pass
-    if f_category:
-        q = q.filter(SupportTicket.category == f_category)
-
-    all_tickets = q.order_by(SupportTicket.created_at.desc()).all()
-
-    # --- stats ---
-    today_start = datetime.combine(date.today(), datetime.min.time())
-    open_count        = SupportTicket.query.filter_by(status='Open').count()
-    inprog_count      = SupportTicket.query.filter_by(status='In Progress').count()
-    closed_today      = SupportTicket.query.filter(
-        SupportTicket.status == 'Closed',
-        SupportTicket.closed_at >= today_start
-    ).count()
-    closed_tickets = SupportTicket.query.filter(
-        SupportTicket.status == 'Closed',
-        SupportTicket.closed_at != None,
-        SupportTicket.created_at != None,
-    ).all()
-    def _res_hours(t):
-        return (t.closed_at - t.created_at).total_seconds() / 3600.0
-
-    if closed_tickets:
-        hours_list = [_res_hours(t) for t in closed_tickets if t.closed_at and t.created_at]
-        avg_hours = round(sum(hours_list) / len(hours_list), 1) if hours_list else None
-    else:
-        avg_hours = None
-
-    # Resolution time by priority
-    priority_order = ['Urgent', 'High', 'Normal', 'Low']
-    resolution_by_priority = []
-    for pri in priority_order:
-        pts = [t for t in closed_tickets if t.priority == pri and t.closed_at and t.created_at]
-        if pts:
-            avg = sum(_res_hours(t) for t in pts) / len(pts)
-            resolution_by_priority.append({'priority': pri, 'count': len(pts), 'avg_hours': round(avg, 1)})
-
-    # --- chart: tickets per day (last 30 days) ---
-    cutoff = now_mst() - timedelta(days=29)
-    chart_tickets = SupportTicket.query.filter(SupportTicket.created_at >= cutoff).all()
-    from collections import defaultdict
-    day_counts = defaultdict(int)
-    for t in chart_tickets:
-        day_counts[t.created_at.strftime('%Y-%m-%d')] += 1
-    chart_labels = [(date.today() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(29, -1, -1)]
-    chart_data   = [day_counts.get(d, 0) for d in chart_labels]
-
-    # --- per-tech workload ---
-    techs = User.query.filter(User.role.in_(['admin', 'manager'])).order_by(User.username).all()
-    tech_loads = []
-    for tech in techs:
-        o  = SupportTicket.query.filter_by(assigned_to_user_id=tech.id, status='Open').count()
-        ip = SupportTicket.query.filter_by(assigned_to_user_id=tech.id, status='In Progress').count()
-        tech_closed = SupportTicket.query.filter_by(assigned_to_user_id=tech.id, status='Closed').filter(
-            SupportTicket.closed_at != None, SupportTicket.created_at != None
-        ).all()
-        tech_avg = None
-        if tech_closed:
-            h = [_res_hours(t) for t in tech_closed if t.closed_at and t.created_at]
-            tech_avg = round(sum(h) / len(h), 1) if h else None
-        if o + ip > 0 or tech_closed:
-            tech_loads.append({'user': tech, 'open': o, 'in_progress': ip,
-                                'closed': len(tech_closed), 'avg_hours': tech_avg})
-
-    urgent_count = SupportTicket.query.filter(
-        SupportTicket.priority.in_(['Urgent', 'High']),
-        SupportTicket.status != 'Closed'
-    ).count()
-    unassigned_count = SupportTicket.query.filter(
-        SupportTicket.assigned_to_user_id == None,
-        SupportTicket.status != 'Closed'
-    ).count()
-
-    return render_template('tickets.html',
-        tickets=all_tickets,
-        f_status=f_status, f_priority=f_priority, f_source=f_source, f_assignee=f_assignee, f_category=f_category,
-        open_count=open_count, inprog_count=inprog_count,
-        closed_today=closed_today, avg_hours=avg_hours,
-        chart_labels=chart_labels, chart_data=chart_data,
-        tech_loads=tech_loads, techs=techs,
-        urgent_count=urgent_count, unassigned_count=unassigned_count,
-        resolution_by_priority=resolution_by_priority,
-        total_closed=len(closed_tickets),
-        now=now_mst(),
-    )
+    tickets = SupportTicket.query.order_by(SupportTicket.created_at.desc()).all()
+    total_closed = SupportTicket.query.filter_by(status='Closed').count()
+    total_open = SupportTicket.query.filter(SupportTicket.status.in_(['Open', 'In Progress'])).count()
+    return render_template('tickets.html', tickets=tickets, total_closed=total_closed, total_open=total_open)
 
 
 @app.route('/tickets/new', methods=['GET', 'POST'])
@@ -3149,11 +3017,7 @@ def new_ticket():
         if priority not in ['Low', 'Normal', 'High', 'Urgent']:
             priority = 'Normal'
 
-        category = (request.form.get('category') or 'General').strip()
-        if category not in ['Hardware', 'Software', 'Network', 'Account', 'General', 'Other']:
-            category = 'General'
-
-        reporter_name  = (request.form.get('reporter_name') or '').strip() or None
+        reporter_name = (request.form.get('reporter_name') or '').strip() or None
         reporter_email = (request.form.get('reporter_email') or '').strip() or None
 
         asset_id = request.form.get('asset_id')
@@ -3162,7 +3026,6 @@ def new_ticket():
         ticket = SupportTicket(
             status='Open',
             priority=priority,
-            category=category,
             source='web',
             subject=subject,
             description=description,
@@ -3172,21 +3035,20 @@ def new_ticket():
             asset_tag=asset.asset_tag if asset else None,
             hostname=asset.name if asset else None,
             created_by_user_id=current_user.id,
-            created_at=now_mst(),
-            updated_at=now_mst(),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
         db.session.add(ticket)
-        db.session.flush()  # get ticket.id
-        _log_ticket_activity(ticket.id, 'created', f'Ticket created via web by {current_user.display_name}')
         db.session.commit()
 
         if asset:
-            db.session.add(AssetHistory(
+            history = AssetHistory(
                 asset_id=asset.id,
                 action='Ticket Created',
                 description=f'Support ticket #{ticket.id} created: {ticket.subject}',
-                user_id=current_user.id,
-            ))
+                user_id=current_user.id
+            )
+            db.session.add(history)
             db.session.commit()
 
         flash(f'Ticket #{ticket.id} created.', 'success')
@@ -3202,150 +3064,29 @@ def new_ticket():
 @license_required
 def view_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    techs = User.query.filter(User.role.in_(['admin', 'manager'])).order_by(User.username).all()
-    # Merge notes and activities into a unified timeline
-    # Skip 'note_added' activities — the note itself already appears
-    timeline = []
-    for act in ticket.activities:
-        if act.action != 'note_added':
-            timeline.append({'type': 'activity', 'ts': act.created_at, 'obj': act})
-    for note in ticket.notes:
-        timeline.append({'type': 'note', 'ts': note.created_at, 'obj': note})
-    timeline.sort(key=lambda x: x['ts'] or datetime.min)
+    techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(User.display_name).all()
+    # Build timeline: merge notes + activity sorted by created_at
+    notes = [{'type': 'note', 'obj': n, 'ts': n.created_at} for n in ticket.notes.order_by(TicketNote.created_at).all()]
+    acts = [{'type': 'activity', 'obj': a, 'ts': a.created_at} for a in ticket.activity.order_by(TicketActivity.created_at).all()]
+    timeline = sorted(notes + acts, key=lambda x: x['ts'] or datetime.utcnow())
     return render_template('view_ticket.html', ticket=ticket, techs=techs, timeline=timeline)
-
-
-@app.route('/tickets/<int:ticket_id>/close', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def close_ticket(ticket_id):
-    ticket = SupportTicket.query.get_or_404(ticket_id)
-    if ticket.status != 'Closed':
-        ticket.status = 'Closed'
-        ticket.closed_at = now_mst()
-        ticket.closed_by_user_id = current_user.id
-        ticket.updated_at = now_mst()
-        if not ticket.csat_token:
-            ticket.csat_token = uuid.uuid4().hex
-        _log_ticket_activity(ticket.id, 'closed', f'Closed by {current_user.display_name}')
-        db.session.commit()
-        _send_ticket_closed_email(ticket)
-    flash(f'Ticket #{ticket.id} closed.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=ticket.id))
-
-
-@app.route('/tickets/<int:ticket_id>/reopen', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def reopen_ticket(ticket_id):
-    ticket = SupportTicket.query.get_or_404(ticket_id)
-    if ticket.status != 'Open':
-        old = ticket.status
-        ticket.status = 'Open'
-        ticket.closed_at = None
-        ticket.closed_by_user_id = None
-        ticket.updated_at = now_mst()
-        _log_ticket_activity(ticket.id, 'status_changed', f'Status changed from {old} to Open by {current_user.display_name}')
-        db.session.commit()
-    flash(f'Ticket #{ticket.id} reopened.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=ticket.id))
-
-
-@app.route('/tickets/<int:ticket_id>/assign', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def assign_ticket(ticket_id):
-    ticket = SupportTicket.query.get_or_404(ticket_id)
-    user_id_raw = request.form.get('assignee_id', '').strip()
-    if user_id_raw == '' or user_id_raw == '0':
-        assignee = None
-        detail = f'Unassigned by {current_user.display_name}'
-    else:
-        assignee = User.query.get(int(user_id_raw))
-        detail = f'Assigned to {assignee.display_name} by {current_user.display_name}' if assignee else 'Assigned'
-    old_assignee = ticket.assigned_to
-    ticket.assigned_to_user_id = assignee.id if assignee else None
-    ticket.updated_at = now_mst()
-    _log_ticket_activity(ticket.id, 'assigned', detail)
-    db.session.commit()
-    flash('Ticket assignment updated.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=ticket.id))
-
-
-@app.route('/tickets/<int:ticket_id>/note', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def add_ticket_note(ticket_id):
-    ticket = SupportTicket.query.get_or_404(ticket_id)
-    content = (request.form.get('content') or '').strip()
-    if not content:
-        flash('Note cannot be empty.', 'danger')
-        return redirect(url_for('view_ticket', ticket_id=ticket.id))
-    note = TicketNote(
-        ticket_id=ticket.id,
-        user_id=current_user.id,
-        content=content,
-        created_at=now_mst(),
-    )
-    db.session.add(note)
-    ticket.updated_at = now_mst()
-    _log_ticket_activity(ticket.id, 'note_added', f'Note added by {current_user.display_name}')
-    db.session.commit()
-    flash('Note added.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=ticket.id))
-
-
-@app.route('/tickets/<int:ticket_id>/priority', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def set_ticket_priority(ticket_id):
-    ticket = SupportTicket.query.get_or_404(ticket_id)
-    new_p = (request.form.get('priority') or '').strip()
-    if new_p not in ['Low', 'Normal', 'High', 'Urgent']:
-        flash('Invalid priority.', 'danger')
-        return redirect(url_for('view_ticket', ticket_id=ticket.id))
-    old_p = ticket.priority
-    ticket.priority = new_p
-    ticket.updated_at = now_mst()
-    _log_ticket_activity(ticket.id, 'priority_changed', f'Priority changed from {old_p} to {new_p} by {current_user.display_name}')
-    db.session.commit()
-    flash(f'Priority updated to {new_p}.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
 @app.route('/tickets/<int:ticket_id>/status', methods=['POST'])
 @login_required
-@manager_required
 @license_required
 def set_ticket_status(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    new_s = (request.form.get('status') or '').strip()
-    if new_s not in ['Open', 'In Progress', 'Closed']:
-        flash('Invalid status.', 'danger')
-        return redirect(url_for('view_ticket', ticket_id=ticket.id))
-    old_s = ticket.status
-    ticket.status = new_s
-    ticket.updated_at = now_mst()
-    if new_s == 'Closed' and old_s != 'Closed':
-        ticket.closed_at = now_mst()
-        ticket.closed_by_user_id = current_user.id
-        if not ticket.csat_token:
-            ticket.csat_token = uuid.uuid4().hex
-        _log_ticket_activity(ticket.id, 'closed', f'Closed by {current_user.display_name}')
+    new_status = request.form.get('status', '').strip()
+    if new_status in ('Open', 'In Progress', 'Closed'):
+        old = ticket.status
+        ticket.status = new_status
+        if new_status == 'Closed':
+            ticket.closed_at = datetime.utcnow()
+            ticket.closed_by_user_id = current_user.id
+        db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                      action='status_changed', detail=f'{old} → {new_status}'))
         db.session.commit()
-        _send_ticket_closed_email(ticket)
-    else:
-        if new_s != 'Closed':
-            ticket.closed_at = None
-            ticket.closed_by_user_id = None
-        _log_ticket_activity(ticket.id, 'status_changed', f'Status changed from {old_s} to {new_s} by {current_user.display_name}')
-        db.session.commit()
-    flash(f'Status updated to {new_s}.', 'success')
     return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
@@ -3355,42 +3096,76 @@ def set_ticket_status(ticket_id):
 @license_required
 def edit_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    new_subject = (request.form.get('subject') or '').strip()
-    new_desc    = (request.form.get('description') or '').strip()
-    if not new_subject or not new_desc:
-        flash('Subject and description are required.', 'danger')
-        return redirect(url_for('view_ticket', ticket_id=ticket.id))
-    changed = []
-    if new_subject != ticket.subject:
-        changed.append('subject')
-        ticket.subject = new_subject
-    if new_desc != ticket.description:
-        changed.append('description')
-        ticket.description = new_desc
-    if changed:
-        ticket.updated_at = now_mst()
-        _log_ticket_activity(ticket.id, 'edited', f'Edited {", ".join(changed)} by {current_user.display_name}')
-        db.session.commit()
-        flash('Ticket updated.', 'success')
+    ticket.subject = request.form.get('subject', ticket.subject).strip()
+    ticket.description = request.form.get('description', ticket.description).strip()
+    db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                  action='edited', detail='Subject/description updated'))
+    db.session.commit()
+    flash('Ticket updated.', 'success')
+    return redirect(url_for('view_ticket', ticket_id=ticket.id))
+
+
+@app.route('/tickets/<int:ticket_id>/assign', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def assign_ticket(ticket_id):
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    assignee_id = request.form.get('assignee_id', '0')
+    if assignee_id == '0':
+        ticket.assigned_to_user_id = None
+        detail = 'Unassigned'
+    else:
+        ticket.assigned_to_user_id = int(assignee_id)
+        u = User.query.get(ticket.assigned_to_user_id)
+        detail = f'Assigned to {u.display_name if u else assignee_id}'
+    db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                  action='assigned', detail=detail))
+    db.session.commit()
     return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
 @app.route('/tickets/<int:ticket_id>/category', methods=['POST'])
 @login_required
-@manager_required
 @license_required
 def set_ticket_category(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    new_cat = (request.form.get('category') or 'General').strip()
-    valid = ['Hardware', 'Software', 'Network', 'Account', 'General', 'Other']
-    if new_cat not in valid:
-        new_cat = 'General'
-    if new_cat != ticket.category:
-        old = ticket.category or 'General'
-        ticket.category = new_cat
-        ticket.updated_at = now_mst()
-        _log_ticket_activity(ticket.id, 'category_changed', f'Category changed from {old} to {new_cat} by {current_user.display_name}')
+    cat = request.form.get('category', 'General').strip()
+    ticket.category = cat
+    db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                  action='category_changed', detail=f'Category set to {cat}'))
+    db.session.commit()
+    return redirect(url_for('view_ticket', ticket_id=ticket.id))
+
+
+@app.route('/tickets/<int:ticket_id>/priority', methods=['POST'])
+@login_required
+@license_required
+def set_ticket_priority(ticket_id):
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    priority = request.form.get('priority', 'Normal').strip()
+    if priority in ('Low', 'Normal', 'High', 'Urgent'):
+        old = ticket.priority
+        ticket.priority = priority
+        db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                      action='priority_changed', detail=f'{old} → {priority}'))
         db.session.commit()
+    return redirect(url_for('view_ticket', ticket_id=ticket.id))
+
+
+@app.route('/tickets/<int:ticket_id>/note', methods=['POST'])
+@login_required
+@license_required
+def add_ticket_note(ticket_id):
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    content = request.form.get('content', '').strip()
+    if content:
+        note = TicketNote(ticket_id=ticket.id, user_id=current_user.id, content=content)
+        db.session.add(note)
+        db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                      action='note_added', detail='Internal note added'))
+        db.session.commit()
+        flash('Note added.', 'success')
     return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
@@ -3405,265 +3180,49 @@ def merge_ticket(ticket_id):
     except (ValueError, TypeError):
         flash('Invalid target ticket ID.', 'danger')
         return redirect(url_for('view_ticket', ticket_id=ticket.id))
-    if target_id == ticket.id:
-        flash('Cannot merge a ticket into itself.', 'danger')
-        return redirect(url_for('view_ticket', ticket_id=ticket.id))
     target = SupportTicket.query.get(target_id)
-    if not target:
-        flash(f'Ticket #{target_id} not found.', 'danger')
+    if not target or target.id == ticket.id:
+        flash('Target ticket not found.', 'danger')
         return redirect(url_for('view_ticket', ticket_id=ticket.id))
     ticket.status = 'Merged'
-    ticket.merged_into_id = target_id
-    ticket.closed_at = now_mst()
-    ticket.updated_at = now_mst()
-    _log_ticket_activity(ticket.id, 'merged', f'Merged into #{target_id} by {current_user.display_name}')
-    _log_ticket_activity(target_id, 'merged_from', f'Ticket #{ticket.id} merged into this ticket by {current_user.display_name}')
+    ticket.merged_into_id = target.id
+    db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
+                                  action='merged', detail=f'Merged into #{target.id}'))
+    db.session.add(TicketActivity(ticket_id=target.id, user_id=current_user.id,
+                                  action='merged', detail=f'#{ticket.id} merged into this ticket'))
     db.session.commit()
-    flash(f'Ticket #{ticket.id} merged into #{target_id}.', 'success')
-    return redirect(url_for('view_ticket', ticket_id=target_id))
+    flash(f'Ticket #{ticket.id} merged into #{target.id}.', 'success')
+    return redirect(url_for('view_ticket', ticket_id=target.id))
 
 
-@app.route('/csat/<token>/<int:score>')
-def csat_response(token, score):
-    """Public endpoint — reporter clicks 👍 or 👎 in the close email."""
-    ticket = SupportTicket.query.filter_by(csat_token=token).first_or_404()
-    if ticket.csat_score is None:
-        ticket.csat_score = 1 if score >= 1 else 0
-        ticket.csat_comment = request.args.get('comment', '').strip() or None
+@app.route('/tickets/<int:ticket_id>/close', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def close_ticket(ticket_id):
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    if ticket.status != 'Closed':
+        ticket.status = 'Closed'
+        ticket.closed_at = datetime.utcnow()
+        ticket.closed_by_user_id = current_user.id
         db.session.commit()
-        label = 'positive' if ticket.csat_score == 1 else 'negative'
-        return f"""<!doctype html><html><head><meta charset=utf-8>
-        <title>Feedback received</title>
-        <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa;}}
-        .box{{text-align:center;padding:40px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.1);max-width:400px;}}</style></head>
-        <body><div class="box">
-        <div style="font-size:64px">{'👍' if ticket.csat_score==1 else '👎'}</div>
-        <h2>Thanks for your feedback!</h2>
-        <p>Your {label} response has been recorded for ticket <strong>#{ticket.id}</strong>.</p>
-        </div></body></html>"""
-    return """<!doctype html><html><head><meta charset=utf-8><title>Already rated</title></head>
-    <body style="font-family:Arial,sans-serif;text-align:center;padding:60px">
-    <h2>Already recorded</h2><p>This ticket has already been rated. Thank you!</p></body></html>"""
+    flash(f'Ticket #{ticket.id} closed.', 'success')
+    return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
-# ── Asset check-out / check-in ──────────────────────────────────────────────
-
-@app.route('/assets/<int:asset_id>/checkout', methods=['POST'])
+@app.route('/tickets/<int:ticket_id>/reopen', methods=['POST'])
 @login_required
 @manager_required
 @license_required
-def asset_checkout(asset_id):
-    asset = Asset.query.get_or_404(asset_id)
-    # Check not already checked out
-    active = AssetLoan.query.filter_by(asset_id=asset_id, checked_in_at=None).first()
-    if active:
-        flash(f'Asset is already checked out to {active.checked_out_to}.', 'warning')
-        return redirect(url_for('view_asset', asset_id=asset_id))
-    borrower = (request.form.get('checked_out_to') or '').strip()
-    if not borrower:
-        flash('Borrower name is required.', 'danger')
-        return redirect(url_for('view_asset', asset_id=asset_id))
-    due_str = (request.form.get('due_back_at') or '').strip()
-    due = None
-    if due_str:
-        try:
-            from datetime import date as _date
-            due = _date.fromisoformat(due_str)
-        except ValueError:
-            pass
-    loan = AssetLoan(
-        asset_id=asset_id,
-        checked_out_to=borrower,
-        checked_out_by_user_id=current_user.id,
-        due_back_at=due,
-        notes=(request.form.get('notes') or '').strip() or None,
-    )
-    db.session.add(loan)
-    log_change(asset, current_user.username, 'checkout', f'Checked out to {borrower}')
-    db.session.commit()
-    flash(f'Asset checked out to {borrower}.', 'success')
-    return redirect(url_for('view_asset', asset_id=asset_id))
-
-
-@app.route('/assets/<int:asset_id>/checkin/<int:loan_id>', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def asset_checkin(asset_id, loan_id):
-    loan = AssetLoan.query.get_or_404(loan_id)
-    if loan.asset_id != asset_id:
-        flash('Loan does not belong to this asset.', 'danger')
-        return redirect(url_for('view_asset', asset_id=asset_id))
-    if not loan.is_active:
-        flash('Asset is already checked in.', 'warning')
-        return redirect(url_for('view_asset', asset_id=asset_id))
-    loan.checked_in_at = now_mst()
-    loan.checked_in_by_user_id = current_user.id
-    asset = Asset.query.get(asset_id)
-    log_change(asset, current_user.username, 'checkin', f'Checked in from {loan.checked_out_to}')
-    db.session.commit()
-    flash(f'Asset checked in from {loan.checked_out_to}.', 'success')
-    return redirect(url_for('view_asset', asset_id=asset_id))
-
-
-# ── Software inventory (agent → server) ─────────────────────────────────────
-
-@app.route('/api/asset/<int:asset_id>/software', methods=['POST'])
-@license_required
-@require_api_key('agent')
-def api_update_software(asset_id):
-    """Agent POSTs full software inventory; replace existing records."""
-    asset = Asset.query.get_or_404(asset_id)
-    apps = request.get_json(silent=True) or []
-    InstalledApp.query.filter_by(asset_id=asset_id).delete()
-    now = now_mst()
-    for a in apps:
-        name = (a.get('name') or '').strip()
-        if not name:
-            continue
-        db.session.add(InstalledApp(
-            asset_id=asset_id,
-            name=name,
-            version=(a.get('version') or '').strip() or None,
-            publisher=(a.get('publisher') or '').strip() or None,
-            install_date=(a.get('install_date') or '').strip() or None,
-            recorded_at=now,
-        ))
-    db.session.commit()
-    return jsonify({'ok': True, 'count': len(apps)})
-
-
-@app.route('/api/rmm/<agent_id>/software', methods=['POST'])
-def rmm_update_software(agent_id):
-    """RMM agent POSTs software inventory via its agent_id + token (no user login needed)."""
-    token = request.args.get('token', '') or request.headers.get('X-Agent-Token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'error': 'Unauthorized'}), 401
-    # Look up the asset linked to this agent
-    row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
-        {'aid': agent_id}
-    ).fetchone()
-    if not row or not row[0]:
-        return jsonify({'error': 'No asset linked to this agent'}), 404
-    asset_id = row[0]
-    apps = request.get_json(silent=True) or []
-    InstalledApp.query.filter_by(asset_id=asset_id).delete()
-    now = now_mst()
-    inserted = 0
-    for a in apps:
-        name = (a.get('name') or '').strip()
-        if not name:
-            continue
-        db.session.add(InstalledApp(
-            asset_id=asset_id,
-            name=name,
-            version=(a.get('version') or '').strip() or None,
-            publisher=(a.get('publisher') or '').strip() or None,
-            install_date=(a.get('install_date') or '').strip() or None,
-            recorded_at=now,
-        ))
-        inserted += 1
-    db.session.commit()
-    return jsonify({'ok': True, 'count': inserted})
-
-
-# ── Global search ────────────────────────────────────────────────────────────
-
-@app.route('/search')
-@login_required
-@license_required
-def global_search():
-    q = (request.args.get('q') or '').strip()
-    if not q or len(q) < 2:
-        return render_template('search.html', q=q, assets=[], tickets=[], employees=[])
-    like = f'%{q}%'
-
-    from sqlalchemy import or_
-    assets = Asset.query.filter(or_(
-        Asset.asset_tag.ilike(like),
-        Asset.hostname.ilike(like),
-        Asset.make.ilike(like),
-        Asset.model.ilike(like),
-        Asset.serial_number.ilike(like),
-    )).limit(20).all()
-
-    tickets = SupportTicket.query.filter(or_(
-        SupportTicket.subject.ilike(like),
-        SupportTicket.description.ilike(like),
-        SupportTicket.reporter_name.ilike(like),
-        SupportTicket.reporter_email.ilike(like),
-        SupportTicket.hostname.ilike(like),
-        SupportTicket.asset_tag.ilike(like),
-    )).order_by(SupportTicket.created_at.desc()).limit(20).all()
-
-    try:
-        from models_employee import Employee
-        employees = Employee.query.filter(or_(
-            Employee.name.ilike(like),
-            Employee.email.ilike(like),
-            Employee.department.ilike(like),
-            Employee.job_title.ilike(like),
-        )).limit(20).all()
-    except Exception:
-        employees = []
-
-    return render_template('search.html', q=q, assets=assets, tickets=tickets, employees=employees)
-
-
-# ── Agent installer download ─────────────────────────────────────────────────
-
-@app.route('/download/agent-installer')
-@login_required
-@license_required
-def download_agent_installer():
-    """Serve the MSI installer (preferred) or PS1 fallback."""
-    import os
-    msi_path = os.path.join(app.root_path, 'rmm_agent', 'CirqueRMM.msi')
-    if os.path.exists(msi_path):
-        return send_file(msi_path, as_attachment=True, download_name='CirqueRMM.msi',
-                         mimetype='application/x-msi')
-    # Fallback to PS1 if MSI not built yet
-    ps1_path = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
-    if not os.path.exists(ps1_path):
-        return "Installer not found on server.", 404
-    return send_file(ps1_path, as_attachment=True, download_name='CirqueRMM-Install.ps1',
-                     mimetype='application/octet-stream')
-
-
-@app.route('/download/agent-ps1')
-@login_required
-@license_required
-def download_agent_ps1():
-    """Serve the raw PowerShell installer script directly."""
-    import os
-    path = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
-    if not os.path.exists(path):
-        return 'Script not found on server.', 404
-    return send_file(path, as_attachment=True, download_name='CirqueRMM-Install.ps1',
-                     mimetype='application/octet-stream')
-
-
-@app.route('/download/agent-file/<path:filename>')
-@login_required
-@license_required
-def download_agent_file(filename):
-    """Serve individual agent files for the installer (authenticated users only)."""
-    import os, posixpath
-    # Whitelist allowed files
-    allowed = {
-        'agent_client.py', 'agent_launcher.py', 'tray.py',
-        'requirements.txt', 'version.txt',
-        'cirque_icon_ico.b64', 'cirque_icon_png.b64',
-    }
-    # Sanitize filename to prevent path traversal
-    clean = posixpath.basename(filename)
-    if clean not in allowed:
-        return "File not available.", 404
-    path = os.path.join(app.root_path, 'rmm_agent', clean)
-    if not os.path.exists(path):
-        return f"{clean} not found on server.", 404
-    return send_file(path, as_attachment=False, mimetype='text/plain')
+def reopen_ticket(ticket_id):
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    if ticket.status != 'Open':
+        ticket.status = 'Open'
+        ticket.closed_at = None
+        ticket.closed_by_user_id = None
+        db.session.commit()
+    flash(f'Ticket #{ticket.id} reopened.', 'success')
+    return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
 
 @app.route('/api/support-tickets', methods=['POST'])
@@ -3685,11 +3244,11 @@ def api_create_support_ticket():
     if source not in ['api', 'tray']:
         source = 'api'
 
-    reporter_name  = (payload.get('reporter_name') or '').strip() or None
+    reporter_name = (payload.get('reporter_name') or '').strip() or None
     reporter_email = (payload.get('reporter_email') or '').strip() or None
-    hostname       = (payload.get('hostname') or '').strip() or None
-    asset_tag      = (payload.get('asset_tag') or '').strip() or None
-    asset_id       = payload.get('asset_id')
+    hostname = (payload.get('hostname') or '').strip() or None
+    asset_tag = (payload.get('asset_tag') or '').strip() or None
+    asset_id = payload.get('asset_id')
 
     asset = None
     if asset_id:
@@ -3701,7 +3260,7 @@ def api_create_support_ticket():
         asset = Asset.query.filter_by(asset_tag=asset_tag).first()
 
     if asset:
-        asset_id  = asset.id
+        asset_id = asset.id
         asset_tag = asset.asset_tag
         if not hostname:
             hostname = asset.name
@@ -3719,21 +3278,710 @@ def api_create_support_ticket():
         asset_id=asset_id,
         asset_tag=asset_tag,
         created_by_user_id=created_by_user_id,
-        created_at=now_mst(),
-        updated_at=now_mst(),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
     db.session.add(ticket)
-    db.session.flush()
-    _log_ticket_activity(ticket.id, 'created', f'Ticket submitted via {source}')
     db.session.commit()
 
-    if asset:
-        db.session.add(AssetHistory(
+    if asset and created_by_user_id:
+        history = AssetHistory(
             asset_id=asset.id,
             action='Ticket Created',
-            description=f'Support ticket #{ticket.id} created via {source}: {ticket.subject}',
-            user_id=created_by_user_id,
-        ))
+            description=f'Support ticket #{ticket.id} created via API: {ticket.subject}',
+            user_id=created_by_user_id
+        )
+        db.session.add(history)
+        db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'ticket_id': ticket.id,
+        'ticket_url': url_for('view_ticket', ticket_id=ticket.id, _external=True),
+        'status': ticket.status,
+    })
+
+
+# ==================== MONITORING PROFILES & CHECKS ====================
+
+@app.route('/monitoring')
+@login_required
+def monitoring_dashboard():
+    """Main monitoring dashboard showing all assets with profiles and current status"""
+    # Get all assets with their monitoring profiles
+    assets_query = db.session.query(
+        Asset.id,
+        Asset.name,
+        Asset.asset_tag,
+        Asset.category,
+        Asset.status,
+        Asset.os_version,
+        db.func.coalesce(MonitoringProfile.name, 'Not Assigned').label('profile_name'),
+        db.func.coalesce(MonitoringProfile.id, None).label('profile_id'),
+        db.func.coalesce(MonitoringProfile.device_type, 'Unknown').label('device_type')
+    ).outerjoin(
+        AssetMonitoringProfile, Asset.id == AssetMonitoringProfile.c.asset_id
+    ).outerjoin(
+        MonitoringProfile, AssetMonitoringProfile.c.profile_id == MonitoringProfile.id
+    ).all()
+    
+    assets = []
+    for a in assets_query:
+        assets.append({
+            'id': a.id,
+            'name': a.name,
+            'asset_tag': a.asset_tag,
+            'category': a.category,
+            'status': a.status,
+            'os_version': a.os_version,
+            'profile_name': a.profile_name,
+            'profile_id': a.profile_id,
+            'device_type': a.device_type,
+            'has_profile': a.profile_id is not None
+        })
+    
+    # Get all profiles for assignment dropdown
+    profiles = MonitoringProfile.query.filter_by(enabled=True).order_by(MonitoringProfile.name).all()
+    
+    # Get active alerts count
+    active_alerts = db.session.query(db.func.count(MonitoringAlert.id)).filter_by(status='active').scalar() or 0
+    
+    # Get profile assignment stats
+    total_assets = len(assets)
+    assigned_assets = sum(1 for a in assets if a['has_profile'])
+    unassigned_assets = total_assets - assigned_assets
+    
+    return render_template('monitoring_dashboard.html',
+                         assets=assets,
+                         profiles=profiles,
+                         active_alerts=active_alerts,
+                         total_assets=total_assets,
+                         assigned_assets=assigned_assets,
+                         unassigned_assets=unassigned_assets)
+
+
+@app.route('/monitoring/profiles')
+@login_required
+def monitoring_profiles():
+    """View all monitoring profiles and their checks"""
+    profiles = MonitoringProfile.query.order_by(MonitoringProfile.name).all()
+    
+    profiles_data = []
+    for profile in profiles:
+        # Count checks for this profile
+        check_count = db.session.query(db.func.count(ProfileCheck.c.check_id)).filter(
+            ProfileCheck.c.profile_id == profile.id
+        ).scalar() or 0
+        
+        # Count assets using this profile
+        asset_count = db.session.query(db.func.count(AssetMonitoringProfile.c.asset_id)).filter(
+            AssetMonitoringProfile.c.profile_id == profile.id
+        ).scalar() or 0
+        
+        profiles_data.append({
+            'profile': profile,
+            'check_count': check_count,
+            'asset_count': asset_count
+        })
+    
+    return render_template('monitoring_profiles.html', profiles=profiles_data)
+
+
+@app.route('/monitoring/profile/<int:profile_id>')
+@login_required
+def monitoring_profile_detail(profile_id):
+    """View details of a specific monitoring profile including all checks"""
+    profile = MonitoringProfile.query.get_or_404(profile_id)
+    
+    # Get all checks for this profile with their parameters
+    checks_query = db.session.query(
+        MonitoringCheck,
+        ProfileCheck.c.enabled,
+        ProfileCheck.c.check_interval_override,
+        ProfileCheck.c.warning_threshold,
+        ProfileCheck.c.critical_threshold,
+        ProfileCheck.c.parameters
+    ).join(
+        ProfileCheck, MonitoringCheck.id == ProfileCheck.c.check_id
+    ).filter(
+        ProfileCheck.c.profile_id == profile_id
+    ).order_by(MonitoringCheck.name).all()
+    
+    checks = []
+    for check, enabled, interval, warning, critical, parameters in checks_query:
+        checks.append({
+            'check': check,
+            'enabled': enabled,
+            'interval_override': interval,
+            'warning_threshold': warning,
+            'critical_threshold': critical,
+            'parameters': parameters
+        })
+    
+    # Get assets using this profile
+    assets = db.session.query(Asset).join(
+        AssetMonitoringProfile, Asset.id == AssetMonitoringProfile.c.asset_id
+    ).filter(
+        AssetMonitoringProfile.c.profile_id == profile_id
+    ).all()
+    
+    return render_template('monitoring_profile_detail.html',
+                         profile=profile,
+                         checks=checks,
+                         assets=assets)
+
+@app.route('/agent/download')
+def agent_download():
+    """Serve the Linux agent Python script for download"""
+    agent_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'agent.py')
+    return send_file(agent_path, as_attachment=True, download_name='cirque-rmm-agent')
+
+@app.route('/agent/install.sh')
+def agent_install_script():
+    """Serve the agent installer script"""
+    script_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'install.sh')
+    return send_file(script_path, mimetype='text/x-shellscript')
+
+@app.route('/agent/service')
+def agent_service_file():
+    """Serve the systemd service file"""
+    service_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'cirque-rmm-agent.service')
+    return send_file(service_path, mimetype='text/plain')
+
+
+@app.route('/monitoring/assign/<int:asset_id>', methods=['POST'])
+@login_required
+def monitoring_assign_profile(asset_id):
+    """Assign a monitoring profile to an asset"""
+    asset = Asset.query.get_or_404(asset_id)
+    profile_id = request.form.get('profile_id')
+    
+    if not profile_id:
+        flash('Please select a monitoring profile', 'warning')
+        return redirect(request.referrer or url_for('monitoring_dashboard'))
+    
+    profile = MonitoringProfile.query.get_or_404(profile_id)
+    
+    try:
+        # Remove existing profile assignment if any
+        db.session.execute(
+            AssetMonitoringProfile.delete().where(
+                AssetMonitoringProfile.c.asset_id == asset_id
+            )
+        )
+        
+        # Insert new assignment
+        db.session.execute(
+            AssetMonitoringProfile.insert().values(
+                asset_id=asset_id,
+                profile_id=profile_id,
+                assigned_by=current_user.id
+            )
+        )
+        
+        db.session.commit()
+        flash(f'Monitoring profile "{profile.name}" assigned to {asset.name}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error assigning monitoring profile: {str(e)}')
+        flash('Error assigning monitoring profile', 'danger')
+    
+    return redirect(request.referrer or url_for('monitoring_dashboard'))
+
+
+@app.route('/monitoring/unassign/<int:asset_id>', methods=['POST'])
+@login_required
+def monitoring_unassign_profile(asset_id):
+    """Remove monitoring profile from an asset"""
+    asset = Asset.query.get_or_404(asset_id)
+    
+    try:
+        db.session.execute(
+            AssetMonitoringProfile.delete().where(
+                AssetMonitoringProfile.c.asset_id == asset_id
+            )
+        )
+        db.session.commit()
+        flash(f'Monitoring profile removed from {asset.name}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error removing monitoring profile: {str(e)}')
+        flash('Error removing monitoring profile', 'danger')
+    
+    return redirect(request.referrer or url_for('monitoring_dashboard'))
+
+
+@app.route('/monitoring/alerts')
+@login_required
+def monitoring_alerts():
+    """View all monitoring alerts"""
+    status_filter = request.args.get('status', 'active')
+    severity_filter = request.args.get('severity', '')
+    
+    query = MonitoringAlert.query
+    
+    if status_filter and status_filter != 'all':
+        query = query.filter_by(status=status_filter)
+    
+    if severity_filter:
+        query = query.filter_by(severity=severity_filter)
+    
+    alerts = query.order_by(MonitoringAlert.triggered_at.desc()).limit(500).all()
+    
+    # Get alert statistics
+    stats = {
+        'active': db.session.query(db.func.count(MonitoringAlert.id)).filter_by(status='active').scalar() or 0,
+        'acknowledged': db.session.query(db.func.count(MonitoringAlert.id)).filter_by(status='acknowledged').scalar() or 0,
+        'resolved': db.session.query(db.func.count(MonitoringAlert.id)).filter_by(status='resolved').scalar() or 0,
+        'critical': db.session.query(db.func.count(MonitoringAlert.id)).filter(
+            MonitoringAlert.status == 'active',
+            MonitoringAlert.severity == 'critical'
+        ).scalar() or 0,
+        'warning': db.session.query(db.func.count(MonitoringAlert.id)).filter(
+            MonitoringAlert.status == 'active',
+            MonitoringAlert.severity == 'warning'
+        ).scalar() or 0
+    }
+    
+    return render_template('monitoring_alerts.html',
+                         alerts=alerts,
+                         stats=stats,
+                         status_filter=status_filter,
+                         severity_filter=severity_filter)
+
+
+@app.route('/monitoring/alert/<int:alert_id>/acknowledge', methods=['POST'])
+@login_required
+def monitoring_acknowledge_alert(alert_id):
+    """Acknowledge a monitoring alert"""
+    alert = MonitoringAlert.query.get_or_404(alert_id)
+    
+    try:
+        alert.status = 'acknowledged'
+        alert.acknowledged_at = datetime.utcnow()
+        alert.acknowledged_by = current_user.username
+        db.session.commit()
+        flash('Alert acknowledged', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error acknowledging alert: {str(e)}')
+        flash('Error acknowledging alert', 'danger')
+    
+    return redirect(request.referrer or url_for('monitoring_alerts'))
+
+
+@app.route('/monitoring/alert/<int:alert_id>/resolve', methods=['POST'])
+@login_required
+def monitoring_resolve_alert(alert_id):
+    """Resolve a monitoring alert"""
+    alert = MonitoringAlert.query.get_or_404(alert_id)
+    resolution_notes = request.form.get('resolution_notes', '')
+    
+    try:
+        alert.status = 'resolved'
+        alert.resolved_at = datetime.utcnow()
+        alert.resolved_by = current_user.username
+        alert.resolution_notes = resolution_notes
+        db.session.commit()
+        flash('Alert resolved', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error resolving alert:{str(e)}')
+        flash('Error resolving alert', 'danger')
+    
+    return redirect(request.referrer or url_for('monitoring_alerts'))
+
+
+@app.route('/monitoring/maintenance-windows')
+@login_required
+def monitoring_maintenance_windows():
+    """View and manage maintenance windows"""
+    windows = MaintenanceWindow.query.order_by(MaintenanceWindow.day_of_week, MaintenanceWindow.start_time).all()
+    
+    return render_template('monitoring_maintenance_windows.html', windows=windows)
+
+
+# ==================== PROXMOX / BACKUPS ====================
+
+@app.route('/backups')
+@login_required
+@admin_required
+def backups():
+    """Proxmox backup & ZFS health dashboard."""
+    from proxmox_service import _get_setting
+
+    stale_hours = int(_get_setting(Setting, 'proxmox_stale_hours', '26') or '26')
+
+    pools = ProxmoxZfsPool.query.order_by(
+        ProxmoxZfsPool.server, ProxmoxZfsPool.node, ProxmoxZfsPool.pool_name
+    ).all()
+
+    jobs = ProxmoxBackupJob.query.order_by(
+        ProxmoxBackupJob.node, ProxmoxBackupJob.vm_name
+    ).all()
+
+    cluster_configured = bool(
+        Setting.query.filter_by(key='proxmox_cluster_host').first()
+        and (Setting.query.filter_by(key='proxmox_cluster_host').first().value or '').strip()
+    )
+
+    last_sync_row = Setting.query.filter_by(key='proxmox_last_sync').first()
+    last_sync = last_sync_row.value if last_sync_row else None
+
+    summary = {
+        'total_pools': len(pools),
+        'degraded_pools': sum(1 for p in pools if p.health not in ('ONLINE', 'AVAILABLE')),
+        'critical_pools': sum(1 for p in pools if p.percent_used and p.percent_used >= 80),
+        'total_vms': len(jobs),
+        'ok_vms': sum(1 for j in jobs if j.backup_status == 'ok'),
+        'stale_vms': sum(1 for j in jobs if j.backup_status == 'stale'),
+        'missing_vms': sum(1 for j in jobs if j.backup_status == 'missing'),
+    }
+
+    return render_template(
+        'backups.html',
+        pools=pools, jobs=jobs,
+        summary=summary,
+        stale_hours=stale_hours,
+        cluster_configured=cluster_configured,
+        last_sync=last_sync,
+        now=datetime.utcnow(),
+    )
+
+
+@app.route('/api/proxmox/sync', methods=['POST'])
+@login_required
+@admin_required
+def api_proxmox_sync():
+    """Trigger a manual Proxmox sync."""
+    from proxmox_service import sync_proxmox
+    try:
+        result = sync_proxmox(app, db, ProxmoxBackupJob, ProxmoxZfsPool,
+                              Setting, MonitoringAlert)
+        # Record last sync time
+        row = Setting.query.filter_by(key='proxmox_last_sync').first()
+        if row is None:
+            row = Setting(key='proxmox_last_sync')
+            db.session.add(row)
+        row.value = datetime.utcnow().isoformat()
+        db.session.commit()
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.exception('Proxmox manual sync failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/proxmox/test', methods=['POST'])
+@login_required
+@admin_required
+def api_proxmox_test():
+    """Test connection to configured Proxmox host(s)."""
+    from proxmox_service import test_proxmox_connection
+    data = request.get_json(silent=True) or {}
+    prefix = data.get('prefix', 'cluster')
+    if prefix not in ('cluster', 'backup'):
+        return jsonify({'success': False, 'error': 'Invalid prefix'}), 400
+    result = test_proxmox_connection(Setting, prefix)
+    return jsonify(result)
+
+
+@app.route('/api/proxmox/settings', methods=['POST'])
+@login_required
+@admin_required
+def api_proxmox_settings():
+    """Save Proxmox settings."""
+    data = request.get_json(silent=True) or {}
+    allowed_keys = {
+        'proxmox_cluster_host', 'proxmox_cluster_port',
+        'proxmox_cluster_token_id', 'proxmox_cluster_token_secret',
+        'proxmox_cluster_verify_ssl',
+        'proxmox_backup_host', 'proxmox_backup_port',
+        'proxmox_backup_token_id', 'proxmox_backup_token_secret',
+        'proxmox_backup_verify_ssl',
+        'proxmox_stale_hours',
+    }
+    saved = []
+    for key, value in data.items():
+        if key not in allowed_keys:
+            continue
+        row = Setting.query.filter_by(key=key).first()
+        if row is None:
+            row = Setting(key=key, value=str(value))
+            db.session.add(row)
+        else:
+            row.value = str(value)
+        saved.append(key)
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'saved': saved})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== SSH TERMINAL ====================
+
+from ssh_terminal_manager import get_ssh_manager
+
+@app.route('/terminal/<int:asset_id>')
+@login_required
+def terminal(asset_id):
+    """Web-based SSH terminal for an asset"""
+    asset = Asset.query.get_or_404(asset_id)
+    return render_template('terminal.html', asset=asset)
+
+@app.route('/api/terminal/connect', methods=['POST'])
+@login_required
+def api_terminal_connect():
+    """Connect to an asset via SSH"""
+    data = request.get_json()
+    
+    asset_id = data.get('asset_id')
+    username = data.get('username', 'root')
+    password = data.get('password')
+    
+    asset = Asset.query.get_or_404(asset_id)
+    
+    # Generate session ID
+    import uuid
+    session_id = f"{current_user.id}:{asset_id}:{str(uuid.uuid4())[:8]}"
+    
+    # Create SSH session
+    ssh_manager = get_ssh_manager()
+    session = ssh_manager.create_session(
+        session_id=session_id,
+        hostname=asset.ip_address_1,
+        username=username,
+        password=password,
+        port=22
+    )
+    
+    if session:
+        return jsonify({
+            'success': True,
+            'session_id': session_id
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Failed to connect'
+        }), 500
+
+@app.route('/api/terminal/input', methods=['POST'])
+@login_required
+def api_terminal_input():
+    """Send input to SSH session"""
+    data = request.get_json()
+    
+    session_id = data.get('session_id')
+    input_data = data.get('data', '')
+    
+    ssh_manager = get_ssh_manager()
+    session = ssh_manager.get_session(session_id)
+    
+    if not session:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+    
+    if session.send_input(input_data):
+        return jsonify({'success': True})
+    else:
+        return jsonify({'success': False, 'error': 'Failed to send input'}), 500
+
+@app.route('/api/terminal/output', methods=['POST'])
+@login_required
+def api_terminal_output():
+    """Get output from SSH session"""
+    data = request.get_json()
+    
+    session_id = data.get('session_id')
+    since_index = data.get('since_index', 0)
+    
+    ssh_manager = get_ssh_manager()
+    session = ssh_manager.get_session(session_id)
+    
+    if not session:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+    
+    output = session.get_output(since_index)
+    
+    return jsonify({
+        'success': True,
+        'output': output,
+        'index': since_index + len(output)
+    })
+
+@app.route('/api/terminal/disconnect', methods=['POST'])
+@login_required
+def api_terminal_disconnect():
+    """Disconnect SSH session"""
+    data = request.get_json()
+    
+    session_id = data.get('session_id')
+    
+    ssh_manager = get_ssh_manager()
+    if ssh_manager.close_session(session_id):
+        return jsonify({'success': True})
+    else:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+
+# ==================== LINUX AGENT API ====================
+
+@app.route('/api/linux-agent/heartbeat', methods=['POST'])
+def api_linux_agent_heartbeat():
+    """Receive heartbeat from Linux monitoring agent"""
+    # Check API key
+    api_key = request.headers.get('X-API-Key')
+    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+        return jsonify({'success': False, 'error': 'Invalid API key'}), 401
+    
+    data = request.get_json()
+    
+    try:
+        agent_id = data.get('agent_id')
+        asset_id = data.get('asset_id')
+        system_info = data.get('system_info', {})
+        metrics = data.get('metrics', {})
+        disks = data.get('disks', [])
+        services_running = data.get('services_running', 0)
+        updates = data.get('updates', {})
+        
+        # Save heartbeat to database
+        cursor = db.session.execute(text("""
+            INSERT INTO linux_agent_heartbeat 
+            (agent_id, asset_id, system_info, metrics, disks, services_running, 
+             updates_available, security_updates, timestamp)
+            VALUES (:agent_id, :asset_id, :system_info, :metrics, :disks, 
+                    :services_running, :updates_available, :security_updates, :timestamp)
+        """), {
+            'agent_id': agent_id,
+            'asset_id': asset_id,
+            'system_info': json.dumps(system_info),
+            'metrics': json.dumps(metrics),
+            'disks': json.dumps(disks),
+            'services_running': services_running,
+            'updates_available': updates.get('available', 0),
+            'security_updates': updates.get('security', 0),
+            'timestamp': datetime.utcnow()
+        })
+        db.session.commit()
+        
+        # If asset_id provided, update last seen
+        if asset_id:
+            cursor = db.session.execute(text("""
+                UPDATE assets 
+                SET last_seen = :last_seen 
+                WHERE id = :asset_id
+            """), {
+                'last_seen': datetime.utcnow(),
+                'asset_id': asset_id
+            })
+            db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Heartbeat received',
+            'timestamp': datetime.utcnow().isoformat()
+        })
+    
+    except Exception as e:
+        print(f"Error processing agent heartbeat: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/linux-agent/checks', methods=['GET'])
+def api_linux_agent_checks():
+    """Get checks that Linux agent should execute"""
+    # Check API key
+    api_key = request.headers.get('X-API-Key')
+    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+        return jsonify({'success': False, 'error': 'Invalid API key'}), 401
+    
+    asset_id = request.args.get('asset_id')
+    if not asset_id:
+        return jsonify({'success': False, 'error': 'asset_id required'}), 400
+    
+    try:
+        # Get checks for this asset's profile
+        result = db.session.execute(text("""
+            SELECT 
+                mc.id, mc.name, mc.check_type, mc.check_command,
+                mc.warning_threshold, mc.critical_threshold, 
+                mc.check_interval_minutes
+            FROM monitoring_check mc
+            JOIN profile_check pc ON mc.id = pc.check_id
+            JOIN asset_monitoring_profile amp ON pc.profile_id = amp.profile_id
+            WHERE amp.asset_id = :asset_id AND mc.enabled = 1
+        """), {'asset_id': asset_id})
+        
+        checks = []
+        for row in result:
+            checks.append({
+                'id': row[0],
+                'name': row[1],
+                'type': row[2],
+                'command': row[3],
+                'warning_threshold': row[4],
+                'critical_threshold': row[5],
+                'interval_minutes': row[6]
+            })
+        
+        return jsonify({
+            'success': True,
+            'checks': checks
+        })
+    
+    except Exception as e:
+        print(f"Error getting agent checks: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/linux-agent/check-result', methods=['POST'])
+def api_linux_agent_check_result():
+    """Receive check result from Linux agent"""
+    # Check API key
+    api_key = request.headers.get('X-API-Key')
+    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+        return jsonify({'success': False, 'error': 'Invalid API key'}), 401
+    
+    data = request.get_json()
+    
+    try:
+        asset_id = data.get('asset_id')
+        check_id = data.get('check_id')
+        status = data.get('status')
+        value = data.get('value')
+        message = data.get('message')
+        
+        # Save check result
+        cursor = db.session.execute(text("""
+            INSERT INTO monitoring_check_result 
+            (asset_id, check_id, status, value, message, checked_at)
+            VALUES (:asset_id, :check_id, :status, :value, :message, :checked_at)
+        """), {
+            'asset_id': asset_id,
+            'check_id': check_id,
+            'status': status,
+            'value': str(value) if value is not None else None,
+            'message': message,
+            'checked_at': datetime.utcnow()
+        })
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Check result saved'
+        })
+    
+    except Exception as e:
+        print(f"Error saving check result: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== RMM AGENT DOWNLOAD ====================
+
+@app.route('/rmm/agent-download')
+@login_required
+@admin_required
+@license_required
 def rmm_agent_download():
     """Serve the RMM agent folder as a zip for admins to push to endpoints."""
     import zipfile
@@ -3741,8 +3989,7 @@ def rmm_agent_download():
     agent_dir = os.path.join(os.path.dirname(__file__), 'rmm_agent')
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for fname in ['agent_launcher.py', 'agent_client.py', 'requirements.txt',
-                       'install_service.ps1', 'agent_repair.ps1', 'README.md']:
+        for fname in ['agent_client.py', 'requirements.txt', 'install_service.ps1', 'README.md']:
             fpath = os.path.join(agent_dir, fname)
             if os.path.exists(fpath):
                 zf.write(fpath, arcname=fname)
@@ -3781,7 +4028,7 @@ def rmm_agent_version():
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
 
-    import hashlib, ast as _ast
+    import hashlib
     agent_dir = os.path.join(os.path.dirname(__file__), 'rmm_agent')
     version_path = os.path.join(agent_dir, 'version.txt')
     agent_path = os.path.join(agent_dir, 'agent_client.py')
@@ -3792,15 +4039,7 @@ def rmm_agent_version():
 
     checksum = ''
     if os.path.exists(agent_path):
-        raw = open(agent_path, 'rb').read()
-        # Only advertise a new checksum if the file is syntax-valid.
-        # If it has errors, return a dummy checksum so agents don't update.
-        try:
-            _ast.parse(raw)
-            checksum = hashlib.sha256(raw).hexdigest()
-        except SyntaxError:
-            # Corrupt/in-progress file — do not serve it
-            return jsonify({'version': version, 'checksum': '', 'error': 'agent file has syntax error'}), 200
+        checksum = hashlib.sha256(open(agent_path, 'rb').read()).hexdigest()
 
     return jsonify({'version': version, 'checksum': checksum})
 
@@ -3808,65 +4047,36 @@ def rmm_agent_version():
 @app.route('/rmm/agent/file')
 def rmm_agent_file():
     """Serve agent_client.py for self-update. Authenticated by agent token."""
-    import ast as _ast
     agent_id = request.args.get('agent_id', '')
     token = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
 
     agent_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_client.py')
-    # Safety guard: never serve a file with syntax errors
-    try:
-        _ast.parse(open(agent_path, 'rb').read())
-    except SyntaxError as _e:
-        return jsonify({'error': f'agent_client.py has syntax error: {_e}'}), 503
     return send_file(agent_path, mimetype='text/x-python', as_attachment=False)
-
-
-@app.route('/rmm/agent/launcher')
-def rmm_agent_launcher():
-    """Serve agent_launcher.py (self-healing wrapper). Authenticated by agent token."""
-    agent_id = request.args.get('agent_id', '')
-    token    = request.args.get('token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'error': 'Unauthorized'}), 401
-    launcher_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_launcher.py')
-    return send_file(launcher_path, mimetype='text/x-python', as_attachment=False)
-
-
-@app.route('/rmm/agent/repair')
-def rmm_agent_repair():
-    """Serve agent_repair.ps1. Authenticated by agent token."""
-    agent_id = request.args.get('agent_id', '')
-    token    = request.args.get('token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'error': 'Unauthorized'}), 401
-    repair_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_repair.ps1')
-    return send_file(repair_path, mimetype='text/plain', as_attachment=False)
-
-
-@app.route('/rmm/agent/tray')
-def rmm_agent_tray():
-    """Serve tray.py to authenticated agents."""
-    agent_id = request.args.get('agent_id', '')
-    token    = request.args.get('token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'error': 'Unauthorized'}), 401
-    tray_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'tray.py')
-    if not os.path.isfile(tray_path):
-        return jsonify({'error': 'tray.py not found on server'}), 404
-    return send_file(tray_path, mimetype='text/x-python', as_attachment=False)
 
 
 @app.route('/api/rmm/agent-status/<agent_id>')
 @login_required
 def api_rmm_agent_status(agent_id):
-    """Proxy the gateway /status/<agent_id> so the browser doesn't need direct access."""
+    """Proxy the gateway /status/<agent_id>, falling back to DB last_seen_at recency."""
     try:
         resp = requests.get(f'{RMM_GATEWAY_INTERNAL}/status/{agent_id}', timeout=3)
-        return jsonify(resp.json())
-    except Exception as e:
-        return jsonify({'agent_id': agent_id, 'online': False, 'error': str(e)})
+        data = resp.json()
+        if data.get('online'):
+            return jsonify(data)
+    except Exception:
+        pass
+    # Gateway doesn't have a live WS for HTTP-based agents — check DB freshness instead
+    row = db.session.execute(
+        text("SELECT last_seen_at FROM rmm_agent WHERE agent_id = :aid AND enabled = 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if row and row[0]:
+        last = datetime.fromisoformat(str(row[0]))
+        online = (datetime.utcnow() - last).total_seconds() < 300  # 5-minute window
+        return jsonify({'agent_id': agent_id, 'online': online, 'source': 'db'})
+    return jsonify({'agent_id': agent_id, 'online': False})
 
 
 @app.route('/api/rmm/issue-token', methods=['POST'])
@@ -3879,7 +4089,7 @@ def api_rmm_issue_token():
         return jsonify({'error': 'agent_id required'}), 400
 
     token = 'rct_' + secrets.token_urlsafe(32)
-    expires_at = (now_mst() + timedelta(minutes=5)).isoformat(timespec='seconds')
+    expires_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat(timespec='seconds')
 
     db.session.execute(text(
         "INSERT INTO rmm_connect_token (token, agent_id, user_id, expires_at) VALUES (:t, :a, :u, :e)"
@@ -3932,46 +4142,9 @@ def api_rmm_telemetry(agent_id):
         d['network_json'] = _json.loads(d.get('network_json') or '[]')
     except Exception:
         d['network_json'] = []
-    try:
-        d['security'] = _json.loads(d.get('security_json') or '{}')
-    except Exception:
-        d['security'] = {}
-    try:
-        d['gpu'] = _json.loads(d.get('gpu_json') or '[]')
-    except Exception:
-        d['gpu'] = []
-    try:
-        d['sysinfo'] = _json.loads(d.get('sysinfo_json') or '{}')
-    except Exception:
-        d['sysinfo'] = {}
     return jsonify({'ok': True, 'telemetry': d})
 
 
-@app.route('/api/rmm/last-scan/<agent_id>', methods=['POST'])
-@login_required
-def api_rmm_last_scan(agent_id):
-    """Persist the last AV scan time into security_json."""
-    import json as _json
-    data = request.get_json(force=True) or {}
-    scan_type = data.get('scan_type', 'quick')
-    scan_time = data.get('scan_time', '')
-    row = db.session.execute(
-        text("SELECT security_json FROM rmm_telemetry WHERE agent_id = :aid"),
-        {'aid': agent_id}
-    ).fetchone()
-    if not row:
-        return jsonify({'ok': False, 'error': 'No telemetry row'}), 404
-    try:
-        sec = _json.loads(row[0] or '{}')
-    except Exception:
-        sec = {}
-    sec['last_scan'] = {'type': scan_type, 'time': scan_time}
-    db.session.execute(
-        text("UPDATE rmm_telemetry SET security_json = :sj WHERE agent_id = :aid"),
-        {'sj': _json.dumps(sec), 'aid': agent_id}
-    )
-    db.session.commit()
-    return jsonify({'ok': True})
 
 
 # ── Eagle Eyes ────────────────────────────────────────────────────────────────
@@ -4594,401 +4767,200 @@ def api_rmm_screenshot_latest(agent_id):
         return jsonify({'ok': False, 'error': 'No screenshot yet'}), 404
     return jsonify({
         'ok': True,
-        'screenshot': {
-            'id': row[0],
-            'image_b64': row[1],
-            'format': row[2],
-            'width': row[3],
-            'height': row[4],
-            'captured_at': row[5],
-        },
+        'id': row[0],
+        'image_b64': row[1],
+        'format': row[2],
+        'width': row[3],
+        'height': row[4],
+        'captured_at': row[5],
     })
 
 
-@app.route('/api/rmm/metrics-history/<agent_id>')
-@login_required
-def api_rmm_metrics_history(agent_id):
-    """Return CPU/RAM history for the last N hours (default 24)."""
-    hours = int(request.args.get('hours', 24))
-    rows = db.session.execute(
-        text("""SELECT recorded_at, cpu_percent, memory_percent
-                FROM rmm_metrics_history
-                WHERE agent_id = :aid
-                  AND recorded_at >= datetime('now', :delta)
-                ORDER BY recorded_at ASC"""),
-        {'aid': agent_id, 'delta': f'-{hours} hours'}
-    ).fetchall()
-    return jsonify({
-        'ok': True,
-        'hours': hours,
-        'data': [{'ts': r[0], 'cpu': r[1], 'ram': r[2]} for r in rows],
-    })
+# ==================== RMM AGENT DATA SYNC ====================
 
-
-@app.route('/api/rmm/availability/<agent_id>')
-@login_required
-def api_rmm_availability(agent_id):
-    """Return recent online/offline events for an agent."""
-    limit = int(request.args.get('limit', 100))
-    rows = db.session.execute(
-        text("""SELECT event, recorded_at
-                FROM rmm_availability
-                WHERE agent_id = :aid
-                ORDER BY recorded_at DESC
-                LIMIT :lim"""),
-        {'aid': agent_id, 'lim': limit}
-    ).fetchall()
-    return jsonify({
-        'ok': True,
-        'events': [{'event': r[0], 'ts': r[1]} for r in rows],
-    })
-
-
-@app.route('/api/rmm/patches/<agent_id>')
-@login_required
-def api_rmm_patches(agent_id):
-    """Return installed Windows hotfixes for an agent."""
-    rows = db.session.execute(
-        text("""SELECT hotfix_id, description, installed_on
-                FROM rmm_patch
-                WHERE agent_id = :aid
-                ORDER BY installed_on DESC"""),
-        {'aid': agent_id}
-    ).fetchall()
-    return jsonify({
-        'ok': True,
-        'count': len(rows),
-        'patches': [{'id': r[0], 'description': r[1], 'installed_on': r[2]} for r in rows],
-    })
-
-
-@app.route('/api/rmm/pending-updates/<agent_id>')
-@login_required
-def api_rmm_pending_updates(agent_id):
-    """List available (not yet installed) Windows Updates reported by the agent."""
-    rows = db.session.execute(
-        text("""SELECT update_id, title, kb_ids, severity, size_mb,
-                       reboot_required, category, recorded_at
-                FROM rmm_pending_update
-                WHERE agent_id = :aid
-                ORDER BY
-                    CASE severity
-                        WHEN 'Critical'  THEN 1 WHEN 'Important' THEN 2
-                        WHEN 'Moderate'  THEN 3 WHEN 'Low'       THEN 4 ELSE 5
-                    END, title"""),
-        {'aid': agent_id}
-    ).fetchall()
-    import json as _json
-    return jsonify({
-        'ok': True,
-        'count': len(rows),
-        'updates': [{
-            'update_id':       r[0], 'title':    r[1],
-            'kb_ids':          _json.loads(r[2] or '[]'),
-            'severity':        r[3], 'size_mb':  r[4],
-            'reboot_required': bool(r[5]),
-            'category':        r[6], 'recorded_at': r[7],
-        } for r in rows],
-    })
-
-
-@app.route('/api/rmm/session-events/<agent_id>')
-@login_required
-def api_rmm_session_events(agent_id):
-    """Return session activity events (logon/logoff/lock/unlock/sleep/wake) for an agent."""
-    from rmm_gateway.db import get_session_events
-    days = request.args.get('days', 7, type=int)
-    events = get_session_events(agent_id, min(days, 90))
-    return jsonify({'ok': True, 'events': events})
-
-
-@app.route('/api/rmm/software/<agent_id>')
-@login_required
-def api_rmm_software(agent_id):
-    """Return installed software inventory for an agent."""
-    from rmm_gateway.db import get_software
-    software = get_software(agent_id)
-    return jsonify({'ok': True, 'software': software, 'count': len(software)})
-
-
-@app.route('/api/rmm/patch-jobs/<agent_id>', methods=['GET'])
-@login_required
-def api_rmm_patch_jobs_get(agent_id):
-    """List patch deployment jobs for an agent."""
-    import json as _json
-    rows = db.session.execute(
-        text("""SELECT id, update_ids, kb_ids, titles, status,
-                       approved_by, approved_at, deployed_at, completed_at,
-                       result_json, reboot_required, created_at, updated_at
-                FROM rmm_patch_job
-                WHERE agent_id = :aid
-                ORDER BY id DESC LIMIT 30"""),
-        {'aid': agent_id}
-    ).fetchall()
-    return jsonify({
-        'ok': True,
-        'jobs': [{
-            'id':              r[0],
-            'update_ids':      _json.loads(r[1] or '[]'),
-            'kb_ids':          _json.loads(r[2] or '[]'),
-            'titles':          _json.loads(r[3] or '[]'),
-            'status':          r[4],
-            'approved_by':     r[5],
-            'approved_at':     r[6],
-            'deployed_at':     r[7],
-            'completed_at':    r[8],
-            'result':          _json.loads(r[9]) if r[9] else None,
-            'reboot_required': bool(r[10]),
-            'created_at':      r[11],
-            'updated_at':      r[12],
-        } for r in rows],
-    })
-
-
-@app.route('/api/rmm/patch-jobs/<agent_id>', methods=['POST'])
-@login_required
-def api_rmm_patch_jobs_create(agent_id):
-    """Approve a set of pending updates, creating a queued patch job."""
-    import json as _json
-    data       = request.get_json() or {}
-    update_ids = data.get('update_ids') or []
-    kb_ids     = data.get('kb_ids') or []
-    titles     = data.get('titles') or []
-    if not update_ids:
-        return jsonify({'ok': False, 'error': 'update_ids required'}), 400
-    db.session.execute(
-        text("""INSERT INTO rmm_patch_job
-                    (agent_id, update_ids, kb_ids, titles, status, approved_by, approved_at)
-                VALUES (:aid, :uids, :kbids, :titles, 'queued', :uid, datetime('now', '-7 hours'))"""),
-        {
-            'aid':    agent_id,
-            'uids':   _json.dumps(update_ids),
-            'kbids':  _json.dumps(kb_ids),
-            'titles': _json.dumps(titles),
-            'uid':    current_user.id if hasattr(current_user, 'id') else None,
-        }
-    )
-    db.session.commit()
-    job_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
-    return jsonify({'ok': True, 'job_id': job_id})
-
-
-@app.route('/api/rmm/cmd/<agent_id>', methods=['POST'])
-@login_required
-def api_rmm_cmd(agent_id):
-    """Proxy any JSON message to the connected agent via gateway send-msg."""
-    import json as _json, urllib.request as _req, urllib.error as _err
-    data = request.get_json(force=True) or {}
-    session_id = data.get('session_id') or 0
-    if not session_id:
-        try:
-            res = db.session.execute(
-                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, datetime('now', '-7 hours'))"),
-                {'aid': None, 'uid': current_user.id, 'reason': data.get('type', 'cmd')}
+@app.route('/api/rmm/system-info', methods=['POST'])
+def receive_system_info():
+    """Receive system info from Linux agent and update asset record"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'agent_id' not in data:
+            return jsonify({'ok': False, 'error': 'Missing agent_id'}), 400
+        
+        agent_id = data['agent_id']
+        hostname = data.get('hostname', 'Unknown')
+        
+        # Find asset by agent_id (stored in serial_number) or by hostname
+        asset = Asset.query.filter(
+            (Asset.serial_number == agent_id) | 
+            (Asset.name.ilike(f'%{hostname}%'))
+        ).first()
+        
+        if not asset:
+            # Create new asset from agent data
+            asset = Asset(
+                asset_tag=f'LINUX-{agent_id[:8].upper()}',
+                name=hostname,
+                category='Server' if 'server' in hostname.lower() else 'Workstation',
+                device_type='Virtual Machine' if data.get('virtualization', {}).get('is_virtual') else 'Linux Workstation',
+                status='In Use'
             )
-            db.session.commit()
-            session_id = res.lastrowid
-        except Exception:
-            session_id = 0
-    data['session_id'] = session_id
-    payload = _json.dumps(data).encode()
-    try:
-        req = _req.Request(
-            f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
-            data=payload, headers={'Content-Type': 'application/json'}, method='POST')
-        with _req.urlopen(req, timeout=10) as resp:
-            result = _json.loads(resp.read())
-        if not result.get('ok'):
-            return jsonify({'ok': False, 'session_id': session_id, 'error': result.get('error', 'Gateway error')}), 502
-    except Exception as e:
-        return jsonify({'ok': False, 'session_id': session_id, 'error': str(e)}), 502
-    return jsonify({'ok': True, 'session_id': session_id})
-
-
-@app.route('/api/rmm/cmd-result/<agent_id>/<int:session_id>')
-@login_required
-def api_rmm_cmd_result(agent_id, session_id):
-    """Poll for latest agent response in rmm_event for a given session."""
-    import json as _json
-    row = db.session.execute(
-        text("""SELECT event_type, data_json, created_at
-                FROM rmm_event WHERE session_id = :sid AND actor_type = 'agent'
-                ORDER BY id DESC LIMIT 1"""),
-        {'sid': session_id}
-    ).fetchone()
-    if not row:
-        return jsonify({'ok': False, 'ready': False})
-    try:
-        data = _json.loads(row[1] or '{}')
-    except Exception:
-        data = {}
-    return jsonify({'ok': True, 'ready': True, 'event_type': row[0], 'data': data, 'created_at': row[2]})
-
-
-@app.route('/api/rmm/deploy-rustdesk/<agent_id>', methods=['POST'])
-@login_required
-@manager_required
-def api_rmm_deploy_rustdesk(agent_id):
-    """Send a PowerShell script to the agent to install RustDesk via winget
-    and configure it to use the internal relay server."""
-    import json as _json, urllib.request as _req
-
-    # Find the linked asset so we can update rustdesk_id after install
-    row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
-        {'aid': agent_id}
-    ).fetchone()
-    if not row:
-        return jsonify({'ok': False, 'error': 'agent not found'}), 404
-
-    server   = 'rust.corp.cirque.com'
-    key      = 's18RB+OV0ctX3SuOIcXy6EeYqA+Elx25RODTGYBnyV8='
-
-    # PowerShell: install RustDesk silently, then write server config
-    ps = r"""
-$ErrorActionPreference = 'Stop'
-Write-Host 'Installing RustDesk via winget...'
-try {
-    winget install --id RustDesk.RustDesk --silent --accept-source-agreements --accept-package-agreements 2>&1
-} catch { Write-Host "winget error: $_" }
-
-Start-Sleep -Seconds 5
-
-$cfg2 = @"
-rendezvous_server = '{server}'
-nat_type = 1
-serial = 0
-
-[options]
-custom-rendezvous-server = '{server}'
-key = '{key}'
-relay-server = ''
-api-server = ''
-"@
-
-# Write config for current user and for SYSTEM (service)
-$paths = @(
-    "$env:APPDATA\RustDesk\config",
-    "$env:ProgramData\RustDesk\config",
-    "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config",
-    "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
-)
-foreach ($dir in $paths) {
-    try {
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $cfg2 | Set-Content -Path "$dir\RustDesk2.toml" -Encoding UTF8 -Force
-        Write-Host "Wrote config to $dir"
-    } catch { Write-Host "Skipped $dir: $_" }
-}
-
-# Restart RustDesk service if running
-try {
-    $svc = Get-Service -Name 'RustDesk' -ErrorAction SilentlyContinue
-    if ($svc) { Restart-Service -Name 'RustDesk' -Force; Write-Host 'RustDesk service restarted' }
-} catch { Write-Host "Service restart: $_" }
-
-# Start RustDesk briefly to trigger peer ID generation, then close it
-try {
-    $rd = "$env:ProgramFiles\RustDesk\RustDesk.exe"
-    if (-not (Test-Path $rd)) { $rd = "${env:ProgramFiles(x86)}\RustDesk\RustDesk.exe" }
-    if (Test-Path $rd) {
-        Start-Process $rd --minimized -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 8
-        Stop-Process -Name 'RustDesk' -ErrorAction SilentlyContinue
-    }
-} catch { Write-Host "RustDesk launch: $_" }
-
-# Read and report the peer ID so the tracker can store it
-try {
-    $tomlPaths = @(
-        "$env:APPDATA\RustDesk\config\RustDesk.toml",
-        "$env:ProgramData\RustDesk\config\RustDesk.toml",
-        "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config\RustDesk.toml"
-    )
-    foreach ($tp in $tomlPaths) {
-        if (Test-Path $tp) {
-            $raw = Get-Content $tp -Raw -ErrorAction SilentlyContinue
-            if ($raw -match '(?m)^id\s*=\s*(\S+)') {
-                Write-Host "RUSTDESK_ID=$($Matches[1].Trim())"
-                break
-            }
-        }
-    }
-} catch { Write-Host "ID read: $_" }
-
-Write-Host 'Done.'
-""".replace('{server}', server).replace('{key}', key)
-
-    try:
-        session_row = db.session.execute(
-            text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, 'Deploy RustDesk', datetime('now','-7 hours'))"),
-            {'aid': row[0], 'uid': current_user.id}
-        )
+            db.session.add(asset)
+        
+        # Update asset with system info
+        os_info = data.get('os', {})
+        cpu_info = data.get('cpu', {})
+        mem_info = data.get('memory', {})
+        virt_info = data.get('virtualization', {})
+        network_info = data.get('network', [])
+        
+        asset.operating_system = os_info.get('pretty_name', 'Linux')
+        asset.os_version = os_info.get('version', 'Unknown')
+        asset.hardware_cpu = cpu_info.get('model', 'Unknown').strip()
+        asset.hardware_ram_gb = mem_info.get('total_gb')
+        asset.last_seen = datetime.utcnow()
+        asset.online_state = 'Online'
+        
+        # Extract primary IP and MAC from network interfaces
+        if network_info:
+            for iface in network_info:
+                if iface.get('is_up') and iface.get('addresses'):
+                    # Get first IPv4 address
+                    for addr in iface.get('addresses', []):
+                        if addr.get('type') == 'ipv4' and not asset.ip_address:
+                            asset.ip_address = addr.get('address')
+                    
+                    # Get MAC address
+                    mac = iface.get('mac')
+                    if mac:
+                        # Store in appropriate field based on interface name
+                        if 'wl' in iface.get('name', '') or 'wifi' in iface.get('name', '').lower():
+                            asset.hardware_mac_wifi = mac
+                        else:
+                            asset.hardware_mac_ethernet = mac
+        
+        # Set manufacturer/model from virtualization or detect
+        if virt_info.get('is_virtual'):
+            asset.manufacturer = virt_info.get('type', 'Unknown').upper()
+            asset.model = 'Virtual Machine'
+            if not asset.device_type or asset.device_type == '-':
+                asset.device_type = 'Virtual Machine'
+        
+        # Store agent_id in serial_number field
+        if not asset.serial_number:
+            asset.serial_number = agent_id
+        
         db.session.commit()
-        session_id = session_row.lastrowid
-    except Exception:
-        session_id = 0
-
-    payload = _json.dumps({'type': 'run_script', 'shell': 'powershell', 'code': ps, 'timeout': 180, 'session_id': session_id}).encode()
-    try:
-        req = _req.Request(f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
-                           data=payload, headers={'Content-Type': 'application/json'}, method='POST')
-        with _req.urlopen(req, timeout=15) as resp:
-            result = _json.loads(resp.read())
-        if not result.get('ok'):
-            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error')}), 502
+        
+        # Ensure rmm_agent entry exists for this agent (auto-register if missing)
+        try:
+            rmm_row = db.session.execute(
+                text("SELECT id FROM rmm_agent WHERE agent_id = :aid"),
+                {'aid': agent_id}
+            ).fetchone()
+            if not rmm_row:
+                import hashlib, secrets
+                tok = secrets.token_hex(32)
+                tok_hash = hashlib.sha256(tok.encode()).hexdigest()
+                db.session.execute(
+                    text("INSERT INTO rmm_agent (agent_id, asset_id, agent_token_sha256, enabled, created_at, last_seen_at) VALUES (:aid, :asid, :hash, 1, :now, :now)"),
+                    {'aid': agent_id, 'asid': asset.id, 'hash': tok_hash, 'now': datetime.utcnow().isoformat()}
+                )
+            else:
+                db.session.execute(
+                    text("UPDATE rmm_agent SET last_seen_at = :now, asset_id = :asid WHERE agent_id = :aid"),
+                    {'now': datetime.utcnow().isoformat(), 'asid': asset.id, 'aid': agent_id}
+                )
+            db.session.commit()
+        except Exception as e:
+            logger.warning(f"rmm_agent upsert failed: {e}")
+        
+        logger.info(f"Updated asset {asset.name} (ID {asset.id}) from agent {agent_id}")
+        
+        return jsonify({
+            'ok': True,
+            'asset_id': asset.id,
+            'message': f'Updated asset {asset.name}'
+        })
+        
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 502
+        logger.error(f"Error receiving system info: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
-    return jsonify({'ok': True, 'session_id': session_id})
 
-
-@app.route('/api/rmm/patch-jobs/<agent_id>/<int:job_id>/deploy', methods=['POST'])
-@login_required
-def api_rmm_patch_jobs_deploy(agent_id, job_id):
-    """Push a queued patch job to the connected agent via the gateway."""
-    import json as _json, urllib.request as _req, urllib.error as _err
-    row = db.session.execute(
-        text("SELECT update_ids, kb_ids, titles, status FROM rmm_patch_job WHERE id = :jid AND agent_id = :aid"),
-        {'jid': job_id, 'aid': agent_id}
-    ).fetchone()
-    if not row:
-        return jsonify({'ok': False, 'error': 'Job not found'}), 404
-    if row[3] not in ('queued', 'failed'):
-        return jsonify({'ok': False, 'error': f'Job is already {row[3]}'}), 400
-
-    payload = _json.dumps({
-        'job_id':     job_id,
-        'update_ids': _json.loads(row[0] or '[]'),
-        'kb_ids':     _json.loads(row[1] or '[]'),
-        'titles':     _json.loads(row[2] or '[]'),
-    }).encode()
-
-    gw = RMM_GATEWAY_INTERNAL
+@app.route('/api/rmm/telemetry', methods=['POST'])
+def receive_telemetry():
+    """Receive telemetry from Linux agent, update asset last_seen, and persist metrics."""
+    import json as _json
     try:
-        req = _req.Request(
-            f"{gw}/deploy-patches/{agent_id}",
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
+        data = request.get_json()
+
+        if not data or 'agent_id' not in data:
+            return jsonify({'ok': False, 'error': 'Missing agent_id'}), 400
+
+        agent_id = data['agent_id']
+        now = datetime.utcnow()
+
+        # Update asset last_seen / online_state
+        asset = Asset.query.filter_by(serial_number=agent_id).first()
+        asset_id = asset.id if asset else None
+        if asset:
+            asset.last_seen = now
+            asset.online_state = 'Online'
+
+        # Refresh rmm_agent.last_seen_at
+        db.session.execute(
+            text("UPDATE rmm_agent SET last_seen_at = :ts WHERE agent_id = :aid"),
+            {'ts': now.isoformat(), 'aid': agent_id}
         )
-        with _req.urlopen(req, timeout=10) as resp:
-            result = _json.loads(resp.read())
-        if not result.get('ok'):
-            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error')}), 502
-    except _err.HTTPError as e:
-        body = e.read().decode()
-        return jsonify({'ok': False, 'error': f'Gateway {e.code}: {body}'}), 502
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 502
 
-    # Mark as deploying
-    db.session.execute(
-        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=datetime('now', '-7 hours'), updated_at=datetime('now', '-7 hours') WHERE id=:jid"),
-        {'jid': job_id}
-    )
-    db.session.commit()
-    return jsonify({'ok': True, 'message': 'Deploy command sent to agent'})
+        # Persist CPU / RAM / Disk metrics into rmm_telemetry
+        cpu_info  = data.get('cpu', {})
+        mem_info  = data.get('memory', {})
+        disk_info = data.get('disk', {})
+
+        cpu_pct  = cpu_info.get('usage_percent')
+        ram_pct  = mem_info.get('usage_percent')
+        ram_total_gb = (mem_info.get('total_mb') or 0) / 1024
+        ram_avail_gb = (mem_info.get('available_mb') or 0) / 1024
+
+        # Normalise disk into the same JSON array the UI expects
+        disk_json = '[]'
+        if disk_info:
+            disk_json = _json.dumps([{
+                'mountpoint': '/',
+                'device': '/',
+                'total_gb': disk_info.get('total_gb', 0),
+                'free_gb':  disk_info.get('free_gb', 0),
+                'percent':  disk_info.get('usage_percent', 0),
+            }])
+
+        db.session.execute(text("""
+            INSERT INTO rmm_telemetry
+                (agent_id, asset_id, cpu_percent, ram_percent, ram_total_gb,
+                 ram_available_gb, disk_json, captured_at)
+            VALUES
+                (:aid, :asid, :cpu, :ram, :ramt, :rava, :dj, :ts)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                cpu_percent=excluded.cpu_percent,
+                ram_percent=excluded.ram_percent,
+                ram_total_gb=excluded.ram_total_gb,
+                ram_available_gb=excluded.ram_available_gb,
+                disk_json=excluded.disk_json,
+                captured_at=excluded.captured_at
+        """), {
+            'aid': agent_id, 'asid': asset_id,
+            'cpu': cpu_pct, 'ram': ram_pct,
+            'ramt': ram_total_gb, 'rava': ram_avail_gb,
+            'dj': disk_json, 'ts': now.isoformat()
+        })
+
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    except Exception as e:
+        logger.error(f"Error receiving telemetry: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # ==================== API ENDPOINTS ====================
@@ -5077,7 +5049,6 @@ def assets():
         'asset_tag': Asset.asset_tag,
         'name': Asset.name,
         'category': Asset.category,
-        'device_type': Asset.device_type,
         'manufacturer': Asset.manufacturer,
         'serial_number': Asset.serial_number,
         'status': Asset.status,
@@ -5095,7 +5066,7 @@ def assets():
     # Warranty status filter
     if warranty_status:
         filtered_assets = []
-        today = now_mst().date()  # Convert to date for comparison
+        today = datetime.utcnow().date()  # Convert to date for comparison
         
         for asset in all_assets:
             if warranty_status == 'active' and asset.warranty_expiry:
@@ -5122,7 +5093,7 @@ def assets():
     
     # Quick filter from dashboard
     if quick_filter:
-        today = now_mst().date()
+        today = datetime.utcnow().date()
         if quick_filter == 'noncompliant':
             all_assets = [asset for asset in all_assets if asset.online_state == 'noncompliant']
         elif quick_filter == 'low_storage':
@@ -5130,7 +5101,7 @@ def assets():
                          if asset.hardware_storage_total_gb and asset.hardware_storage_free_gb
                          and (asset.hardware_storage_free_gb / asset.hardware_storage_total_gb * 100) < 20]
         elif quick_filter == 'offline':
-            cutoff = now_mst() - timedelta(days=7)
+            cutoff = datetime.utcnow() - timedelta(days=7)
             all_assets = [asset for asset in all_assets if asset.last_seen and asset.last_seen < cutoff]
         elif quick_filter == 'warranty_expiring':
             all_assets = [asset for asset in all_assets 
@@ -5140,8 +5111,41 @@ def assets():
     
     assets = all_assets
     categories = db.session.query(Asset.category).distinct().all()
-    
-    return render_template('assets.html', assets=assets, categories=categories)
+
+    # Build RMM online/offline sets based on last_seen_at (same 5-min logic as api_rmm_agent_status)
+    # Also query gateway for live WebSocket-connected agents (covers Windows agents that don't POST telemetry)
+    cutoff = datetime.utcnow() - timedelta(seconds=300)
+    rmm_rows = db.session.execute(
+        text("SELECT agent_id, asset_id, last_seen_at FROM rmm_agent WHERE enabled = 1 AND asset_id IS NOT NULL")
+    ).fetchall()
+
+    # Get live gateway connections
+    gateway_online = set()
+    try:
+        gw_resp = requests.get(f'{RMM_GATEWAY_INTERNAL}/agents', timeout=2)
+        gateway_online = set(gw_resp.json().get('agents', []))
+    except Exception:
+        pass
+
+    rmm_asset_ids = set()
+    rmm_online_ids = set()
+    for row in rmm_rows:
+        agent_id, asset_id, last_seen_at = row[0], row[1], row[2]
+        rmm_asset_ids.add(asset_id)
+        # Online if: gateway has live WS connection, OR last_seen_at within 5 min
+        if agent_id in gateway_online:
+            rmm_online_ids.add(asset_id)
+        elif last_seen_at:
+            if isinstance(last_seen_at, str):
+                try:
+                    last_seen_at = datetime.fromisoformat(last_seen_at)
+                except ValueError:
+                    last_seen_at = None
+            if last_seen_at and last_seen_at > cutoff:
+                rmm_online_ids.add(asset_id)
+
+    return render_template('assets.html', assets=assets, categories=categories,
+                           rmm_asset_ids=rmm_asset_ids, rmm_online_ids=rmm_online_ids)
 
 @app.route('/assets/add', methods=['GET', 'POST'])
 @login_required
@@ -5156,7 +5160,7 @@ def add_asset():
             if file and file.filename != '' and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
                 # Add timestamp to filename to avoid conflicts
-                photo_filename = f"{now_mst().strftime('%Y%m%d_%H%M%S')}_{filename}"
+                photo_filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{filename}"
                 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
                 file.save(os.path.join(app.config['UPLOAD_FOLDER'], photo_filename))
         
@@ -5187,7 +5191,6 @@ def add_asset():
             expected_life_years=expected_life_years,
             replacement_date=replacement_date,
             condition=request.form.get('condition', 'Good'),
-            device_type=request.form.get('device_type') or None,
             rustdesk_id=(request.form.get('rustdesk_id') or '').strip() or None
         )
         
@@ -5248,7 +5251,6 @@ def view_asset(asset_id):
 
     # Look up RMM agent for this asset
     rmm_agent_id = None
-    rmm_tele = None
     try:
         rmm_row = db.session.execute(
             text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
@@ -5256,44 +5258,12 @@ def view_asset(asset_id):
         ).fetchone()
         if rmm_row:
             rmm_agent_id = rmm_row[0]
-            # Also pull cached telemetry for server-side rendering in Overview
-            tele_row = db.session.execute(
-                text("""SELECT hostname, os_name, os_version, os_edition, cpu_name, cpu_cores,
-                               ram_total_gb, serial_number, vendor, model_name, domain,
-                               agent_version, captured_at, network_json, disk_json, public_ip
-                          FROM rmm_telemetry WHERE agent_id = :aid"""),
-                {'aid': rmm_agent_id}
-            ).fetchone()
-            if tele_row:
-                rmm_tele = dict(tele_row._mapping)
-    except Exception:
-        pass
-
-    # Checkout / loan data
-    active_loan = AssetLoan.query.filter_by(asset_id=asset.id, checked_in_at=None).first()
-    loan_history = AssetLoan.query.filter(
-        AssetLoan.asset_id == asset.id,
-        AssetLoan.checked_in_at != None
-    ).order_by(AssetLoan.checked_out_at.desc()).limit(20).all()
-    installed_apps = InstalledApp.query.filter_by(asset_id=asset.id).order_by(InstalledApp.name).all()
-
-    # Vulnerability exposure count for this asset
-    vuln_count = 0
-    try:
-        _vcon = _alert_svc._get_db()
-        vuln_count = _vcon.execute(
-            "SELECT COUNT(*) FROM device_vulnerability WHERE asset_id=? AND status='Open'",
-            (asset_id,)
-        ).fetchone()[0]
-        _vcon.close()
     except Exception:
         pass
 
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
-                         now=now_mst, intune_device=intune_device, intune_error=intune_error,
-                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele,
-                         active_loan=active_loan, loan_history=loan_history,
-                         installed_apps=installed_apps, vuln_count=vuln_count)
+                         now=datetime.utcnow, intune_device=intune_device, intune_error=intune_error,
+                         rmm_agent_id=rmm_agent_id)
 
 @app.route('/assets/<int:asset_id>/edit', methods=['GET', 'POST'])
 @login_required
@@ -5306,13 +5276,7 @@ def edit_asset(asset_id):
         asset.model = 'XPS 15 9520'
         asset.serial_number = 'GJBBLR3'
         db.session.commit()
-
-    # Lock hardware identity fields when asset is managed by an RMM agent
-    rmm_row = db.session.execute(
-        text("SELECT id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
-        {'aid': asset.id}).fetchone()
-    rmm_linked = rmm_row is not None
-
+    
     if request.method == 'POST':
         old_status = asset.status
         
@@ -5327,19 +5291,17 @@ def edit_asset(asset_id):
                         os.remove(old_photo_path)
                 
                 filename = secure_filename(file.filename)
-                photo_filename = f"{now_mst().strftime('%Y%m%d_%H%M%S')}_{filename}"
+                photo_filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{filename}"
                 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
                 file.save(os.path.join(app.config['UPLOAD_FOLDER'], photo_filename))
                 asset.photo = photo_filename
         
         asset.asset_tag = request.form.get('asset_tag')
-        # Hardware identity fields are read-only when managed by an RMM agent
-        if not rmm_linked:
-            asset.name = request.form.get('name')
-            asset.manufacturer = request.form.get('manufacturer')
-            asset.model = request.form.get('model')
-            asset.serial_number = request.form.get('serial_number')
+        asset.name = request.form.get('name')
         asset.category = request.form.get('category')
+        asset.manufacturer = request.form.get('manufacturer')
+        asset.model = request.form.get('model')
+        asset.serial_number = request.form.get('serial_number')
         asset.purchase_date = datetime.strptime(request.form.get('purchase_date'), '%Y-%m-%d').date() if request.form.get('purchase_date') else None
         asset.purchase_cost = float(request.form.get('purchase_cost')) if request.form.get('purchase_cost') else None
         asset.warranty_expiry = datetime.strptime(request.form.get('warranty_expiry'), '%Y-%m-%d').date() if request.form.get('warranty_expiry') else None
@@ -5347,24 +5309,11 @@ def edit_asset(asset_id):
         asset.location = request.form.get('location')
         asset.notes = request.form.get('notes')
         asset.rustdesk_id = (request.form.get('rustdesk_id') or '').strip() or None
-        asset.rustdesk_password = (request.form.get('rustdesk_password') or '').strip() or None
-        asset.vendor = request.form.get('vendor') or None
+        asset.service_urls = request.form.get('service_urls')
         asset.expected_life_years = int(request.form.get('expected_life_years', 3))
-        # Auto-compute replacement_date from purchase_date + expected_life_years
-        purchase_d = asset.purchase_date
-        if purchase_d and asset.expected_life_years:
-            try:
-                asset.replacement_date = purchase_d.replace(year=purchase_d.year + asset.expected_life_years)
-            except ValueError:
-                asset.replacement_date = purchase_d + timedelta(days=365 * asset.expected_life_years)
-        elif request.form.get('replacement_date'):
-            asset.replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date()
+        asset.replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date() if request.form.get('replacement_date') else None
         asset.condition = request.form.get('condition', 'Good')
-        asset.device_type = request.form.get('device_type') or None
-        # Auto-set disposal_date when status transitions to Disposed or Retired
-        if asset.status in ('Disposed', 'Retired') and not asset.disposal_date:
-            asset.disposal_date = now_mst().date()
-        asset.updated_at = now_mst()
+        asset.updated_at = datetime.utcnow()
         
         db.session.commit()
         
@@ -5383,7 +5332,18 @@ def edit_asset(asset_id):
         return redirect(url_for('view_asset', asset_id=asset.id))
     
     employees = Employee.query.all()
-    return render_template('edit_asset.html', asset=asset, employees=employees, rmm_linked=rmm_linked)
+    # Check if this asset has an RMM agent (so we can show read-only indicators)
+    rmm_agent_id = None
+    try:
+        rmm_row = db.session.execute(
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = 1 LIMIT 1"),
+            {'aid': asset_id}
+        ).fetchone()
+        if rmm_row:
+            rmm_agent_id = rmm_row[0]
+    except Exception:
+        pass
+    return render_template('edit_asset.html', asset=asset, employees=employees, rmm_agent_id=rmm_agent_id, rmm_linked=bool(rmm_agent_id))
 
 
 @app.route('/assets/<int:asset_id>/remote/rustdesk/start', methods=['POST'])
@@ -5404,7 +5364,7 @@ def start_rustdesk_remote_session(asset_id):
         asset_id=asset.id,
         started_by_user_id=current_user.id,
         reason=reason,
-        started_at=now_mst()
+        started_at=datetime.utcnow()
     )
     db.session.add(session_row)
 
@@ -5421,7 +5381,6 @@ def start_rustdesk_remote_session(asset_id):
         'success': True,
         'session_id': session_row.id,
         'rustdesk_id': asset.rustdesk_id,
-        'rustdesk_password': asset.rustdesk_password or '',
     })
 
 
@@ -5434,7 +5393,7 @@ def end_remote_session(session_id):
     if session_row.ended_at is not None:
         return jsonify({'success': True})
 
-    session_row.ended_at = now_mst()
+    session_row.ended_at = datetime.utcnow()
     session_row.ended_by_user_id = current_user.id
 
     history = AssetHistory(
@@ -5447,71 +5406,6 @@ def end_remote_session(session_id):
     db.session.commit()
 
     return jsonify({'success': True})
-
-
-@app.route('/api/rmm/rustdesk-sync/<agent_id>', methods=['POST'])
-def api_rmm_rustdesk_sync(agent_id):
-    """RMM agent reports its RustDesk peer ID so the tracker can auto-populate
-    asset.rustdesk_id without manual entry.
-
-    Auth: agent_id + token as query params (same as other agent endpoints).
-    Body JSON: { "rustdesk_id": "<10-digit peer id>", "rustdesk_password": "<optional>" }
-    """
-    token = request.args.get('token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
-
-    data = request.get_json(silent=True) or {}
-    peer_id = (data.get('rustdesk_id') or '').strip()
-    if not peer_id:
-        return jsonify({'ok': False, 'error': 'rustdesk_id is required'}), 400
-
-    # Find the asset linked to this agent
-    row = db.session.execute(
-        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
-        {'aid': agent_id}
-    ).fetchone()
-    if not row or not row[0]:
-        return jsonify({'ok': False, 'error': 'agent not linked to an asset'}), 404
-
-    asset = Asset.query.get(row[0])
-    if not asset:
-        return jsonify({'ok': False, 'error': 'asset not found'}), 404
-
-    changed = asset.rustdesk_id != peer_id
-    asset.rustdesk_id = peer_id
-
-    optional_pw = (data.get('rustdesk_password') or '').strip()
-    if optional_pw:
-        asset.rustdesk_password = optional_pw
-
-    if changed:
-        db.session.add(AssetHistory(
-            asset_id=asset.id,
-            action='RustDesk ID Updated',
-            description=f'RMM agent auto-synced RustDesk peer ID: {peer_id}',
-            user_id=None
-        ))
-
-    db.session.commit()
-    return jsonify({'ok': True, 'asset_id': asset.id, 'changed': changed})
-
-
-@app.route('/api/rmm/agent-info/<agent_id>')
-def api_rmm_agent_info(agent_id):
-    """Return asset info for a given agent (authenticated by token).
-    Used by the tray app setup to populate tray_config.json."""
-    token = request.args.get('token', '')
-    if not agent_id or not token or not _verify_agent_token(agent_id, token):
-        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
-    row = db.session.execute(
-        text("SELECT a.id, a.asset_tag, a.name FROM rmm_agent ra LEFT JOIN asset a ON a.id = ra.asset_id WHERE ra.agent_id = :aid AND ra.enabled = 1 LIMIT 1"),
-        {'aid': agent_id}
-    ).fetchone()
-    if not row:
-        return jsonify({'ok': False, 'error': 'agent not found'}), 404
-    return jsonify({'ok': True, 'asset_id': row[0], 'asset_tag': row[1] or '', 'hostname': row[2] or ''})
-
 
 @app.route('/assets/<int:asset_id>/assign', methods=['POST'])
 @login_required
@@ -5631,8 +5525,6 @@ def merge_duplicate_assets():
         transfer_serial = None
         transfer_employee_id = None
         transfer_intune_id = None
-        transfer_teamviewer_id = None
-        transfer_teamviewer_link = None
         
         for delete_id in delete_ids:
             if delete_id != keep_id:
@@ -5645,10 +5537,6 @@ def merge_duplicate_assets():
                         transfer_employee_id = duplicate.employee_id
                     if not transfer_intune_id and duplicate.intune_device_id:
                         transfer_intune_id = duplicate.intune_device_id
-                    if not transfer_teamviewer_id and duplicate.teamviewer_id:
-                        transfer_teamviewer_id = duplicate.teamviewer_id
-                    if not transfer_teamviewer_link and duplicate.teamviewer_link:
-                        transfer_teamviewer_link = duplicate.teamviewer_link
                     
                     duplicates_to_delete.append(duplicate)
         
@@ -5666,10 +5554,6 @@ def merge_duplicate_assets():
             keep_asset.employee_id = transfer_employee_id
         if not keep_asset.intune_device_id and transfer_intune_id:
             keep_asset.intune_device_id = transfer_intune_id
-        if not keep_asset.teamviewer_id and transfer_teamviewer_id:
-            keep_asset.teamviewer_id = transfer_teamviewer_id
-        if not keep_asset.teamviewer_link and transfer_teamviewer_link:
-            keep_asset.teamviewer_link = transfer_teamviewer_link
         
         db.session.flush()  # Apply the transfers
         
@@ -5707,14 +5591,14 @@ def update_asset_status(asset_id):
         asset = Asset.query.get_or_404(asset_id)
         old_status = asset.status
         asset.status = new_status
-        asset.updated_at = now_mst()
+        asset.updated_at = datetime.utcnow()
         
         # Create history entry
         history = AssetHistory(
             asset_id=asset.id,
             action=f'Status changed from {old_status} to {new_status}',
             changed_by=current_user.username,
-            timestamp=now_mst()
+            timestamp=datetime.utcnow()
         )
         db.session.add(history)
         db.session.commit()
@@ -5813,7 +5697,7 @@ def employees():
             Asset.employee_id.in_(employee_ids)
         ).group_by(Asset.employee_id).all()
 
-        now_utc = now_mst().replace(tzinfo=timezone.utc)
+        now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
 
         for emp_id, last_seen in activity_rows:
             if not last_seen:
@@ -6211,7 +6095,7 @@ def export_employees_csv():
         io.BytesIO(output.getvalue().encode('utf-8')),
         mimetype='text/csv',
         as_attachment=True,
-        download_name=f'employees_export_{now_mst().strftime("%Y%m%d_%H%M%S")}.csv'
+        download_name=f'employees_export_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
     )
 
 @app.route('/employees/template')
@@ -7000,11 +6884,11 @@ def reports():
     ).join(Asset, Employee.id == Asset.employee_id, isouter=True).group_by(Employee.department).all()
     
     # Warranty expiring soon
-    thirty_days = now_mst().date() + timedelta(days=30)
+    thirty_days = datetime.utcnow().date() + timedelta(days=30)
     expiring = Asset.query.filter(
         Asset.warranty_expiry.isnot(None),
         Asset.warranty_expiry <= thirty_days,
-        Asset.warranty_expiry >= now_mst().date()
+        Asset.warranty_expiry >= datetime.utcnow().date()
     ).all()
     
     # Lifecycle statistics
@@ -7077,7 +6961,7 @@ def reports():
                          licenses_expiring=licenses_expiring,
                          total_license_purchase_cost=total_license_purchase_cost,
                          total_license_annual_cost=total_license_annual_cost,
-                         today=now_mst().date())
+                         today=datetime.utcnow().date())
 
 @app.route('/system-description')
 @login_required
@@ -7109,7 +6993,7 @@ def edit_system_description_section(section_id):
     if request.method == 'POST':
         section.content = request.form.get('content')
         section.updated_by = current_user.username
-        section.updated_at = now_mst()
+        section.updated_at = datetime.utcnow()
         db.session.commit()
         flash(f'Section "{section.section_title}" updated successfully', 'success')
         return redirect(url_for('system_description'))
@@ -7136,7 +7020,7 @@ def export_system_description():
     title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     
     doc.add_paragraph(f"Cirque Corporation")
-    doc.add_paragraph(f"Generated: {now_mst().strftime('%B %d, %Y')}")
+    doc.add_paragraph(f"Generated: {datetime.utcnow().strftime('%B %d, %Y')}")
     doc.add_page_break()
     
     # Add sections
@@ -7168,7 +7052,7 @@ def export_system_description():
     return send_file(
         doc_io,
         as_attachment=True,
-        download_name=f'System_Description_{now_mst().strftime("%Y%m%d")}.docx',
+        download_name=f'System_Description_{datetime.utcnow().strftime("%Y%m%d")}.docx',
         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     )
 
@@ -7374,7 +7258,7 @@ def export_assets_csv():
         io.BytesIO(output.getvalue().encode('utf-8')),
         mimetype='text/csv',
         as_attachment=True,
-        download_name=f'assets_export_{now_mst().strftime("%Y%m%d_%H%M%S")}.csv'
+        download_name=f'assets_export_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
     )
 
 @app.route('/assets/import', methods=['GET', 'POST'])
@@ -7414,7 +7298,7 @@ def import_assets():
                         asset_tag = row.get('Asset Tag', '').strip()
                         if not asset_tag:
                             # Generate unique temporary tag with microseconds for uniqueness
-                            timestamp = now_mst().strftime('%Y%m%d%H%M%S%f')
+                            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
                             asset_tag = f"TEMP-{timestamp}-{row_num}"
                         
                         # Check if asset tag already exists
@@ -7600,7 +7484,7 @@ def perform_intune_asset_sync():
 
         def build_unique_asset_tag(base):
             if not base:
-                base = f"TEMP-{now_mst().strftime('%Y%m%d%H%M%S')}"
+                base = f"TEMP-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
             base_tag = base.upper().replace(' ', '').replace('/', '-').replace('_', '-')
             candidate = base_tag
             counter = 1
@@ -7739,7 +7623,7 @@ def perform_intune_asset_sync():
                         hardware_tpm_version=tpm_ver,
                         azure_ad_device_id=device.get('azureADDeviceId'),
                         last_seen=last_sync_dt,
-                        notes=f"Synced from Microsoft Intune on {now_mst().strftime('%Y-%m-%d %H:%M UTC')}"
+                        notes=f"Synced from Microsoft Intune on {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
                     )
                     db.session.add(new_asset)
                     if serial_number:
@@ -7829,17 +7713,12 @@ def edit_user(user_id):
         user.email = request.form.get('email')
         user.role = request.form.get('role')
         user.is_admin = (user.role == 'admin')
-        user.first_name = (request.form.get('first_name') or '').strip() or None
-        user.last_name = (request.form.get('last_name') or '').strip() or None
-        # Keep full_name in sync for legacy display
-        if user.first_name or user.last_name:
-            user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-
+        
         # Update password if provided
         new_password = request.form.get('password')
         if new_password:
             user.password_hash = generate_password_hash(new_password)
-
+        
         db.session.commit()
         flash(f'User {user.username} updated successfully!', 'success')
         return redirect(url_for('users'))
@@ -7885,616 +7764,6 @@ def init_db():
         return 'Database initialized! Admin user created (username: admin, password: admin123)'
     
     return 'Database already initialized!'
-
-@app.route('/settings/teamviewer/test', methods=['POST'])
-@login_required
-@admin_required
-@license_required
-def test_teamviewer_connection():
-    """Test TeamViewer API connection"""
-    try:
-        token = request.json.get('token')
-        if not token:
-            return jsonify({'success': False, 'message': 'Token is required'})
-        
-        # Test API connection
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json'
-        }
-        
-        response = requests.get(
-            'https://webapi.teamviewer.com/api/v1/ping',
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            # Try multiple endpoints to find devices
-            endpoints_to_try = [
-                ('https://webapi.teamviewer.com/api/v1/devices', 'devices'),
-                ('https://webapi.teamviewer.com/api/v1/managed/devices', 'resources'),
-                ('https://webapi.teamviewer.com/api/v1/managed/groups', 'resources')
-            ]
-            
-            for endpoint, key in endpoints_to_try:
-                try:
-                    devices_response = requests.get(endpoint, headers=headers, timeout=10)
-                    
-                    if devices_response.status_code == 200:
-                        data = devices_response.json()
-                        devices = data.get(key, [])
-                        
-                        if devices:
-                            return jsonify({
-                                'success': True,
-                                'message': f'Connection successful! Found {len(devices)} devices/groups.',
-                                'device_count': len(devices),
-                                'endpoint': endpoint
-                            })
-                except Exception as e:
-                    continue
-            
-            # If no endpoint worked, return warning
-            return jsonify({
-                'success': True,
-                'message': 'Authentication OK, but could not access device inventory. May need additional permissions.',
-                'warning': True
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': f'Authentication failed: {response.status_code} - {response.text}'
-            })
-    
-    except requests.exceptions.Timeout:
-        return jsonify({
-            'success': False,
-            'message': 'Connection timeout - TeamViewer API is not responding'
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        })
-
-@app.route('/teamviewer/diagnostic')
-@login_required
-@admin_required
-@license_required
-def teamviewer_diagnostic():
-    """Show diagnostic info about TeamViewer API data"""
-    # Get token from settings
-    tv_token_setting = Setting.query.filter_by(key='teamviewer_token').first()
-    if not tv_token_setting or not tv_token_setting.value:
-        flash('TeamViewer token not configured', 'danger')
-        return redirect(url_for('settings'))
-    
-    token = tv_token_setting.value
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    results = {}
-    all_devices = []
-    all_fields = set()  # Track all unique field names
-    
-    # Get groups first
-    try:
-        groups_response = requests.get(
-            'https://webapi.teamviewer.com/api/v1/managed/groups',
-            headers=headers,
-            timeout=10
-        )
-        
-        if groups_response.status_code == 200:
-            groups_data = groups_response.json()
-            groups = groups_data.get('resources', [])
-            
-            results['Groups'] = {
-                'status': 'success',
-                'count': len(groups),
-                'groups': []
-            }
-            
-            # For each group, get devices
-            for group in groups:
-                group_id = group.get('id')
-                group_name = group.get('name', 'Unknown')
-                
-                # Try to get devices in this group
-                devices_in_group = []
-                try:
-                    devices_url = f'https://webapi.teamviewer.com/api/v1/managed/groups/{group_id}/devices'
-                    devices_response = requests.get(devices_url, headers=headers, timeout=10)
-                    
-                    if devices_response.status_code == 200:
-                        devices_data = devices_response.json()
-                        devices_in_group = devices_data.get('resources', [])
-                        # Collect all field names from devices
-                        for device in devices_in_group:
-                            # Collect all top-level field names
-                            all_fields.update(device.keys())
-                            # Also collect nested field names for special objects
-                            for key, value in device.items():
-                                if isinstance(value, dict):
-                                    all_fields.update([f"{key}.{subkey}" for subkey in value.keys()])
-                        all_devices.extend(devices_in_group)
-                except Exception as e:
-                    pass
-                
-                results['Groups']['groups'].append({
-                    'id': group_id,
-                    'name': group_name,
-                    'device_count': len(devices_in_group),
-                    'devices': devices_in_group  # Show ALL devices
-                })
-        else:
-            results['Groups'] = {
-                'status': 'error',
-                'code': groups_response.status_code,
-                'message': groups_response.text[:200]
-            }
-    except Exception as e:
-        results['Groups'] = {
-            'status': 'error',
-            'message': str(e)
-        }
-    
-    # Add field summary
-    results['Available_Fields'] = {
-        'count': len(all_fields),
-        'fields': sorted(list(all_fields))
-    }
-    
-    # Summary
-    results['Summary'] = {
-        'total_groups': len(results.get('Groups', {}).get('groups', [])),
-        'total_devices': len(all_devices),
-        'sample_devices': all_devices[:3]
-    }
-    
-    return render_template('teamviewer_diagnostic.html', results=results)
-
-def get_device_online_state(device):
-    """Extract online state from device dict using isOnline boolean field"""
-    is_online = device.get('isOnline')
-    
-    # Handle boolean value
-    if is_online is True:
-        return 'Online'
-    elif is_online is False:
-        return 'Offline'
-    
-    # Fallback for other formats
-    return 'Offline'
-
-@app.route('/teamviewer/sync/preview')
-@login_required
-@admin_required
-@license_required
-def teamviewer_sync_preview():
-    """Preview what would happen during TeamViewer sync without making changes"""
-    # Get token from settings
-    tv_token_setting = Setting.query.filter_by(key='teamviewer_token').first()
-    if not tv_token_setting or not tv_token_setting.value:
-        flash('TeamViewer token not configured', 'danger')
-        return redirect(url_for('settings'))
-    
-    token = tv_token_setting.value
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    try:
-        # Get all devices from TeamViewer
-        devices = []
-        groups_response = requests.get(
-            'https://webapi.teamviewer.com/api/v1/managed/groups',
-            headers=headers,
-            timeout=10
-        )
-        
-        if groups_response.status_code == 200:
-            groups = groups_response.json().get('resources', [])
-            
-            for group in groups:
-                devices_response = requests.get(
-                    f'https://webapi.teamviewer.com/api/v1/managed/groups/{group["id"]}/devices',
-                    headers=headers,
-                    timeout=10
-                )
-                
-                if devices_response.status_code == 200:
-                    group_devices = devices_response.json().get('resources', [])
-                    for device in group_devices:
-                        device['group_name'] = group.get('name', 'Unknown')
-                    devices.extend(group_devices)
-        
-        # Analyze what would happen
-        will_update = []
-        will_create = []
-        will_skip = []
-        
-        for device in devices:
-            device_name = device.get('name', 'Unknown')
-            tv_id = device.get('teamviewerId')
-            
-            if not tv_id:
-                will_skip.append({
-                    'name': device_name,
-                    'reason': 'No TeamViewer ID'
-                })
-                continue
-            
-            tv_id_str = str(tv_id)
-            
-            # Try to find existing asset by TeamViewer ID first
-            asset = Asset.query.filter_by(teamviewer_id=tv_id_str).first()
-            
-            # If not found, try by name (case-insensitive)
-            if not asset:
-                asset = Asset.query.filter(
-                    db.func.lower(Asset.name) == db.func.lower(device_name)
-                ).first()
-            
-            if asset:
-                # Would update existing asset
-                will_update.append({
-                    'asset_id': asset.id,
-                    'asset_tag': asset.asset_tag,
-                    'current_name': asset.name,
-                    'tv_name': device_name,
-                    'tv_id': tv_id_str,
-                    'online_state': 'Online' if device.get('isOnline') else 'Offline',
-                    'last_seen': device.get('last_seen'),
-                    'current_tv_id': asset.teamviewer_id,
-                    'current_online_state': asset.online_state,
-                    'has_existing_data': bool(asset.manufacturer or asset.model or asset.serial_number)
-                })
-            else:
-                # Would create new asset
-                will_create.append({
-                    'tv_name': device_name,
-                    'tv_id': tv_id_str,
-                    'online_state': 'Online' if device.get('isOnline') else 'Offline',
-                    'last_seen': device.get('last_seen'),
-                    'group': device.get('group_name', 'Unknown'),
-                    'asset_tag': f'TV-{tv_id_str[:8]}'
-                })
-        
-        return render_template('teamviewer_sync_preview.html',
-                             will_update=will_update,
-                             will_create=will_create,
-                             will_skip=will_skip)
-        
-    except Exception as e:
-        flash(f'Error fetching TeamViewer data: {str(e)}', 'danger')
-        return redirect(url_for('settings'))
-
-@app.route('/teamviewer/sync', methods=['GET', 'POST'])
-@login_required
-@admin_required
-@license_required
-def teamviewer_sync():
-    """Sync assets from TeamViewer"""
-    # Get token from settings
-    tv_token_setting = Setting.query.filter_by(key='teamviewer_token').first()
-    if not tv_token_setting or not tv_token_setting.value:
-        flash('TeamViewer token not configured', 'danger')
-        return redirect(url_for('settings'))
-    
-    token = tv_token_setting.value
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    # If POST, execute the sync
-    if request.method == 'POST':
-        action = request.form.get('action')
-        
-        if action == 'execute':
-            try:
-                # Get all devices from TeamViewer
-                devices = []
-                groups_response = requests.get(
-                    'https://webapi.teamviewer.com/api/v1/managed/groups',
-                    headers=headers,
-                    timeout=10
-                )
-                
-                if groups_response.status_code == 200:
-                    groups = groups_response.json().get('resources', [])
-                    
-                    for group in groups:
-                        devices_response = requests.get(
-                            f'https://webapi.teamviewer.com/api/v1/managed/groups/{group["id"]}/devices',
-                            headers=headers,
-                            timeout=10
-                        )
-                        
-                        if devices_response.status_code == 200:
-                            group_devices = devices_response.json().get('resources', [])
-                            for device in group_devices:
-                                device['group_name'] = group.get('name', 'Unknown')
-                            devices.extend(group_devices)
-                
-                # Track sync results
-                updated_count = 0
-                created_count = 0
-                skipped_count = 0
-                match_details = []  # Track what matched
-                
-                for device in devices:
-                    device_name = device.get('name') or device.get('alias', 'Unknown')
-                    # Use correct TeamViewer field name
-                    tv_id = device.get('teamviewerId')
-                    
-                    if not tv_id:
-                        skipped_count += 1
-                        match_details.append(f"Skipped: {device_name} (no TV ID)")
-                        continue
-                    
-                    # Convert to string for database storage
-                    tv_id_str = str(tv_id)
-                    
-                    # Try to find existing asset by TeamViewer ID first
-                    asset = Asset.query.filter_by(teamviewer_id=tv_id_str).first()
-                    
-                    # If not found, try by exact name (case-insensitive)
-                    if not asset:
-                        asset = Asset.query.filter(
-                            db.func.lower(Asset.name) == db.func.lower(device_name)
-                        ).first()
-                    
-                    # If still not found, try partial name match (for Chris-Desktop vs CHRIS-DESKTOP cases)
-                    if not asset:
-                        # Remove special characters and compare
-                        clean_device_name = device_name.lower().replace('-', '').replace('_', '').replace(' ', '')
-                        for potential_asset in Asset.query.all():
-                            clean_asset_name = potential_asset.name.lower().replace('-', '').replace('_', '').replace(' ', '')
-                            if clean_device_name == clean_asset_name:
-                                asset = potential_asset
-                                break
-                    
-                    if asset:
-                        # Update existing asset
-                        old_values = {
-                            'name': asset.name,
-                            'os_version': asset.os_version,
-                            'online_state': asset.online_state,
-                            'manufacturer': asset.manufacturer,
-                            'model': asset.model,
-                            'serial_number': asset.serial_number,
-                            'notes': asset.notes,
-                            'teamviewer_link': asset.teamviewer_link
-                        }
-
-                        asset.teamviewer_id = tv_id_str
-                        asset.online_state = get_device_online_state(device)
-                        asset.os_version = device.get('device_operating_system') or asset.os_version
-                        asset.last_teamviewer_sync = now_mst()
-                        # Store last_seen if device is offline
-                        last_seen = device.get('last_seen')
-                        if last_seen:
-                            from dateutil import parser
-                            try:
-                                asset.last_seen = parser.parse(last_seen)
-                            except:
-                                asset.last_seen = None
-                        else:
-                            asset.last_seen = None
-                        # Generate TeamViewer web connect link
-                        from urllib.parse import quote
-                        asset.teamviewer_link = f"https://web.teamviewer.com/Connect?uiMode=OneUI&lng=en&useLowMem=false&TabMode=MultiTabUI&machineId={tv_id_str}&deviceName={quote(device_name)}&deviceType=Desktop&connectByKnownDeviceMode=RemoteControl"
-                        # Only overwrite if TeamViewer provides a value
-                        manufacturer = device.get('manufacturer') or device.get('device_manufacturer')
-                        if manufacturer:
-                            asset.manufacturer = manufacturer
-                        model = device.get('model') or device.get('device_model')
-                        if model:
-                            asset.model = model
-                        serial_number = device.get('serial_number') or device.get('device_serial_number')
-                        if serial_number:
-                            asset.serial_number = serial_number
-                        # Do not overwrite purchase_date from TeamViewer (not provided by API)
-                        description = device.get('description')
-                        if description:
-                            asset.notes = description
-
-                        # Log the change
-                        AssetHistory.log_change(
-                            asset,
-                            current_user.username,
-                            'update',
-                            f'TeamViewer sync: Updated {device_name}',
-                            old_values,
-                            {
-                                'name': asset.name,
-                                'os_version': asset.os_version,
-                                'online_state': asset.online_state,
-                                'manufacturer': asset.manufacturer,
-                                'model': asset.model,
-                                'serial_number': asset.serial_number,
-                                'notes': asset.notes,
-                                'teamviewer_link': asset.teamviewer_link
-                            }
-                        )
-                        updated_count += 1
-                        match_details.append(f"Updated: {device_name} → {asset.name}")
-                    else:
-                        # Don't create new assets from TV sync, just update existing ones
-                        match_details.append(f"Not in tracker: {device_name}")
-                        skipped_count += 1
-                        continue
-                        from urllib.parse import quote
-                        tv_link = f"https://web.teamviewer.com/Connect?uiMode=OneUI&lng=en&useLowMem=false&TabMode=MultiTabUI&machineId={tv_id_str}&deviceName={quote(device_name)}&deviceType=Desktop&connectByKnownDeviceMode=RemoteControl"
-                        
-                        # Parse last_seen if available
-                        last_seen_dt = None
-                        last_seen = device.get('last_seen')
-                        if last_seen:
-                            from dateutil import parser
-                            try:
-                                last_seen_dt = parser.parse(last_seen)
-                            except:
-                                last_seen_dt = None
-                        
-                        new_asset = Asset(
-                            name=device_name,
-                            asset_tag=f'TV-{tv_id_str[:8]}',
-                            category='Computer',
-                            status='In Use',
-                            teamviewer_id=tv_id_str,
-                            online_state=get_device_online_state(device),
-                            os_version=device.get('device_operating_system'),
-                            location=device.get('group_name', 'Unknown'),
-                            last_teamviewer_sync=now_mst(),
-                            last_seen=last_seen_dt,
-                            purchase_date=now_mst().date(),
-                            expected_life_years=5,
-                            manufacturer=device.get('manufacturer') or device.get('device_manufacturer'),
-                            model=device.get('model') or device.get('device_model'),
-                            serial_number=device.get('serial_number') or device.get('device_serial_number'),
-                            notes=device.get('description'),
-                            teamviewer_link=tv_link
-                        )
-                        db.session.add(new_asset)
-                        # Log creation
-                        AssetHistory.log_change(
-                            new_asset,
-                            current_user.username,
-                            'create',
-                            f'Created from TeamViewer sync: {device_name}'
-                        )
-                        created_count += 1
-                        match_details.append(f"Created new: {device_name}")
-                
-                db.session.commit()
-                
-                # Update last sync time in settings
-                last_sync_setting = Setting.query.filter_by(key='teamviewer_last_sync').first()
-                if not last_sync_setting:
-                    last_sync_setting = Setting(key='teamviewer_last_sync')
-                    db.session.add(last_sync_setting)
-                
-                last_sync_setting.value = now_mst().isoformat()
-                last_sync_setting.updated_by = current_user.username
-                db.session.commit()
-                
-                # Show detailed results
-                details_msg = '<br>'.join(match_details[:20])  # Show first 20
-                if len(match_details) > 20:
-                    details_msg += f'<br>... and {len(match_details) - 20} more'
-                
-                flash(f'Sync complete! Updated: {updated_count}, Skipped: {skipped_count}', 'success')
-                if match_details:
-                    flash(details_msg, 'info')
-                return redirect(url_for('settings'))
-                
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Sync failed: {str(e)}', 'danger')
-                return redirect(url_for('settings'))
-    
-    # GET request - show preview
-    try:
-        # Get all devices from TeamViewer
-        devices = []
-        groups_response = requests.get(
-            'https://webapi.teamviewer.com/api/v1/managed/groups',
-            headers=headers,
-            timeout=10
-        )
-        
-        if groups_response.status_code == 200:
-            groups = groups_response.json().get('resources', [])
-            
-            for group in groups:
-                devices_response = requests.get(
-                    f'https://webapi.teamviewer.com/api/v1/managed/groups/{group["id"]}/devices',
-                    headers=headers,
-                    timeout=10
-                )
-                
-                if devices_response.status_code == 200:
-                    group_devices = devices_response.json().get('resources', [])
-                    for device in group_devices:
-                        device['group_name'] = group.get('name', 'Unknown')
-                    devices.extend(group_devices)
-                
-                # Limit to 5 devices for testing
-                if len(devices) >= 5:
-                    break
-        
-        # Limit to first 5 devices
-        devices = devices[:5]
-        
-        # Analyze what would happen
-        preview = {
-            'to_update': [],
-            'to_create': [],
-            'to_skip': []
-        }
-        
-        for device in devices:
-            device_name = device.get('name') or device.get('alias', 'Unknown')
-            # Use correct TeamViewer field name
-            tv_id = device.get('teamviewerId')
-            
-            if not tv_id:
-                # Debug: show what keys are available
-                available_keys = ', '.join(device.keys())
-                preview['to_skip'].append({
-                    'device': device_name,
-                    'reason': f'No TeamViewer ID found. Available fields: {available_keys[:100]}'
-                })
-                continue
-            
-            # Convert to string for database operations
-            tv_id_str = str(tv_id)
-            
-            # Try to find existing asset
-            asset = Asset.query.filter_by(teamviewer_id=tv_id_str).first()
-            if not asset:
-                asset = Asset.query.filter(
-                    db.func.lower(Asset.name) == db.func.lower(device_name)
-                ).first()
-            
-            device_info = {
-                'name': device_name,
-                'tv_id': tv_id_str,
-                'online_state': get_device_online_state(device),
-                'os': device.get('device_operating_system', 'Unknown'),
-                'group': device.get('group_name', 'Unknown')
-            }
-            
-            if asset:
-                device_info['existing_asset'] = asset.name
-                device_info['asset_tag'] = asset.asset_tag
-                device_info['changes'] = []
-                
-                if asset.teamviewer_id != tv_id:
-                    device_info['changes'].append(f'TeamViewer ID: {asset.teamviewer_id or "None"} → {tv_id}')
-                if asset.online_state != device.get('online_state'):
-                    device_info['changes'].append(f'Status: {asset.online_state or "Unknown"} → {device.get("online_state", "Offline")}')
-                if asset.os_version != device.get('device_operating_system'):
-                    device_info['changes'].append(f'OS: {asset.os_version or "Unknown"} → {device.get("device_operating_system", "Unknown")}')
-                
-                preview['to_update'].append(device_info)
-            else:
-                preview['to_create'].append(device_info)
-        
-        return render_template('teamviewer_sync.html',
-                             preview=preview,
-                             total_devices=len(devices))
-    
-    except Exception as e:
-        flash(f'Error loading sync preview: {str(e)}', 'danger')
-        return redirect(url_for('settings'))
 
 # ==================== LICENSE MANAGEMENT ====================
 
@@ -8580,7 +7849,7 @@ def get_license():
         # Calculate days remaining if expiry date exists
         days_remaining = None
         if license_info.expiry_date:
-            delta = license_info.expiry_date - now_mst()
+            delta = license_info.expiry_date - datetime.utcnow()
             days_remaining = max(0, delta.days)
         
         return jsonify({
@@ -8668,7 +7937,7 @@ def verify_license():
         # Calculate days remaining
         days_remaining = None
         if license_info.expiry_date:
-            delta = license_info.expiry_date - now_mst()
+            delta = license_info.expiry_date - datetime.utcnow()
             days_remaining = max(0, delta.days)
         
         return jsonify({
@@ -8704,44 +7973,940 @@ def remove_license_key(license_id):
         logger.error(f'Error deleting license: {str(e)}')
         return jsonify({'error': 'Failed to remove license'}), 500
 
-def _rebuild_msi_if_stale():
-    """
-    Rebuild CirqueRMM.msi in a background thread if any source file in rmm_agent/
-    is newer than the MSI.  Runs automatically on every service start so you
-    never need to manually re-run build_msi.py after editing agent files.
-    """
-    import threading, subprocess as _sp, os as _os
 
-    def _worker():
-        agent_dir = _os.path.join(app.root_path, 'rmm_agent')
-        msi_path  = _os.path.join(agent_dir, 'CirqueRMM.msi')
-        build_py  = _os.path.join(agent_dir, 'build_msi.py')
-        sources   = [
-            'agent_client.py', 'agent_launcher.py', 'tray.py',
-            'requirements.txt', 'version.txt', 'install_agent.ps1',
-            'build_msi.py',
-        ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESTORED ROUTES (recovered from git HEAD)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Restored: /assets/<int:asset_id>/checkout ──
+@app.route('/assets/<int:asset_id>/checkout', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def asset_checkout(asset_id):
+    asset = Asset.query.get_or_404(asset_id)
+    # Check not already checked out
+    active = AssetLoan.query.filter_by(asset_id=asset_id, checked_in_at=None).first()
+    if active:
+        flash(f'Asset is already checked out to {active.checked_out_to}.', 'warning')
+        return redirect(url_for('view_asset', asset_id=asset_id))
+    borrower = (request.form.get('checked_out_to') or '').strip()
+    if not borrower:
+        flash('Borrower name is required.', 'danger')
+        return redirect(url_for('view_asset', asset_id=asset_id))
+    due_str = (request.form.get('due_back_at') or '').strip()
+    due = None
+    if due_str:
         try:
-            msi_mtime = _os.path.getmtime(msi_path) if _os.path.exists(msi_path) else 0
-            stale = any(
-                _os.path.getmtime(_os.path.join(agent_dir, f)) > msi_mtime
-                for f in sources
-                if _os.path.exists(_os.path.join(agent_dir, f))
+            from datetime import date as _date
+            due = _date.fromisoformat(due_str)
+        except ValueError:
+            pass
+    loan = AssetLoan(
+        asset_id=asset_id,
+        checked_out_to=borrower,
+        checked_out_by_user_id=current_user.id,
+        due_back_at=due,
+        notes=(request.form.get('notes') or '').strip() or None,
+    )
+    db.session.add(loan)
+    log_change(asset, current_user.username, 'checkout', f'Checked out to {borrower}')
+    db.session.commit()
+    flash(f'Asset checked out to {borrower}.', 'success')
+    return redirect(url_for('view_asset', asset_id=asset_id))
+
+
+
+
+# ── Restored: /assets/<int:asset_id>/checkin/<int:loan_id> ──
+@app.route('/assets/<int:asset_id>/checkin/<int:loan_id>', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def asset_checkin(asset_id, loan_id):
+    loan = AssetLoan.query.get_or_404(loan_id)
+    if loan.asset_id != asset_id:
+        flash('Loan does not belong to this asset.', 'danger')
+        return redirect(url_for('view_asset', asset_id=asset_id))
+    if not loan.is_active:
+        flash('Asset is already checked in.', 'warning')
+        return redirect(url_for('view_asset', asset_id=asset_id))
+    loan.checked_in_at = now_mst()
+    loan.checked_in_by_user_id = current_user.id
+    asset = Asset.query.get(asset_id)
+    log_change(asset, current_user.username, 'checkin', f'Checked in from {loan.checked_out_to}')
+    db.session.commit()
+    flash(f'Asset checked in from {loan.checked_out_to}.', 'success')
+    return redirect(url_for('view_asset', asset_id=asset_id))
+
+
+# ── Software inventory (agent → server) ─────────────────────────────────────
+
+
+
+# ── Restored: /api/asset/<int:asset_id>/software ──
+@app.route('/api/asset/<int:asset_id>/software', methods=['POST'])
+@license_required
+@require_api_key('agent')
+def api_update_software(asset_id):
+    """Agent POSTs full software inventory; replace existing records."""
+    asset = Asset.query.get_or_404(asset_id)
+    apps = request.get_json(silent=True) or []
+    InstalledApp.query.filter_by(asset_id=asset_id).delete()
+    now = now_mst()
+    for a in apps:
+        name = (a.get('name') or '').strip()
+        if not name:
+            continue
+        db.session.add(InstalledApp(
+            asset_id=asset_id,
+            name=name,
+            version=(a.get('version') or '').strip() or None,
+            publisher=(a.get('publisher') or '').strip() or None,
+            install_date=(a.get('install_date') or '').strip() or None,
+            recorded_at=now,
+        ))
+    db.session.commit()
+    return jsonify({'ok': True, 'count': len(apps)})
+
+
+
+
+# ── Restored: /api/rmm/<agent_id>/software ──
+@app.route('/api/rmm/<agent_id>/software', methods=['POST'])
+def rmm_update_software(agent_id):
+    """RMM agent POSTs software inventory via its agent_id + token (no user login needed)."""
+    token = request.args.get('token', '') or request.headers.get('X-Agent-Token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    # Look up the asset linked to this agent
+    row = db.session.execute(
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if not row or not row[0]:
+        return jsonify({'error': 'No asset linked to this agent'}), 404
+    asset_id = row[0]
+    apps = request.get_json(silent=True) or []
+    InstalledApp.query.filter_by(asset_id=asset_id).delete()
+    now = now_mst()
+    inserted = 0
+    for a in apps:
+        name = (a.get('name') or '').strip()
+        if not name:
+            continue
+        db.session.add(InstalledApp(
+            asset_id=asset_id,
+            name=name,
+            version=(a.get('version') or '').strip() or None,
+            publisher=(a.get('publisher') or '').strip() or None,
+            install_date=(a.get('install_date') or '').strip() or None,
+            recorded_at=now,
+        ))
+        inserted += 1
+    db.session.commit()
+    return jsonify({'ok': True, 'count': inserted})
+
+
+# ── Global search ────────────────────────────────────────────────────────────
+
+
+
+# ── Restored: /search ──
+@app.route('/search')
+@login_required
+@license_required
+def global_search():
+    q = (request.args.get('q') or '').strip()
+    if not q or len(q) < 2:
+        return render_template('search.html', q=q, assets=[], tickets=[], employees=[])
+    like = f'%{q}%'
+
+    from sqlalchemy import or_
+    assets = Asset.query.filter(or_(
+        Asset.asset_tag.ilike(like),
+        Asset.hostname.ilike(like),
+        Asset.make.ilike(like),
+        Asset.model.ilike(like),
+        Asset.serial_number.ilike(like),
+    )).limit(20).all()
+
+    tickets = SupportTicket.query.filter(or_(
+        SupportTicket.subject.ilike(like),
+        SupportTicket.description.ilike(like),
+        SupportTicket.reporter_name.ilike(like),
+        SupportTicket.reporter_email.ilike(like),
+        SupportTicket.hostname.ilike(like),
+        SupportTicket.asset_tag.ilike(like),
+    )).order_by(SupportTicket.created_at.desc()).limit(20).all()
+
+    try:
+        from models_employee import Employee
+        employees = Employee.query.filter(or_(
+            Employee.name.ilike(like),
+            Employee.email.ilike(like),
+            Employee.department.ilike(like),
+            Employee.job_title.ilike(like),
+        )).limit(20).all()
+    except Exception:
+        employees = []
+
+    return render_template('search.html', q=q, assets=assets, tickets=tickets, employees=employees)
+
+
+# ── Agent installer download ─────────────────────────────────────────────────
+
+
+
+# ── Restored: /download/agent-installer ──
+@app.route('/download/agent-installer')
+@login_required
+@license_required
+def download_agent_installer():
+    """Serve the MSI installer (preferred) or PS1 fallback."""
+    import os
+    msi_path = os.path.join(app.root_path, 'rmm_agent', 'CirqueRMM.msi')
+    if os.path.exists(msi_path):
+        return send_file(msi_path, as_attachment=True, download_name='CirqueRMM.msi',
+                         mimetype='application/x-msi')
+    # Fallback to PS1 if MSI not built yet
+    ps1_path = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
+    if not os.path.exists(ps1_path):
+        return "Installer not found on server.", 404
+    return send_file(ps1_path, as_attachment=True, download_name='CirqueRMM-Install.ps1',
+                     mimetype='application/octet-stream')
+
+
+
+
+# ── Restored: /download/agent-ps1 ──
+@app.route('/download/agent-ps1')
+@login_required
+@license_required
+def download_agent_ps1():
+    """Serve the raw PowerShell installer script directly."""
+    import os
+    path = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
+    if not os.path.exists(path):
+        return 'Script not found on server.', 404
+    return send_file(path, as_attachment=True, download_name='CirqueRMM-Install.ps1',
+                     mimetype='application/octet-stream')
+
+
+
+
+# ── Restored: /download/agent-file/<path:filename> ──
+@app.route('/download/agent-file/<path:filename>')
+@login_required
+@license_required
+def download_agent_file(filename):
+    """Serve individual agent files for the installer (authenticated users only)."""
+    import os, posixpath
+    # Whitelist allowed files
+    allowed = {
+        'agent_client.py', 'agent_launcher.py', 'tray.py',
+        'requirements.txt', 'version.txt',
+        'cirque_icon_ico.b64', 'cirque_icon_png.b64',
+    }
+    # Sanitize filename to prevent path traversal
+    clean = posixpath.basename(filename)
+    if clean not in allowed:
+        return "File not available.", 404
+    path = os.path.join(app.root_path, 'rmm_agent', clean)
+    if not os.path.exists(path):
+        return f"{clean} not found on server.", 404
+    return send_file(path, as_attachment=False, mimetype='text/plain')
+
+
+
+
+# ── Restored: /rmm/agent/launcher ──
+@app.route('/rmm/agent/launcher')
+def rmm_agent_launcher():
+    """Serve agent_launcher.py (self-healing wrapper). Authenticated by agent token."""
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    launcher_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_launcher.py')
+    return send_file(launcher_path, mimetype='text/x-python', as_attachment=False)
+
+
+
+
+# ── Restored: /rmm/agent/repair ──
+@app.route('/rmm/agent/repair')
+def rmm_agent_repair():
+    """Serve agent_repair.ps1. Authenticated by agent token."""
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    repair_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_repair.ps1')
+    return send_file(repair_path, mimetype='text/plain', as_attachment=False)
+
+
+
+
+# ── Restored: /rmm/agent/tray ──
+@app.route('/rmm/agent/tray')
+def rmm_agent_tray():
+    """Serve tray.py to authenticated agents."""
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    tray_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'tray.py')
+    if not os.path.isfile(tray_path):
+        return jsonify({'error': 'tray.py not found on server'}), 404
+    return send_file(tray_path, mimetype='text/x-python', as_attachment=False)
+
+
+
+
+# ── Restored: /api/rmm/last-scan/<agent_id> ──
+@app.route('/api/rmm/last-scan/<agent_id>', methods=['POST'])
+@login_required
+def api_rmm_last_scan(agent_id):
+    """Persist the last AV scan time into security_json."""
+    import json as _json
+    data = request.get_json(force=True) or {}
+    scan_type = data.get('scan_type', 'quick')
+    scan_time = data.get('scan_time', '')
+    row = db.session.execute(
+        text("SELECT security_json FROM rmm_telemetry WHERE agent_id = :aid"),
+        {'aid': agent_id}
+    ).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'error': 'No telemetry row'}), 404
+    try:
+        sec = _json.loads(row[0] or '{}')
+    except Exception:
+        sec = {}
+    sec['last_scan'] = {'type': scan_type, 'time': scan_time}
+    db.session.execute(
+        text("UPDATE rmm_telemetry SET security_json = :sj WHERE agent_id = :aid"),
+        {'sj': _json.dumps(sec), 'aid': agent_id}
+    )
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ── Eagle Eyes ────────────────────────────────────────────────────────────────
+
+
+
+# ── Restored: /api/rmm/metrics-history/<agent_id> ──
+@app.route('/api/rmm/metrics-history/<agent_id>')
+@login_required
+def api_rmm_metrics_history(agent_id):
+    """Return CPU/RAM history for the last N hours (default 24)."""
+    hours = int(request.args.get('hours', 24))
+    rows = db.session.execute(
+        text("""SELECT recorded_at, cpu_percent, memory_percent
+                FROM rmm_metrics_history
+                WHERE agent_id = :aid
+                  AND recorded_at >= datetime('now', :delta)
+                ORDER BY recorded_at ASC"""),
+        {'aid': agent_id, 'delta': f'-{hours} hours'}
+    ).fetchall()
+    return jsonify({
+        'ok': True,
+        'hours': hours,
+        'data': [{'ts': r[0], 'cpu': r[1], 'ram': r[2]} for r in rows],
+    })
+
+
+
+
+# ── Restored: /api/rmm/availability/<agent_id> ──
+@app.route('/api/rmm/availability/<agent_id>')
+@login_required
+def api_rmm_availability(agent_id):
+    """Return recent online/offline events for an agent."""
+    limit = int(request.args.get('limit', 100))
+    rows = db.session.execute(
+        text("""SELECT event, recorded_at
+                FROM rmm_availability
+                WHERE agent_id = :aid
+                ORDER BY recorded_at DESC
+                LIMIT :lim"""),
+        {'aid': agent_id, 'lim': limit}
+    ).fetchall()
+    return jsonify({
+        'ok': True,
+        'events': [{'event': r[0], 'ts': r[1]} for r in rows],
+    })
+
+
+
+
+# ── Restored: /api/rmm/patches/<agent_id> ──
+@app.route('/api/rmm/patches/<agent_id>')
+@login_required
+def api_rmm_patches(agent_id):
+    """Return installed Windows hotfixes for an agent."""
+    rows = db.session.execute(
+        text("""SELECT hotfix_id, description, installed_on
+                FROM rmm_patch
+                WHERE agent_id = :aid
+                ORDER BY installed_on DESC"""),
+        {'aid': agent_id}
+    ).fetchall()
+    return jsonify({
+        'ok': True,
+        'count': len(rows),
+        'patches': [{'id': r[0], 'description': r[1], 'installed_on': r[2]} for r in rows],
+    })
+
+
+
+
+# ── Restored: /api/rmm/pending-updates/<agent_id> ──
+@app.route('/api/rmm/pending-updates/<agent_id>')
+@login_required
+def api_rmm_pending_updates(agent_id):
+    """List available (not yet installed) Windows Updates reported by the agent."""
+    rows = db.session.execute(
+        text("""SELECT update_id, title, kb_ids, severity, size_mb,
+                       reboot_required, category, recorded_at
+                FROM rmm_pending_update
+                WHERE agent_id = :aid
+                ORDER BY
+                    CASE severity
+                        WHEN 'Critical'  THEN 1 WHEN 'Important' THEN 2
+                        WHEN 'Moderate'  THEN 3 WHEN 'Low'       THEN 4 ELSE 5
+                    END, title"""),
+        {'aid': agent_id}
+    ).fetchall()
+    import json as _json
+    return jsonify({
+        'ok': True,
+        'count': len(rows),
+        'updates': [{
+            'update_id':       r[0], 'title':    r[1],
+            'kb_ids':          _json.loads(r[2] or '[]'),
+            'severity':        r[3], 'size_mb':  r[4],
+            'reboot_required': bool(r[5]),
+            'category':        r[6], 'recorded_at': r[7],
+        } for r in rows],
+    })
+
+
+
+
+# ── Restored: /api/rmm/session-events/<agent_id> ──
+@app.route('/api/rmm/session-events/<agent_id>')
+@login_required
+def api_rmm_session_events(agent_id):
+    """Return session activity events (logon/logoff/lock/unlock/sleep/wake) for an agent."""
+    from rmm_gateway.db import get_session_events
+    days = request.args.get('days', 7, type=int)
+    events = get_session_events(agent_id, min(days, 90))
+    return jsonify({'ok': True, 'events': events})
+
+
+
+
+# ── Restored: /api/rmm/software/<agent_id> ──
+@app.route('/api/rmm/software/<agent_id>')
+@login_required
+def api_rmm_software(agent_id):
+    """Return installed software inventory for an agent."""
+    from rmm_gateway.db import get_software
+    software = get_software(agent_id)
+    return jsonify({'ok': True, 'software': software, 'count': len(software)})
+
+
+
+
+# ── Restored: /api/rmm/patch-jobs/<agent_id> ──
+@app.route('/api/rmm/patch-jobs/<agent_id>', methods=['GET'])
+@login_required
+def api_rmm_patch_jobs_get(agent_id):
+    """List patch deployment jobs for an agent."""
+    import json as _json
+    rows = db.session.execute(
+        text("""SELECT id, update_ids, kb_ids, titles, status,
+                       approved_by, approved_at, deployed_at, completed_at,
+                       result_json, reboot_required, created_at, updated_at
+                FROM rmm_patch_job
+                WHERE agent_id = :aid
+                ORDER BY id DESC LIMIT 30"""),
+        {'aid': agent_id}
+    ).fetchall()
+    return jsonify({
+        'ok': True,
+        'jobs': [{
+            'id':              r[0],
+            'update_ids':      _json.loads(r[1] or '[]'),
+            'kb_ids':          _json.loads(r[2] or '[]'),
+            'titles':          _json.loads(r[3] or '[]'),
+            'status':          r[4],
+            'approved_by':     r[5],
+            'approved_at':     r[6],
+            'deployed_at':     r[7],
+            'completed_at':    r[8],
+            'result':          _json.loads(r[9]) if r[9] else None,
+            'reboot_required': bool(r[10]),
+            'created_at':      r[11],
+            'updated_at':      r[12],
+        } for r in rows],
+    })
+
+
+
+
+# ── Restored: /api/rmm/patch-jobs/<agent_id> ──
+@app.route('/api/rmm/patch-jobs/<agent_id>', methods=['POST'])
+@login_required
+def api_rmm_patch_jobs_create(agent_id):
+    """Approve a set of pending updates, creating a queued patch job."""
+    import json as _json
+    data       = request.get_json() or {}
+    update_ids = data.get('update_ids') or []
+    kb_ids     = data.get('kb_ids') or []
+    titles     = data.get('titles') or []
+    if not update_ids:
+        return jsonify({'ok': False, 'error': 'update_ids required'}), 400
+    db.session.execute(
+        text("""INSERT INTO rmm_patch_job
+                    (agent_id, update_ids, kb_ids, titles, status, approved_by, approved_at)
+                VALUES (:aid, :uids, :kbids, :titles, 'queued', :uid, datetime('now', '-7 hours'))"""),
+        {
+            'aid':    agent_id,
+            'uids':   _json.dumps(update_ids),
+            'kbids':  _json.dumps(kb_ids),
+            'titles': _json.dumps(titles),
+            'uid':    current_user.id if hasattr(current_user, 'id') else None,
+        }
+    )
+    db.session.commit()
+    job_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
+    return jsonify({'ok': True, 'job_id': job_id})
+
+
+
+
+# ── Restored: /api/rmm/cmd/<agent_id> ──
+@app.route('/api/rmm/cmd/<agent_id>', methods=['POST'])
+@login_required
+def api_rmm_cmd(agent_id):
+    """Proxy any JSON message to the connected agent via gateway send-msg."""
+    import json as _json, urllib.request as _req, urllib.error as _err
+    data = request.get_json(force=True) or {}
+    session_id = data.get('session_id') or 0
+    if not session_id:
+        try:
+            res = db.session.execute(
+                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, datetime('now', '-7 hours'))"),
+                {'aid': None, 'uid': current_user.id, 'reason': data.get('type', 'cmd')}
             )
-            if stale:
-                logger.info('RMM agent files changed — rebuilding CirqueRMM.msi…')
-                r = _sp.run(['python3', build_py], capture_output=True, text=True, cwd=agent_dir)
-                if r.returncode == 0:
-                    logger.info('CirqueRMM.msi rebuilt successfully.')
-                else:
-                    logger.error(f'MSI build failed:\n{r.stdout}\n{r.stderr}')
-            else:
-                logger.info('CirqueRMM.msi is up-to-date — skipping rebuild.')
-        except Exception as exc:
-            logger.error(f'MSI auto-rebuild error: {exc}')
+            db.session.commit()
+            session_id = res.lastrowid
+        except Exception:
+            session_id = 0
+    data['session_id'] = session_id
+    payload = _json.dumps(data).encode()
+    try:
+        req = _req.Request(
+            f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+            data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        with _req.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read())
+        if not result.get('ok'):
+            return jsonify({'ok': False, 'session_id': session_id, 'error': result.get('error', 'Gateway error')}), 502
+    except Exception as e:
+        return jsonify({'ok': False, 'session_id': session_id, 'error': str(e)}), 502
+    return jsonify({'ok': True, 'session_id': session_id})
 
-    threading.Thread(target=_worker, name='msi-rebuild', daemon=True).start()
 
+
+
+# ── Restored: /api/rmm/cmd-result/<agent_id>/<int:session_id> ──
+@app.route('/api/rmm/cmd-result/<agent_id>/<int:session_id>')
+@login_required
+def api_rmm_cmd_result(agent_id, session_id):
+    """Poll for latest agent response in rmm_event for a given session."""
+    import json as _json
+    row = db.session.execute(
+        text("""SELECT event_type, data_json, created_at
+                FROM rmm_event WHERE session_id = :sid AND actor_type = 'agent'
+                ORDER BY id DESC LIMIT 1"""),
+        {'sid': session_id}
+    ).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'ready': False})
+    try:
+        data = _json.loads(row[1] or '{}')
+    except Exception:
+        data = {}
+    return jsonify({'ok': True, 'ready': True, 'event_type': row[0], 'data': data, 'created_at': row[2]})
+
+
+
+
+# ── Restored: /api/rmm/deploy-rustdesk/<agent_id> ──
+@app.route('/api/rmm/deploy-rustdesk/<agent_id>', methods=['POST'])
+@login_required
+@manager_required
+def api_rmm_deploy_rustdesk(agent_id):
+    """Send a PowerShell script to the agent to install RustDesk via winget
+    and configure it to use the internal relay server."""
+    import json as _json, urllib.request as _req
+
+    # Find the linked asset so we can update rustdesk_id after install
+    row = db.session.execute(
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'error': 'agent not found'}), 404
+
+    server   = 'rust.corp.cirque.com'
+    key      = 's18RB+OV0ctX3SuOIcXy6EeYqA+Elx25RODTGYBnyV8='
+
+    # PowerShell: install RustDesk silently, then write server config
+    ps = r"""
+$ErrorActionPreference = 'Stop'
+Write-Host 'Installing RustDesk via winget...'
+try {
+    winget install --id RustDesk.RustDesk --silent --accept-source-agreements --accept-package-agreements 2>&1
+} catch { Write-Host "winget error: $_" }
+
+Start-Sleep -Seconds 5
+
+$cfg2 = @"
+rendezvous_server = '{server}'
+nat_type = 1
+serial = 0
+
+[options]
+custom-rendezvous-server = '{server}'
+key = '{key}'
+relay-server = ''
+api-server = ''
+"@
+
+# Write config for current user and for SYSTEM (service)
+$paths = @(
+    "$env:APPDATA\RustDesk\config",
+    "$env:ProgramData\RustDesk\config",
+    "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config",
+    "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
+)
+foreach ($dir in $paths) {
+    try {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $cfg2 | Set-Content -Path "$dir\RustDesk2.toml" -Encoding UTF8 -Force
+        Write-Host "Wrote config to $dir"
+    } catch { Write-Host "Skipped $dir: $_" }
+}
+
+# Restart RustDesk service if running
+try {
+    $svc = Get-Service -Name 'RustDesk' -ErrorAction SilentlyContinue
+    if ($svc) { Restart-Service -Name 'RustDesk' -Force; Write-Host 'RustDesk service restarted' }
+} catch { Write-Host "Service restart: $_" }
+
+# Start RustDesk briefly to trigger peer ID generation, then close it
+try {
+    $rd = "$env:ProgramFiles\RustDesk\RustDesk.exe"
+    if (-not (Test-Path $rd)) { $rd = "${env:ProgramFiles(x86)}\RustDesk\RustDesk.exe" }
+    if (Test-Path $rd) {
+        Start-Process $rd --minimized -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 8
+        Stop-Process -Name 'RustDesk' -ErrorAction SilentlyContinue
+    }
+} catch { Write-Host "RustDesk launch: $_" }
+
+# Read and report the peer ID so the tracker can store it
+try {
+    $tomlPaths = @(
+        "$env:APPDATA\RustDesk\config\RustDesk.toml",
+        "$env:ProgramData\RustDesk\config\RustDesk.toml",
+        "C:\Windows\System32\config\systemprofile\AppData\Roaming\RustDesk\config\RustDesk.toml"
+    )
+    foreach ($tp in $tomlPaths) {
+        if (Test-Path $tp) {
+            $raw = Get-Content $tp -Raw -ErrorAction SilentlyContinue
+            if ($raw -match '(?m)^id\s*=\s*(\S+)') {
+                Write-Host "RUSTDESK_ID=$($Matches[1].Trim())"
+                break
+            }
+        }
+    }
+} catch { Write-Host "ID read: $_" }
+
+Write-Host 'Done.'
+""".replace('{server}', server).replace('{key}', key)
+
+    try:
+        session_row = db.session.execute(
+            text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, 'Deploy RustDesk', datetime('now','-7 hours'))"),
+            {'aid': row[0], 'uid': current_user.id}
+        )
+        db.session.commit()
+        session_id = session_row.lastrowid
+    except Exception:
+        session_id = 0
+
+    payload = _json.dumps({'type': 'run_script', 'shell': 'powershell', 'code': ps, 'timeout': 180, 'session_id': session_id}).encode()
+    try:
+        req = _req.Request(f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+                           data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        with _req.urlopen(req, timeout=15) as resp:
+            result = _json.loads(resp.read())
+        if not result.get('ok'):
+            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error')}), 502
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 502
+
+    return jsonify({'ok': True, 'session_id': session_id})
+
+
+
+
+# ── Restored: /api/rmm/patch-jobs/<agent_id>/<int:job_id>/deploy ──
+@app.route('/api/rmm/patch-jobs/<agent_id>/<int:job_id>/deploy', methods=['POST'])
+@login_required
+def api_rmm_patch_jobs_deploy(agent_id, job_id):
+    """Push a queued patch job to the connected agent via the gateway."""
+    import json as _json, urllib.request as _req, urllib.error as _err
+    row = db.session.execute(
+        text("SELECT update_ids, kb_ids, titles, status FROM rmm_patch_job WHERE id = :jid AND agent_id = :aid"),
+        {'jid': job_id, 'aid': agent_id}
+    ).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'error': 'Job not found'}), 404
+    if row[3] not in ('queued', 'failed'):
+        return jsonify({'ok': False, 'error': f'Job is already {row[3]}'}), 400
+
+    payload = _json.dumps({
+        'job_id':     job_id,
+        'update_ids': _json.loads(row[0] or '[]'),
+        'kb_ids':     _json.loads(row[1] or '[]'),
+        'titles':     _json.loads(row[2] or '[]'),
+    }).encode()
+
+    gw = RMM_GATEWAY_INTERNAL
+    try:
+        req = _req.Request(
+            f"{gw}/deploy-patches/{agent_id}",
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with _req.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read())
+        if not result.get('ok'):
+            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error')}), 502
+    except _err.HTTPError as e:
+        body = e.read().decode()
+        return jsonify({'ok': False, 'error': f'Gateway {e.code}: {body}'}), 502
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 502
+
+    # Mark as deploying
+    db.session.execute(
+        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=datetime('now', '-7 hours'), updated_at=datetime('now', '-7 hours') WHERE id=:jid"),
+        {'jid': job_id}
+    )
+    db.session.commit()
+    return jsonify({'ok': True, 'message': 'Deploy command sent to agent'})
+
+
+
+
+# ── Restored: /api/rmm/rustdesk-sync/<agent_id> ──
+@app.route('/api/rmm/rustdesk-sync/<agent_id>', methods=['POST'])
+def api_rmm_rustdesk_sync(agent_id):
+    """RMM agent reports its RustDesk peer ID so the tracker can auto-populate
+    asset.rustdesk_id without manual entry.
+
+    Auth: agent_id + token as query params (same as other agent endpoints).
+    Body JSON: { "rustdesk_id": "<10-digit peer id>", "rustdesk_password": "<optional>" }
+    """
+    token = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+
+    data = request.get_json(silent=True) or {}
+    peer_id = (data.get('rustdesk_id') or '').strip()
+    if not peer_id:
+        return jsonify({'ok': False, 'error': 'rustdesk_id is required'}), 400
+
+    # Find the asset linked to this agent
+    row = db.session.execute(
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = 1 LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if not row or not row[0]:
+        return jsonify({'ok': False, 'error': 'agent not linked to an asset'}), 404
+
+    asset = Asset.query.get(row[0])
+    if not asset:
+        return jsonify({'ok': False, 'error': 'asset not found'}), 404
+
+    changed = asset.rustdesk_id != peer_id
+    asset.rustdesk_id = peer_id
+
+    optional_pw = (data.get('rustdesk_password') or '').strip()
+    if optional_pw:
+        asset.rustdesk_password = optional_pw
+
+    if changed:
+        db.session.add(AssetHistory(
+            asset_id=asset.id,
+            action='RustDesk ID Updated',
+            description=f'RMM agent auto-synced RustDesk peer ID: {peer_id}',
+            user_id=None
+        ))
+
+    db.session.commit()
+    return jsonify({'ok': True, 'asset_id': asset.id, 'changed': changed})
+
+
+
+
+# ── Restored: /api/rmm/agent-info/<agent_id> ──
+@app.route('/api/rmm/agent-info/<agent_id>')
+def api_rmm_agent_info(agent_id):
+    """Return asset info for a given agent (authenticated by token).
+    Used by the tray app setup to populate tray_config.json."""
+    token = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+    row = db.session.execute(
+        text("SELECT a.id, a.asset_tag, a.name FROM rmm_agent ra LEFT JOIN asset a ON a.id = ra.asset_id WHERE ra.agent_id = :aid AND ra.enabled = 1 LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'error': 'agent not found'}), 404
+    return jsonify({'ok': True, 'asset_id': row[0], 'asset_tag': row[1] or '', 'hostname': row[2] or ''})
+
+
+
+
+# ── Restored: /csat/<token>/<int:score> ──
+@app.route('/csat/<token>/<int:score>')
+def csat_response(token, score):
+    """Public endpoint — reporter clicks 👍 or 👎 in the close email."""
+    ticket = SupportTicket.query.filter_by(csat_token=token).first_or_404()
+    if ticket.csat_score is None:
+        ticket.csat_score = 1 if score >= 1 else 0
+        ticket.csat_comment = request.args.get('comment', '').strip() or None
+        db.session.commit()
+        label = 'positive' if ticket.csat_score == 1 else 'negative'
+        return f"""<!doctype html><html><head><meta charset=utf-8>
+        <title>Feedback received</title>
+        <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa;}}
+        .box{{text-align:center;padding:40px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.1);max-width:400px;}}</style></head>
+        <body><div class="box">
+        <div style="font-size:64px">{'👍' if ticket.csat_score==1 else '👎'}</div>
+        <h2>Thanks for your feedback!</h2>
+        <p>Your {label} response has been recorded for ticket <strong>#{ticket.id}</strong>.</p>
+        </div></body></html>"""
+    return """<!doctype html><html><head><meta charset=utf-8><title>Already rated</title></head>
+    <body style="font-family:Arial,sans-serif;text-align:center;padding:60px">
+    <h2>Already recorded</h2><p>This ticket has already been rated. Thank you!</p></body></html>"""
+
+
+# ── Asset check-out / check-in ──────────────────────────────────────────────
+
+
+
+# ── Restored: /api/ai/test ──
+@app.route('/api/ai/test', methods=['POST'])
+@login_required
+def api_ai_test():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    try:
+        import openai as _oai
+        db_conn = get_db()
+        row = db_conn.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
+        model_row = db_conn.execute("SELECT value FROM setting WHERE key='openai_model'").fetchone()
+        db_conn.close()
+        api_key = row['value'] if row else None
+        model   = (model_row['value'] if model_row else None) or 'gpt-4o'
+        if not api_key:
+            return jsonify({'ok': False, 'error': 'No API key saved. Add your key and hit Save first.'}), 400
+        client = _oai.OpenAI(api_key=api_key)
+        resp   = client.chat.completions.create(
+            model=model,
+            messages=[{'role':'user', 'content':'Reply with just the word OK.'}],
+            max_tokens=5
+        )
+        reply = resp.choices[0].message.content.strip()
+        return jsonify({'ok': True, 'model': model, 'reply': reply})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# REPORT ROUTES
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+
+# ── Error handlers ────────────────────────────────────────────────────────────
+
+@app.errorhandler(404)
+def page_not_found(e):
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify({'error': 'Not found'}), 404
+    return render_template('errors/404.html'), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    db.session.rollback()
+    logger.error(f'500 error on {request.path}: {e}')
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify({'error': 'Internal server error'}), 500
+    return render_template('errors/500.html', error=str(e)), 500
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify({'error': 'Forbidden'}), 403
+    return render_template('errors/403.html'), 403
+
+
+# ── AI Cross-Module Ask ────────────────────────────────────────────────────────
+
+@app.route('/api/ai/ask', methods=['POST'])
+@login_required
+def api_ai_ask():
+    """Cross-module AI question answering."""
+    data = request.get_json(force=True) or {}
+    question = (data.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'question required'}), 400
+    try:
+        result = _ai_engine.ask_ai(question)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'AI ask error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER FOR RAW DB ACCESS (security/workflow/report routes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_db():
+    import sqlite3 as _sq3
+    _conn = _sq3.connect('/var/www/tracker/assets.db')
+    _conn.row_factory = _sq3.Row
+    return _conn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8751,8 +8916,7 @@ def _rebuild_msi_if_stale():
 @app.route('/alerts/center')
 @login_required
 def alert_center():
-    from sqlalchemy import text as _t
-    users = db.session.execute(_t("SELECT id, username, full_name FROM user ORDER BY username")).mappings().fetchall()
+    users = db.session.execute(text("SELECT id, username, full_name FROM user ORDER BY username")).mappings().fetchall()
     return render_template('alert_center.html', users=[dict(u) for u in users])
 
 
@@ -8768,21 +8932,20 @@ def api_alert_rules():
             else:
                 rows = con.execute("SELECT * FROM alert_rule ORDER BY category, alert_type").fetchall()
             return jsonify(ok=True, rules=[dict(r) for r in rows])
-        # POST – create
         d = request.get_json(force=True)
         con.execute(
             """INSERT INTO alert_rule (category, alert_type, label, threshold_value, threshold_unit,
                enabled, auto_ticket, ticket_priority, assigned_to_user_id, email_notify,
                teams_notify, teams_webhook_url, cooldown_minutes)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (d.get('category','agent'), d.get('alert_type',''), d.get('label',''),
-             d.get('threshold_value',0), d.get('threshold_unit',''),
-             1 if d.get('enabled',True) else 0,
+            (d.get('category', 'agent'), d.get('alert_type', ''), d.get('label', ''),
+             d.get('threshold_value', 0), d.get('threshold_unit', ''),
+             1 if d.get('enabled', True) else 0,
              1 if d.get('auto_ticket') else 0,
-             d.get('ticket_priority','Normal'), d.get('assigned_to_user_id'),
-             1 if d.get('email_notify',True) else 0,
+             d.get('ticket_priority', 'Normal'), d.get('assigned_to_user_id'),
+             1 if d.get('email_notify', True) else 0,
              1 if d.get('teams_notify') else 0,
-             d.get('teams_webhook_url',''), d.get('cooldown_minutes',60))
+             d.get('teams_webhook_url', ''), d.get('cooldown_minutes', 60))
         )
         con.commit()
         return jsonify(ok=True)
@@ -8799,20 +8962,19 @@ def api_alert_rule(rid):
             con.execute("DELETE FROM alert_rule WHERE id=?", (rid,))
             con.commit()
             return jsonify(ok=True)
-        # PUT – update
         d = request.get_json(force=True)
         con.execute(
             """UPDATE alert_rule SET label=?, threshold_value=?, threshold_unit=?,
                enabled=?, auto_ticket=?, ticket_priority=?, assigned_to_user_id=?,
                email_notify=?, teams_notify=?, teams_webhook_url=?, cooldown_minutes=?
                WHERE id=?""",
-            (d.get('label',''), d.get('threshold_value',0), d.get('threshold_unit',''),
-             1 if d.get('enabled',True) else 0,
+            (d.get('label', ''), d.get('threshold_value', 0), d.get('threshold_unit', ''),
+             1 if d.get('enabled', True) else 0,
              1 if d.get('auto_ticket') else 0,
-             d.get('ticket_priority','Normal'), d.get('assigned_to_user_id'),
-             1 if d.get('email_notify',True) else 0,
+             d.get('ticket_priority', 'Normal'), d.get('assigned_to_user_id'),
+             1 if d.get('email_notify', True) else 0,
              1 if d.get('teams_notify') else 0,
-             d.get('teams_webhook_url',''), d.get('cooldown_minutes',60), rid)
+             d.get('teams_webhook_url', ''), d.get('cooldown_minutes', 60), rid)
         )
         con.commit()
         return jsonify(ok=True)
@@ -8845,8 +9007,7 @@ def api_alert_log():
         limit = int(request.args.get('limit', 100))
         if cat:
             rows = con.execute(
-                "SELECT * FROM alert_log WHERE category=? ORDER BY fired_at DESC LIMIT ?",
-                (cat, limit)
+                "SELECT * FROM alert_log WHERE category=? ORDER BY fired_at DESC LIMIT ?", (cat, limit)
             ).fetchall()
         else:
             rows = con.execute(
@@ -8857,17 +9018,13 @@ def api_alert_log():
         con.close()
 
 
-# ── Notification bell ────────────────────────────────────────────────────────
-
 @app.route('/api/notifications/bell')
 @login_required
 def api_notifications_bell():
     con = _alert_svc._get_db()
     try:
         unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=0").fetchone()[0]
-        recent = con.execute(
-            "SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20"
-        ).fetchall()
+        recent = con.execute("SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20").fetchall()
         return jsonify(ok=True, unread=unread, items=[dict(r) for r in recent])
     finally:
         con.close()
@@ -8941,7 +9098,6 @@ def vulnerability_dashboard():
         open_count   = con.execute("SELECT COUNT(*) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
     finally:
         con.close()
-    # Convert last_sync from UTC to MST (UTC-7)
     last_sync = None
     if last_sync_raw:
         try:
@@ -8960,8 +9116,6 @@ def vulnerability_dashboard():
 @app.route('/api/vulnerabilities/sync', methods=['POST'])
 @login_required
 def api_vuln_sync():
-    """Kick off Defender sync in a background thread so the worker isn't blocked."""
-    # `app` is the real Flask instance here (not a proxy), so pass it directly.
     _app = app
     def _bg():
         with _app.app_context():
@@ -8979,7 +9133,6 @@ def api_vuln_sync():
 def api_vuln_stats():
     con = _alert_svc._get_db()
     try:
-        # Count only CVEs that have at least one device with an Open exposure
         counts = {}
         for row in con.execute("""
             SELECT vc.severity, COUNT(DISTINCT vc.cve_id) as c
@@ -9001,11 +9154,12 @@ def api_vuln_stats():
                 last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
             except Exception:
                 last_sync_mst = last_sync_raw[:16]
-        return jsonify(Critical=counts.get('Critical',0), High=counts.get('High',0),
-                       Medium=counts.get('Medium',0), Low=counts.get('Low',0),
+        return jsonify(Critical=counts.get('Critical', 0), High=counts.get('High', 0),
+                       Medium=counts.get('Medium', 0), Low=counts.get('Low', 0),
                        devices=devices, open_exposures=open_exp, last_sync=last_sync_mst)
     finally:
         con.close()
+
 
 @app.route('/api/vulnerabilities')
 @login_required
@@ -9044,16 +9198,14 @@ def api_vulnerabilities():
 def api_vuln_devices():
     con = _alert_svc._get_db()
     try:
-        cve_id = request.args.get('cve_id')
+        cve_id   = request.args.get('cve_id')
         asset_id = request.args.get('asset_id')
         if cve_id:
             rows = con.execute(
                 """SELECT dv.*, a.name as asset_name,
-                          COALESCE(rt.hostname, a.name) as display_name
+                          COALESCE(a.hostname, a.name) as display_name
                    FROM device_vulnerability dv
                    LEFT JOIN asset a ON a.id = dv.asset_id
-                   LEFT JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
-                   LEFT JOIN rmm_telemetry rt ON rt.agent_id = ra.agent_id
                    WHERE dv.cve_id=? ORDER BY dv.severity""",
                 (cve_id,)
             ).fetchall()
@@ -9062,7 +9214,8 @@ def api_vuln_devices():
                 """SELECT dv.*, vc.name as vuln_name, vc.description
                    FROM device_vulnerability dv
                    LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
-                   WHERE dv.asset_id=? ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END""",
+                   WHERE dv.asset_id=? ORDER BY CASE dv.severity
+                   WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END""",
                 (asset_id,)
             ).fetchall()
         else:
@@ -9071,7 +9224,8 @@ def api_vuln_devices():
                    FROM device_vulnerability dv
                    LEFT JOIN asset a ON a.id = dv.asset_id
                    WHERE dv.status='Open'
-                   ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END
+                   ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
+                            WHEN 'Medium' THEN 3 ELSE 4 END
                    LIMIT 500"""
             ).fetchall()
         return jsonify(ok=True, devices=[dict(r) for r in rows])
@@ -9082,8 +9236,8 @@ def api_vuln_devices():
 @app.route('/api/vulnerabilities/<cve_id>/status', methods=['PUT'])
 @login_required
 def api_vuln_status(cve_id):
-    d = request.get_json(force=True)
-    con = _alert_svc._get_db()
+    d        = request.get_json(force=True)
+    con      = _alert_svc._get_db()
     username = current_user.username if current_user.is_authenticated else 'system'
     now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
     try:
@@ -9094,64 +9248,19 @@ def api_vuln_status(cve_id):
         if asset_id:
             con.execute(
                 """UPDATE device_vulnerability
-                   SET status=?, remediation_note=?, plan_date=?,
-                       updated_at=?, updated_by=?
+                   SET status=?, remediation_note=?, plan_date=?, updated_at=?, updated_by=?
                    WHERE cve_id=? AND asset_id=?""",
                 (status, note, plan, now_str, username, cve_id, asset_id)
             )
             con.commit()
-            # Log to asset activity history
-            try:
-                asset = Asset.query.get(int(asset_id))
-                if asset:
-                    desc = f'Vulnerability {cve_id} marked {status}'
-                    if plan:
-                        desc += f' — remediation planned {plan}'
-                    if note:
-                        desc += f'. Note: {note}'
-                    db.session.add(AssetHistory(
-                        asset_id=asset.id,
-                        action='Vulnerability',
-                        description=desc,
-                        user_id=current_user.id if current_user.is_authenticated else None,
-                        timestamp=now_mst()
-                    ))
-                    db.session.commit()
-            except Exception:
-                pass
         else:
-            # Bulk update — get all affected asset_ids first for logging
-            affected = con.execute(
-                "SELECT DISTINCT asset_id FROM device_vulnerability WHERE cve_id=?",
-                (cve_id,)
-            ).fetchall()
             con.execute(
                 """UPDATE device_vulnerability
-                   SET status=?, remediation_note=?, plan_date=?,
-                       updated_at=?, updated_by=?
+                   SET status=?, remediation_note=?, plan_date=?, updated_at=?, updated_by=?
                    WHERE cve_id=?""",
                 (status, note, plan, now_str, username, cve_id)
             )
             con.commit()
-            # Log to each affected asset
-            try:
-                desc = f'Vulnerability {cve_id} marked {status} (bulk update)'
-                if plan:
-                    desc += f' — remediation planned {plan}'
-                if note:
-                    desc += f'. Note: {note}'
-                for row in affected:
-                    if row[0]:
-                        db.session.add(AssetHistory(
-                            asset_id=row[0],
-                            action='Vulnerability',
-                            description=desc,
-                            user_id=current_user.id if current_user.is_authenticated else None,
-                            timestamp=now_mst()
-                        ))
-                db.session.commit()
-            except Exception:
-                pass
         return jsonify(ok=True)
     finally:
         con.close()
@@ -9160,26 +9269,18 @@ def api_vuln_status(cve_id):
 @app.route('/api/vulnerabilities/<cve_id>/deploy', methods=['POST'])
 @login_required
 def api_vuln_deploy(cve_id):
-    """Create and dispatch CVE patch deployment job(s) to device agent(s).
-
-    Body (JSON):
-      asset_id  — optional int; if omitted deploys to ALL devices with this CVE
-    """
-    import json as _json, urllib.request as _req, urllib.error as _err
     data     = request.get_json(force=True) or {}
     asset_id = data.get('asset_id')
     username = current_user.username if current_user.is_authenticated else 'system'
     con      = _alert_svc._get_db()
     now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
-
     try:
         if asset_id:
             rows = con.execute(
                 """SELECT dv.asset_id, ra.agent_id
                    FROM device_vulnerability dv
                    JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
-                   WHERE dv.cve_id = ? AND dv.asset_id = ?
-                   LIMIT 1""",
+                   WHERE dv.cve_id = ? AND dv.asset_id = ? LIMIT 1""",
                 (cve_id, asset_id)
             ).fetchall()
         else:
@@ -9192,16 +9293,13 @@ def api_vuln_deploy(cve_id):
             ).fetchall()
     finally:
         con.close()
-
     if not rows:
         return jsonify(ok=False, error='No connected agents found for this CVE'), 404
-
     dispatched = []
     errors     = []
     for (aid, agent_id) in rows:
-        # Create job record
         try:
-            raw = db.session.execute(
+            db.session.execute(
                 text("""INSERT INTO cve_patch_job
                         (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
                         VALUES (:aid, :agent, :cve, 'queued', :who, :now, :now, :now)"""),
@@ -9212,21 +9310,17 @@ def api_vuln_deploy(cve_id):
         except Exception as e:
             errors.append({'agent_id': agent_id, 'error': f'DB error: {e}'})
             continue
-
-        # Dispatch to gateway
-        payload = _json.dumps({'job_id': job_id, 'cve_ids': [cve_id]}).encode()
+        payload = json.dumps({'job_id': job_id, 'cve_ids': [cve_id]}).encode()
         try:
+            import urllib.request as _req
             req = _req.Request(
                 f"{RMM_GATEWAY_INTERNAL}/deploy-cve-patches/{agent_id}",
-                data=payload,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
+                data=payload, headers={'Content-Type': 'application/json'}, method='POST'
             )
             with _req.urlopen(req, timeout=10) as resp:
-                result = _json.loads(resp.read())
+                result = json.loads(resp.read())
             if result.get('ok'):
                 dispatched.append({'asset_id': aid, 'agent_id': agent_id, 'job_id': job_id})
-                # Mark deploying
                 db.session.execute(
                     text("UPDATE cve_patch_job SET status='deploying', updated_at=:now WHERE id=:jid"),
                     {'now': now_str, 'jid': job_id}
@@ -9234,29 +9328,14 @@ def api_vuln_deploy(cve_id):
                 db.session.commit()
             else:
                 errors.append({'agent_id': agent_id, 'error': result.get('error', 'gateway error')})
-                db.session.execute(
-                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
-                    {'now': now_str, 'jid': job_id}
-                )
-                db.session.commit()
         except Exception as e:
-            # Agent offline or gateway error — mark queued (will retry when online)
             errors.append({'agent_id': agent_id, 'error': str(e)})
-
-    return jsonify(ok=True, dispatched=dispatched, errors=errors,
-                   total=len(rows), sent=len(dispatched))
+    return jsonify(ok=True, dispatched=dispatched, errors=errors, total=len(rows), sent=len(dispatched))
 
 
 @app.route('/api/vulnerabilities/cve-patch-jobs')
 @login_required
 def api_cve_patch_jobs():
-    """Poll CVE patch job status.
-
-    Query params:
-      cve_id   — required
-      asset_id — optional, filter to one device
-    """
-    import json as _json
     cve_id   = request.args.get('cve_id')
     asset_id = request.args.get('asset_id')
     if not cve_id:
@@ -9265,108 +9344,21 @@ def api_cve_patch_jobs():
     try:
         if asset_id:
             rows = con.execute(
-                """SELECT j.id, j.asset_id, j.agent_id, j.cve_id, j.status,
-                          j.deployed_by, j.deployed_at, j.completed_at,
-                          j.result_json, j.reboot_required, j.updates_found,
-                          j.created_at, a.name as asset_name
-                   FROM cve_patch_job j
+                """SELECT j.*, a.name as asset_name FROM cve_patch_job j
                    LEFT JOIN asset a ON a.id = j.asset_id
-                   WHERE j.cve_id = ? AND j.asset_id = ?
-                   ORDER BY j.id DESC LIMIT 1""",
+                   WHERE j.cve_id = ? AND j.asset_id = ? ORDER BY j.id DESC LIMIT 1""",
                 (cve_id, asset_id)
             ).fetchall()
         else:
             rows = con.execute(
-                """SELECT j.id, j.asset_id, j.agent_id, j.cve_id, j.status,
-                          j.deployed_by, j.deployed_at, j.completed_at,
-                          j.result_json, j.reboot_required, j.updates_found,
-                          j.created_at, a.name as asset_name
-                   FROM cve_patch_job j
+                """SELECT j.*, a.name as asset_name FROM cve_patch_job j
                    LEFT JOIN asset a ON a.id = j.asset_id
-                   WHERE j.cve_id = ?
-                   ORDER BY j.id DESC LIMIT 50""",
+                   WHERE j.cve_id = ? ORDER BY j.id DESC LIMIT 50""",
                 (cve_id,)
             ).fetchall()
-        jobs = []
-        for r in rows:
-            res = _json.loads(r[8]) if r[8] else None
-            jobs.append({
-                'id':              r[0],
-                'asset_id':        r[1],
-                'agent_id':        r[2],
-                'cve_id':          r[3],
-                'status':          r[4],
-                'deployed_by':     r[5],
-                'deployed_at':     r[6],
-                'completed_at':    r[7],
-                'result':          res,
-                'reboot_required': bool(r[9]),
-                'updates_found':   r[10],
-                'created_at':      r[11],
-                'asset_name':      r[12],
-            })
-        return jsonify(ok=True, jobs=jobs)
+        return jsonify(ok=True, jobs=[dict(r) for r in rows])
     finally:
         con.close()
-
-
-# Auto-rebuild MSI whenever the service starts (non-blocking background thread)
-_rebuild_msi_if_stale()
-
-# Start alert evaluator background thread
-_alert_svc.start_background_thread()
-
-# Start workflow schedule runner
-_wf_engine.start_schedule_runner()
-
-# Load SMTP settings from DB into app.config so they survive restarts
-def _load_smtp_from_db():
-    try:
-        mappings = [
-            ('smtp_server',   'MAIL_SERVER',         None,  False),
-            ('smtp_port',     'MAIL_PORT',            None,  True),
-            ('smtp_username', 'MAIL_USERNAME',        None,  False),
-            ('smtp_password', 'MAIL_PASSWORD',        None,  False),
-            ('smtp_use_tls',  'MAIL_USE_TLS',         None,  'bool'),
-            ('smtp_use_ssl',  'MAIL_USE_SSL',         None,  'bool'),
-            ('smtp_sender',   'MAIL_DEFAULT_SENDER',  None,  False),
-        ]
-        with app.app_context():
-            for db_key, cfg_key, default, cast in mappings:
-                row = Setting.query.filter_by(key=db_key).first()
-                if row and row.value and row.value.strip():
-                    v = row.value.strip()
-                    if cast == 'bool':
-                        app.config[cfg_key] = (v == 'true')
-                    elif cast is True:
-                        app.config[cfg_key] = int(v)
-                    else:
-                        app.config[cfg_key] = v if v else None
-    except Exception as exc:
-        app.logger.warning(f'Could not load SMTP settings from DB at startup: {exc}')
-
-_load_smtp_from_db()
-
-
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        
-        # Verify license on startup
-        license_service.verify_on_startup()
-        
-        # Start periodic license checks
-        license_service.start_periodic_check()
-        
-    app.run(host='0.0.0.0', port=5000, debug=True)
-
-
-# ── Helper for new feature routes (raw sqlite3, same DB file) ─────────────────
-def get_db():
-    import sqlite3 as _sq3
-    _conn = _sq3.connect('/var/www/tracker/assets.db')
-    _conn.row_factory = _sq3.Row
-    return _conn
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -9407,7 +9399,7 @@ def api_workflow_create():
         """INSERT INTO workflow_definitions
            (name, description, trigger_type, trigger_config, nodes, edges, enabled, created_by, created_at, updated_at)
            VALUES (?,?,?,?,?,?,1,?,?,?)""",
-        (data['name'], data.get('description',''), data['trigger_type'],
+        (data['name'], data.get('description', ''), data['trigger_type'],
          json.dumps(data.get('trigger_config', {})),
          json.dumps(data.get('nodes', [])),
          json.dumps(data.get('edges', [])),
@@ -9438,18 +9430,18 @@ def api_workflow_get(wf_id):
 def api_workflow_update(wf_id):
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin only'}), 403
-    data = request.get_json()
-    now  = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    data    = request.get_json()
+    now     = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     db_conn = get_db()
     db_conn.execute(
         """UPDATE workflow_definitions
            SET name=?, description=?, trigger_type=?, trigger_config=?,
                nodes=?, edges=?, enabled=?, updated_at=?
            WHERE id=?""",
-        (data.get('name'), data.get('description',''), data.get('trigger_type'),
-         json.dumps(data.get('trigger_config',{})),
-         json.dumps(data.get('nodes',[])),
-         json.dumps(data.get('edges',[])),
+        (data.get('name'), data.get('description', ''), data.get('trigger_type'),
+         json.dumps(data.get('trigger_config', {})),
+         json.dumps(data.get('nodes', [])),
+         json.dumps(data.get('edges', [])),
          1 if data.get('enabled', True) else 0,
          now, wf_id)
     )
@@ -9513,7 +9505,6 @@ def api_workflow_runs(wf_id):
 @app.route('/api/workflows/ai-generate', methods=['POST'])
 @login_required
 def api_workflow_ai_generate():
-    """Use AI to generate a workflow from a plain-English prompt."""
     data   = request.get_json(force=True) or {}
     prompt = (data.get('prompt') or '').strip()
     if not prompt:
@@ -9527,8 +9518,7 @@ def api_workflow_ai_generate():
 def api_workflow_run_steps(run_id):
     db_conn = get_db()
     steps = db_conn.execute(
-        "SELECT * FROM workflow_run_steps WHERE run_id=? ORDER BY id",
-        (run_id,)
+        "SELECT * FROM workflow_run_steps WHERE run_id=? ORDER BY id", (run_id,)
     ).fetchall()
     db_conn.close()
     result = []
@@ -9548,7 +9538,6 @@ def api_workflow_run_steps(run_id):
 def api_ai_ticket_suggest(ticket_id):
     try:
         result = _ai_engine.suggest_ticket_resolution(ticket_id)
-        # Parse JSON suggestion for frontend
         if result.get('suggestion'):
             try:
                 result['parsed'] = json.loads(result['suggestion'])
@@ -9583,8 +9572,7 @@ def api_ai_suggestion_dismiss(sug_id):
 def api_ai_ticket_suggestions(ticket_id):
     db_conn = get_db()
     rows = db_conn.execute(
-        "SELECT * FROM ai_ticket_suggestions WHERE ticket_id=? ORDER BY id DESC LIMIT 10",
-        (ticket_id,)
+        "SELECT * FROM ai_ticket_suggestions WHERE ticket_id=? ORDER BY id DESC LIMIT 10", (ticket_id,)
     ).fetchall()
     db_conn.close()
     result = []
@@ -9629,7 +9617,6 @@ def api_ai_settings_get():
     for key in keys:
         row = db_conn.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
         val = row['value'] if row else ''
-        # Mask API key
         if key == 'openai_api_key' and val:
             val = val[:8] + '…' + val[-4:]
         result[key] = val
@@ -9642,13 +9629,12 @@ def api_ai_settings_get():
 def api_ai_settings_save():
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin only'}), 403
-    data = request.get_json()
+    data    = request.get_json()
     db_conn = get_db()
     allowed = ['openai_api_key', 'openai_model', 'ai_ticket_enabled',
                'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
     for key in allowed:
         if key in data:
-            # Don't overwrite masked key
             if key == 'openai_api_key' and '…' in str(data[key]):
                 continue
             existing = db_conn.execute("SELECT id FROM setting WHERE key=?", (key,)).fetchone()
@@ -9658,33 +9644,6 @@ def api_ai_settings_save():
                 db_conn.execute("INSERT INTO setting (key, value) VALUES (?,?)", (key, data[key]))
     db_conn.commit(); db_conn.close()
     return jsonify({'ok': True})
-
-
-@app.route('/api/ai/test', methods=['POST'])
-@login_required
-def api_ai_test():
-    if current_user.role != 'admin':
-        return jsonify({'error': 'Admin only'}), 403
-    try:
-        import openai as _oai
-        db_conn = get_db()
-        row = db_conn.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
-        model_row = db_conn.execute("SELECT value FROM setting WHERE key='openai_model'").fetchone()
-        db_conn.close()
-        api_key = row['value'] if row else None
-        model   = (model_row['value'] if model_row else None) or 'gpt-4o'
-        if not api_key:
-            return jsonify({'ok': False, 'error': 'No API key saved. Add your key and hit Save first.'}), 400
-        client = _oai.OpenAI(api_key=api_key)
-        resp   = client.chat.completions.create(
-            model=model,
-            messages=[{'role':'user', 'content':'Reply with just the word OK.'}],
-            max_tokens=5
-        )
-        reply = resp.choices[0].message.content.strip()
-        return jsonify({'ok': True, 'model': model, 'reply': reply})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -9722,14 +9681,13 @@ def api_report_runs_list():
 @app.route('/api/reports/run', methods=['POST'])
 @login_required
 def api_report_run():
-    data       = request.get_json()
-    rtype      = data.get('report_type')
-    name       = data.get('name') or rtype
-    config     = data.get('config', {})
-    tmpl_id    = data.get('template_id')
+    data    = request.get_json()
+    rtype   = data.get('report_type')
+    name    = data.get('name') or rtype
+    config  = data.get('config', {})
+    tmpl_id = data.get('template_id')
     if not rtype:
         return jsonify({'error': 'report_type required'}), 400
-
     db_conn = get_db()
     now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     cur = db_conn.execute(
@@ -9739,7 +9697,6 @@ def api_report_run():
     run_id = cur.lastrowid
     db_conn.commit(); db_conn.close()
 
-    # Run in background
     def _bg():
         _report_engine.run_report(run_id, tmpl_id, name, rtype, config, current_user.username)
     threading.Thread(target=_bg, daemon=True).start()
@@ -9760,7 +9717,6 @@ def api_report_run_status(run_id):
 @app.route('/api/reports/runs/<int:run_id>/data', methods=['GET'])
 @login_required
 def api_report_run_data(run_id):
-    """Return in-browser table data for a completed report."""
     db_conn = get_db()
     row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
     db_conn.close()
@@ -9768,9 +9724,8 @@ def api_report_run_data(run_id):
         return jsonify({'error': 'Not found'}), 404
     if row['status'] != 'ready':
         return jsonify({'error': 'Report not ready yet', 'status': row['status']}), 202
-
-    rtype  = row['report_type']
-    config = json.loads(row['config'] or '{}')
+    rtype   = row['report_type']
+    config  = json.loads(row['config'] or '{}')
     fetcher = _report_engine.FETCHERS.get(rtype)
     if not fetcher:
         return jsonify({'error': 'Unknown report type'}), 400
@@ -9788,3 +9743,23 @@ def api_report_download(filename):
     mimetype = 'text/csv' if safe.endswith('.csv') else 'application/pdf' if safe.endswith('.pdf') else 'text/html'
     return send_file(path, as_attachment=True, download_name=safe, mimetype=mimetype)
 
+
+# Start alert evaluator and workflow schedule runner
+try:
+    _alert_svc.start_background_thread()
+    _wf_engine.start_schedule_runner()
+except Exception as _svc_err:
+    logger.warning(f'Background service startup warning: {_svc_err}')
+
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+        
+        # Verify license on startup
+        license_service.verify_on_startup()
+        
+        # Start periodic license checks
+        license_service.start_periodic_check()
+        
+    app.run(host='0.0.0.0', port=5000, debug=True)

@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+
+{% block title %}Monitoring Dashboard - IT Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h1 class="h3 mb-0"><i class="bi bi-activity text-primary"></i> Monitoring Dashboard</h1>
+            <p class="text-muted">Manage monitoring profiles and track asset health</p>
+        </div>
+        <div class="col-auto">
+            <a href="{{ url_for('monitoring_profiles') }}" class="btn btn-outline-primary">
+                <i class="bi bi-list-check"></i> Manage Profiles
+            </a>
+            <a href="{{ url_for('monitoring_alerts') }}" class="btn btn-outline-warning">
+                <i class="bi bi-exclamation-triangle"></i> View Alerts
+                {% if active_alerts > 0 %}
+                <span class="badge bg-danger">{{ active_alerts }}</span>
+                {% endif %}
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small text-white-50">Total Assets</div>
+                            <div class="h3 mb-0">{{ total_assets }}</div>
+                        </div>
+                        <div class="fs-1 opacity-50">
+                            <i class="bi bi-hdd-rack"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small text-white-50">Monitored Assets</div>
+                            <div class="h3 mb-0">{{ assigned_assets }}</div>
+                        </div>
+                        <div class="fs-1 opacity-50">
+                            <i class="bi bi-check-circle"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small text-white-50">Not Configured</div>
+                            <div class="h3 mb-0">{{ unassigned_assets }}</div>
+                        </div>
+                        <div class="fs-1 opacity-50">
+                            <i class="bi bi-exclamation-circle"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card {% if active_alerts > 0 %}bg-danger{% else %}bg-secondary{% endif %} text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small text-white-50">Active Alerts</div>
+                            <div class="h3 mb-0">{{ active_alerts }}</div>
+                        </div>
+                        <div class="fs-1 opacity-50">
+                            <i class="bi bi-bell"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assets Table -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-table"></i> Asset Monitoring Status</h5>
+            <div class="input-group" style="width: 300px;">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" id="searchInput" class="form-control" placeholder="Search assets...">
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="assetsTable">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Category</th>
+                            <th>OS / Version</th>
+                            <th>Monitoring Profile</th>
+                            <th>Status</th>
+                            <th class="text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in assets %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ asset.name }}</div>
+                                <small class="text-muted">{{ asset.asset_tag }}</small>
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary">{{ asset.category }}</span>
+                            </td>
+                            <td>
+                                {% if asset.os_version %}
+                                    <small>{{ asset.os_version }}</small>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if asset.has_profile %}
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-check-circle"></i> {{ asset.profile_name }}
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-warning text-dark">
+                                        <i class="bi bi-dash-circle"></i> Not Assigned
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if asset.status == 'In Use' %}
+                                    <span class="badge bg-success">{{ asset.status }}</span>
+                                {% elif asset.status == 'Available' %}
+                                    <span class="badge bg-info">{{ asset.status }}</span>
+                                {% elif asset.status == 'In Repair' %}
+                                    <span class="badge bg-warning">{{ asset.status }}</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">{{ asset.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                <div class="btn-group btn-group-sm">
+                                    {% if asset.has_profile %}
+                                        <a href="{{ url_for('monitoring_profile_detail', profile_id=asset.profile_id) }}" 
+                                           class="btn btn-outline-primary" title="View Profile">
+                                            <i class="bi bi-eye"></i>
+                                        </a>
+                                        <button type="button" class="btn btn-outline-danger" 
+                                                onclick="unassignProfile({{ asset.id }}, '{{ asset.name }}')" title="Unassign">
+                                            <i class="bi bi-x-circle"></i>
+                                        </button>
+                                    {% else %}
+                                        <button type="button" class="btn btn-primary btn-sm" 
+                                                data-bs-toggle="modal" data-bs-target="#assignModal"
+                                                data-asset-id="{{ asset.id }}" data-asset-name="{{ asset.name }}">
+                                            <i class="bi bi-plus-circle"></i> Assign Profile
+                                        </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Assign Profile Modal -->
+<div class="modal fade" id="assignModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="assignForm">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Assign Monitoring Profile</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Assign monitoring profile to: <strong id="modal-asset-name"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label">Select Profile</label>
+                        <select name="profile_id" class="form-select" required>
+                            <option value="">-- Choose Profile --</option>
+                            {% for profile in profiles %}
+                            <option value="{{ profile.id }}">{{ profile.name }} ({{ profile.device_type }})</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Select the appropriate monitoring profile for this device type.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle"></i> Assign Profile
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Search functionality
+document.getElementById('searchInput')?.addEventListener('input', function(e) {
+    const searchTerm = e.target.value.toLowerCase();
+    const rows = document.querySelectorAll('#assetsTable tbody tr');
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(searchTerm) ? '' : 'none';
+    });
+});
+
+// Assign profile modal
+const assignModal = document.getElementById('assignModal');
+if (assignModal) {
+    assignModal.addEventListener('show.bs.modal', function(event) {
+        const button = event.relatedTarget;
+        const assetId = button.getAttribute('data-asset-id');
+        const assetName = button.getAttribute('data-asset-name');
+        
+        document.getElementById('modal-asset-name').textContent = assetName;
+        document.getElementById('assignForm').action = `/monitoring/assign/${assetId}`;
+    });
+}
+
+// Unassign profile
+function unassignProfile(assetId, assetName) {
+    if (confirm(`Remove monitoring profile from "${assetName}"?`)) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = `/monitoring/unassign/${assetId}`;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+
+{% endblock %}

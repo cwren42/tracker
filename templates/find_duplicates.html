@@ -34,8 +34,7 @@
                         <th>Serial Number</th>
                         <th>Assigned To</th>
                         <th>Status</th>
-                        <th>Last Seen</th>
-                        <th>TeamViewer</th>
+                        <th>Purchase Date</th>
                         <th>Intune Device ID</th>
                         <th>Created</th>
                         <th>Actions</th>
@@ -70,18 +69,10 @@
                             </span>
                         </td>
                         <td>
-                            {% if asset.last_seen %}
-                                <small>{{ asset.last_seen.strftime('%Y-%m-%d %H:%M') }}</small>
+                            {% if asset.purchase_date %}
+                                <small>{{ asset.purchase_date.strftime('%Y-%m-%d') }}</small>
                             {% else %}
-                                <span class="text-muted">Never</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if asset.teamviewer_id %}
-                                <i class="bi bi-display text-primary" title="TeamViewer: {{ asset.teamviewer_id }}"></i>
-                                <small>{{ asset.teamviewer_id[:12] }}...</small>
-                            {% else %}
-                                <i class="bi bi-x-circle text-muted"></i>
+                                <span class="text-muted">—</span>
                             {% endif %}
                         </td>
                         <td>

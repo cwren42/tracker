@@ -1,0 +1,23 @@
+[Unit]
+Description=Cirque RMM Linux Monitoring Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/cirque-rmm-agent --config /etc/cirque-rmm/agent.conf
+Restart=always
+RestartSec=10
+User=root
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cirque-rmm-agent
+
+[Install]
+WantedBy=multi-user.target

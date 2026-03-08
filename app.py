@@ -4613,7 +4613,7 @@ def rmm_eagle_eyes_dashboard(agent_id):
         text("""SELECT ra.asset_id, COALESCE(a.name, ra.agent_id)
                 FROM rmm_agent ra
                 LEFT JOIN asset a ON ra.asset_id = a.id
-                WHERE ra.agent_id = :aid COLLATE NOCASE"""),
+                WHERE ra.agent_id ILIKE :aid"""),
         {'aid': agent_id}
     ).fetchone()
     hostname     = row[1] if row else agent_id

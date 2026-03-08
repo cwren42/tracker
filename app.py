@@ -911,45 +911,6 @@ def index():
         enabled=True
     ).order_by(DashboardWidget.position).all()
 
-@app.route('/api/dashboard/live-status')
-@login_required
-def dashboard_live_status():
-    """SSE stream: pushes a JSON snapshot of live agent counts every 15s."""
-    import time as _t
-    def _generate():
-        for _ in range(120):  # max 30 minutes = 120 × 15s
-            try:
-                online = db.session.execute(
-                    text("SELECT COUNT(*) FROM asset WHERE online_state='Online'")
-                ).scalar() or 0
-                offline = db.session.execute(
-                    text("SELECT COUNT(*) FROM asset WHERE online_state='Offline'")
-                ).scalar() or 0
-                open_tickets = db.session.execute(
-                    text("SELECT COUNT(*) FROM support_ticket WHERE status='Open'")
-                ).scalar() or 0
-                open_alerts = db.session.execute(
-                    text("SELECT COUNT(*) FROM monitoring_alert WHERE status='open'")
-                ).scalar() or 0
-                crit_cves = db.session.execute(
-                    text("SELECT COUNT(*) FROM device_vulnerability "
-                         "WHERE severity IN ('Critical','High') AND status!='resolved'")
-                ).scalar() or 0
-                payload = json.dumps({
-                    'online': online, 'offline': offline,
-                    'open_tickets': open_tickets, 'open_alerts': open_alerts,
-                    'crit_cves': crit_cves,
-                    'ts': datetime.utcnow().strftime('%H:%M:%S')
-                })
-                yield f"data: {payload}\n\n"
-            except Exception:
-                yield "data: {}\n\n"
-            _t.sleep(15)
-    from flask import Response, stream_with_context
-    return Response(stream_with_context(_generate()),
-                    mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-    
     # If no custom widgets, use default layout
     if not user_widgets:
         user_widgets = get_default_widgets()
@@ -989,6 +950,45 @@ def dashboard_live_status():
                          data=dashboard_data,
                          edit_mode=request.args.get('edit') == 'true',
                          last_report_run_display=last_report_run_display)
+
+@app.route('/api/dashboard/live-status')
+@login_required
+def dashboard_live_status():
+    """SSE stream: pushes a JSON snapshot of live agent counts every 15s."""
+    import time as _t
+    def _generate():
+        for _ in range(120):  # max 30 minutes = 120 × 15s
+            try:
+                online = db.session.execute(
+                    text("SELECT COUNT(*) FROM asset WHERE online_state='Online'")
+                ).scalar() or 0
+                offline = db.session.execute(
+                    text("SELECT COUNT(*) FROM asset WHERE online_state='Offline'")
+                ).scalar() or 0
+                open_tickets = db.session.execute(
+                    text("SELECT COUNT(*) FROM support_ticket WHERE status='Open'")
+                ).scalar() or 0
+                open_alerts = db.session.execute(
+                    text("SELECT COUNT(*) FROM monitoring_alert WHERE status='open'")
+                ).scalar() or 0
+                crit_cves = db.session.execute(
+                    text("SELECT COUNT(*) FROM device_vulnerability "
+                         "WHERE severity IN ('Critical','High') AND status!='resolved'")
+                ).scalar() or 0
+                payload = json.dumps({
+                    'online': online, 'offline': offline,
+                    'open_tickets': open_tickets, 'open_alerts': open_alerts,
+                    'crit_cves': crit_cves,
+                    'ts': datetime.utcnow().strftime('%H:%M:%S')
+                })
+                yield f"data: {payload}\n\n"
+            except Exception:
+                yield "data: {}\n\n"
+            _t.sleep(15)
+    from flask import Response, stream_with_context
+    return Response(stream_with_context(_generate()),
+                    mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 def get_default_widgets():
     """Return default dashboard widget configuration"""

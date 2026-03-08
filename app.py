@@ -5224,10 +5224,10 @@ def assets():
     # Text search
     if search:
         query = query.filter(
-            (Asset.name.contains(search)) |
-            (Asset.asset_tag.contains(search)) |
-            (Asset.serial_number.contains(search)) |
-            (Asset.manufacturer.contains(search))
+            (Asset.name.ilike(f'%{search}%')) |
+            (Asset.asset_tag.ilike(f'%{search}%')) |
+            (Asset.serial_number.ilike(f'%{search}%')) |
+            (Asset.manufacturer.ilike(f'%{search}%'))
         )
     
     # Multi-select categories

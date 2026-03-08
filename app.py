@@ -291,6 +291,12 @@ class SupportTicket(db.Model):
         elapsed = (datetime.utcnow() - self.created_at).total_seconds() / 3600
         return max(0.0, self.sla_target_hours - elapsed)
 
+    @property
+    def sla_breached(self):
+        if self.status in ('Closed', 'Merged'):
+            return False
+        return self.sla_hours_remaining == 0.0
+
 
 class TicketNote(db.Model):
     __tablename__ = 'ticket_note'
@@ -9164,7 +9170,7 @@ def get_db():
 @app.route('/alerts/center')
 @login_required
 def alert_center():
-    users = db.session.execute(text("SELECT id, username, full_name FROM user ORDER BY username")).mappings().fetchall()
+    users = db.session.execute(text('SELECT id, username, full_name FROM "user" ORDER BY username')).mappings().fetchall()
     return render_template('alert_center.html', users=[dict(u) for u in users])
 
 
@@ -10224,7 +10230,7 @@ def _asset_eol_check():
                             if (today - a.purchase_date).days >= eol_age_days]
 
                 system_user_id = db.session.execute(
-                    text("SELECT id FROM user ORDER BY id LIMIT 1")
+                    text('SELECT id FROM "user" ORDER BY id LIMIT 1')
                 ).scalar() or 1
 
                 def _ticket_exists(subject_prefix, asset_id):

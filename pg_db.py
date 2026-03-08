@@ -79,6 +79,8 @@ def _fix_sql(sql: str) -> str:
     )
     # 4. bare datetime('now') → NOW()
     sql = re.sub(r"(?i)datetime\('now'\)", "NOW()", sql)
+    # 4b. Quote 'user' table — reserved word in PostgreSQL
+    sql = re.sub(r'(?<!["\w])user(?!["\w])', '"user"', sql)
     # 5. Escape bare % in SQL (LIKE wildcards) so psycopg2 won't misread them
     #    Replace % with %% — but only when it is NOT already %% and NOT %s
     sql = re.sub(r"(?<!%)%(?![%s(])", "%%", sql)

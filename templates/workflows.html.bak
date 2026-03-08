@@ -1,0 +1,822 @@
+{% extends "base.html" %}
+{% block title %}Workflows — Asset Tracker{% endblock %}
+
+{% block content %}
+<style>
+  #wf-shell { display:flex; height:calc(100vh - 70px); overflow:hidden; }
+
+  /* ── LEFT SIDEBAR ── */
+  #wf-sidebar {
+    width:260px; min-width:260px; background:#1a2233; border-right:1px solid #2d3a50;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  #wf-sidebar-header {
+    padding:14px 16px; border-bottom:1px solid #2d3a50; display:flex; align-items:center; gap:8px;
+  }
+  #wf-sidebar-header h6 { margin:0; color:#cdd9e5; font-weight:600; font-size:.9rem; flex:1; }
+  #wf-list { flex:1; overflow-y:auto; padding:8px 0; }
+  .wf-item {
+    padding:10px 16px; cursor:pointer; border-left:3px solid transparent;
+    transition:.15s; display:flex; align-items:center; gap:8px;
+  }
+  .wf-item:hover { background:#253045; }
+  .wf-item.active { border-left-color:#0d6efd; background:#1f3055; }
+  .wf-item .wf-name { color:#cdd9e5; font-size:.85rem; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .wf-item .wf-badge { font-size:.7rem; }
+
+  #wf-palette { border-top:1px solid #2d3a50; padding:10px; }
+  #wf-palette h6 { color:#8899aa; font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+  .palette-node {
+    display:flex; align-items:center; gap:8px; padding:7px 10px; margin-bottom:4px;
+    background:#253045; border:1px solid #2d3a50; border-radius:6px; cursor:grab;
+    color:#cdd9e5; font-size:.82rem; user-select:none;
+  }
+  .palette-node:active { cursor:grabbing; }
+  .palette-node .pn-icon { width:28px; height:28px; border-radius:5px; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
+
+  /* ── CANVAS AREA ── */
+  #wf-main { flex:1; display:flex; flex-direction:column; overflow:hidden; background:#121c2b; }
+  #wf-toolbar {
+    padding:8px 14px; background:#1a2233; border-bottom:1px solid #2d3a50;
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  #wf-toolbar .wf-title-input {
+    background:transparent; border:none; color:#cdd9e5; font-size:.95rem; font-weight:600;
+    outline:none; flex:1; min-width:150px;
+  }
+  #wf-canvas-wrap { flex:1; overflow:hidden; position:relative; }
+  #wf-canvas {
+    width:100%; height:100%; position:relative; overflow:hidden;
+    cursor:default;
+  }
+  #wf-svg {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    pointer-events:none; z-index:1;
+  }
+  #wf-nodes { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; }
+
+  /* ── NODES ── */
+  .wf-node {
+    position:absolute; min-width:160px; background:#1e2d45; border:1.5px solid #2d3a50;
+    border-radius:8px; cursor:move; user-select:none; box-shadow:0 2px 10px #0006;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .wf-node:hover, .wf-node.selected { border-color:#0d6efd; box-shadow:0 0 0 2px #0d6efd44; }
+  .wf-node .node-header {
+    padding:8px 12px; border-radius:6px 6px 0 0; display:flex; align-items:center; gap:7px;
+    font-size:.82rem; font-weight:600; color:#fff;
+  }
+  .wf-node .node-body { padding:8px 12px; font-size:.78rem; color:#8899aa; min-height:20px; }
+  .wf-node .node-label { font-size:.72rem; color:#6a7a90; margin-top:2px; }
+
+  /* node type colours */
+  .node-trigger .node-header { background:#1d4034; color:#5fcf8b; }
+  .node-action .node-header  { background:#1d2e54; color:#6aacf8; }
+  .node-condition .node-header { background:#3d2a10; color:#f8a84a; }
+
+  /* ── PORTS ── */
+  .port {
+    position:absolute; width:14px; height:14px; background:#2d3a50;
+    border:2px solid #4a5d78; border-radius:50%; cursor:crosshair;
+    transition:.15s; z-index:10;
+  }
+  .port:hover { background:#0d6efd; border-color:#0d6efd; }
+  .port-out { right:-7px; }
+  .port-in  { left:-7px;  }
+  .port-out-true  { right:-7px; background:#1a4a2a; border-color:#5fcf8b; }
+  .port-out-false { right:-7px; background:#4a1a1a; border-color:#f87171; }
+
+  /* ── RIGHT PANEL ── */
+  #wf-config-panel {
+    width:280px; min-width:280px; background:#1a2233; border-left:1px solid #2d3a50;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  #wf-config-panel h6 { color:#cdd9e5; font-size:.88rem; font-weight:600; margin:0; }
+  #wf-config-inner { flex:1; overflow-y:auto; padding:14px; }
+  .cfg-section { margin-bottom:14px; }
+  .cfg-label { font-size:.75rem; color:#8899aa; text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px; }
+  .cfg-input {
+    width:100%; background:#121c2b; border:1px solid #2d3a50; color:#cdd9e5;
+    border-radius:5px; padding:6px 9px; font-size:.82rem; outline:none;
+  }
+  .cfg-input:focus { border-color:#0d6efd; }
+  .cfg-select { appearance:none; }
+
+  /* delete button node */
+  .node-del { position:absolute; top:4px; right:4px; background:none; border:none; color:#4a5d78; font-size:.85rem; cursor:pointer; opacity:0; transition:.15s; }
+  .wf-node:hover .node-del { opacity:1; }
+  .node-del:hover { color:#f87171; }
+
+  /* run history */
+  .run-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1e2d45; font-size:.8rem; }
+  .run-status { width:60px; }
+  .conn-delete { cursor:pointer; fill:#f87171; opacity:0; transition:.15s; }
+  svg:hover .conn-group:hover .conn-delete { opacity:1; }
+</style>
+
+<!-- Empty canvas placeholder -->
+<div id="wf-shell">
+  <!-- LEFT -->
+  <div id="wf-sidebar">
+    <div id="wf-sidebar-header">
+      <h6><i class="bi bi-diagram-3"></i> Workflows</h6>
+      <button class="btn btn-sm btn-primary py-0 px-2" onclick="newWorkflow()"><i class="bi bi-plus-lg"></i></button>
+    </div>
+    <div id="wf-list">
+      <div class="text-center text-secondary py-4" style="font-size:.8rem">Loading…</div>
+    </div>
+
+    <div id="wf-palette">
+      <h6>Add Node</h6>
+      <div class="palette-node" draggable="true" data-type="trigger">
+        <div class="pn-icon" style="background:#1d4034;color:#5fcf8b"><i class="bi bi-lightning-fill"></i></div>
+        Trigger
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="create_ticket">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-ticket-fill"></i></div>
+        Create Ticket
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="update_ticket">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-pencil-fill"></i></div>
+        Update Ticket
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="send_notification">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-bell-fill"></i></div>
+        Notification
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="send_email">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-envelope-fill"></i></div>
+        Send Email
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="disable_ad_user">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-person-slash-fill"></i></div>
+        Disable AD User
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="azure_sync">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-cloud-arrow-up-fill"></i></div>
+        Azure Sync
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="deploy_patch">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-shield-check"></i></div>
+        Deploy Patch
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="webhook">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-globe2"></i></div>
+        Webhook
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="ai_suggest">
+        <div class="pn-icon" style="background:#1d2e54;color:#a855f7"><i class="bi bi-stars"></i></div>
+        AI Suggest
+      </div>
+      <div class="palette-node" draggable="true" data-type="condition">
+        <div class="pn-icon" style="background:#3d2a10;color:#f8a84a"><i class="bi bi-signpost-split-fill"></i></div>
+        Condition
+      </div>
+      <div class="palette-node" draggable="true" data-type="action" data-action="wait">
+        <div class="pn-icon" style="background:#1d2e54;color:#6aacf8"><i class="bi bi-clock-fill"></i></div>
+        Wait
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div id="wf-main">
+    <div id="wf-toolbar">
+      <input id="wf-title" class="wf-title-input" value="New Workflow" placeholder="Workflow name…">
+      <select id="wf-trigger-type" class="cfg-input" style="max-width:160px">
+        <option value="manual">Manual</option>
+        <option value="schedule">Schedule</option>
+        <option value="ticket_created">Ticket Created</option>
+        <option value="ticket_updated">Ticket Updated</option>
+        <option value="vulnerability_detected">Vulnerability Detected</option>
+        <option value="patch_failed">Patch Failed</option>
+        <option value="user_offboarded">User Offboarded</option>
+        <option value="alert_triggered">Alert Triggered</option>
+      </select>
+      <div class="form-check form-switch mb-0 ms-2">
+        <input type="checkbox" class="form-check-input" id="wf-enabled" checked>
+        <label class="form-check-label text-secondary" for="wf-enabled" style="font-size:.8rem">Enabled</label>
+      </div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearCanvas()"><i class="bi bi-trash3"></i> Clear</button>
+        <button class="btn btn-sm btn-success" onclick="runWorkflow()" id="btn-run" disabled><i class="bi bi-play-fill"></i> Run Now</button>
+        <button class="btn btn-sm btn-primary" onclick="saveWorkflow()"><i class="bi bi-floppy-fill"></i> Save</button>
+      </div>
+    </div>
+
+    <!-- canvas -->
+    <div id="wf-canvas-wrap">
+      <div id="wf-canvas">
+        <svg id="wf-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="wf-nodes"></div>
+        <div id="wf-drop-hint" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
+          <i class="bi bi-diagram-3" style="font-size:3rem;color:#2d3a50"></i>
+          <p style="color:#4a5d78;margin-top:8px;font-size:.9rem">Drag nodes from the left panel<br>onto the canvas to build your workflow</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- run history tab at bottom -->
+    <div style="background:#1a2233;border-top:1px solid #2d3a50;padding:8px 14px;">
+      <div class="d-flex align-items-center gap-3 mb-1">
+        <span style="color:#8899aa;font-size:.78rem;font-weight:600">RUN HISTORY</span>
+        <small id="run-history-status" class="text-secondary"></small>
+      </div>
+      <div id="run-history" style="max-height:80px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div id="wf-config-panel">
+    <div style="padding:12px 14px;border-bottom:1px solid #2d3a50;display:flex;align-items:center;gap:8px">
+      <h6>Node Config</h6>
+    </div>
+    <div id="wf-config-inner">
+      <div class="text-center text-secondary py-4" style="font-size:.8rem">
+        <i class="bi bi-cursor-fill" style="font-size:1.5rem"></i><br>Click a node to configure
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+//  WORKFLOW CANVAS ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+let nodes = [];        // [{id, type, action, label, x, y, config}]
+let edges = [];        // [{id, fromNode, fromPort, toNode, label}]
+let selectedNode = null;
+let currentWfId  = null;
+let nodeIdSeq    = 1;
+let edgeIdSeq    = 1;
+
+const canvas = document.getElementById('wf-canvas');
+const svgEl  = document.getElementById('wf-svg');
+const nodesDiv = document.getElementById('wf-nodes');
+const dropHint = document.getElementById('wf-drop-hint');
+
+// ── Drag from palette ────────────────────────────────────────────────────────
+let paletteDrag = null;
+document.querySelectorAll('.palette-node').forEach(el => {
+  el.addEventListener('dragstart', e => {
+    paletteDrag = { type: el.dataset.type, action: el.dataset.action || '' };
+  });
+});
+
+canvas.addEventListener('dragover', e => { e.preventDefault(); });
+canvas.addEventListener('drop', e => {
+  if (!paletteDrag) return;
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left - 80;
+  const y = e.clientY - rect.top - 30;
+  addNode(paletteDrag.type, paletteDrag.action, x, y);
+  paletteDrag = null;
+});
+
+// nodesDiv sits on top of canvas (z-index:2) and intercepts drag events —
+// add identical listeners so drops anywhere on the canvas work.
+nodesDiv.addEventListener('dragover', e => { e.preventDefault(); });
+nodesDiv.addEventListener('drop', e => {
+  if (!paletteDrag) return;
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left - 80;
+  const y = e.clientY - rect.top - 30;
+  addNode(paletteDrag.type, paletteDrag.action, x, y);
+  paletteDrag = null;
+});
+
+// ── Node creation ────────────────────────────────────────────────────────────
+const ICONS = {
+  trigger:'lightning-fill', create_ticket:'ticket-fill', update_ticket:'pencil-fill',
+  send_notification:'bell-fill', send_email:'envelope-fill', disable_ad_user:'person-slash-fill',
+  azure_sync:'cloud-arrow-up-fill', deploy_patch:'shield-check', webhook:'globe2',
+  ai_suggest:'stars', wait:'clock-fill', condition:'signpost-split-fill'
+};
+const ACTION_LABELS = {
+  create_ticket:'Create Ticket', update_ticket:'Update Ticket',
+  send_notification:'Notification', send_email:'Send Email',
+  disable_ad_user:'Disable AD User', azure_sync:'Azure Sync',
+  deploy_patch:'Deploy Patch', webhook:'Webhook', ai_suggest:'AI Suggest', wait:'Wait'
+};
+
+function addNode(type, action, x, y, cfg={}, id=null, label=null) {
+  const nid = id || ('n' + (nodeIdSeq++));
+  const nd  = { id:nid, type, action, x, y, config:cfg,
+                label: label || (type==='trigger'?'Trigger': type==='condition'?'Condition': ACTION_LABELS[action]||action) };
+  nodes.push(nd);
+  renderNode(nd);
+  updateDropHint();
+  return nd;
+}
+
+function renderNode(nd) {
+  const el = document.createElement('div');
+  el.className = `wf-node node-${nd.type}`;
+  el.id = 'node-' + nd.id;
+  el.style.left = nd.x + 'px';
+  el.style.top  = nd.y + 'px';
+  const icon = nd.type === 'condition' ? ICONS.condition : (ICONS[nd.action] || 'gear-fill');
+  el.innerHTML = `
+    <button class="node-del" onclick="deleteNode('${nd.id}')"><i class="bi bi-x-lg"></i></button>
+    <div class="node-header">
+      <i class="bi bi-${icon}"></i> ${escHtml(nd.label)}
+    </div>
+    <div class="node-body" id="node-body-${nd.id}"></div>
+  `;
+
+  // Input port (not on trigger)
+  if (nd.type !== 'trigger') {
+    const pin = document.createElement('div');
+    pin.className = 'port port-in';
+    pin.style.top = '30px';
+    pin.title = 'Input';
+    el.appendChild(pin);
+  }
+
+  // Output port(s)
+  if (nd.type === 'condition') {
+    const pTrue = makeOutPort(nd.id, 'true', '#5fcf8b', 20);
+    const pFalse= makeOutPort(nd.id, 'false', '#f87171', 45);
+    el.appendChild(pTrue); el.appendChild(pFalse);
+  } else {
+    const pOut = makeOutPort(nd.id, 'out', '#6aacf8', 30);
+    el.appendChild(pOut);
+  }
+
+  // Drag to move
+  makeDraggable(el, nd);
+  // Click to select
+  el.addEventListener('mousedown', e => { if(!e.target.classList.contains('port')) selectNode(nd); });
+
+  nodesDiv.appendChild(el);
+  refreshEdges();
+  updateNodeBody(nd);
+}
+
+function makeOutPort(nid, label, color, top) {
+  const p = document.createElement('div');
+  p.className = 'port port-out';
+  p.style.top = top + 'px';
+  p.style.borderColor = color;
+  p.dataset.node = nid;
+  p.dataset.port = label;
+  if (label === 'true')  p.title = 'True ✓';
+  if (label === 'false') p.title = 'False ✗';
+  if (label === 'out')   p.title = 'Output';
+  p.addEventListener('mousedown', startEdgeDrag);
+  return p;
+}
+
+function updateNodeBody(nd) {
+  const body = document.getElementById('node-body-' + nd.id);
+  if (!body) return;
+  const cfg = nd.config;
+  let txt = '';
+  if (nd.type === 'trigger')     txt = document.getElementById('wf-trigger-type').value;
+  else if (nd.action === 'create_ticket')   txt = cfg.title || '<em style="color:#4a5d78">No title set</em>';
+  else if (nd.action === 'send_email')      txt = cfg.to    || '<em style="color:#4a5d78">No recipient</em>';
+  else if (nd.action === 'send_notification') txt = cfg.message || '<em style="color:#4a5d78">No message</em>';
+  else if (nd.action === 'disable_ad_user') txt = cfg.username_field || '{{username}}';
+  else if (nd.action === 'webhook')         txt = (cfg.url||'').substring(0,30) || '<em style="color:#4a5d78">No URL</em>';
+  else if (nd.action === 'wait')            txt = (cfg.seconds||'?') + 's';
+  else if (nd.type  === 'condition')        txt = (cfg.field||'?') + ' ' + (cfg.operator||'==') + ' ' + (cfg.value||'?');
+  else if (nd.action === 'ai_suggest')      txt = 'AI ticket suggestion';
+  body.innerHTML = txt;
+}
+
+// ── Edge drawing ─────────────────────────────────────────────────────────────
+let edgeDragActive = false;
+let edgeDragFrom   = null;
+let edgeDragLine   = null;
+
+function startEdgeDrag(e) {
+  e.preventDefault(); e.stopPropagation();
+  edgeDragActive = true;
+  edgeDragFrom = { node: e.target.dataset.node, port: e.target.dataset.port };
+  const pos = portPos(edgeDragFrom.node, edgeDragFrom.port);
+  edgeDragLine = document.createElementNS('http://www.w3.org/2000/svg','path');
+  edgeDragLine.setAttribute('stroke','#0d6efd');
+  edgeDragLine.setAttribute('stroke-width','2');
+  edgeDragLine.setAttribute('fill','none');
+  edgeDragLine.setAttribute('stroke-dasharray','6 3');
+  svgEl.appendChild(edgeDragLine);
+}
+
+document.addEventListener('mousemove', e => {
+  if (!edgeDragActive || !edgeDragLine) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const from = portPos(edgeDragFrom.node, edgeDragFrom.port);
+  edgeDragLine.setAttribute('d', bezier(from.x, from.y, mx, my));
+});
+
+document.addEventListener('mouseup', e => {
+  if (!edgeDragActive) return;
+  edgeDragActive = false;
+  if (edgeDragLine) { svgEl.removeChild(edgeDragLine); edgeDragLine = null; }
+  // Find if dropped on an input port
+  const rect = canvas.getBoundingClientRect();
+  const ex = e.clientX - rect.left;
+  const ey = e.clientY - rect.top;
+  const target = findInputPort(ex, ey);
+  if (target && target !== edgeDragFrom.node) {
+    // Avoid duplicate
+    const dup = edges.find(ed => ed.fromNode===edgeDragFrom.node && ed.fromPort===edgeDragFrom.port && ed.toNode===target);
+    if (!dup) {
+      edges.push({ id:'e'+(edgeIdSeq++), fromNode:edgeDragFrom.node, fromPort:edgeDragFrom.port, toNode:target, label:edgeDragFrom.port==='out'?'':edgeDragFrom.port });
+      refreshEdges();
+    }
+  }
+  edgeDragFrom = null;
+});
+
+function findInputPort(x, y) {
+  for (const nd of nodes) {
+    if (nd.type === 'trigger') continue;
+    const el = document.getElementById('node-' + nd.id);
+    if (!el) continue;
+    const pin = el.querySelector('.port-in');
+    if (!pin) continue;
+    const r = pin.getBoundingClientRect();
+    const cr = canvas.getBoundingClientRect();
+    const px = r.left - cr.left + r.width/2;
+    const py = r.top  - cr.top  + r.height/2;
+    if (Math.abs(x-px)<16 && Math.abs(y-py)<16) return nd.id;
+  }
+  return null;
+}
+
+function portPos(nid, port) {
+  const el  = document.getElementById('node-' + nid);
+  if (!el) return {x:0,y:0};
+  const nd  = nodes.find(n=>n.id===nid);
+  const cr  = canvas.getBoundingClientRect();
+  if (port === 'in') {
+    const p = el.querySelector('.port-in');
+    if (!p) return {x:nd.x, y:nd.y+30};
+    const r = p.getBoundingClientRect();
+    return {x: r.left - cr.left + r.width/2, y: r.top - cr.top + r.height/2};
+  }
+  let selector = port==='true' ? '.port-out-true' : port==='false' ? '.port-out-false' : '.port-out:not(.port-out-true):not(.port-out-false)';
+  // generic out port
+  const allPorts = el.querySelectorAll('.port-out');
+  let p = null;
+  if (port === 'out' || (!port)) {
+    p = el.querySelector('[data-port="out"]');
+  } else {
+    p = el.querySelector(`[data-port="${port}"]`);
+  }
+  if (!p) p = el.querySelector('.port-out');
+  if (!p) return {x:nd.x+160, y:nd.y+30};
+  const r = p.getBoundingClientRect();
+  return {x: r.left - cr.left + r.width/2, y: r.top - cr.top + r.height/2};
+}
+
+function bezier(x1,y1,x2,y2) {
+  const cx = (x1+x2)/2;
+  return `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
+}
+
+function edgeColor(port) {
+  if (port==='true')  return '#5fcf8b';
+  if (port==='false') return '#f87171';
+  return '#4a6a9a';
+}
+
+function refreshEdges() {
+  svgEl.innerHTML = '';
+  // Add arrowhead markers
+  svgEl.innerHTML = `<defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#4a6a9a"/>
+    </marker>
+    <marker id="arr-true"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#5fcf8b"/>
+    </marker>
+    <marker id="arr-false" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#f87171"/>
+    </marker>
+  </defs>`;
+
+  edges.forEach(ed => {
+    const from = portPos(ed.fromNode, ed.fromPort);
+    const to   = portPos(ed.toNode, 'in');
+    const col  = edgeColor(ed.fromPort);
+    const mid  = [(from.x+to.x)/2, (from.y+to.y)/2];
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.classList.add('conn-group');
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', bezier(from.x,from.y,to.x,to.y));
+    path.setAttribute('stroke', col);
+    path.setAttribute('stroke-width','2');
+    path.setAttribute('fill','none');
+    const mId = ed.fromPort==='true'?'arr-true':ed.fromPort==='false'?'arr-false':'arr';
+    path.setAttribute('marker-end', `url(#${mId})`);
+    // label
+    const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+    txt.setAttribute('x', mid[0]); txt.setAttribute('y', mid[1]-6);
+    txt.setAttribute('fill', col); txt.setAttribute('font-size','11');
+    txt.setAttribute('text-anchor','middle');
+    txt.textContent = ed.label || '';
+    // delete hit area
+    const delCirc = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    delCirc.setAttribute('cx', mid[0]); delCirc.setAttribute('cy', mid[1]);
+    delCirc.setAttribute('r','9'); delCirc.setAttribute('fill','#1a2233');
+    delCirc.setAttribute('stroke', col); delCirc.setAttribute('stroke-width','1.5');
+    delCirc.classList.add('conn-delete');
+    delCirc.setAttribute('cursor','pointer');
+    const delX = document.createElementNS('http://www.w3.org/2000/svg','text');
+    delX.setAttribute('x',mid[0]); delX.setAttribute('y',mid[1]+4);
+    delX.setAttribute('fill',col); delX.setAttribute('font-size','10');
+    delX.setAttribute('text-anchor','middle'); delX.textContent='✕';
+    delX.classList.add('conn-delete'); delX.setAttribute('cursor','pointer');
+    [delCirc,delX].forEach(el=>el.addEventListener('click',()=>{ edges=edges.filter(e=>e.id!==ed.id); refreshEdges(); }));
+    g.appendChild(path); g.appendChild(txt); g.appendChild(delCirc); g.appendChild(delX);
+    svgEl.appendChild(g);
+  });
+}
+
+// ── Node dragging ────────────────────────────────────────────────────────────
+function makeDraggable(el, nd) {
+  let dragging=false, ox=0, oy=0;
+  el.addEventListener('mousedown', e=>{
+    if (e.target.classList.contains('port') || e.target.closest('button')) return;
+    dragging=true;
+    ox=e.clientX-nd.x; oy=e.clientY-nd.y;
+    el.style.zIndex=100;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if (!dragging) return;
+    nd.x = e.clientX-ox; nd.y = e.clientY-oy;
+    el.style.left=nd.x+'px'; el.style.top=nd.y+'px';
+    refreshEdges();
+  });
+  document.addEventListener('mouseup', ()=>{
+    if (dragging) { dragging=false; el.style.zIndex=''; }
+  });
+}
+
+// ── Node selection & config panel ────────────────────────────────────────────
+function selectNode(nd) {
+  if (selectedNode) {
+    const prev = document.getElementById('node-' + selectedNode.id);
+    if (prev) prev.classList.remove('selected');
+  }
+  selectedNode = nd;
+  const el = document.getElementById('node-' + nd.id);
+  if (el) el.classList.add('selected');
+  renderConfigPanel(nd);
+}
+
+function renderConfigPanel(nd) {
+  const panel = document.getElementById('wf-config-inner');
+  let html = `<div class="cfg-section"><div class="cfg-label">Node Label</div>
+    <input class="cfg-input" id="cfg-label" value="${escHtml(nd.label)}" oninput="nd_set('label',this.value)">
+  </div>`;
+
+  if (nd.type === 'trigger') {
+    html += `<div class="cfg-section"><div class="cfg-label">Trigger Type</div>
+      <select class="cfg-input cfg-select" id="cfg-trigger" onchange="nd_set('config.trigger_type',this.value)">
+        <option value="manual">Manual</option>
+        <option value="schedule">Schedule</option>
+        <option value="ticket_created">Ticket Created</option>
+        <option value="ticket_updated">Ticket Updated</option>
+        <option value="vulnerability_detected">Vulnerability Detected</option>
+        <option value="patch_failed">Patch Failed</option>
+        <option value="user_offboarded">User Offboarded</option>
+        <option value="alert_triggered">Alert Triggered</option>
+      </select>
+      <div class="mt-2" id="cfg-schedule-wrap" style="display:none">
+        <div class="cfg-label">Cron / Interval (mins)</div>
+        <input class="cfg-input mt-1" id="cfg-interval" type="number" min="1" placeholder="60" value="${nd.config.interval||''}" oninput="nd_set('config.interval',this.value)">
+      </div>
+    </div>`;
+  } else if (nd.type === 'condition') {
+    html += cfgRow('Field / Variable','cfg-cond-field','text', nd.config.field||'', "nd_set('config.field',this.value)");
+    html += `<div class="cfg-section"><div class="cfg-label">Operator</div>
+      <select class="cfg-input cfg-select" onchange="nd_set('config.operator',this.value)">
+        ${'== != > < contains not_contains'.split(' ').map(op=>`<option${(nd.config.operator||'==')==op?' selected':''}>${op}</option>`).join('')}
+      </select></div>`;
+    html += cfgRow('Value','cfg-cond-val','text', nd.config.value||'', "nd_set('config.value',this.value)");
+  } else if (nd.action === 'create_ticket') {
+    html += cfgRow('Ticket Title','cfg-ct-title','text', nd.config.title||'', "nd_set('config.title',this.value)");
+    html += cfgRow('Description','cfg-ct-desc','text', nd.config.description||'', "nd_set('config.description',this.value)");
+    html += `<div class="cfg-section"><div class="cfg-label">Priority</div>
+      <select class="cfg-input cfg-select" onchange="nd_set('config.priority',this.value)">
+        $(['Low','Medium','High','Critical'].map(p=>`<option${(nd.config.priority||'Medium')===p?' selected':''}>${p}</option>`).join(''))}
+      </select></div>`;
+  } else if (nd.action === 'update_ticket') {
+    html += cfgRow('Status','cfg-ut-status','text', nd.config.status||'', "nd_set('config.status',this.value)");
+    html += cfgRow('Note','cfg-ut-note','text', nd.config.note||'', "nd_set('config.note',this.value)");
+  } else if (nd.action === 'send_email') {
+    html += cfgRow('To','cfg-email-to','email', nd.config.to||'', "nd_set('config.to',this.value)");
+    html += cfgRow('Subject','cfg-email-subj','text', nd.config.subject||'', "nd_set('config.subject',this.value)");
+    html += cfgRow('Body','cfg-email-body','text', nd.config.body||'', "nd_set('config.body',this.value)");
+  } else if (nd.action === 'send_notification') {
+    html += cfgRow('Message','cfg-notif-msg','text', nd.config.message||'', "nd_set('config.message',this.value)");
+    html += cfgRow('Recipient User','cfg-notif-user','text', nd.config.user||'', "nd_set('config.user',this.value)");
+  } else if (nd.action === 'disable_ad_user') {
+    html += cfgRow('Username Field','cfg-ad-user','text', nd.config.username_field||'{{username}}', "nd_set('config.username_field',this.value)");
+    html += `<div class="text-secondary mt-1" style="font-size:.75rem">Use <code>{{username}}</code> for dynamic context.</div>`;
+  } else if (nd.action === 'azure_sync') {
+    html += `<div class="text-secondary" style="font-size:.79rem">Runs Azure AD sync after disabling a user. No config needed.</div>`;
+  } else if (nd.action === 'webhook') {
+    html += cfgRow('URL','cfg-wh-url','url', nd.config.url||'', "nd_set('config.url',this.value)");
+    html += `<div class="cfg-section"><div class="cfg-label">Method</div>
+      <select class="cfg-input cfg-select" onchange="nd_set('config.method',this.value)">
+        ${['POST','GET','PUT'].map(m=>`<option${(nd.config.method||'POST')===m?' selected':''}>${m}</option>`).join('')}
+      </select></div>`;
+    html += cfgRow('Body (JSON)','cfg-wh-body','text', nd.config.body||'{}', "nd_set('config.body',this.value)");
+  } else if (nd.action === 'deploy_patch') {
+    html += cfgRow('Asset ID / {{asset_id}}','cfg-dp-asset','text', nd.config.asset_id_field||'{{asset_id}}', "nd_set('config.asset_id_field',this.value)");
+    html += cfgRow('Patch ID','cfg-dp-patch','text', nd.config.patch_id||'', "nd_set('config.patch_id',this.value)");
+  } else if (nd.action === 'wait') {
+    html += cfgRow('Seconds','cfg-wait-s','number', nd.config.seconds||30, "nd_set('config.seconds',+this.value)");
+  } else if (nd.action === 'ai_suggest') {
+    html += `<div class="text-secondary" style="font-size:.79rem">Calls AI to suggest resolutions for the ticket in context (<code>{{ticket_id}}</code>).</div>`;
+  }
+
+  html += `<div class="mt-3"><button class="btn btn-sm btn-outline-danger w-100" onclick="deleteNode('${nd.id}')"><i class="bi bi-trash3"></i> Delete Node</button></div>`;
+  panel.innerHTML = html;
+
+  // post-render: trigger select sync
+  const ts = document.getElementById('cfg-trigger');
+  if (ts) {
+    ts.value = nd.config.trigger_type || document.getElementById('wf-trigger-type').value;
+    ts.dispatchEvent(new Event('change'));
+  }
+}
+
+function cfgRow(label, id, type, val, onInput) {
+  return `<div class="cfg-section"><div class="cfg-label">${label}</div>
+    <input class="cfg-input" id="${id}" type="${type}" value="${escHtml(String(val))}" oninput="${onInput}">
+  </div>`;
+}
+
+// Set nested config key (supports config.xxx)
+function nd_set(key, value) {
+  if (!selectedNode) return;
+  const parts = key.split('.');
+  if (parts.length === 1) { selectedNode[key] = value; }
+  else { selectedNode[parts[0]][parts[1]] = value; }
+  updateNodeBody(selectedNode);
+}
+
+// Trigger schedule visibility
+document.addEventListener('change', e => {
+  if (e.target.id === 'cfg-trigger') {
+    const wrap = document.getElementById('cfg-schedule-wrap');
+    if (wrap) wrap.style.display = e.target.value==='schedule'?'block':'none';
+    document.getElementById('wf-trigger-type').value = e.target.value;
+    nd_set('config.trigger_type', e.target.value);
+  }
+});
+
+// ── Delete node ──────────────────────────────────────────────────────────────
+function deleteNode(nid) {
+  nodes = nodes.filter(n=>n.id!==nid);
+  edges = edges.filter(e=>e.fromNode!==nid && e.toNode!==nid);
+  const el = document.getElementById('node-' + nid);
+  if (el) el.remove();
+  if (selectedNode && selectedNode.id===nid) {
+    selectedNode = null;
+    document.getElementById('wf-config-inner').innerHTML = '<div class="text-center text-secondary py-4" style="font-size:.8rem"><i class="bi bi-cursor-fill" style="font-size:1.5rem"></i><br>Click a node to configure</div>';
+  }
+  refreshEdges();
+  updateDropHint();
+}
+
+function clearCanvas() {
+  if (!confirm('Clear canvas?')) return;
+  nodes=[]; edges=[]; selectedNode=null; nodeIdSeq=1; edgeIdSeq=1;
+  nodesDiv.innerHTML=''; svgEl.innerHTML=''; updateDropHint();
+  document.getElementById('wf-config-inner').innerHTML='<div class="text-center text-secondary py-4" style="font-size:.8rem"><i class="bi bi-cursor-fill" style="font-size:1.5rem"></i><br>Click a node to configure</div>';
+}
+
+function updateDropHint() {
+  dropHint.style.display = nodes.length ? 'none' : 'block';
+}
+
+// ── Save / Load ──────────────────────────────────────────────────────────────
+async function saveWorkflow() {
+  const payload = {
+    name:         document.getElementById('wf-title').value,
+    trigger_type: document.getElementById('wf-trigger-type').value,
+    enabled:      document.getElementById('wf-enabled').checked,
+    nodes: nodes.map(n => ({id:n.id, type:n.type, action:n.action, label:n.label, x:n.x, y:n.y, config:n.config})),
+    edges: edges
+  };
+  const method = currentWfId ? 'PUT' : 'POST';
+  const url    = currentWfId ? `/api/workflows/${currentWfId}` : '/api/workflows';
+  const resp   = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+  const data   = await resp.json();
+  if (resp.ok) {
+    if (!currentWfId && data.id) { currentWfId = data.id; document.getElementById('btn-run').disabled=false; }
+    showToast('Workflow saved', 'success');
+    loadWorkflowList();
+  } else {
+    showToast(data.error || 'Save failed', 'danger');
+  }
+}
+
+async function loadWorkflow(id) {
+  const resp = await fetch('/api/workflows/' + id);
+  const wf   = await resp.json();
+  if (!resp.ok) return;
+  currentWfId = wf.id;
+  clearCanvas();
+  document.getElementById('wf-title').value = wf.name;
+  document.getElementById('wf-trigger-type').value = wf.trigger_type;
+  document.getElementById('wf-enabled').checked = !!wf.enabled;
+  document.getElementById('btn-run').disabled = false;
+
+  // Replay highest id for seq
+  wf.nodes.forEach(n => {
+    addNode(n.type, n.action||'', n.x, n.y, n.config||{}, n.id, n.label);
+    const seq = parseInt((n.id||'').replace('n',''));
+    if (!isNaN(seq) && seq >= nodeIdSeq) nodeIdSeq = seq+1;
+  });
+  wf.edges.forEach(e => {
+    edges.push(e);
+    const seq = parseInt((e.id||'').replace('e',''));
+    if (!isNaN(seq) && seq >= edgeIdSeq) edgeIdSeq = seq+1;
+  });
+  refreshEdges();
+  loadRunHistory(id);
+
+  // Highlight active
+  document.querySelectorAll('.wf-item').forEach(el=>{
+    el.classList.toggle('active', el.dataset.id==id);
+  });
+}
+
+async function loadWorkflowList() {
+  const resp = await fetch('/api/workflows');
+  const list = await resp.json();
+  const el   = document.getElementById('wf-list');
+  if (!list.length) { el.innerHTML='<div class="text-center text-secondary py-4" style="font-size:.78rem">No workflows yet.<br>Click + to create one.</div>'; return; }
+  el.innerHTML = list.map(wf => `
+    <div class="wf-item${wf.id===currentWfId?' active':''}" data-id="${wf.id}" onclick="loadWorkflow(${wf.id})">
+      <span class="wf-badge badge bg-${wf.enabled?'success':'secondary'}">${wf.enabled?'ON':'OFF'}</span>
+      <span class="wf-name">${escHtml(wf.name)}</span>
+    </div>`).join('');
+}
+
+async function runWorkflow() {
+  if (!currentWfId) return;
+  const resp = await fetch(`/api/workflows/${currentWfId}/run`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  const d = await resp.json();
+  if (resp.ok) { showToast('Workflow started — Run #' + d.run_id, 'success'); setTimeout(()=>loadRunHistory(currentWfId),1500); }
+  else showToast(d.error||'Failed', 'danger');
+}
+
+function newWorkflow() {
+  currentWfId = null;
+  clearCanvas();
+  document.getElementById('wf-title').value = 'New Workflow';
+  document.getElementById('wf-trigger-type').value = 'manual';
+  document.getElementById('wf-enabled').checked = true;
+  document.getElementById('btn-run').disabled = true;
+  document.querySelectorAll('.wf-item').forEach(el=>el.classList.remove('active'));
+  document.getElementById('run-history').innerHTML='';
+}
+
+async function loadRunHistory(wfId) {
+  const resp = await fetch(`/api/workflows/${wfId}/runs`);
+  const runs = await resp.json();
+  const el   = document.getElementById('run-history');
+  if (!runs.length) { el.innerHTML='<span style="color:#4a5d78;font-size:.78rem">No runs yet</span>'; return; }
+  const colors = {success:'#5fcf8b',failed:'#f87171',running:'#6aacf8',pending:'#f8a84a'};
+  el.innerHTML = runs.map(r => {
+    const col = colors[r.status]||'#8899aa';
+    return `<div class="run-row">
+      <span style="color:${col};font-size:.78rem;font-weight:600">${r.status.toUpperCase()}</span>
+      <span style="color:#8899aa;font-size:.78rem">${r.started_at||'—'}</span>
+      ${r.error?`<span style="color:#f87171;font-size:.75rem">${escHtml(r.error)}</span>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ── Utility ──────────────────────────────────────────────────────────────────
+function escHtml(s) { return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function showToast(msg, type='info') {
+  const t = document.createElement('div');
+  t.className = `alert alert-${type} position-fixed`;
+  t.style.cssText = 'bottom:20px;right:20px;z-index:9999;min-width:220px;animation:fadeIn .2s';
+  t.innerHTML = `<i class="bi bi-${type==='success'?'check-circle':'exclamation-circle'}-fill me-2"></i>${msg}`;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3000);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+loadWorkflowList();
+</script>
+{% endblock %}

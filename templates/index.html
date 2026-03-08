@@ -78,7 +78,7 @@
                   <div class="card-body">
                     <div class="row text-center g-2">
                       <div class="col-6">
-                        <div class="fw-bold fs-3 {% if data.tickets_open > 10 %}text-warning{% else %}text-success{% endif %}">{{ data.tickets_open }}</div>
+                        <div class="fw-bold fs-3 {% if data.tickets_open > 10 %}text-warning{% else %}text-success{% endif %}" data-live="open_tickets">{{ data.tickets_open }}</div>
                         <div class="small text-muted">Open</div>
                       </div>
                       <div class="col-6">
@@ -1083,6 +1083,29 @@ function addWidgetToDashboard(widgetId, widgetType, widgetSize, widgetHeight) {
     btn.addEventListener('click', ask);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
 })();
-</script>
 
-{% endblock %}
+  // ── Live status SSE ──────────────────────────────────────────────────────
+  (function() {
+    if (!window.EventSource) return;
+    const fields = {
+      online:       '[data-live="online"]',
+      offline:      '[data-live="offline"]',
+      open_tickets: '[data-live="open_tickets"]',
+      open_alerts:  '[data-live="open_alerts"]',
+      crit_cves:    '[data-live="crit_cves"]',
+    };
+    function connect() {
+      const es = new EventSource('/api/dashboard/live-status');
+      es.onmessage = function(e) {
+        try {
+          const d = JSON.parse(e.data);
+          for (const [key, sel] of Object.entries(fields)) {
+            const el = document.querySelector(sel);
+            if (el && d[key] !== undefined) el.textContent = d[key];
+          }
+        } catch(_) {}
+      };
+      es.onerror = function() { es.close(); setTimeout(connect, 30000); };
+    }
+    connect();
+  })();

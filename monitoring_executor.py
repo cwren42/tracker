@@ -172,6 +172,11 @@ class MonitoringExecutor:
             elif check_type == 'custom':
                 result.update(self.check_custom(asset, params))
             
+            elif normalized_type in ('status', 'selinux_status', 'uptime', 'agent_version'):
+                # Informational checks — mark as passed (data comes from agent telemetry)
+                result['success'] = True
+                result['message'] = f"{check.name}: informational check (no active probe)"
+            
             else:
                 result['message'] = f"Unknown check type: {check_type}"
                 result['success'] = False
@@ -636,7 +641,7 @@ class MonitoringExecutor:
                 existing_alert.failure_count = (existing_alert.failure_count or 0) + 1
                 existing_alert.last_failed_at = now
                 existing_alert.message = result.get('message', 'Check failed')
-                existing_alert.details = json.dumps(result)
+                existing_alert.details = json.dumps(result, default=str)
                 logger.info(f"Updated existing alert #{existing_alert.id} (failure #{existing_alert.failure_count})")
             else:
                 # Create new alert
@@ -645,7 +650,7 @@ class MonitoringExecutor:
                     check_id=check.id,
                     severity=result.get('severity', 'critical'),
                     message=f"{check.name} failed on {asset.name}",
-                    details=json.dumps(result),
+                    details=json.dumps(result, default=str),
                     status='open',
                     triggered_at=now,
                     failure_count=1,

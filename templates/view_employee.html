@@ -33,6 +33,11 @@
             <i class="bi bi-trash"></i> Delete
         </button>
         {% endif %}
+        {% if current_user.role in ['admin', 'manager'] %}
+        <button type="button" class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#offboardModal">
+            <i class="bi bi-box-arrow-right"></i> Offboard
+        </button>
+        {% endif %}
         <a href="{{ url_for('employees') }}" class="btn btn-secondary">
             <i class="bi bi-arrow-left"></i> Back
         </a>
@@ -58,6 +63,37 @@
                 <form method="POST" action="{{ url_for('delete_employee', employee_id=employee.id) }}" class="d-inline">
                     <button type="submit" class="btn btn-danger">
                         <i class="bi bi-trash"></i> Delete Employee
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Offboard Confirmation Modal -->
+<div class="modal fade" id="offboardModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title"><i class="bi bi-box-arrow-right"></i> Offboard Employee</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Initiate offboarding workflow for <strong>{{ employee.name }}</strong>?</p>
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> This will automatically:
+                    <ul class="mb-0 mt-1">
+                        <li>Unassign all assets (mark as Available)</li>
+                        <li>Return all active licenses</li>
+                        <li>Create an offboarding checklist ticket</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="POST" action="{{ url_for('offboard_employee', employee_id=employee.id) }}" class="d-inline">
+                    <button type="submit" class="btn btn-warning">
+                        <i class="bi bi-box-arrow-right"></i> Start Offboarding
                     </button>
                 </form>
             </div>

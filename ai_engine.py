@@ -518,3 +518,187 @@ def ask_ai(question: str) -> dict:
         sources = ["Assets", "Tickets", "Licenses", "Monitoring", "Backups"]
 
     return {"answer": answer, "sources": sources}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Predictive failure analysis + ticket auto-triage
+# ──────────────────────────────────────────────────────────────────────────────
+def predict_asset_failures() -> dict:
+    """
+    Analyse metrics, CVE counts, age, storage and monitoring alerts to surface
+    at-risk assets. Returns rule-based risk scores enriched with AI narrative if
+    an OpenAI key is available.
+    """
+    db = _db()
+
+    # Gather signals
+    assets = db.execute("""
+        SELECT a.id, a.asset_tag, a.name, a.purchase_date, a.status,
+               a.hardware_storage_total_gb, a.hardware_storage_free_gb,
+               a.hardware_ram_gb, a.warranty_expiry,
+               (SELECT COUNT(*) FROM device_vulnerability v
+                WHERE v.asset_id = a.id AND v.severity IN ('Critical','High')
+                  AND v.status != 'resolved') AS crit_cves,
+               (SELECT COUNT(*) FROM monitoring_alert m
+                WHERE m.asset_id = a.id AND m.status = 'open') AS open_alerts
+        FROM asset a
+        WHERE a.status != 'Retired'
+    """).fetchall()
+
+    at_risk = []
+    today = datetime.utcnow().date()
+
+    for row in assets:
+        risk_score = 0
+        reasons = []
+
+        # Age signal
+        if row["purchase_date"]:
+            import datetime as _dt
+            pd = _dt.date.fromisoformat(str(row["purchase_date"]))
+            age_years = (today - pd).days / 365.25
+            if age_years >= 5:
+                risk_score += 30
+                reasons.append(f"Age {age_years:.1f}yr ≥ 5yr EOL threshold")
+            elif age_years >= 4:
+                risk_score += 15
+                reasons.append(f"Age {age_years:.1f}yr approaching EOL")
+
+        # Warranty signal
+        if row["warranty_expiry"]:
+            import datetime as _dt
+            we = _dt.date.fromisoformat(str(row["warranty_expiry"]))
+            days_left = (we - today).days
+            if days_left < 0:
+                risk_score += 25
+                reasons.append("Warranty expired")
+            elif days_left <= 30:
+                risk_score += 15
+                reasons.append(f"Warranty expiring in {days_left}d")
+
+        # Storage signal
+        if row["hardware_storage_total_gb"] and row["hardware_storage_total_gb"] > 0:
+            free_pct = (row["hardware_storage_free_gb"] or 0) / row["hardware_storage_total_gb"]
+            if free_pct < 0.10:
+                risk_score += 25
+                reasons.append(f"Storage critically low ({free_pct*100:.0f}% free)")
+            elif free_pct < 0.20:
+                risk_score += 10
+                reasons.append(f"Storage low ({free_pct*100:.0f}% free)")
+
+        # CVE signal
+        if row["crit_cves"] and row["crit_cves"] > 0:
+            cve_score = min(30, row["crit_cves"] * 2)
+            risk_score += cve_score
+            reasons.append(f"{row['crit_cves']} unresolved Critical/High CVEs")
+
+        # Monitoring alerts
+        if row["open_alerts"] and row["open_alerts"] > 0:
+            alert_score = min(20, row["open_alerts"] * 5)
+            risk_score += alert_score
+            reasons.append(f"{row['open_alerts']} open monitoring alert(s)")
+
+        if risk_score > 0:
+            at_risk.append({
+                "asset_id":  row["id"],
+                "asset_tag": row["asset_tag"],
+                "name":      row["name"],
+                "risk_score": min(100, risk_score),
+                "reasons":   reasons,
+            })
+
+    db.close()
+
+    # Sort by descending risk
+    at_risk.sort(key=lambda x: x["risk_score"], reverse=True)
+    top = at_risk[:20]
+
+    # AI narrative (optional, skipped if no API key)
+    narrative = None
+    try:
+        if top and _get_api_key():
+            summary_lines = [
+                f"  - {a['name']} (score {a['risk_score']}): {'; '.join(a['reasons'])}"
+                for a in top[:10]
+            ]
+            narrative = _openai_chat([
+                {"role": "system", "content":
+                    "You are a senior IT infrastructure analyst. Provide a concise executive summary "
+                    "(3-5 sentences) of hardware risk across the fleet and prioritised action items."},
+                {"role": "user", "content":
+                    f"Top at-risk assets:\n" + "\n".join(summary_lines)}
+            ], max_tokens=300)
+    except Exception as _ai_err:
+        log.debug(f"AI narrative skipped: {_ai_err}")
+
+    return {
+        "at_risk": top,
+        "total_flagged": len(at_risk),
+        "narrative": narrative,
+        "generated_at": _now(),
+    }
+
+
+def auto_triage_ticket(ticket_id: int) -> dict:
+    """
+    Rule-based ticket triage: suggest priority, category and assignee based on
+    keywords. Falls back to AI if a key is available.
+    Returns {"priority", "category", "suggested_assignee", "reason"}.
+    """
+    db = _db()
+    row = db.execute(
+        "SELECT subject, description, priority, source FROM support_ticket WHERE id=?",
+        (ticket_id,)
+    ).fetchone()
+    db.close()
+
+    if not row:
+        return {"error": "Ticket not found"}
+
+    text = f"{row['subject']} {row['description'] or ''}".lower()
+
+    # Keyword-based rules
+    priority = row["priority"] or "Normal"
+    category = "General"
+    reason = "Keyword match"
+
+    if any(w in text for w in ["ransomware", "breach", "hack", "phish", "malware", "virus"]):
+        priority, category = "Urgent", "Security Incident"
+        reason = "Security threat keywords detected"
+    elif any(w in text for w in ["down", "outage", "offline", "unreachable", "not working", "crash"]):
+        priority = "High"
+        category = "Outage / Downtime"
+        reason = "Outage/downtime keywords"
+    elif any(w in text for w in ["slow", "performance", "lag", "freeze"]):
+        priority = "Normal"
+        category = "Performance"
+        reason = "Performance keywords"
+    elif any(w in text for w in ["password", "locked out", "login", "access denied"]):
+        priority = "High"
+        category = "Access / Authentication"
+        reason = "Access problem keywords"
+    elif any(w in text for w in ["printer", "print", "scanner"]):
+        priority = "Low"
+        category = "Peripheral"
+        reason = "Printer/peripheral keywords"
+
+    result = {"priority": priority, "category": category, "reason": reason, "source": "rules"}
+
+    # Enhance with AI if available
+    try:
+        if _get_api_key():
+            ai_resp = _openai_chat([
+                {"role": "system", "content":
+                    "You are an IT help-desk triage specialist. Given a support ticket, respond with "
+                    "JSON only: {\"priority\": \"Low|Normal|High|Urgent\", \"category\": \"string\", "
+                    "\"reason\": \"one sentence\"}"},
+                {"role": "user", "content":
+                    f"Subject: {row['subject']}\nDescription: {row['description'] or '(none)'}"}
+            ], max_tokens=120)
+            parsed = json.loads(ai_resp)
+            result.update(parsed)
+            result["source"] = "ai"
+    except Exception:
+        pass  # Use rule-based result
+
+    return result

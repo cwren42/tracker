@@ -49,8 +49,12 @@
         <button class="btn btn-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Reopen</button>
       </form>
     {% endif %}
+    <button class="btn btn-outline-secondary btn-sm" id="aiTriageBtn" onclick="aiTriage({{ ticket.id }})">
+      <i class="bi bi-robot me-1"></i>AI Triage
+    </button>
   </div>
 </div>
+<div id="aiTriageResult" class="alert alert-info mt-2 d-none"></div>
 
 <div class="row g-4">
 
@@ -439,5 +443,25 @@ fetch(`/api/ai/ticket/${TICKET_ID}/suggestions`).then(r=>r.json()).then(list=>{
   const latest = list[0];
   if (latest.status === 'pending') renderSuggestion(latest, document.getElementById('ai-panel-body'));
 });
+
+async function aiTriage(ticket_id) {
+  const btn = document.getElementById('aiTriageBtn');
+  const box = document.getElementById('aiTriageResult');
+  btn.disabled = true;
+  box.className = 'alert alert-info mt-2';
+  box.textContent = 'AI is triaging this ticket…';
+  try {
+    const r = await fetch(`/api/ai/triage-ticket/${ticket_id}`, {method:'POST'});
+    const d = await r.json();
+    if (d.error) { box.className='alert alert-danger mt-2'; box.textContent=d.error; }
+    else {
+      box.className='alert alert-success mt-2';
+      box.innerHTML = `<strong>AI Triage Result</strong> <span class="badge bg-secondary">${escHtml(d.source)}</span><br>
+        Priority: <strong>${escHtml(d.priority)}</strong> &nbsp;|&nbsp; Category: <strong>${escHtml(d.category)}</strong><br>
+        <span class="text-muted small">${escHtml(d.reason)}</span>`;
+    }
+  } catch(e) { box.className='alert alert-danger mt-2'; box.textContent='Triage request failed.'; }
+  finally { btn.disabled = false; }
+}
 </script>
 {% endblock %}

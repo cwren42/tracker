@@ -46,6 +46,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SESSION_COOKIE_SECURE'] = True  # Enable secure cookies for HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
 app.config['REMEMBER_COOKIE_SECURE'] = True  # Enable secure cookies for HTTPS
 app.config['REMEMBER_COOKIE_HTTPONLY'] = True
 app.config['PREFERRED_URL_SCHEME'] = 'https'  # Use HTTPS for URL generation
@@ -270,6 +271,9 @@ class SupportTicket(db.Model):
     assigned_to = db.relationship('User', foreign_keys=[assigned_to_user_id])
     notes = db.relationship('TicketNote', backref='ticket', lazy='dynamic', cascade='all, delete-orphan')
     activity = db.relationship('TicketActivity', backref='ticket', lazy='dynamic', cascade='all, delete-orphan')
+    csat_token = db.Column(db.String(64))
+    csat_score = db.Column(db.Integer)       # 1=positive, 0=negative
+    csat_comment = db.Column(db.Text)
 
 
 class TicketNote(db.Model):
@@ -612,6 +616,38 @@ AssetMonitoringProfile = db.Table('asset_monitoring_profile',
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# ─── Audit Trail Model ─────────────────────────────────────────────────────
+class AuditTrail(db.Model):
+    __tablename__ = 'audit_trail'
+    id = db.Column(db.Integer, primary_key=True)
+    entity_type = db.Column(db.Text, nullable=False)
+    entity_id = db.Column(db.Integer, nullable=False)
+    action = db.Column(db.Text, nullable=False)  # create, update, delete
+    changes = db.Column(db.Text)  # JSON
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    ip_address = db.Column(db.Text)
+    user_agent = db.Column(db.Text)
+    created_at = db.Column(db.Text, default=lambda: datetime.utcnow().isoformat())
+
+def _log_audit(entity_type, entity_id, action, changes=None):
+    """Write an audit record. Safe to call from routes and event listeners."""
+    from flask import has_request_context, request as _req
+    try:
+        uid = current_user.id if has_request_context() and current_user.is_authenticated else 1
+        ip  = _req.remote_addr if has_request_context() else None
+        ua  = _req.user_agent.string[:500] if has_request_context() else None
+        entry = AuditTrail(
+            entity_type=entity_type, entity_id=int(entity_id or 0),
+            action=action, changes=json.dumps(changes) if changes else None,
+            user_id=uid, ip_address=ip, user_agent=ua)
+        db.session.add(entry)
+        # Don't commit here — will be committed with the parent transaction
+    except Exception:
+        pass  # Never break the main operation due to audit logging
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def admin_required(f):
     """Decorator to require admin role"""
     from functools import wraps
@@ -667,6 +703,33 @@ def license_required(f):
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+# ─── SQLAlchemy Audit Event Listeners ────────────────────────────────────────
+from sqlalchemy import event as _sa_event
+
+def _make_audit_listener(entity_type):
+    """Return after_insert / after_update / after_delete listeners for a model."""
+    def _after_insert(mapper, connection, target):
+        _log_audit(entity_type, target.id, 'create')
+    def _after_delete(mapper, connection, target):
+        _log_audit(entity_type, target.id, 'delete')
+    def _after_update(mapper, connection, target):
+        changed = {
+            attr.key: str(getattr(target, attr.key))
+            for attr in db.inspect(target).attrs
+            if db.inspect(target).attrs[attr.key].history.has_changes()
+            and attr.key not in ('updated_at', 'last_seen', 'last_login')
+        }
+        if changed:
+            _log_audit(entity_type, target.id, 'update', changed)
+    return _after_insert, _after_update, _after_delete
+
+for _model, _etype in [(Asset, 'asset'), (Employee, 'employee'), (Policy, 'policy')]:
+    _ins, _upd, _del = _make_audit_listener(_etype)
+    _sa_event.listen(_model, 'after_insert', _ins)
+    _sa_event.listen(_model, 'after_update', _upd)
+    _sa_event.listen(_model, 'after_delete', _del)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ==================== EMAIL FUNCTIONS ====================
 
@@ -844,6 +907,45 @@ def index():
         user_id=current_user.id,
         enabled=True
     ).order_by(DashboardWidget.position).all()
+
+@app.route('/api/dashboard/live-status')
+@login_required
+def dashboard_live_status():
+    """SSE stream: pushes a JSON snapshot of live agent counts every 15s."""
+    import time as _t
+    def _generate():
+        for _ in range(120):  # max 30 minutes = 120 × 15s
+            try:
+                online = db.session.execute(
+                    text("SELECT COUNT(*) FROM asset WHERE online_state='Online'")
+                ).scalar() or 0
+                offline = db.session.execute(
+                    text("SELECT COUNT(*) FROM asset WHERE online_state='Offline'")
+                ).scalar() or 0
+                open_tickets = db.session.execute(
+                    text("SELECT COUNT(*) FROM support_ticket WHERE status='Open'")
+                ).scalar() or 0
+                open_alerts = db.session.execute(
+                    text("SELECT COUNT(*) FROM monitoring_alert WHERE status='open'")
+                ).scalar() or 0
+                crit_cves = db.session.execute(
+                    text("SELECT COUNT(*) FROM device_vulnerability "
+                         "WHERE severity IN ('Critical','High') AND status!='resolved'")
+                ).scalar() or 0
+                payload = json.dumps({
+                    'online': online, 'offline': offline,
+                    'open_tickets': open_tickets, 'open_alerts': open_alerts,
+                    'crit_cves': crit_cves,
+                    'ts': datetime.utcnow().strftime('%H:%M:%S')
+                })
+                yield f"data: {payload}\n\n"
+            except Exception:
+                yield "data: {}\n\n"
+            _t.sleep(15)
+    from flask import Response, stream_with_context
+    return Response(stream_with_context(_generate()),
+                    mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
     
     # If no custom widgets, use default layout
     if not user_widgets:
@@ -1381,6 +1483,7 @@ def login():
         user = User.query.filter_by(username=username).first()
         
         if user and check_password_hash(user.password_hash, password):
+            session.permanent = True
             login_user(user)
             user.last_login = datetime.utcnow()
             db.session.commit()
@@ -1518,6 +1621,7 @@ def login_microsoft_callback():
         flash(f'Welcome back, {display_name}!', 'success')
     
     # Log user in
+    session.permanent = True
     login_user(user)
     user.last_login = datetime.utcnow()
     db.session.commit()
@@ -3205,7 +3309,30 @@ def close_ticket(ticket_id):
         ticket.status = 'Closed'
         ticket.closed_at = datetime.utcnow()
         ticket.closed_by_user_id = current_user.id
-        db.session.commit()
+        # Generate CSAT token and send survey email if reporter email is known
+        if ticket.reporter_email and not ticket.csat_token:
+            ticket.csat_token = secrets.token_urlsafe(32)
+            db.session.commit()
+            try:
+                base = request.host_url.rstrip('/')
+                good_url = f"{base}/csat/{ticket.csat_token}/1"
+                bad_url  = f"{base}/csat/{ticket.csat_token}/0"
+                send_email(
+                    subject=f'How did we do? Ticket #{ticket.id} — {ticket.subject[:60]}',
+                    recipients=[ticket.reporter_email],
+                    text_body=(
+                        f'Hi {ticket.reporter_name or "there"},\n\n'
+                        f'Your support ticket #{ticket.id} has been resolved.\n\n'
+                        f'Quick question — how satisfied were you with our service?\n'
+                        f'👍 Great:  {good_url}\n'
+                        f'👎 Needs improvement:  {bad_url}\n\n'
+                        f'Thank you for your feedback!\n— IT Support'
+                    )
+                )
+            except Exception as _csat_err:
+                logger.warning(f'CSAT email failed for ticket {ticket.id}: {_csat_err}')
+        else:
+            db.session.commit()
     flash(f'Ticket #{ticket.id} closed.', 'success')
     return redirect(url_for('view_ticket', ticket_id=ticket.id))
 
@@ -5976,6 +6103,78 @@ def delete_employee(employee_id):
     
     flash(f'Employee {employee_name} deleted successfully', 'success')
     return redirect(url_for('employees'))
+
+@app.route('/employees/<int:employee_id>/offboard', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def offboard_employee(employee_id):
+    """Offboarding workflow: unassign assets, revoke licenses, create checklist ticket."""
+    employee = Employee.query.get_or_404(employee_id)
+
+    steps_done = []
+
+    # 1. Unassign all assets
+    asset_list = []
+    for asset in list(employee.assets):
+        asset_list.append(f"{asset.asset_tag} ({asset.name})")
+        asset.employee_id = None
+        asset.status = 'Available'
+        asset.updated_at = datetime.utcnow()
+    if asset_list:
+        steps_done.append(f"Assets unassigned: {', '.join(asset_list)}")
+        db.session.flush()
+
+    # 2. Revoke active license assignments
+    active_licenses = LicenseAssignment.query.filter_by(
+        employee_id=employee.id, status='Active').all()
+    license_list = []
+    for la in active_licenses:
+        la.status = 'Returned'
+        la.returned_date = datetime.utcnow()
+        license_list.append(str(la.id))
+    if license_list:
+        steps_done.append(f"Licenses returned: {len(license_list)}")
+
+    # 3. Create offboarding checklist ticket
+    checklist = (
+        "## Offboarding Checklist\n\n"
+        f"**Employee:** {employee.name} ({employee.email or 'no email'})\n"
+        f"**Department:** {employee.department or 'N/A'}\n"
+        f"**Initiated by:** {current_user.username}\n\n"
+        "### Automated Steps Completed\n"
+    )
+    for step in steps_done:
+        checklist += f"- [x] {step}\n"
+    checklist += (
+        "\n### Manual Steps Required\n"
+        "- [ ] Disable Active Directory / Azure AD account\n"
+        "- [ ] Remove from all security groups and distribution lists\n"
+        "- [ ] Revoke MFA tokens and app-specific passwords\n"
+        "- [ ] Collect physical access cards / keys\n"
+        "- [ ] Remove from VPN / remote access\n"
+        "- [ ] Archive or transfer email and files\n"
+        "- [ ] Update org chart and documentation\n"
+    )
+
+    ticket = SupportTicket(
+        status='Open', priority='High', source='system',
+        category='HR / Offboarding',
+        subject=f'[OFFBOARD] {employee.name} — Offboarding Checklist',
+        description=checklist,
+        reporter_name=current_user.username,
+        reporter_email=current_user.email,
+        created_by_user_id=current_user.id,
+        created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+    db.session.add(ticket)
+    db.session.commit()
+
+    flash(
+        f'Offboarding initiated for {employee.name}. '
+        f'Ticket #{ticket.id} created with checklist. '
+        f'{len(asset_list)} asset(s) unassigned, {len(license_list)} license(s) returned.',
+        'success')
+    return redirect(url_for('view_employee', employee_id=employee.id))
 
 @app.route('/employees/import', methods=['GET', 'POST'])
 @login_required
@@ -8898,6 +9097,30 @@ def api_ai_ask():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/ai/predict-failures', methods=['GET'])
+@login_required
+def api_ai_predict_failures():
+    """Return risk-scored at-risk assets using AI predictive analysis."""
+    try:
+        result = _ai_engine.predict_asset_failures()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'AI predict-failures error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai/triage-ticket/<int:ticket_id>', methods=['POST'])
+@login_required
+def api_ai_triage_ticket(ticket_id):
+    """Auto-triage a ticket: suggest priority and category."""
+    try:
+        result = _ai_engine.auto_triage_ticket(ticket_id)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'AI triage error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER FOR RAW DB ACCESS (security/workflow/report routes)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -9365,6 +9588,83 @@ def api_cve_patch_jobs():
 # WORKFLOW ROUTES
 # ════════════════════════════════════════════════════════════════════════════════
 
+@app.route('/api/vulnerabilities/by-app')
+@login_required
+def api_vuln_by_app():
+    """Return CVEs grouped by product_name with device counts — for one-click patch-all."""
+    con = _alert_svc._get_db()
+    try:
+        rows = con.execute("""
+            SELECT
+                dv.product_name,
+                vc.severity,
+                COUNT(DISTINCT dv.cve_id)   AS cve_count,
+                COUNT(DISTINCT dv.asset_id) AS device_count,
+                MAX(vc.cvss)                AS max_cvss,
+                GROUP_CONCAT(DISTINCT dv.cve_id) AS cve_ids
+            FROM device_vulnerability dv
+            LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
+            WHERE dv.status = 'Open' AND dv.product_name IS NOT NULL AND dv.product_name != ''
+            GROUP BY dv.product_name, vc.severity
+            ORDER BY max_cvss DESC, cve_count DESC
+            LIMIT 200
+        """).fetchall()
+        result = {}
+        for r in rows:
+            pname = r['product_name']
+            if pname not in result:
+                result[pname] = {'product_name': pname, 'severities': {}, 'total_cves': 0, 'total_devices': 0, 'max_cvss': 0, 'all_cve_ids': []}
+            result[pname]['severities'][r['severity']] = r['cve_count']
+            result[pname]['total_cves'] += r['cve_count']
+            result[pname]['total_devices'] = max(result[pname]['total_devices'], r['device_count'])
+            result[pname]['max_cvss'] = max(result[pname]['max_cvss'], r['max_cvss'] or 0)
+            result[pname]['all_cve_ids'] += (r['cve_ids'] or '').split(',')
+        apps = sorted(result.values(), key=lambda x: (-x['max_cvss'], -x['total_cves']))
+        return jsonify(ok=True, apps=apps)
+    finally:
+        con.close()
+
+
+@app.route('/api/vulnerabilities/patch-all-by-app', methods=['POST'])
+@login_required
+@manager_required
+def api_patch_all_by_app():
+    """Queue CVE patch jobs for all open CVEs of a given product_name across all affected devices."""
+    data = request.get_json(force=True) or {}
+    product_name = (data.get('product_name') or '').strip()
+    if not product_name:
+        return jsonify(ok=False, error='product_name required'), 400
+    con = _alert_svc._get_db()
+    try:
+        rows = con.execute("""
+            SELECT DISTINCT dv.cve_id, dv.asset_id, ra.agent_id
+            FROM device_vulnerability dv
+            JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = 1
+            WHERE dv.product_name = ? AND dv.status = 'Open'
+        """, (product_name,)).fetchall()
+    finally:
+        con.close()
+    if not rows:
+        return jsonify(ok=False, error='No connected agents for this product'), 404
+    username = current_user.username
+    now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
+    dispatched, errors = [], []
+    for r in rows:
+        cve_id, asset_id, agent_id = r['cve_id'], r['asset_id'], r['agent_id']
+        try:
+            db.session.execute(
+                text("""INSERT OR IGNORE INTO cve_patch_job
+                        (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
+                        VALUES (:aid, :agt, :cve, 'queued', :who, :now, :now, :now)"""),
+                {'aid': asset_id, 'agt': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
+            )
+            dispatched.append({'asset_id': asset_id, 'cve_id': cve_id})
+        except Exception as e:
+            errors.append({'cve_id': cve_id, 'asset_id': asset_id, 'error': str(e)})
+    db.session.commit()
+    return jsonify(ok=True, product_name=product_name, queued=len(dispatched), errors=errors)
+
+
 @app.route('/workflows')
 @login_required
 def workflows():
@@ -9750,6 +10050,208 @@ try:
     _wf_engine.start_schedule_runner()
 except Exception as _svc_err:
     logger.warning(f'Background service startup warning: {_svc_err}')
+
+# ─── Ticket SLA Escalation Background Thread ─────────────────────────────────
+def _ticket_sla_check():
+    """Escalate tickets that have breached their SLA. Runs hourly."""
+    SLA_HOURS = {'Low': 120, 'Normal': 72, 'High': 24, 'Urgent': 4}
+    while True:
+        try:
+            _time.sleep(3600)  # wait 1 hour between checks
+            with app.app_context():
+                open_tickets = SupportTicket.query.filter(
+                    SupportTicket.status.in_(['Open', 'In Progress'])
+                ).all()
+                now = datetime.utcnow()
+                escalated = []
+                for t in open_tickets:
+                    hours = SLA_HOURS.get(t.priority, 72)
+                    age_hours = (now - t.created_at).total_seconds() / 3600
+                    if age_hours > hours:
+                        # Escalate priority one level
+                        escalation_map = {'Low': 'Normal', 'Normal': 'High', 'High': 'Urgent'}
+                        if t.priority in escalation_map:
+                            old_priority = t.priority
+                            t.priority = escalation_map[t.priority]
+                            # Add activity note
+                            note = TicketNote(
+                                ticket_id=t.id, user_id=1,
+                                content=f'[SLA] Auto-escalated from {old_priority} to {t.priority} '
+                                        f'({age_hours:.0f}h open, SLA: {hours}h)')
+                            db.session.add(note)
+                            escalated.append(t.id)
+                if escalated:
+                    db.session.commit()
+                    logger.info(f'SLA escalation: raised priority on tickets {escalated}')
+        except Exception as _sla_err:
+            logger.warning(f'SLA check error: {_sla_err}')
+
+threading.Thread(target=_ticket_sla_check, daemon=True, name='ticket-sla').start()
+
+# ─── Eagle Eyes Report Schedule Emailer ──────────────────────────────────────
+def _eagle_report_scheduler():
+    """Check report schedules every 15 minutes and send due emails."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    def _is_due(freq, dow, send_time, last_sent):
+        """Return True if this schedule should fire now."""
+        now = datetime.utcnow()
+        h, m = (int(x) for x in (send_time or '08:00').split(':'))
+        if now.hour != h or now.minute > m + 15:
+            return False
+        if last_sent and (now - last_sent).total_seconds() < 3600:
+            return False  # already sent within the last hour
+        if freq == 'daily':
+            return True
+        if freq == 'weekly' and now.isoweekday() == int(dow or 1):
+            return True
+        if freq == 'monthly' and now.day == 1:
+            return True
+        return False
+
+    def _build_eagle_report(agent_id):
+        """Build a plain-text Eagle Eyes summary for a given agent (or all)."""
+        with app.app_context():
+            where = "WHERE agent_id = :aid" if agent_id else ""
+            params = {'aid': agent_id} if agent_id else {}
+            rows = db.session.execute(text(f"""
+                SELECT agent_id, event_type, description, captured_at
+                FROM rmm_eagle_event
+                {where}
+                ORDER BY captured_at DESC LIMIT 50
+            """), params).mappings().fetchall()
+            if not rows:
+                return None, "No Eagle Eyes events in the last period."
+            lines = [f"Eagle Eyes Report — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n"]
+            for r in rows:
+                lines.append(f"  [{r['captured_at']}] {r['agent_id']} – {r['event_type']}: {r['description']}")
+            return rows[0]['agent_id'], "\n".join(lines)
+
+    while True:
+        try:
+            _time.sleep(900)  # check every 15 minutes
+            with app.app_context():
+                schedules = db.session.execute(text("""
+                    SELECT id, agent_id, frequency, day_of_week, send_time, email_to, last_sent_at
+                    FROM rmm_eagle_report_schedule WHERE enabled = 1
+                """)).mappings().fetchall()
+
+                for sch in schedules:
+                    last = datetime.fromisoformat(sch['last_sent_at']) if sch['last_sent_at'] else None
+                    if not _is_due(sch['frequency'], sch['day_of_week'], sch['send_time'], last):
+                        continue
+                    subject_agent, body = _build_eagle_report(sch['agent_id'])
+                    if not body:
+                        continue
+                    try:
+                        msg = MIMEMultipart('alternative')
+                        msg['Subject'] = f"Eagle Eyes Report — {subject_agent or 'All Agents'}"
+                        msg['From'] = app.config.get('MAIL_DEFAULT_SENDER', 'assettracker@cirque.com')
+                        msg['To'] = sch['email_to']
+                        msg.attach(MIMEText(body, 'plain'))
+                        with smtplib.SMTP(app.config.get('MAIL_SERVER', '10.15.0.4'),
+                                          app.config.get('MAIL_PORT', 25)) as smtp:
+                            smtp.sendmail(msg['From'], [sch['email_to']], msg.as_string())
+                        db.session.execute(text(
+                            "UPDATE rmm_eagle_report_schedule SET last_sent_at = :ts WHERE id = :id"
+                        ), {'ts': datetime.utcnow().isoformat(), 'id': sch['id']})
+                        db.session.commit()
+                        logger.info(f"Eagle Eyes report sent to {sch['email_to']} (schedule {sch['id']})")
+                    except Exception as _mail_err:
+                        logger.warning(f"Eagle Eyes email failed for schedule {sch['id']}: {_mail_err}")
+        except Exception as _sched_err:
+            logger.warning(f'Eagle report scheduler error: {_sched_err}')
+
+threading.Thread(target=_eagle_report_scheduler, daemon=True, name='eagle-scheduler').start()
+
+# ─── Asset Lifecycle EOL Auto-Ticket ─────────────────────────────────────────
+def _asset_eol_check():
+    """Daily: open a ticket for assets nearing warranty expiry or age EOL."""
+    EOL_AGE_YEARS = 5        # auto-ticket assets older than this
+    WARN_DAYS = 30           # warn this many days before warranty expiry
+
+    while True:
+        try:
+            _time.sleep(86400)  # run once per day
+            with app.app_context():
+                today = datetime.utcnow().date()
+                warn_date = today + timedelta(days=WARN_DAYS)
+                eol_age_days = EOL_AGE_YEARS * 365
+
+                # Assets with warranty expiring soon
+                expiring = Asset.query.filter(
+                    Asset.warranty_expiry.isnot(None),
+                    Asset.warranty_expiry <= warn_date,
+                    Asset.warranty_expiry >= today,
+                    Asset.status != 'Retired'
+                ).all()
+
+                # Assets over EOL by age
+                from datetime import date as _date
+                aged_out = Asset.query.filter(
+                    Asset.purchase_date.isnot(None),
+                    Asset.status != 'Retired'
+                ).all()
+                aged_out = [a for a in aged_out
+                            if (today - a.purchase_date).days >= eol_age_days]
+
+                system_user_id = db.session.execute(
+                    text("SELECT id FROM user ORDER BY id LIMIT 1")
+                ).scalar() or 1
+
+                def _ticket_exists(subject_prefix, asset_id):
+                    return SupportTicket.query.filter(
+                        SupportTicket.asset_id == asset_id,
+                        SupportTicket.subject.like(f'{subject_prefix}%'),
+                        SupportTicket.status != 'Closed'
+                    ).first() is not None
+
+                for asset in expiring:
+                    pfx = f'[EOL] Warranty expiring'
+                    if not _ticket_exists(pfx, asset.id):
+                        days_left = (asset.warranty_expiry - today).days
+                        t = SupportTicket(
+                            status='Open', priority='High', source='system',
+                            category='Asset Management',
+                            subject=f'{pfx}: {asset.asset_tag} ({asset.name}) — {days_left}d left',
+                            description=(
+                                f'Asset {asset.asset_tag} ({asset.name}) warranty expires on '
+                                f'{asset.warranty_expiry}. Please review replacement or extended '
+                                f'warranty options.'),
+                            asset_id=asset.id, asset_tag=asset.asset_tag,
+                            hostname=asset.name,
+                            created_by_user_id=system_user_id,
+                            created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+                        db.session.add(t)
+                        logger.info(f'EOL ticket created for expiring warranty: {asset.asset_tag}')
+
+                for asset in aged_out:
+                    pfx = f'[EOL] Asset age exceeded'
+                    if not _ticket_exists(pfx, asset.id):
+                        age_years = (today - asset.purchase_date).days / 365.25
+                        t = SupportTicket(
+                            status='Open', priority='Normal', source='system',
+                            category='Asset Management',
+                            subject=f'{pfx}: {asset.asset_tag} ({asset.name}) — {age_years:.1f}yr old',
+                            description=(
+                                f'Asset {asset.asset_tag} ({asset.name}) was purchased on '
+                                f'{asset.purchase_date} ({age_years:.1f} years ago), exceeding the '
+                                f'{EOL_AGE_YEARS}-year EOL threshold. Please evaluate for replacement.'),
+                            asset_id=asset.id, asset_tag=asset.asset_tag,
+                            hostname=asset.name,
+                            created_by_user_id=system_user_id,
+                            created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+                        db.session.add(t)
+                        logger.info(f'EOL ticket created for aged asset: {asset.asset_tag}')
+
+                db.session.commit()
+        except Exception as _eol_err:
+            logger.warning(f'Asset EOL check error: {_eol_err}')
+
+threading.Thread(target=_asset_eol_check, daemon=True, name='asset-eol').start()
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 if __name__ == '__main__':

@@ -4426,12 +4426,11 @@ def _eagle_date_params(default_days: int = 7) -> tuple:
     to_date   = request.args.get('to_date', '').strip()
     if from_date and to_date:
         return (
-            "captured_at >= :from_date AND captured_at < (:to_date::date + INTERVAL '1 day')",
+            "captured_at >= :from_date AND captured_at < (CAST(:to_date AS DATE) + INTERVAL '1 day')",
             {'from_date': from_date, 'to_date': to_date}
         )
     days = int(request.args.get('days', default_days))
-    # datetime('now','-7 hours') = current MST time (server clock is UTC)
-    return ("captured_at >= NOW() - INTERVAL '7 hours' + :since::interval", {'since': f'{days} days'})
+    return ("captured_at >= NOW() - CAST(:since AS INTERVAL)", {'since': f'{days} days'})
 
 
 @app.route('/api/rmm/eagle-eyes/<agent_id>/events')
@@ -4479,7 +4478,7 @@ def api_rmm_eagle_hourly(agent_id):
     date_clause, date_params = _eagle_date_params(default_days=7)
     tz_adj = f'{_agent_tz_offset_minutes(agent_id)} minutes'
     rows = db.session.execute(
-        text(f"""SELECT CAST(strftime('%H', datetime(captured_at, :tz)) AS INTEGER) as hr,
+        text(f"""SELECT CAST(EXTRACT(HOUR FROM (captured_at + CAST(:tz AS INTERVAL))) AS INTEGER) as hr,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
@@ -4498,14 +4497,14 @@ def api_rmm_eagle_daily(agent_id):
     date_clause, date_params = _eagle_date_params(default_days=30)
     tz_adj = f'{_agent_tz_offset_minutes(agent_id)} minutes'
     rows = db.session.execute(
-        text(f"""SELECT date(captured_at, :tz) as day,
+        text(f"""SELECT CAST(captured_at + CAST(:tz AS INTERVAL) AS DATE) as day,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
                 GROUP BY day ORDER BY day"""),
         {'aid': agent_id, 'tz': tz_adj, **date_params}
     ).fetchall()
-    result = [{'day': r[0], 'total_s': r[1] or 0} for r in rows]
+    result = [{'day': str(r[0]), 'total_s': r[1] or 0} for r in rows]
     return jsonify({'ok': True, 'daily': result})
 
 
@@ -8595,7 +8594,7 @@ def api_rmm_metrics_history(agent_id):
         text("""SELECT recorded_at, cpu_percent, memory_percent
                 FROM rmm_metrics_history
                 WHERE agent_id = :aid
-                  AND recorded_at >= NOW() + :delta::interval
+                  AND recorded_at >= NOW() + CAST(:delta AS INTERVAL)
                 ORDER BY recorded_at ASC"""),
         {'aid': agent_id, 'delta': f'-{hours} hours'}
     ).fetchall()

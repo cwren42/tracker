@@ -81,6 +81,16 @@ def _fix_sql(sql: str) -> str:
     sql = re.sub(r"(?i)datetime\('now'\)", "NOW()", sql)
     # 4b. Quote 'user' table — reserved word in PostgreSQL
     sql = re.sub(r'(?<!["\w])user(?!["\w])', '"user"', sql)
+    # 4c. GROUP_CONCAT(DISTINCT col) → STRING_AGG(col, ',')
+    sql = re.sub(
+        r'(?i)GROUP_CONCAT\s*\(\s*(DISTINCT\s+)?([\w.]+)\s*\)',
+        lambda m: f"STRING_AGG({'DISTINCT ' if m.group(1) else ''}{m.group(2)}, ',')",
+        sql
+    )
+    # 4d. INSERT OR IGNORE → INSERT (ON CONFLICT DO NOTHING added below)
+    _has_or_ignore = bool(re.search(r'(?i)\bOR\s+IGNORE\b', sql))
+    if _has_or_ignore:
+        sql = re.sub(r'(?i)\bOR\s+IGNORE\b', '', sql)
     # 5. Escape bare % in SQL (LIKE wildcards) so psycopg2 won't misread them
     #    Replace % with %% — but only when it is NOT already %% and NOT %s
     sql = re.sub(r"(?<!%)%(?![%s(])", "%%", sql)
@@ -91,7 +101,10 @@ def _fix_sql(sql: str) -> str:
     stripped = sql.strip()
     if (stripped.upper().startswith("INSERT")
             and "RETURNING" not in stripped.upper()):
-        sql = stripped.rstrip(";") + " RETURNING id"
+        base = stripped.rstrip(";")
+        if _has_or_ignore and "ON CONFLICT" not in base.upper():
+            base += " ON CONFLICT DO NOTHING"
+        sql = base + " RETURNING id"
     return sql
 
 

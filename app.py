@@ -9485,20 +9485,22 @@ def api_vulnerabilities():
         limit = int(request.args.get('limit', 500))
         if sev:
             rows = con.execute(
-                """SELECT vc.*, COUNT(DISTINCT dv.asset_id) AS device_count
+                """SELECT vc.*, dc.device_count
                    FROM vulnerability_cache vc
-                   INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+                   JOIN (SELECT cve_id, COUNT(DISTINCT asset_id) AS device_count
+                         FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
+                     ON dc.cve_id = vc.cve_id
                    WHERE vc.severity=?
-                   GROUP BY vc.cve_id
                    ORDER BY vc.cvss DESC LIMIT ?""",
                 (sev, limit)
             ).fetchall()
         else:
             rows = con.execute(
-                """SELECT vc.*, COUNT(DISTINCT dv.asset_id) AS device_count
+                """SELECT vc.*, dc.device_count
                    FROM vulnerability_cache vc
-                   INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
-                   GROUP BY vc.cve_id
+                   JOIN (SELECT cve_id, COUNT(DISTINCT asset_id) AS device_count
+                         FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
+                     ON dc.cve_id = vc.cve_id
                    ORDER BY CASE vc.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
                              WHEN 'Medium' THEN 3 ELSE 4 END, vc.cvss DESC LIMIT ?""",
                 (limit,)
@@ -9694,7 +9696,7 @@ def api_vuln_by_app():
                 COUNT(DISTINCT dv.cve_id)   AS cve_count,
                 COUNT(DISTINCT dv.asset_id) AS device_count,
                 MAX(vc.cvss)                AS max_cvss,
-                GROUP_CONCAT(DISTINCT dv.cve_id) AS cve_ids
+                STRING_AGG(dv.cve_id, ',') AS cve_ids
             FROM device_vulnerability dv
             LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
             WHERE dv.status = 'Open' AND dv.product_name IS NOT NULL AND dv.product_name != ''
@@ -9746,9 +9748,10 @@ def api_patch_all_by_app():
         cve_id, asset_id, agent_id = r['cve_id'], r['asset_id'], r['agent_id']
         try:
             db.session.execute(
-                text("""INSERT OR IGNORE INTO cve_patch_job
+                text("""INSERT INTO cve_patch_job
                         (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
-                        VALUES (:aid, :agt, :cve, 'queued', :who, :now, :now, :now)"""),
+                        VALUES (:aid, :agt, :cve, 'queued', :who, :now, :now, :now)
+                        ON CONFLICT DO NOTHING"""),
                 {'aid': asset_id, 'agt': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
             )
             dispatched.append({'asset_id': asset_id, 'cve_id': cve_id})

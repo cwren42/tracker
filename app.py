@@ -4406,13 +4406,15 @@ def api_rmm_eagle_eyes(agent_id):
 import re as _re_tz
 
 def _dt_iso(dt) -> str | None:
-    """Return an ISO 8601 string for JSON responses.
-    For timezone-aware datetimes (UTC from DB), keep the offset so the browser's
-    built-in Date() correctly converts to the viewer's local timezone.
-    e.g. '2026-03-09T01:49:08+00:00' → browser shows '3/8/2026, 7:49 PM' in MDT."""
+    """Return an ISO 8601 string with UTC offset for JSON responses.
+    psycopg2 returns TIMESTAMPTZ as naive datetimes when session timezone=UTC.
+    We force UTC tzinfo so isoformat() emits '+00:00', letting the browser
+    convert to the viewer's local timezone via new Date()."""
     if dt is None:
         return None
     if hasattr(dt, 'isoformat'):
+        if getattr(dt, 'tzinfo', None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         return dt.isoformat(timespec='seconds')
     return str(dt)
 

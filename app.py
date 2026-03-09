@@ -4684,7 +4684,36 @@ def api_eagle_current(agent_id):
         ).mappings().fetchone()
         if row:
             c = dict(row)
-            c['captured_at'] = _dt_iso(c.get('captured_at'))
+            dt = c.get('captured_at')
+            c['captured_at'] = _dt_iso(dt)
+            # Inject live timezone offset derived from the stored timestamp offset
+            # so JS can display times correctly even without a page reload
+            tz_off_h = 0.0
+            tz_lbl = 'UTC'
+            if dt and hasattr(dt, 'utcoffset') and dt.utcoffset() is not None:
+                tz_off_h = dt.utcoffset().total_seconds() / 3600
+                # Derive label from telemetry tz_str + actual offset
+                tz_row2 = db.session.execute(
+                    text("SELECT timezone FROM rmm_telemetry WHERE agent_id = :aid"),
+                    {'aid': agent_id}
+                ).fetchone()
+                tz_str2 = (tz_row2[0] or '') if tz_row2 else ''
+                _tz_abbr2 = {
+                    ('Mountain', -7): 'MST', ('Mountain', -6): 'MDT',
+                    ('Eastern',  -5): 'EST', ('Eastern',  -4): 'EDT',
+                    ('Central',  -6): 'CST', ('Central',  -5): 'CDT',
+                    ('Pacific',  -8): 'PST', ('Pacific',  -7): 'PDT',
+                    ('Alaska',   -9): 'AKST',('Alaska',   -8): 'AKDT',
+                    ('Hawaii',  -10): 'HST',
+                    ('Atlantic', -4): 'AST', ('Atlantic', -3): 'ADT',
+                }
+                off_int2 = int(tz_off_h)
+                tz_lbl = next(
+                    (ab for (kw, off), ab in _tz_abbr2.items() if kw in tz_str2 and off == off_int2),
+                    f"UTC{'+' if tz_off_h >= 0 else ''}{off_int2}"
+                )
+            c['tz_offset_h'] = tz_off_h
+            c['tz_label'] = tz_lbl
             return jsonify(ok=True, current=c)
         return jsonify(ok=True, current=None)
     except Exception as e:

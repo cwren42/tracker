@@ -467,8 +467,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 const agentId        = {{ agent_id | tojson }};
-const agentTzOffsetH = {{ tz_offset_h }};
-const agentTzLabel   = {{ tz_label | tojson }};
+let agentTzOffsetH = {{ tz_offset_h }};
+let agentTzLabel   = {{ tz_label | tojson }};
 let lastSummary = [], lastEvents = [], lastSites = [];
 let _arTimer = null;
 
@@ -910,6 +910,16 @@ async function eeLoadCurrent() {
       return;
     }
     const c = data.current;
+    // Update timezone from live data (so page refresh corrects DST without hard reload)
+    if (typeof c.tz_offset_h === 'number') agentTzOffsetH = c.tz_offset_h;
+    if (c.tz_label) agentTzLabel = c.tz_label;
+    // Refresh the "Updated" label now that we have correct tz
+    const _updEl = document.getElementById('ee-last-updated');
+    if (_updEl) {
+      const _now2 = new Date(Date.now() + agentTzOffsetH*3600000);
+      const _t2 = _now2.toLocaleTimeString('en-US',{timeZone:'UTC',hour:'numeric',minute:'2-digit'});
+      _updEl.textContent = `Updated ${_t2} ${agentTzLabel}`;
+    }
     // Dot = green if fresh (< 90s), yellow if stale-ish, grey if very old
     let _cTs = c.captured_at || '';
     if (_cTs && !/Z$|[+-]\d\d/.test(_cTs)) _cTs += 'Z';
@@ -917,13 +927,16 @@ async function eeLoadCurrent() {
     dot.style.background = ageS < 90 ? '#51cf66' : ageS < 300 ? '#fcc419' : '#495057';
     app.textContent  = c.process_name || '—';
     ttl.textContent  = c.window_title || '';
-    if (c.is_idle) {
+    if (ageS <= 300 && c.is_idle) {
+      // Only show idle badge if agent is actively reporting (not stale)
       ib.classList.remove('d-none');
-      // Use time-since-last-event as idle duration (c.idle_s can be stale/accumulated)
       const idleSec = Math.max(0, Math.round(ageS));
       idr.textContent = idleSec > 0 ? fmtDuration(idleSec) + ' idle' : '';
-    } else { ib.classList.add('d-none'); idr.textContent = ''; }
-    age.textContent = c.captured_at ? fmtTs(c.captured_at) : '';
+    } else {
+      ib.classList.add('d-none');
+      idr.textContent = ageS > 300 ? `Last seen: ${fmtTs(c.captured_at)}` : '';
+    }
+    age.textContent = ageS <= 300 && c.captured_at ? fmtTs(c.captured_at) : '';
   } catch(_){}
 }
 

@@ -318,21 +318,11 @@ def store_eagle_event(agent_id: str, captured_at_str: str, process_name: str, wi
     """Store a single Eagle Eyes window focus event and update rmm_eagle_current."""
     conn = get_conn()
     cur = get_cursor(conn)
-    # Resolve local UTC offset once (e.g. -06:00 for MDT)
-    _local_tz = datetime.now().astimezone().tzinfo
     try:
-        # Agent sends naive local time ("2026-03-08T18:59:13") — no offset.
-        # Attach the server's local offset so PostgreSQL stores the correct UTC value.
-        if captured_at_str:
-            try:
-                ts = datetime.fromisoformat(captured_at_str.rstrip('Z'))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=_local_tz)
-                ts_str = ts.isoformat()
-            except Exception:
-                ts_str = now_iso()
-        else:
-            ts_str = now_iso()
+        # Tell Postgres to interpret incoming naive timestamps as America/Denver.
+        # Agent sends naive local time ("2026-03-08T19:30:17") with no offset.
+        cur.execute("SET LOCAL timezone = 'America/Denver'")
+        ts_str = captured_at_str if captured_at_str else now_iso()
 
         cur.execute(
             """

@@ -4625,25 +4625,37 @@ def rmm_eagle_eyes_dashboard(agent_id):
     tz_str = (tz_row[0] or '') if tz_row else ''
     tz_offset_h = 0.0
     tz_label    = 'UTC'
+    _tz_abbr = {
+        ('Mountain', -7): 'MST', ('Mountain', -6): 'MDT',
+        ('Eastern',  -5): 'EST', ('Eastern',  -4): 'EDT',
+        ('Central',  -6): 'CST', ('Central',  -5): 'CDT',
+        ('Pacific',  -8): 'PST', ('Pacific',  -7): 'PDT',
+        ('Alaska',   -9): 'AKST',('Alaska',   -8): 'AKDT',
+        ('Hawaii',  -10): 'HST',
+        ('Atlantic', -4): 'AST', ('Atlantic', -3): 'ADT',
+    }
     m_tz = _re_tz.search(r'\(UTC([+-])(\d+):(\d+)\)', tz_str)
     if m_tz:
         sign = 1 if m_tz.group(1) == '+' else -1
         tz_offset_h = sign * (int(m_tz.group(2)) + int(m_tz.group(3)) / 60)
-        # Friendly abbreviation lookup keyed by (TZ keyword in display name, offset)
-        _tz_abbr = {
-            ('Mountain', -7): 'MST', ('Mountain', -6): 'MDT',
-            ('Eastern',  -5): 'EST', ('Eastern',  -4): 'EDT',
-            ('Central',  -6): 'CST', ('Central',  -5): 'CDT',
-            ('Pacific',  -8): 'PST', ('Pacific',  -7): 'PDT',
-            ('Alaska',   -9): 'AKST',('Alaska',   -8): 'AKDT',
-            ('Hawaii',  -10): 'HST',
-            ('Atlantic', -4): 'AST', ('Atlantic', -3): 'ADT',
-        }
-        off_int = int(tz_offset_h)  # exact only for :00 zones
+        off_int = int(tz_offset_h)
         tz_label = next(
             (abbr for (kw, off), abbr in _tz_abbr.items() if kw in tz_str and off == off_int),
             f"UTC{m_tz.group(1)}{int(m_tz.group(2))}" if int(m_tz.group(3)) == 0
             else f"UTC{m_tz.group(1)}{int(m_tz.group(2))}:{m_tz.group(3)}"
+        )
+    # Override with actual UTC offset from most recent event — auto-detects DST changes
+    recent_ev = db.session.execute(
+        text("SELECT captured_at FROM rmm_eagle_event WHERE agent_id = :aid ORDER BY captured_at DESC LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    if recent_ev and recent_ev[0] and getattr(recent_ev[0], 'utcoffset', lambda: None)() is not None:
+        actual_h = recent_ev[0].utcoffset().total_seconds() / 3600
+        tz_offset_h = actual_h
+        off_int = int(actual_h)
+        tz_label = next(
+            (abbr for (kw, off), abbr in _tz_abbr.items() if kw in tz_str and off == off_int),
+            f"UTC{'+' if actual_h >= 0 else ''}{off_int}"
         )
     return render_template('eagle_eyes.html', agent_id=agent_id, hostname=hostname,
                            asset_id_num=asset_id_num,

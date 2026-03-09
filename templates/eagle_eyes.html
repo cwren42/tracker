@@ -911,13 +911,17 @@ async function eeLoadCurrent() {
     }
     const c = data.current;
     // Dot = green if fresh (< 90s), yellow if stale-ish, grey if very old
-    const ageS = c.captured_at ? (Date.now() - new Date(c.captured_at + (c.captured_at.endsWith('Z')?'':'Z')).getTime()) / 1000 : 9999;
+    let _cTs = c.captured_at || '';
+    if (_cTs && !/Z$|[+-]\d\d/.test(_cTs)) _cTs += 'Z';
+    const ageS = _cTs ? (Date.now() - new Date(_cTs).getTime()) / 1000 : 9999;
     dot.style.background = ageS < 90 ? '#51cf66' : ageS < 300 ? '#fcc419' : '#495057';
     app.textContent  = c.process_name || '—';
     ttl.textContent  = c.window_title || '';
     if (c.is_idle) {
       ib.classList.remove('d-none');
-      idr.textContent = c.idle_s ? fmtDuration(c.idle_s) + ' idle' : '';
+      // Use time-since-last-event as idle duration (c.idle_s can be stale/accumulated)
+      const idleSec = Math.max(0, Math.round(ageS));
+      idr.textContent = idleSec > 0 ? fmtDuration(idleSec) + ' idle' : '';
     } else { ib.classList.add('d-none'); idr.textContent = ''; }
     age.textContent = c.captured_at ? fmtTs(c.captured_at) : '';
   } catch(_){}
@@ -952,12 +956,17 @@ function renderGantt(events, day) {
   let dayStart = null, dayEnd = null;
   for (const ev of events) {
     if (!ev.captured_at) continue;
-    const ts  = new Date(ev.captured_at + (ev.captured_at.endsWith('Z')?'':'Z'));
-    const h   = ts.getUTCHours();
+    let _evTs = ev.captured_at;
+    if (!/Z$|[+-]\d\d/.test(_evTs)) _evTs += 'Z';
+    const tsUtc = new Date(_evTs);
+    if (isNaN(tsUtc.getTime())) continue;
+    // Convert to agent local time by applying timezone offset
+    const tsLocal = new Date(tsUtc.getTime() + agentTzOffsetH * 3600000);
+    const h   = tsLocal.getUTCHours();
     const dur = ev.duration_s || 0;
-    hourBuckets[h].segs.push({proc: ev.process_name||'unknown', dur, ts});
-    if (!dayStart || ts < dayStart) dayStart = ts;
-    if (!dayEnd || ts > dayEnd) dayEnd = ts;
+    hourBuckets[h].segs.push({proc: ev.process_name||'unknown', dur, ts: tsUtc});
+    if (!dayStart || tsUtc < dayStart) dayStart = tsUtc;
+    if (!dayEnd || tsUtc > dayEnd) dayEnd = tsUtc;
   }
   const activeHours = hourBuckets.filter(b=>b.segs.length);
   if (!activeHours.length) { el.style.display='none'; document.getElementById('ee-gantt-empty').style.display=''; return; }

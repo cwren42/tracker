@@ -386,8 +386,8 @@ def ask_ai(question: str) -> dict:
     asset_total = db.execute("SELECT COUNT(*) FROM asset").fetchone()[0]
     asset_in_use = db.execute("SELECT COUNT(*) FROM asset WHERE status='In Use'").fetchone()[0]
     asset_offline = db.execute(
-        "SELECT COUNT(*) FROM asset WHERE intune_last_seen IS NOT NULL AND "
-        "intune_last_seen < datetime('now', '-7 days')"
+        "SELECT COUNT(*) FROM asset WHERE intune_last_sync IS NOT NULL AND "
+        "intune_last_sync < datetime('now', '-7 days')"
     ).fetchone()[0]
     asset_low_storage = db.execute(
         "SELECT COUNT(*) FROM asset WHERE hardware_storage_total_gb > 0 AND "

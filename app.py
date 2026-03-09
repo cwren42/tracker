@@ -4353,6 +4353,10 @@ def api_rmm_telemetry(agent_id):
         d['network_json'] = _json.loads(d.get('network_json') or '[]')
     except Exception:
         d['network_json'] = []
+    # Normalize datetime fields so jsonify emits ISO 8601 with +00:00 offset
+    for _k in ('captured_at', 'created_at', 'updated_at'):
+        if _k in d:
+            d[_k] = _dt_iso(d[_k])
     return jsonify({'ok': True, 'telemetry': d})
 
 

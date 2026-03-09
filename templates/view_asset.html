@@ -1250,28 +1250,14 @@
                     let _swData = [], _svcData = [];
                     let _fsCurrent = null, _fsHistory = [], _fsPending = null;
                     let _eagleEnabled = false;
-                    // All timestamps stored as MST — display as-is
+                    // All timesta// Format any timestamp string into browser local time
                     function fmtLocal(ts){
                         if(!ts) return '—';
-                        // Parse string directly—never use Date object (avoids all browser TZ math)
-                        ts = ts.replace(/Z$|[+-]\d\d:\d\d$|[+-]\d{4}$/, '');
-                        // Support both 'T' and space as date/time separator
-                        let tIdx = ts.indexOf('T');
-                        if(tIdx === -1) tIdx = ts.indexOf(' ');
-                        // Date-only (YYYY-MM-DD or YYYYMMDD)
-                        if(tIdx === -1){
-                            const s = ts.replace(/-/g,'');
-                            if(/^\d{8}$/.test(s)){
-                                const yr=+s.slice(0,4),mo=+s.slice(4,6),dy=+s.slice(6,8);
-                                return `${mo}/${dy}/${yr}`;
-                            }
-                            return ts;
-                        }
-                        const [yr, mo, dy] = ts.slice(0, tIdx).split('-').map(Number);
-                        const [hr24, mn] = ts.slice(tIdx+1).split(':').map(Number);
-                        const ap = hr24 >= 12 ? 'PM' : 'AM';
-                        const hr12 = hr24 % 12 || 12;
-                        return `${mo}/${dy}/${yr}, ${hr12}:${String(mn).padStart(2,'0')} ${ap} MST`;
+                        try {
+                            const d = new Date(ts);
+                            if(isNaN(d)) return ts;
+                            return d.toLocaleString('en-US', {month:'numeric',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
+                        } catch(_) { return ts; }
                     }
 
                     /* ── helpers ──────────────────────────────── */

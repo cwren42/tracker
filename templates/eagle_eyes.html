@@ -12,7 +12,7 @@
       </a>
       <div>
         <h5 class="mb-0 fw-bold"><i class="bi bi-eye me-1 text-warning"></i>Eagle Eyes</h5>
-        <small class="text-muted">{{ hostname }}&nbsp;<span class="badge bg-dark border border-secondary fw-normal" style="font-size:.65rem;">{{ tz_label }}</span></small>
+        <small class="text-muted">{{ hostname }}</small>
       </div>
     </div>
     <div class="d-flex flex-wrap align-items-center gap-2">
@@ -466,9 +466,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-const agentId        = {{ agent_id | tojson }};
-let agentTzOffsetH = {{ tz_offset_h }};
-let agentTzLabel   = {{ tz_label | tojson }};
+const agentId      = {{ agent_id | tojson }};
+let agentTzOffsetH = {{ tz_offset_h }};  // only used to pick the right calendar day for the gantt
 let lastSummary = [], lastEvents = [], lastSites = [];
 let _arTimer = null;
 
@@ -486,11 +485,10 @@ function onPeriodChange() {
   const cr  = document.getElementById('ee-custom-range');
   if (sel === 'custom') {
     cr.classList.remove('d-none');
-    // Use agent's local time (MST), not browser/UTC time
-    const agentNow  = new Date(Date.now() + agentTzOffsetH * 3600000);
-    const agentFrom = new Date(agentNow.getTime() - 7 * 86400000);
-    document.getElementById('ee-to').value   = agentNow.toISOString().slice(0, 10);
-    document.getElementById('ee-from').value = agentFrom.toISOString().slice(0, 10);
+    const today = new Date();
+    const from  = new Date(today.getTime() - 7 * 86400000);
+    document.getElementById('ee-to').value   = today.toLocaleDateString('en-CA');
+    document.getElementById('ee-from').value = from.toLocaleDateString('en-CA');
   } else {
     cr.classList.add('d-none');
     eeLoad();
@@ -500,8 +498,7 @@ function workHoursFilter(events) {
   if (!document.getElementById('ee-work-hours').checked) return events;
   return events.filter(e => {
     try {
-      let t = e.captured_at; if (!/Z$|[+-]\d\d/.test(t)) t += 'Z';
-      const h = new Date(new Date(t).getTime() + agentTzOffsetH*3600000).getUTCHours();
+      const h = new Date(e.captured_at).getHours();
       return h >= 8 && h < 18;
     } catch(_) { return true; }
   });
@@ -599,21 +596,11 @@ function fmtDuration(s) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 function fmtTs(t) {
+  if (!t) return '';
   try {
-    if (!t) return '';
-    // Extract the UTC offset directly from the ISO string (e.g. -06:00 or +00:00)
-    // This avoids depending on agentTzOffsetH being initialized correctly.
-    const offMatch = String(t).match(/([+-])(\d{2}):(\d{2})$/);
-    const offH = offMatch
-      ? (offMatch[1] === '+' ? 1 : -1) * (parseInt(offMatch[2]) + parseInt(offMatch[3])/60)
-      : agentTzOffsetH;  // fallback for timestamps without explicit offset
-    if (!/Z$|[+-]\d\d/.test(t)) t += 'Z';
-    const utcMs = new Date(t).getTime();
-    if (isNaN(utcMs)) return t;
-    const d = new Date(utcMs + offH * 3600000);
-    return d.toLocaleString('en-US', {timeZone:'UTC',
-      month:'numeric', day:'numeric', year:'numeric',
-      hour:'numeric', minute:'2-digit', hour12:true}) + ' ' + agentTzLabel;
+    const d = new Date(t);
+    if (isNaN(d)) return t;
+    return d.toLocaleString('en-US', {month:'numeric', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit', hour12:true});
   } catch(_) { return t; }
 }
 function fmtHour(h) {
@@ -892,10 +879,10 @@ window.eeLoad = async function() {
   renderEvents(filteredEvt);
   loadScreenshots(dp);
 
-  const now = new Date(Date.now() + agentTzOffsetH*3600000);
-  const t = now.toLocaleTimeString('en-US',{timeZone:'UTC',hour:'numeric',minute:'2-digit'});
+  const now = new Date();
+  const t = now.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', hour12:true});
   const upd = document.getElementById('ee-last-updated');
-  if (upd) upd.textContent = `Updated ${t} ${agentTzLabel}`;
+  if (upd) upd.textContent = `Updated ${t}`;
   loadFocusSessions();
   loadGantt();
 };
@@ -917,29 +904,18 @@ async function eeLoadCurrent() {
       return;
     }
     const c = data.current;
-    // Update timezone label from API response
-    if (c.tz_label) agentTzLabel = c.tz_label;
-    // Derive offset from the captured_at ISO string itself (most reliable source)
+    // Keep agentTzOffsetH updated for gantt day calculation
     if (c.captured_at) {
-      const _offM = String(c.captured_at).match(/([+-])(\d{2}):(\d{2})$/);
-      if (_offM) {
-        agentTzOffsetH = (_offM[1] === '+' ? 1 : -1) * (parseInt(_offM[2]) + parseInt(_offM[3])/60);
-      } else if (typeof c.tz_offset_h === 'number') {
-        agentTzOffsetH = c.tz_offset_h;
-      }
+      const _m = String(c.captured_at).match(/([+-])(\d{2}):(\d{2})$/);
+      if (_m) agentTzOffsetH = (_m[1]==='+' ? 1 : -1) * (parseInt(_m[2]) + parseInt(_m[3])/60);
     } else if (typeof c.tz_offset_h === 'number') {
       agentTzOffsetH = c.tz_offset_h;
     }
-    // Refresh the "Updated" label with the now-correct tz
+    // Update the "Updated" label with browser local time
     const _updEl = document.getElementById('ee-last-updated');
-    if (_updEl) {
-      const _now2 = new Date(Date.now() + agentTzOffsetH*3600000);
-      const _t2 = _now2.toLocaleTimeString('en-US',{timeZone:'UTC',hour:'numeric',minute:'2-digit'});
-      _updEl.textContent = `Updated ${_t2} ${agentTzLabel}`;
-    }
+    if (_updEl) _updEl.textContent = `Updated ${new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', hour12:true})}`;
     // Dot = green if fresh (< 90s), yellow if stale-ish, grey if very old
     let _cTs = c.captured_at || '';
-    if (_cTs && !/Z$|[+-]\d\d/.test(_cTs)) _cTs += 'Z';
     const ageS = _cTs ? (Date.now() - new Date(_cTs).getTime()) / 1000 : 9999;
     dot.style.background = ageS < 90 ? '#51cf66' : ageS < 300 ? '#fcc419' : '#495057';
     app.textContent  = c.process_name || '—';
@@ -990,8 +966,10 @@ function renderGantt(events, day) {
     if (!/Z$|[+-]\d\d/.test(_evTs)) _evTs += 'Z';
     const tsUtc = new Date(_evTs);
     if (isNaN(tsUtc.getTime())) continue;
-    // Convert to agent local time by applying timezone offset
-    const tsLocal = new Date(tsUtc.getTime() + agentTzOffsetH * 3600000);
+    // Use agent's local hour - extracted from the ISO offset so gantt shows agent's work day
+    const _offM = _evTs.match(/([+-])(\d{2}):(\d{2})$/);
+    const _offMs = _offM ? ((_offM[1]==='+' ? 1 : -1) * (parseInt(_offM[2])*60 + parseInt(_offM[3]))) * 60000 : agentTzOffsetH * 3600000;
+    const tsLocal = new Date(tsUtc.getTime() + _offMs);
     const h   = tsLocal.getUTCHours();
     const dur = ev.duration_s || 0;
     hourBuckets[h].segs.push({proc: ev.process_name||'unknown', dur, ts: tsUtc});
@@ -1166,9 +1144,8 @@ async function schDelete(id) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Set gantt to today (agent local time)
-  const agentNow = new Date(Date.now() + agentTzOffsetH * 3600000);
-  document.getElementById('ee-gantt-day').value = agentNow.toISOString().slice(0, 10);
+  // Set gantt to today in browser local time
+  document.getElementById('ee-gantt-day').value = new Date().toLocaleDateString('en-CA');
 
   eeLoad();
   eeLoadCurrent();

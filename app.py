@@ -4626,49 +4626,18 @@ def rmm_eagle_eyes_dashboard(agent_id):
     ).fetchone()
     hostname     = row[1] if row else agent_id
     asset_id_num = row[0] if row else None
-    # Timezone: read from telemetry, parse '(UTC-07:00) Mountain Time...'
-    tz_row = db.session.execute(
-        text("SELECT timezone FROM rmm_telemetry WHERE agent_id = :aid"),
-        {'aid': agent_id}
-    ).fetchone()
-    tz_str = (tz_row[0] or '') if tz_row else ''
-    tz_offset_h = 0.0
-    tz_label    = 'UTC'
-    _tz_abbr = {
-        ('Mountain', -7): 'MST', ('Mountain', -6): 'MDT',
-        ('Eastern',  -5): 'EST', ('Eastern',  -4): 'EDT',
-        ('Central',  -6): 'CST', ('Central',  -5): 'CDT',
-        ('Pacific',  -8): 'PST', ('Pacific',  -7): 'PDT',
-        ('Alaska',   -9): 'AKST',('Alaska',   -8): 'AKDT',
-        ('Hawaii',  -10): 'HST',
-        ('Atlantic', -4): 'AST', ('Atlantic', -3): 'ADT',
-    }
-    m_tz = _re_tz.search(r'\(UTC([+-])(\d+):(\d+)\)', tz_str)
-    if m_tz:
-        sign = 1 if m_tz.group(1) == '+' else -1
-        tz_offset_h = sign * (int(m_tz.group(2)) + int(m_tz.group(3)) / 60)
-        off_int = int(tz_offset_h)
-        tz_label = next(
-            (abbr for (kw, off), abbr in _tz_abbr.items() if kw in tz_str and off == off_int),
-            f"UTC{m_tz.group(1)}{int(m_tz.group(2))}" if int(m_tz.group(3)) == 0
-            else f"UTC{m_tz.group(1)}{int(m_tz.group(2))}:{m_tz.group(3)}"
-        )
-    # Override with actual UTC offset from most recent event — auto-detects DST changes
+    # Get timezone offset from the most recent event's stored UTC offset.
+    # This is the only reliable source — no telemetry string parsing needed.
+    tz_offset_h = -6.0  # MDT default (server timezone)
     recent_ev = db.session.execute(
         text("SELECT captured_at FROM rmm_eagle_event WHERE agent_id = :aid ORDER BY captured_at DESC LIMIT 1"),
         {'aid': agent_id}
     ).fetchone()
-    if recent_ev and recent_ev[0] and getattr(recent_ev[0], 'utcoffset', lambda: None)() is not None:
-        actual_h = recent_ev[0].utcoffset().total_seconds() / 3600
-        tz_offset_h = actual_h
-        off_int = int(actual_h)
-        tz_label = next(
-            (abbr for (kw, off), abbr in _tz_abbr.items() if kw in tz_str and off == off_int),
-            f"UTC{'+' if actual_h >= 0 else ''}{off_int}"
-        )
+    if recent_ev and recent_ev[0] and recent_ev[0].utcoffset() is not None:
+        tz_offset_h = recent_ev[0].utcoffset().total_seconds() / 3600
     return render_template('eagle_eyes.html', agent_id=agent_id, hostname=hostname,
                            asset_id_num=asset_id_num,
-                           tz_offset_h=tz_offset_h, tz_label=tz_label)
+                           tz_offset_h=tz_offset_h)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4686,34 +4655,9 @@ def api_eagle_current(agent_id):
             c = dict(row)
             dt = c.get('captured_at')
             c['captured_at'] = _dt_iso(dt)
-            # Inject live timezone offset derived from the stored timestamp offset
-            # so JS can display times correctly even without a page reload
-            tz_off_h = 0.0
-            tz_lbl = 'UTC'
-            if dt and hasattr(dt, 'utcoffset') and dt.utcoffset() is not None:
-                tz_off_h = dt.utcoffset().total_seconds() / 3600
-                # Derive label from telemetry tz_str + actual offset
-                tz_row2 = db.session.execute(
-                    text("SELECT timezone FROM rmm_telemetry WHERE agent_id = :aid"),
-                    {'aid': agent_id}
-                ).fetchone()
-                tz_str2 = (tz_row2[0] or '') if tz_row2 else ''
-                _tz_abbr2 = {
-                    ('Mountain', -7): 'MST', ('Mountain', -6): 'MDT',
-                    ('Eastern',  -5): 'EST', ('Eastern',  -4): 'EDT',
-                    ('Central',  -6): 'CST', ('Central',  -5): 'CDT',
-                    ('Pacific',  -8): 'PST', ('Pacific',  -7): 'PDT',
-                    ('Alaska',   -9): 'AKST',('Alaska',   -8): 'AKDT',
-                    ('Hawaii',  -10): 'HST',
-                    ('Atlantic', -4): 'AST', ('Atlantic', -3): 'ADT',
-                }
-                off_int2 = int(tz_off_h)
-                tz_lbl = next(
-                    (ab for (kw, off), ab in _tz_abbr2.items() if kw in tz_str2 and off == off_int2),
-                    f"UTC{'+' if tz_off_h >= 0 else ''}{off_int2}"
-                )
-            c['tz_offset_h'] = tz_off_h
-            c['tz_label'] = tz_lbl
+            # Pass the UTC offset so JS can keep agentTzOffsetH correct for gantt
+            if dt and dt.utcoffset() is not None:
+                c['tz_offset_h'] = dt.utcoffset().total_seconds() / 3600
             return jsonify(ok=True, current=c)
         return jsonify(ok=True, current=None)
     except Exception as e:

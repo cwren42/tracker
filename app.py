@@ -4407,18 +4407,14 @@ import re as _re_tz
 
 def _dt_iso(dt) -> str | None:
     """Convert a datetime to a naive local-time ISO string for JSON responses.
-    SQLAlchemy returns UTC-aware datetimes. Convert to server-local (America/Denver)
-    and strip the offset so the browser receives e.g. '2026-03-08T19:34:37' and
-    treats it as local time without any TZ conversion."""
+    SQLAlchemy returns UTC-aware datetimes. astimezone() (no arg) converts using
+    the process TZ set via os.environ['TZ'] = 'America/Denver'. Stripping the
+    offset makes JS new Date() treat it as local time with no conversion needed."""
     if dt is None:
         return None
     if hasattr(dt, 'strftime'):
         if getattr(dt, 'tzinfo', None) is not None:
-            try:
-                import zoneinfo
-                dt = dt.astimezone(zoneinfo.ZoneInfo('America/Denver')).replace(tzinfo=None)
-            except Exception:
-                pass
+            dt = dt.astimezone().replace(tzinfo=None)
         return dt.strftime('%Y-%m-%dT%H:%M:%S')
     return str(dt)
 

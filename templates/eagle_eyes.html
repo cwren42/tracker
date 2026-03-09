@@ -600,10 +600,17 @@ function fmtDuration(s) {
 }
 function fmtTs(t) {
   try {
+    if (!t) return '';
+    // Extract the UTC offset directly from the ISO string (e.g. -06:00 or +00:00)
+    // This avoids depending on agentTzOffsetH being initialized correctly.
+    const offMatch = String(t).match(/([+-])(\d{2}):(\d{2})$/);
+    const offH = offMatch
+      ? (offMatch[1] === '+' ? 1 : -1) * (parseInt(offMatch[2]) + parseInt(offMatch[3])/60)
+      : agentTzOffsetH;  // fallback for timestamps without explicit offset
     if (!/Z$|[+-]\d\d/.test(t)) t += 'Z';
     const utcMs = new Date(t).getTime();
     if (isNaN(utcMs)) return t;
-    const d = new Date(utcMs + agentTzOffsetH * 3600000);
+    const d = new Date(utcMs + offH * 3600000);
     return d.toLocaleString('en-US', {timeZone:'UTC',
       month:'numeric', day:'numeric', year:'numeric',
       hour:'numeric', minute:'2-digit', hour12:true}) + ' ' + agentTzLabel;
@@ -910,10 +917,20 @@ async function eeLoadCurrent() {
       return;
     }
     const c = data.current;
-    // Update timezone from live data (so page refresh corrects DST without hard reload)
-    if (typeof c.tz_offset_h === 'number') agentTzOffsetH = c.tz_offset_h;
+    // Update timezone label from API response
     if (c.tz_label) agentTzLabel = c.tz_label;
-    // Refresh the "Updated" label now that we have correct tz
+    // Derive offset from the captured_at ISO string itself (most reliable source)
+    if (c.captured_at) {
+      const _offM = String(c.captured_at).match(/([+-])(\d{2}):(\d{2})$/);
+      if (_offM) {
+        agentTzOffsetH = (_offM[1] === '+' ? 1 : -1) * (parseInt(_offM[2]) + parseInt(_offM[3])/60);
+      } else if (typeof c.tz_offset_h === 'number') {
+        agentTzOffsetH = c.tz_offset_h;
+      }
+    } else if (typeof c.tz_offset_h === 'number') {
+      agentTzOffsetH = c.tz_offset_h;
+    }
+    // Refresh the "Updated" label with the now-correct tz
     const _updEl = document.getElementById('ee-last-updated');
     if (_updEl) {
       const _now2 = new Date(Date.now() + agentTzOffsetH*3600000);

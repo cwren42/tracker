@@ -4487,16 +4487,15 @@ def api_rmm_eagle_app_summary(agent_id):
 @app.route('/api/rmm/eagle-eyes/<agent_id>/hourly')
 @login_required
 def api_rmm_eagle_hourly(agent_id):
-    """Return total active seconds per hour-of-day (0-23) grouped in agent local time."""
+    """Return total active seconds per hour-of-day (0-23) grouped in server local time."""
     date_clause, date_params = _eagle_date_params(default_days=7)
-    tz_adj = f'{_agent_tz_offset_minutes(agent_id)} minutes'
     rows = db.session.execute(
-        text(f"""SELECT CAST(EXTRACT(HOUR FROM (captured_at + CAST(:tz AS INTERVAL))) AS INTEGER) as hr,
+        text(f"""SELECT CAST(EXTRACT(HOUR FROM (captured_at AT TIME ZONE 'America/Denver')) AS INTEGER) as hr,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
                 GROUP BY hr ORDER BY hr"""),
-        {'aid': agent_id, 'tz': tz_adj, **date_params}
+        {'aid': agent_id, **date_params}
     ).fetchall()
     by_hour = {r[0]: int(r[1] or 0) for r in rows}
     result = [{'hour': h, 'total_s': by_hour.get(h, 0)} for h in range(24)]
@@ -4506,16 +4505,15 @@ def api_rmm_eagle_hourly(agent_id):
 @app.route('/api/rmm/eagle-eyes/<agent_id>/daily')
 @login_required
 def api_rmm_eagle_daily(agent_id):
-    """Return total active seconds per calendar day grouped in agent local time."""
+    """Return total active seconds per calendar day grouped in server local time."""
     date_clause, date_params = _eagle_date_params(default_days=30)
-    tz_adj = f'{_agent_tz_offset_minutes(agent_id)} minutes'
     rows = db.session.execute(
-        text(f"""SELECT CAST(captured_at + CAST(:tz AS INTERVAL) AS DATE) as day,
+        text(f"""SELECT CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE) as day,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
                 GROUP BY day ORDER BY day"""),
-        {'aid': agent_id, 'tz': tz_adj, **date_params}
+        {'aid': agent_id, **date_params}
     ).fetchall()
     result = [{'day': str(r[0]), 'total_s': int(r[1] or 0)} for r in rows]
     return jsonify({'ok': True, 'daily': result})

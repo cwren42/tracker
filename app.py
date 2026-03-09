@@ -4406,12 +4406,16 @@ def api_rmm_eagle_eyes(agent_id):
 import re as _re_tz
 
 def _dt_iso(dt) -> str | None:
-    """Convert a datetime (possibly timezone-aware) to ISO 8601 string for JSON responses.
-    Flask's default serializer emits RFC 2822 which breaks JS Date parsing."""
+    """Convert a datetime to a naive local-time ISO string for JSON responses.
+    SQLAlchemy returns UTC-aware datetimes; converting to server local (America/Denver)
+    and stripping the offset lets the browser display it directly without TZ math."""
     if dt is None:
         return None
-    if hasattr(dt, 'isoformat'):
-        return dt.isoformat()
+    if hasattr(dt, 'strftime'):
+        if getattr(dt, 'tzinfo', None) is not None:
+            # astimezone() uses the server's TZ env (America/Denver)
+            dt = dt.astimezone()
+        return dt.strftime('%Y-%m-%dT%H:%M:%S')
     return str(dt)
 
 def _agent_tz_offset_minutes(agent_id: str) -> int:

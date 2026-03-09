@@ -4405,6 +4405,15 @@ def api_rmm_eagle_eyes(agent_id):
 
 import re as _re_tz
 
+def _dt_iso(dt) -> str | None:
+    """Convert a datetime (possibly timezone-aware) to ISO 8601 string for JSON responses.
+    Flask's default serializer emits RFC 2822 which breaks JS Date parsing."""
+    if dt is None:
+        return None
+    if hasattr(dt, 'isoformat'):
+        return dt.isoformat()
+    return str(dt)
+
 def _agent_tz_offset_minutes(agent_id: str) -> int:
     """Return the agent's UTC offset in minutes by reading stored timezone string."""
     row = db.session.execute(
@@ -4447,7 +4456,7 @@ def api_rmm_eagle_events(agent_id):
                 LIMIT :lim"""),
         {'aid': agent_id, 'lim': limit, **date_params}
     ).fetchall()
-    events = [{'captured_at': r[0], 'process_name': r[1], 'window_title': r[2], 'duration_s': r[3]} for r in rows]
+    events = [{'captured_at': _dt_iso(r[0]), 'process_name': r[1], 'window_title': r[2], 'duration_s': r[3]} for r in rows]
     return jsonify({'ok': True, 'events': events})
 
 
@@ -4554,7 +4563,7 @@ def api_rmm_eagle_screenshots(agent_id):
                 ORDER BY id DESC LIMIT :lim"""),
         {'aid': agent_id, 'lim': limit, **date_params}
     ).fetchall()
-    shots = [{'id': r[0], 'time': r[1], 'width': r[2], 'height': r[3], 'format': r[4]} for r in rows]
+    shots = [{'id': r[0], 'time': _dt_iso(r[1]), 'width': r[2], 'height': r[3], 'format': r[4]} for r in rows]
     return jsonify({'ok': True, 'screenshots': shots})
 
 
@@ -4575,7 +4584,7 @@ def api_rmm_eagle_screenshot_image(shot_id):
             b64 = _b64.b64encode(fh.read()).decode()
     return jsonify({'ok': True, 'screenshot': {
         'id': shot_id, 'agent_id': row[0], 'data': b64,
-        'format': row[2], 'width': row[3], 'height': row[4], 'time': row[5],
+        'format': row[2], 'width': row[3], 'height': row[4], 'time': _dt_iso(row[5]),
     }})
 
 
@@ -4674,7 +4683,9 @@ def api_eagle_current(agent_id):
             {"aid": agent_id}
         ).mappings().fetchone()
         if row:
-            return jsonify(ok=True, current=dict(row))
+            c = dict(row)
+            c['captured_at'] = _dt_iso(c.get('captured_at'))
+            return jsonify(ok=True, current=c)
         return jsonify(ok=True, current=None)
     except Exception as e:
         return jsonify(ok=False, error=str(e))
@@ -4712,14 +4723,14 @@ def api_eagle_focus_sessions(agent_id):
                 else:
                     if cur_dur >= FOCUS_MIN_S:
                         sessions.append({'process_name': cur_proc, 'window_title': cur_title,
-                                         'started_at': cur_start, 'duration_s': cur_dur})
+                                         'started_at': _dt_iso(cur_start), 'duration_s': cur_dur})
                     cur_proc  = r['process_name']
                     cur_title = r['window_title']
                     cur_start = r['captured_at']
                     cur_dur   = r['duration_s'] or 0
             if cur_dur >= FOCUS_MIN_S:
                 sessions.append({'process_name': cur_proc, 'window_title': cur_title,
-                                 'started_at': cur_start, 'duration_s': cur_dur})
+                                 'started_at': _dt_iso(cur_start), 'duration_s': cur_dur})
         sessions.sort(key=lambda s: s['duration_s'], reverse=True)
         return jsonify(ok=True, sessions=sessions[:50])
     except Exception as e:
@@ -4946,7 +4957,10 @@ def api_eagle_gantt(agent_id):
               AND CAST(captured_at AS DATE) = CAST(:day AS DATE)
             ORDER BY captured_at
         """), {'aid': agent_id, 'day': day}).mappings().fetchall()
-        return jsonify(ok=True, day=day, events=[dict(r) for r in rows])
+        events = [{'process_name': r['process_name'], 'window_title': r['window_title'],
+                   'duration_s': r['duration_s'], 'idle_s': r['idle_s'],
+                   'captured_at': _dt_iso(r['captured_at'])} for r in rows]
+        return jsonify(ok=True, day=day, events=events)
     except Exception as e:
         return jsonify(ok=False, error=str(e))
 

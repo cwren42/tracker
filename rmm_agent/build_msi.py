@@ -23,7 +23,7 @@ import uuid
 
 AGENT_DIR       = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_MSI      = os.path.join(AGENT_DIR, "CirqueRMM.msi")
-PRODUCT_VERSION = "2.3.3"
+PRODUCT_VERSION = "2.3.5"
 PRODUCT_CODE    = "{3C7A8142-5F26-4E0D-B1D9-FAB2C6E8D291}"
 UPGRADE_CODE    = "{A9F3B812-7D54-4C2A-8E1F-DC0943B65718}"
 

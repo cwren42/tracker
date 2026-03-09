@@ -9,7 +9,7 @@ Env vars:
   RMM_SCREENSHOT     1 = enable screenshot capture (default: 0)
 """
 
-AGENT_VERSION = "2.3.3"
+AGENT_VERSION = "2.3.5"
 
 import asyncio
 import base64

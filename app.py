@@ -4504,6 +4504,19 @@ def _agent_tz_offset_minutes(agent_id: str) -> int:
     return sign * (int(m.group(2)) * 60 + int(m.group(3)))
 
 
+# System / lock-screen processes that should never appear in app usage stats
+EAGLE_SYSTEM_PROCESSES = (
+    'LockApp', 'LockScreenHost', 'ShellHost', 'ShellExperienceHost',
+    'StartMenuExperienceHost', 'SearchHost', 'SearchApp', 'TextInputHost',
+    'ApplicationFrameHost', 'RuntimeBroker', 'taskhostw', 'sihost',
+    'ctfmon', 'fontdrvhost', 'dwm', 'winlogon', 'LogonUI',
+    'conhost', 'condrv',
+)
+_EAGLE_SYSTEM_EXCL = " AND LOWER(process_name) NOT IN ({}) ".format(
+    ','.join(f"'{p.lower()}'" for p in EAGLE_SYSTEM_PROCESSES)
+)
+
+
 def _eagle_date_params(default_days: int = 7) -> tuple:
     """Return (where_clause, params_dict) for date filtering Eagle Eyes queries.
     All timestamps stored in MST. UI dates are MST. No conversion needed."""
@@ -4528,6 +4541,7 @@ def api_rmm_eagle_events(agent_id):
         text(f"""SELECT captured_at, process_name, window_title, duration_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {_EAGLE_SYSTEM_EXCL}
                 ORDER BY captured_at DESC
                 LIMIT :lim"""),
         {'aid': agent_id, 'lim': limit, **date_params}
@@ -4548,6 +4562,7 @@ def api_rmm_eagle_app_summary(agent_id):
                        SUM(duration_s) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {_EAGLE_SYSTEM_EXCL}
                 {wh_clause}
                 GROUP BY process_name
                 ORDER BY total_s DESC
@@ -4569,6 +4584,7 @@ def api_rmm_eagle_hourly(agent_id):
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {_EAGLE_SYSTEM_EXCL}
                 {wh_clause}
                 GROUP BY hr ORDER BY hr"""),
         {'aid': agent_id, **date_params}
@@ -4589,6 +4605,7 @@ def api_rmm_eagle_daily(agent_id):
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {_EAGLE_SYSTEM_EXCL}
                 {wh_clause}
                 GROUP BY day ORDER BY day"""),
         {'aid': agent_id, **date_params}
@@ -8586,7 +8603,72 @@ def download_agent_ps1():
                      mimetype='application/octet-stream')
 
 
-@app.route('/download/site-install.ps1')
+@app.route('/download/agent-bat')
+@login_required
+@license_required
+def download_agent_bat():
+    """Serve a .bat launcher that runs the PS1 bypassing execution policy.
+
+    The user saves this .bat alongside CirqueRMM-Install.ps1 (or it downloads
+    the PS1 automatically) and just double-clicks it as Administrator.
+    """
+    import hmac as _hmac
+    site_token  = _get_or_create_site_enrollment_token()
+    tracker_url = RMM_TRACKER_URL.rstrip('/')
+    ps1_url     = f"{tracker_url}/download/site-install.ps1?t={site_token}"
+
+    bat = (
+        "@echo off\r\n"
+        ":: Cirque RMM Agent Installer Launcher\r\n"
+        ":: Right-click this file and choose 'Run as administrator'\r\n"
+        "setlocal\r\n"
+        "\r\n"
+        ":: Check for admin rights\r\n"
+        "net session >nul 2>&1\r\n"
+        "if %errorlevel% neq 0 (\r\n"
+        "    echo ERROR: Please right-click and choose 'Run as administrator'\r\n"
+        "    pause\r\n"
+        "    exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "echo Installing Cirque RMM Agent...\r\n"
+        "echo Log: C:\\CirqueRMM\\logs\\setup.log\r\n"
+        "echo.\r\n"
+        "\r\n"
+        f"powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -Command \""
+        f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+        f"irm '{ps1_url}' | iex\"\r\n"
+        "\r\n"
+        "if %errorlevel% neq 0 (\r\n"
+        "    echo.\r\n"
+        "    echo Installation failed. Check C:\\CirqueRMM\\logs\\setup.log\r\n"
+        "    echo Also check %%TEMP%%\\CirqueRMM_install.log\r\n"
+        ") else (\r\n"
+        "    echo.\r\n"
+        "    echo Installation complete!\r\n"
+        ")\r\n"
+        "pause\r\n"
+    )
+
+    from flask import Response
+    return Response(bat.encode('ascii'),
+                    mimetype='application/octet-stream',
+                    headers={'Content-Disposition': 'attachment; filename="CirqueRMM-Install.bat"'})
+
+
+@app.route('/download/agent-msi')
+@login_required
+@license_required
+def download_agent_msi():
+    """Serve the MSI installer directly."""
+    import os
+    msi_path = os.path.join(app.root_path, 'rmm_agent', 'CirqueRMM.msi')
+    if not os.path.exists(msi_path):
+        return 'MSI installer not found on server.', 404
+    return send_file(msi_path, as_attachment=True, download_name='CirqueRMM.msi',
+                     mimetype='application/x-msi')
+
+
 def download_site_install_ps1():
     """Serve a pre-configured PS1 authenticated by the site token in ?t=.
 
@@ -8648,6 +8730,70 @@ def download_site_install_ps1():
                     headers={'Content-Disposition': 'inline; filename="CirqueRMM-Install.ps1"'})
 
 
+@app.route('/download/deploy-silent.ps1')
+def download_deploy_silent_ps1():
+    """Serve a silent deployment wrapper script (no site-token auth needed — designed
+    to be uploaded to GPO / Intune / PSRemoting as a SYSTEM-run startup script).
+
+    Checks if the service already exists before doing anything.
+    Creates a hidden scheduled task that runs the installer as SYSTEM so
+    no console window is ever visible to the logged-in user.
+    The task self-deletes after the installer completes.
+    Auth: site token embedded in the URL (?t=TOKEN) same as site-install.ps1.
+    """
+    import hmac as _hmac
+    t = request.args.get('t', '').strip()
+    expected = _get_or_create_site_enrollment_token()
+    if not t or not _hmac.compare_digest(t, expected):
+        return 'Invalid or missing site token.', 403
+
+    tracker_url  = RMM_TRACKER_URL.rstrip('/')
+    installer_url = f"{tracker_url}/download/site-install.ps1?t={expected}"
+
+    script = f"""# Cirque RMM Agent - Silent Mass Deployment Script
+# Safe for GPO Startup Scripts, Intune Script Policies, or PSRemoting.
+# Runs as SYSTEM - no console window is shown to users.
+# If the agent is already installed this script exits immediately.
+
+$ServiceName  = 'CirqueRMM'
+$TaskName     = 'CirqueRMM-SilentInstall'
+$InstallerUrl = '{installer_url}'
+
+# Already installed? Nothing to do.
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {{
+    Write-Host "CirqueRMM already installed - exiting."
+    exit 0
+}}
+
+# Build an Argument string that downloads and runs the installer completely hidden
+$psArgs = "-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -Command " +
+    "`"& {{ [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
+    "irm '$InstallerUrl' | iex }}`""
+
+# Create a one-time scheduled task that runs as SYSTEM (guaranteed no window)
+$action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $psArgs
+$trigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10)
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$settings  = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+    -MultipleInstances IgnoreNew `
+    -Hidden
+
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    -Principal $principal -Settings $settings -Force | Out-Null
+
+# Start immediately rather than waiting for the trigger
+Start-ScheduledTask -TaskName $TaskName
+
+Write-Host "Cirque RMM silent install task created and started on $env:COMPUTERNAME."
+Write-Host "The agent will enroll and start within 1-2 minutes."
+Write-Host "Check C:\\CirqueRMM\\logs\\setup.log for progress."
+"""
+
+    from flask import Response
+    return Response(script.encode('utf-8'),
+                    mimetype='text/plain; charset=utf-8',
+                    headers={'Content-Disposition': 'inline; filename="CirqueRMM-Deploy-Silent.ps1"'})
 
 
 def _get_or_create_site_enrollment_token() -> str:

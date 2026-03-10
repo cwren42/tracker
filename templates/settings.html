@@ -496,41 +496,107 @@
                                 <div class="card-body">
                                     <p class="mb-3">Deploy the RMM agent to any Windows device &mdash; no file transfer needed.</p>
 
-                                    <h6 class="mb-2"><i class="bi bi-1-circle-fill text-primary me-1"></i> PowerShell one-liner (recommended)</h6>
+                                    <h6 class="mb-2"><i class="bi bi-1-circle-fill text-primary me-1"></i> Quick install &mdash; one machine (run as Admin)</h6>
                                     <p class="small text-muted mb-1">Open <strong>PowerShell as Administrator</strong> on the target machine and paste:</p>
                                     <div class="input-group mb-1">
                                         <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
-                                               id="ps1OneLiner" readonly style="font-size:.75rem;">
+                                                 id="ps1OneLiner" readonly style="font-size:.75rem;">
                                         <button class="btn btn-outline-secondary" type="button"
-                                                onclick="copyPs1Liner(this)" title="Copy to clipboard">
+                                                onclick="copyById('ps1OneLiner',this)" title="Copy to clipboard">
                                             <i class="bi bi-clipboard"></i>
                                         </button>
                                     </div>
                                     <script>
-                                    (function(){
-                                        var tok = "{{ rmm_site_token }}";
-                                        var base = "{{ request.host_url }}".replace(/\/+$/, "");
-                                        document.getElementById("ps1OneLiner").value =
-                                            "irm '" + base + "/download/site-install.ps1?t=" + tok + "' | iex";
-                                    })();
-                                    function copyPs1Liner(btn) {
-                                        var val = document.getElementById("ps1OneLiner").value;
-                                        navigator.clipboard.writeText(val).then(function() {
+                                    function copyById(id, btn) {
+                                        navigator.clipboard.writeText(document.getElementById(id).value).then(function() {
                                             btn.innerHTML = '<i class="bi bi-check text-success"></i>';
                                             setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
                                         }).catch(function(){});
                                     }
+                                    document.addEventListener('DOMContentLoaded', function() {
+                                        var tok  = "{{ rmm_site_token }}";
+                                        var base = "{{ request.host_url }}".replace(/\/+$/, "");
+                                        var installUrl = base + "/download/site-install.ps1?t=" + tok;
+                                        var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
+                                        document.getElementById("ps1OneLiner").value  = "irm '" + installUrl + "' | iex";
+                                        document.getElementById("gpoOneLiner").value  = "irm '" + deployUrl  + "' | iex";
+                                        document.getElementById("intuneScriptUrl").value = deployUrl;
+                                        document.getElementById("psremoteCmd").value  =
+                                            "Invoke-Command -ComputerName PC-NAME -ScriptBlock { irm '" + deployUrl + "' | iex }";
+                                        document.getElementById("intuneDownloadLink").href = deployUrl;
+                                    });
                                     </script>
-                                    <p class="small text-muted mb-4">The script auto-enrolls, installs the service, and starts the tray. Logs: <code>C:\CirqueRMM\logs\setup.log</code> and <code>%TEMP%\CirqueRMM_install.log</code></p>
+                                    <p class="small text-muted mb-4">Logs saved to <code>C:\CirqueRMM\logs\setup.log</code></p>
 
-                                    <h6 class="mb-2"><i class="bi bi-2-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
+                                    <h6 class="mb-2"><i class="bi bi-2-circle-fill text-success me-1"></i> Silent mass deployment &mdash; users see nothing</h6>
+                                    <p class="small text-muted mb-2">The silent deploy script creates a hidden Windows Scheduled Task running as <strong>SYSTEM</strong>. No console window, no UAC prompt, no user dialog. Machines that already have the agent installed exit immediately.</p>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-secondary me-2">Option A</span>
+                                            <strong class="small">Group Policy (domain-joined machines)</strong>
+                                        </div>
+                                        <ol class="small text-muted mb-2 ps-3">
+                                            <li>Open <strong>Group Policy Management</strong> &rarr; create/edit a GPO linked to your Computers OU</li>
+                                            <li>Navigate to <em>Computer Configuration &rarr; Windows Settings &rarr; Scripts &rarr; Startup</em></li>
+                                            <li>Add a <strong>PowerShell script</strong> with this command (no arguments needed):</li>
+                                        </ol>
+                                        <div class="input-group mb-1">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="gpoOneLiner" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('gpoOneLiner',this)" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                        <p class="small text-muted mb-0">The script runs silently at startup as SYSTEM. Already-installed machines do nothing.</p>
+                                    </div>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-info text-dark me-2">Option B</span>
+                                            <strong class="small">Microsoft Intune (cloud / hybrid-joined machines)</strong>
+                                        </div>
+                                        <ol class="small text-muted mb-2 ps-3">
+                                            <li>Intune Portal &rarr; <em>Devices &rarr; Windows &rarr; PowerShell Scripts &rarr; Add</em></li>
+                                            <li><a id="intuneDownloadLink" href="#" class="text-info"><i class="bi bi-download me-1"></i>Download CirqueRMM-Deploy-Silent.ps1</a></li>
+                                            <li>Upload it &rarr; set <strong>Run as logged on credentials: No</strong> (SYSTEM) &rarr; assign to device groups</li>
+                                        </ol>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="intuneScriptUrl" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('intuneScriptUrl',this)" title="Copy URL">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                        <p class="small text-muted mt-1 mb-0">Direct script URL (right-click Save As, or use the download link above).</p>
+                                    </div>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-secondary me-2">Option C</span>
+                                            <strong class="small">PowerShell Remoting &mdash; ad-hoc, any number of machines</strong>
+                                        </div>
+                                        <p class="small text-muted mb-2">Run from your admin workstation. Replace <code>PC-NAME</code> with the target hostname, or use <code>(Get-ADComputer -Filter *).Name</code> for all domain PCs:</p>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="psremoteCmd" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('psremoteCmd',this)" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <h6 class="mb-2 mt-1"><i class="bi bi-3-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
                                     <div class="d-flex gap-2 mb-4">
                                         <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-sm">
                                             <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
                                         </a>
                                     </div>
 
-                                    <h6 class="mb-2"><i class="bi bi-3-circle-fill text-primary me-1"></i> Per-asset installer (optional)</h6>
+                                    <h6 class="mb-2"><i class="bi bi-4-circle-fill text-primary me-1"></i> Per-asset installer (optional)</h6>
                                     <p class="text-muted small mb-0">On any asset page, use <strong>Manage &rarr; Generate Installer (.ps1)</strong> to get a pre-configured script linked to that asset.</p>
                                 </div>
                         </div>

@@ -5428,6 +5428,22 @@ def assets():
                          if asset.warranty_expiry and today < asset.warranty_expiry <= (today + timedelta(days=60))]
         elif quick_filter == 'unassigned':
             all_assets = [asset for asset in all_assets if not asset.employee_id]
+        elif quick_filter == 'with_agent':
+            agent_asset_ids = {row[1] for row in db.session.execute(
+                text("SELECT agent_id, asset_id FROM rmm_agent WHERE enabled = true AND asset_id IS NOT NULL")
+            ).fetchall()}
+            all_assets = [asset for asset in all_assets if asset.id in agent_asset_ids]
+        elif quick_filter == 'without_agent':
+            agent_asset_ids = {row[1] for row in db.session.execute(
+                text("SELECT agent_id, asset_id FROM rmm_agent WHERE enabled = true AND asset_id IS NOT NULL")
+            ).fetchall()}
+            all_assets = [asset for asset in all_assets if asset.id not in agent_asset_ids]
+        elif quick_filter == 'network_devices':
+            all_assets = [asset for asset in all_assets
+                          if asset.category and asset.category.lower() in (
+                              'network', 'network device', 'switch', 'router',
+                              'firewall', 'access point', 'ap', 'unifi', 'ubiquiti'
+                          )]
     
     assets = all_assets
     categories = db.session.query(Asset.category).distinct().all()
@@ -5571,6 +5587,7 @@ def view_asset(asset_id):
 
     # Look up RMM agent for this asset
     rmm_agent_id = None
+    rmm_tele = None
     try:
         rmm_row = db.session.execute(
             text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
@@ -5578,12 +5595,19 @@ def view_asset(asset_id):
         ).fetchone()
         if rmm_row:
             rmm_agent_id = rmm_row[0]
+            # Fetch latest telemetry for server-side rendering (Device Identity card, etc.)
+            tele_row = db.session.execute(
+                text("SELECT * FROM rmm_telemetry WHERE agent_id = :aid"),
+                {'aid': rmm_agent_id}
+            ).fetchone()
+            if tele_row:
+                rmm_tele = tele_row._mapping
     except Exception:
         pass
 
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
                          now=datetime.utcnow, intune_device=intune_device, intune_error=intune_error,
-                         rmm_agent_id=rmm_agent_id)
+                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele)
 
 @app.route('/assets/<int:asset_id>/edit', methods=['GET', 'POST'])
 @login_required

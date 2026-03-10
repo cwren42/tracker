@@ -309,7 +309,6 @@
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-assignment" type="button"><i class="bi bi-person-badge me-1"></i>Assignment</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-checkout" type="button"><i class="bi bi-box-arrow-right me-1"></i>Checkout{% if active_loan %} <span class="badge bg-warning text-dark ms-1">Out</span>{% endif %}</button></li>
     {% endif %}
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-software" type="button"><i class="bi bi-box-seam me-1"></i>Software{% if installed_apps %} <span class="badge bg-secondary ms-1">{{ installed_apps|length }}</span>{% endif %}</button></li>
     {% if asset.category not in ['Server'] %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-intune" type="button"><i class="bi bi-microsoft me-1"></i>Intune</button></li>
     {% endif %}
@@ -880,22 +879,25 @@
             </div>
 
             <!-- RMM Sub-tabs -->
-            <ul class="nav nav-tabs mt-2 mb-0" id="rmm-tabs" role="tablist" style="font-size:.8rem;">
-                <li class="nav-item"><button class="nav-link active py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-hw" type="button"><i class="bi bi-cpu me-1"></i>Hardware</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-sec" type="button"><i class="bi bi-shield-check me-1"></i>Security</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-sysinfo" type="button"><i class="bi bi-list-check me-1"></i>System</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-metrics" type="button" onclick="rmmLoadMetrics()"><i class="bi bi-graph-up me-1"></i>Metrics</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-avail" type="button" onclick="rmmLoadAvailability()"><i class="bi bi-activity me-1"></i>Activity</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-patches" type="button" onclick="rmmLoadPatches()"><i class="bi bi-patch-check me-1"></i>Patches</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-software" type="button" onclick="rmmLoadSoftware()"><i class="bi bi-box-seam me-1"></i>Software</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-scripts" type="button"><i class="bi bi-code-slash me-1"></i>Scripts</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-services" type="button" onclick="rmmLoadServices()"><i class="bi bi-gear me-1"></i>Services</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-events" type="button" onclick="rmmLoadEvents()"><i class="bi bi-list-ul me-1"></i>Events</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-transfer" type="button" onclick="rmmFsTabClick()"><i class="bi bi-arrow-left-right me-1"></i>Transfer</button></li>
-                <li class="nav-item"><button class="nav-link py-1 px-2" data-bs-toggle="tab" data-bs-target="#rmm-tab-power" type="button"><i class="bi bi-power me-1"></i>Power</button></li>
-            </ul>
+            <div class="d-flex gap-0 rmm-sidebar-layout" style="min-height:480px;">
+                <div class="flex-shrink-0 border-end me-3 pe-2" style="width:145px;">
+                    <div class="nav flex-column nav-pills gap-1" id="rmm-tabs" role="tablist" style="font-size:.82rem;">
+                        <button class="nav-link text-start py-2 px-3 rounded active" data-bs-toggle="pill" data-bs-target="#rmm-tab-hw" type="button"><i class="bi bi-cpu me-1"></i>Hardware</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-sec" type="button"><i class="bi bi-shield-check me-1"></i>Security</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-sysinfo" type="button"><i class="bi bi-list-check me-1"></i>System</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-metrics" type="button" onclick="rmmLoadMetrics()"><i class="bi bi-graph-up me-1"></i>Metrics</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-avail" type="button" onclick="rmmLoadAvailability()"><i class="bi bi-activity me-1"></i>Activity</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-patches" type="button" onclick="rmmLoadPatches()"><i class="bi bi-patch-check me-1"></i>Patches</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-software" type="button" onclick="rmmLoadSoftware()"><i class="bi bi-box-seam me-1"></i>Software</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-scripts" type="button"><i class="bi bi-code-slash me-1"></i>Scripts</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-services" type="button" onclick="rmmLoadServices()"><i class="bi bi-gear me-1"></i>Services</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-events" type="button" onclick="rmmLoadEvents()"><i class="bi bi-list-ul me-1"></i>Events</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-transfer" type="button" onclick="rmmFsTabClick()"><i class="bi bi-arrow-left-right me-1"></i>Transfer</button>
+                        <button class="nav-link text-start py-2 px-3 rounded" data-bs-toggle="pill" data-bs-target="#rmm-tab-power" type="button"><i class="bi bi-power me-1"></i>Power</button>
+                    </div>
+                </div>
+                <div class="tab-content flex-grow-1" style="font-size:.82rem; min-width:0;">
 
-                    <div class="tab-content border border-top-0 rounded-bottom p-3" style="font-size:.82rem;">
                         <!-- Hardware -->
                         <div class="tab-pane fade show active" id="rmm-tab-hw">
                             <table class="table table-sm mb-0">
@@ -1214,7 +1216,8 @@
                             </div>
                             <div id="rmm-power-status" class="small text-muted mt-3"></div>
                         </div>
-                    </div>
+                </div><!-- /tab-content -->
+            </div><!-- /rmm-sidebar-layout -->
 
                     <div class="text-end mt-2">
                         <small class="text-muted">Last telemetry: <span id="rmm-captured-at">—</span></small>
@@ -2817,44 +2820,6 @@ $out -join "\`n" `;
 {% endif %}
 
 <!-- ══ SOFTWARE TAB ════════════════════════════════════════════ -->
-<div class="tab-pane fade" id="tab-software" role="tabpanel">
-  <div class="mt-3">
-    <div class="card section-card">
-      <div class="card-header d-flex align-items-center justify-content-between">
-        <span><i class="bi bi-box-seam me-2 text-info"></i>Installed Applications</span>
-        {% if installed_apps %}
-        <small class="text-muted">{{ installed_apps|length }} apps &nbsp;&bull;&nbsp; updated by agent</small>
-        {% endif %}
-      </div>
-      <div class="card-body p-0">
-        {% if installed_apps %}
-        <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-              <tr><th>Name</th><th>Version</th><th>Publisher</th><th>Install Date</th></tr>
-            </thead>
-            <tbody>
-              {% for app in installed_apps %}
-              <tr>
-                <td>{{ app.name }}</td>
-                <td class="text-muted">{{ app.version or '—' }}</td>
-                <td class="text-muted">{{ app.publisher or '—' }}</td>
-                <td class="text-muted">{{ app.install_date or '—' }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-        <div class="text-center text-muted py-5">
-          <i class="bi bi-box-seam fs-1 d-block mb-2 opacity-25"></i>
-          No software inventory yet. Install the RMM agent to collect this data automatically.
-        </div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-</div>
 
 {% if asset.unifi_device_id %}
 <div class="tab-pane fade" id="tab-unifi" role="tabpanel">

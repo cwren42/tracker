@@ -46,6 +46,8 @@
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">RMM Agent</h6></li>
                 <li><a class="dropdown-item" href="{{ url_for('download_agent_installer') }}"><i class="bi bi-download me-2"></i>Download Windows Agent (.exe)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('download_agent_msi') }}"><i class="bi bi-box-seam me-2"></i>Download Windows Agent (.msi)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('download_agent_bat') }}"><i class="bi bi-file-earmark-code me-2"></i>Download BAT Launcher (.bat)</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}"><i class="bi bi-filetype-ps me-2"></i>Download Install Script (.ps1)</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('rmm_agent_download') }}"><i class="bi bi-file-zip me-2"></i>Download Windows Agent (.zip)</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('agent_download') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Linux Agent</a></li>
@@ -78,6 +80,15 @@
         </a>
         <a href="{{ url_for('assets', filter='unassigned') }}" class="btn {% if request.args.get('filter') == 'unassigned' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
             <i class="bi bi-person-x"></i> Unassigned
+        </a>
+        <a href="{{ url_for('assets', filter='with_agent') }}" class="btn {% if request.args.get('filter') == 'with_agent' %}btn-success{% else %}btn-outline-success{% endif %}">
+            <i class="bi bi-robot"></i> With Agent
+        </a>
+        <a href="{{ url_for('assets', filter='without_agent') }}" class="btn {% if request.args.get('filter') == 'without_agent' %}btn-warning{% else %}btn-outline-warning{% endif %}">
+            <i class="bi bi-robot"></i> Without Agent
+        </a>
+        <a href="{{ url_for('assets', filter='network_devices') }}" class="btn {% if request.args.get('filter') == 'network_devices' %}btn-info{% else %}btn-outline-info{% endif %}">
+            <i class="bi bi-diagram-3"></i> Network Devices
         </a>
         {% if request.args.get('filter') %}
         <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">

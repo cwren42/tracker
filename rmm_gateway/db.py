@@ -314,6 +314,47 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 "UPDATE asset SET online_state = 'Online', last_seen = %s WHERE id = %s",
                 (now, asset_id),
             )
+            # Sync IP and MAC from network_json back to the asset record so the
+            # Overview tab shows them without needing an Intune sync.
+            networks = data.get("network") or data.get("network_json") or []
+            primary_ip  = None
+            eth_mac     = None
+            wifi_mac    = None
+            for iface in networks:
+                name = (iface.get("interface") or "").lower()
+                ips  = iface.get("ips") or []
+                mac  = iface.get("mac") or ""
+                # Skip loopback and virtual adapters
+                if any(x in name for x in ("loopback", "lo", "vmware", "virtualbox", "vethernet", "docker", "vbox")):
+                    continue
+                if not primary_ip and ips:
+                    candidate = ips[0]
+                    if not candidate.startswith("169.254"):  # skip APIPA
+                        primary_ip = candidate
+                if mac and len(mac) >= 17:
+                    if any(x in name for x in ("wi-fi", "wifi", "wlan", "wireless", "wl")):
+                        if not wifi_mac:
+                            wifi_mac = mac
+                    else:
+                        if not eth_mac:
+                            eth_mac = mac
+            # Only overwrite fields that are currently empty so manual edits are preserved
+            if primary_ip or eth_mac or wifi_mac:
+                parts = ["UPDATE asset SET"]
+                sets  = []
+                vals  = []
+                if primary_ip:
+                    sets.append("ip_address = COALESCE(NULLIF(ip_address,''), %s)")
+                    vals.append(primary_ip)
+                if eth_mac:
+                    sets.append("hardware_mac_ethernet = COALESCE(NULLIF(hardware_mac_ethernet,''), %s)")
+                    vals.append(eth_mac)
+                if wifi_mac:
+                    sets.append("hardware_mac_wifi = COALESCE(NULLIF(hardware_mac_wifi,''), %s)")
+                    vals.append(wifi_mac)
+                if sets:
+                    vals.append(asset_id)
+                    cur.execute(f"UPDATE asset SET {', '.join(sets)} WHERE id = %s", vals)
         conn.commit()
     finally:
         conn.close()

@@ -30,6 +30,7 @@ from sqlalchemy import text
 from api_system import require_api_key
 from ssh_manager import get_ssh_manager
 import secrets
+import hmac
 import alert_service as _alert_svc
 import workflow_engine as _wf_engine
 import ai_engine as _ai_engine
@@ -660,7 +661,7 @@ class AuditTrail(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     ip_address = db.Column(db.Text)
     user_agent = db.Column(db.Text)
-    created_at = db.Column(db.Text, default=lambda: datetime.utcnow().isoformat())
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.utcnow().replace(tzinfo=timezone.utc))
 
 def _log_audit(entity_type, entity_id, action, changes=None):
     """Write an audit record. Safe to call from routes and event listeners."""
@@ -1903,11 +1904,29 @@ def settings():
         'stale_hours': get_setting_value('proxmox_stale_hours', '26'),
     }
 
+    rmm_site_token = _get_or_create_site_enrollment_token()
+
     return render_template('settings.html',
                           config=config,
                           ad_config=ad_config,
                           unifi_config=unifi_config,
-                          proxmox_settings=proxmox_settings)
+                          proxmox_settings=proxmox_settings,
+                          rmm_site_token=rmm_site_token)
+
+
+@app.route('/api/rmm/site-token/regenerate', methods=['POST'])
+@login_required
+@admin_required
+def rmm_regenerate_site_token():
+    """Regenerate the site-wide RMM enrollment token (invalidates the old MSI)."""
+    import secrets as _sec
+    setting = Setting.query.filter_by(key='rmm_site_enrollment_token').first()
+    if not setting:
+        setting = Setting(key='rmm_site_enrollment_token')
+        db.session.add(setting)
+    setting.value = 'site_' + _sec.token_hex(32)
+    db.session.commit()
+    return jsonify({'ok': True, 'token': setting.value})
 
 
 @app.route('/api/unifi/test', methods=['POST'])
@@ -4219,14 +4238,57 @@ RMM_TRACKER_URL      = os.environ.get('RMM_TRACKER_URL', 'https://tracker.corp.c
 
 
 def _verify_agent_token(agent_id: str, token: str) -> bool:
-    """Check agent_id + token against the rmm_agent table (SHA-256 comparison)."""
+    """Check agent_id + token against the rmm_agent table (SHA-256 comparison).
+    On first contact, also checks rmm_enrollment_tokens for a one-time enrollment
+    token and bootstraps the rmm_agent row if found."""
     import hashlib
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     row = db.session.execute(
         text("SELECT id FROM rmm_agent WHERE agent_id = :aid AND agent_token_sha256 = :h AND enabled = true"),
         {'aid': agent_id, 'h': token_hash}
     ).fetchone()
-    return row is not None
+    if row:
+        return True
+
+    # Check enrollment token (one-time, bootstraps rmm_agent on first use)
+    try:
+        enroll_row = db.session.execute(
+            text("""SELECT id, asset_id FROM rmm_enrollment_tokens
+                    WHERE token_sha256 = :h AND used = FALSE
+                      AND (expires_at IS NULL OR expires_at > NOW())"""),
+            {'h': token_hash}
+        ).fetchone()
+        if enroll_row:
+            now = datetime.utcnow().isoformat()
+            # Create rmm_agent row for this agent using the enrollment token as its credential
+            existing = db.session.execute(
+                text("SELECT id FROM rmm_agent WHERE agent_id = :aid"),
+                {'aid': agent_id}
+            ).fetchone()
+            if not existing:
+                db.session.execute(
+                    text("""INSERT INTO rmm_agent
+                            (agent_id, asset_id, agent_token_sha256, enabled, created_at, last_seen_at)
+                            VALUES (:aid, :asid, :hash, TRUE, :now, :now)"""),
+                    {'aid': agent_id, 'asid': enroll_row.asset_id, 'hash': token_hash, 'now': now}
+                )
+            else:
+                db.session.execute(
+                    text("""UPDATE rmm_agent SET agent_token_sha256 = :hash,
+                            asset_id = :asid, last_seen_at = :now WHERE agent_id = :aid"""),
+                    {'hash': token_hash, 'asid': enroll_row.asset_id, 'aid': agent_id, 'now': now}
+                )
+            # Mark enrollment token as used
+            db.session.execute(
+                text("UPDATE rmm_enrollment_tokens SET used = TRUE, used_at = NOW() WHERE id = :id"),
+                {'id': enroll_row.id}
+            )
+            db.session.commit()
+            return True
+    except Exception as e:
+        logger.warning(f"Enrollment token check failed: {e}")
+
+    return False
 
 
 @app.route('/rmm/agent/version')
@@ -4345,14 +4407,20 @@ def api_rmm_telemetry(agent_id):
     if not row:
         return jsonify({'ok': False, 'error': 'No telemetry yet'}), 404
     d = dict(row._mapping)
-    try:
-        d['disk_json'] = _json.loads(d.get('disk_json') or '[]')
-    except Exception:
-        d['disk_json'] = []
-    try:
-        d['network_json'] = _json.loads(d.get('network_json') or '[]')
-    except Exception:
-        d['network_json'] = []
+    for _json_field, _alias in [
+        ('disk_json', 'disk_json'),
+        ('network_json', 'network_json'),
+        ('gpu_json', 'gpu'),
+        ('security_json', 'security'),
+        ('sysinfo_json', 'sysinfo'),
+    ]:
+        raw = d.get(_json_field)
+        parsed = None
+        try:
+            parsed = _json.loads(raw) if raw else ([] if _json_field in ('disk_json', 'network_json', 'gpu_json') else {})
+        except Exception:
+            parsed = [] if _json_field in ('disk_json', 'network_json', 'gpu_json') else {}
+        d[_alias] = parsed
     # Normalize datetime fields so jsonify emits ISO 8601 with +00:00 offset
     for _k in ('captured_at', 'created_at', 'updated_at'):
         if _k in d:
@@ -4473,12 +4541,14 @@ def api_rmm_eagle_events(agent_id):
 def api_rmm_eagle_app_summary(agent_id):
     """Return total time per process for the requested day range."""
     date_clause, date_params = _eagle_date_params(default_days=7)
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT process_name,
                        COUNT(*) as events,
                        SUM(duration_s) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {wh_clause}
                 GROUP BY process_name
                 ORDER BY total_s DESC
                 LIMIT 30"""),
@@ -4493,11 +4563,13 @@ def api_rmm_eagle_app_summary(agent_id):
 def api_rmm_eagle_hourly(agent_id):
     """Return total active seconds per hour-of-day (0-23) grouped in server local time."""
     date_clause, date_params = _eagle_date_params(default_days=7)
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT CAST(EXTRACT(HOUR FROM (captured_at AT TIME ZONE 'America/Denver')) AS INTEGER) as hr,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {wh_clause}
                 GROUP BY hr ORDER BY hr"""),
         {'aid': agent_id, **date_params}
     ).fetchall()
@@ -4511,11 +4583,13 @@ def api_rmm_eagle_hourly(agent_id):
 def api_rmm_eagle_daily(agent_id):
     """Return total active seconds per calendar day grouped in server local time."""
     date_clause, date_params = _eagle_date_params(default_days=30)
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE) as day,
                        SUM(COALESCE(duration_s, 0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                {wh_clause}
                 GROUP BY day ORDER BY day"""),
         {'aid': agent_id, **date_params}
     ).fetchall()
@@ -4529,10 +4603,12 @@ def api_rmm_eagle_top_sites(agent_id):
     """Return top browser sites derived from window titles."""
     import re as _re_site
     date_clause, date_params = _eagle_date_params(default_days=7)
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT window_title, SUM(COALESCE(duration_s,0)) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND {date_clause}
+                  {wh_clause}
                   AND LOWER(process_name) IN ('msedge','chrome','firefox','brave','opera','iexplore','safari')
                   AND window_title IS NOT NULL AND window_title != ''
                 GROUP BY window_title ORDER BY total_s DESC LIMIT 200"""),
@@ -4661,9 +4737,14 @@ def api_eagle_current(agent_id):
             c = dict(row)
             dt = c.get('captured_at')
             c['captured_at'] = _dt_iso(dt)
-            # Pass the UTC offset so JS can keep agentTzOffsetH correct for gantt
-            if dt and dt.utcoffset() is not None:
-                c['tz_offset_h'] = dt.utcoffset().total_seconds() / 3600
+            # Pass DST-aware Mountain Time offset so JS keeps agentTzOffsetH correct
+            try:
+                tz_h = db.session.execute(
+                    text("SELECT EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'America/Denver' - NOW() AT TIME ZONE 'UTC'))/3600")
+                ).scalar()
+                c['tz_offset_h'] = float(tz_h) if tz_h is not None else -6.0
+            except Exception:
+                c['tz_offset_h'] = -6.0
             return jsonify(ok=True, current=c)
         return jsonify(ok=True, current=None)
     except Exception as e:
@@ -4929,17 +5010,24 @@ def api_eagle_gantt(agent_id):
         from datetime import date
         day = date.today().isoformat()
     try:
+        # Compute DST-aware offset for Mountain Time so returned timestamps carry correct offset
+        tz_h_row = db.session.execute(
+            text("SELECT EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'America/Denver' - NOW() AT TIME ZONE 'UTC'))/3600")
+        ).scalar()
+        tz_offset_h = float(tz_h_row) if tz_h_row is not None else -6.0
+        tz_suffix = f'-{abs(int(tz_offset_h)):02d}:00' if tz_offset_h < 0 else f'+{int(tz_offset_h):02d}:00'
         rows = db.session.execute(text("""
-            SELECT process_name, window_title, duration_s, idle_s, captured_at
+            SELECT process_name, window_title, duration_s, idle_s,
+                   to_char(captured_at AT TIME ZONE 'America/Denver', 'YYYY-MM-DD"T"HH24:MI:SS') AS local_ts
             FROM rmm_eagle_event
             WHERE agent_id = :aid
-              AND CAST(captured_at AS DATE) = CAST(:day AS DATE)
+              AND CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE) = CAST(:day AS DATE)
             ORDER BY captured_at
         """), {'aid': agent_id, 'day': day}).mappings().fetchall()
         events = [{'process_name': r['process_name'], 'window_title': r['window_title'],
                    'duration_s': r['duration_s'], 'idle_s': r['idle_s'],
-                   'captured_at': _dt_iso(r['captured_at'])} for r in rows]
-        return jsonify(ok=True, day=day, events=events)
+                   'captured_at': r['local_ts'] + tz_suffix} for r in rows]
+        return jsonify(ok=True, day=day, events=events, tz_offset_h=tz_offset_h)
     except Exception as e:
         return jsonify(ok=False, error=str(e))
 
@@ -5528,6 +5616,7 @@ def edit_asset(asset_id):
         asset.expected_life_years = int(request.form.get('expected_life_years', 3))
         asset.replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date() if request.form.get('replacement_date') else None
         asset.condition = request.form.get('condition', 'Good')
+        asset.device_type = request.form.get('device_type')
         asset.updated_at = datetime.utcnow()
         
         db.session.commit()
@@ -8381,21 +8470,26 @@ def rmm_update_software(agent_id):
         return jsonify({'error': 'No asset linked to this agent'}), 404
     asset_id = row[0]
     apps = request.get_json(silent=True) or []
-    InstalledApp.query.filter_by(asset_id=asset_id).delete()
+    # Delete existing software inventory for this agent and re-insert
+    db.session.execute(text("DELETE FROM rmm_software WHERE agent_id = :aid"), {'aid': agent_id})
     now = now_mst()
     inserted = 0
     for a in apps:
         name = (a.get('name') or '').strip()
         if not name:
             continue
-        db.session.add(InstalledApp(
-            asset_id=asset_id,
-            name=name,
-            version=(a.get('version') or '').strip() or None,
-            publisher=(a.get('publisher') or '').strip() or None,
-            install_date=(a.get('install_date') or '').strip() or None,
-            recorded_at=now,
-        ))
+        db.session.execute(
+            text("""INSERT INTO rmm_software (agent_id, name, version, publisher, install_date, captured_at)
+                     VALUES (:aid, :name, :ver, :pub, :idate, :now)"""),
+            {
+                'aid': agent_id,
+                'name': name,
+                'ver': (a.get('version') or '').strip() or None,
+                'pub': (a.get('publisher') or '').strip() or None,
+                'idate': (a.get('install_date') or '').strip() or None,
+                'now': now,
+            }
+        )
         inserted += 1
     db.session.commit()
     return jsonify({'ok': True, 'count': inserted})
@@ -8456,13 +8550,19 @@ def global_search():
 @login_required
 @license_required
 def download_agent_installer():
-    """Serve the MSI installer (preferred) or PS1 fallback."""
+    """Serve the EXE installer (preferred), then MSI, then PS1 fallback."""
     import os
+    # NSIS-built EXE: no msiexec Custom Action engine, most reliable
+    exe_path = os.path.join(app.root_path, 'rmm_agent', 'CirqueRMM.exe')
+    if os.path.exists(exe_path):
+        return send_file(exe_path, as_attachment=True, download_name='CirqueRMM.exe',
+                         mimetype='application/octet-stream')
+    # Legacy MSI fallback
     msi_path = os.path.join(app.root_path, 'rmm_agent', 'CirqueRMM.msi')
     if os.path.exists(msi_path):
         return send_file(msi_path, as_attachment=True, download_name='CirqueRMM.msi',
                          mimetype='application/x-msi')
-    # Fallback to PS1 if MSI not built yet
+    # Last resort: bare PS1
     ps1_path = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
     if not os.path.exists(ps1_path):
         return "Installer not found on server.", 404
@@ -8486,25 +8586,289 @@ def download_agent_ps1():
                      mimetype='application/octet-stream')
 
 
+@app.route('/download/site-install.ps1')
+def download_site_install_ps1():
+    """Serve a pre-configured PS1 authenticated by the site token in ?t=.
+
+    Designed for the one-liner:  irm 'https://.../download/site-install.ps1?t=TOKEN' | iex
+    No browser session required — the site token itself is the credential.
+
+    Strips the param() block so iex can run the script without errors.
+    iex cannot handle param() blocks — only script files/-File mode can.
+    """
+    import os, re as _re
+    t = request.args.get('t', '').strip()
+    expected = _get_or_create_site_enrollment_token()
+    import hmac as _hmac
+    if not t or not _hmac.compare_digest(t, expected):
+        return 'Invalid or missing site token.', 403
+
+    ps1_src = os.path.join(app.root_path, 'rmm_agent', 'install_agent.ps1')
+    if not os.path.exists(ps1_src):
+        return 'install_agent.ps1 not found on server.', 404
+
+    tracker_url = RMM_TRACKER_URL.rstrip('/')
+    gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+    site_token  = expected
+
+    ps1 = open(ps1_src, encoding='utf-8-sig').read()
+
+    # ── Strip #Requires and <# ... #> comment block ───────────────────────
+    ps1 = _re.sub(r'#Requires[^\n]*\n', '', ps1)
+    ps1 = _re.sub(r'<#.*?#>', '', ps1, flags=_re.DOTALL)
+
+    # ── Strip the param( ... ) block ──────────────────────────────────────
+    # iex evaluates expressions, not script definitions — param() is invalid.
+    # Match 'param' then everything up to the matching closing paren on its own line.
+    ps1 = _re.sub(r'\bparam\s*\(.*?\n\)', '', ps1, flags=_re.DOTALL)
+
+    # ── Prepend direct variable assignments ───────────────────────────────
+    header = (
+        "# Cirque RMM Agent - auto-configured by tracker server\n"
+        "# Run as Administrator. Logs: C:\\CirqueRMM\\logs\\setup.log\n"
+        f"$SiteToken   = '{site_token}'\n"
+        f"$TrackerUrl  = '{tracker_url}'\n"
+        f"$GatewayUrl  = '{gateway_url}'\n"
+        "$Token       = ''\n"
+        "$InstallDir  = 'C:\\CirqueRMM'\n"
+        "$NssmPath    = 'C:\\Program Files\\NSSM\\nssm.exe'\n"
+        "$AgentId     = ''\n"
+        "$SkipDownload = $false\n\n"
+    )
+    ps1 = header + ps1.lstrip()
+
+    # ── Scrub non-ASCII so PowerShell 5.1 never chokes on encoding ────────
+    ps1 = ps1.replace('\u2192', '->').replace('\u2014', '--').replace('\u2013', '-')
+    ps1 = _re.sub(r'[^\x00-\x7f]', '-', ps1)
+
+    from flask import Response
+    # No BOM — irm returns a plain string; BOM confuses the scriptblock parser
+    return Response(ps1.encode('utf-8'),
+                    mimetype='text/plain; charset=utf-8',
+                    headers={'Content-Disposition': 'inline; filename="CirqueRMM-Install.ps1"'})
+
+
+
+
+def _get_or_create_site_enrollment_token() -> str:
+    """Return the site-wide RMM enrollment token, creating it if it doesn't exist."""
+    import secrets as _sec
+    setting = Setting.query.filter_by(key='rmm_site_enrollment_token').first()
+    if not setting or not setting.value:
+        if not setting:
+            setting = Setting(key='rmm_site_enrollment_token')
+            db.session.add(setting)
+        setting.value = 'site_' + _sec.token_hex(32)
+        db.session.commit()
+    return setting.value
+
+
+@app.route('/asset/<int:asset_id>/unlink-agent', methods=['POST'])
+@login_required
+def unlink_rmm_agent(asset_id):
+    """Remove the RMM agent record linked to this asset without deleting the asset."""
+    db.session.execute(
+        text("DELETE FROM rmm_agent WHERE asset_id = :aid"),
+        {'aid': asset_id}
+    )
+    db.session.commit()
+    flash('RMM agent unlinked. The asset record was not deleted.', 'success')
+    return redirect(url_for('view_asset', asset_id=asset_id))
+
+
+@app.route('/api/rmm/enroll', methods=['POST'])
+def rmm_enroll():
+    """Self-registration endpoint for new agents.
+
+    The installer PS1 (embedded in the MSI) sends the site-wide enrollment token
+    here on first install.  The server creates (or finds) an asset and an rmm_agent
+    row, then returns a fresh per-device token that the PS1 writes to agent.conf.
+
+    Request JSON:
+        site_token  – site-wide enrollment token (from Settings → RMM)
+        hostname    – the device's computer name (becomes asset name)
+        agent_id    – optional override; defaults to hostname
+
+    Response JSON:
+        token       – per-device credential for ongoing agent auth
+        agent_id    – the agent ID the token is bound to
+        asset_id    – tracker asset ID
+    """
+    import hashlib as _hl, secrets as _sec
+    data = request.get_json(silent=True) or {}
+    site_token = data.get('site_token', '').strip()
+    hostname   = data.get('hostname', '').strip()
+    agent_id   = (data.get('agent_id') or hostname).strip()
+
+    if not site_token or not hostname:
+        return jsonify({'ok': False, 'error': 'site_token and hostname required'}), 400
+
+    # Validate site token
+    expected = _get_or_create_site_enrollment_token()
+    if not hmac.compare_digest(site_token, expected):
+        return jsonify({'ok': False, 'error': 'Invalid enrollment token'}), 403
+
+    if not agent_id:
+        return jsonify({'ok': False, 'error': 'hostname required'}), 400
+
+    try:
+        now = datetime.utcnow().isoformat()
+
+        # Find or create an asset for this device.
+        # Match by hostname FIRST — serials like "TobefilledbyO.E.M." are identical
+        # across many machines and cannot be used as a reliable unique key.
+        _GARBAGE_SERIALS = {
+            'tobefilled', 'tobefilledbyoem', 'tobefillbyoem',
+            'default string', 'system serial number',
+            'not specified', 'none', 'n/a', 'na', 'o.e.m.', '',
+        }
+        def _is_garbage_serial(s: str) -> bool:
+            return s.lower().replace(' ', '').replace('.', '').replace('-', '') in _GARBAGE_SERIALS
+
+        asset = Asset.query.filter(Asset.name.ilike(hostname)).first()
+        if not asset and not _is_garbage_serial(agent_id):
+            # Only fall back to serial match when the serial is a real unique value
+            asset = Asset.query.filter(Asset.serial_number == agent_id).first()
+        if not asset:
+            asset = Asset(
+                asset_tag=f'RMM-{agent_id[:8].upper()}',
+                name=hostname,
+                category='Workstation',
+                device_type='Windows Workstation',
+                status='In Use',
+            )
+            db.session.add(asset)
+            db.session.flush()  # get asset.id
+
+        # Generate a fresh per-device token
+        raw_token = 'agent_' + _sec.token_hex(32)
+        token_hash = _hl.sha256(raw_token.encode()).hexdigest()
+
+        existing = db.session.execute(
+            text("SELECT id FROM rmm_agent WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        ).fetchone()
+        if existing:
+            db.session.execute(
+                text("""UPDATE rmm_agent
+                        SET agent_token_sha256 = :hash, asset_id = :asid,
+                            last_seen_at = :now
+                        WHERE agent_id = :aid"""),
+                {'hash': token_hash, 'asid': asset.id, 'now': now, 'aid': agent_id}
+            )
+        else:
+            db.session.execute(
+                text("""INSERT INTO rmm_agent
+                        (agent_id, asset_id, agent_token_sha256, enabled, created_at, last_seen_at)
+                        VALUES (:aid, :asid, :hash, TRUE, :now, :now)"""),
+                {'aid': agent_id, 'asid': asset.id, 'hash': token_hash, 'now': now}
+            )
+        db.session.commit()
+
+        logger.info(f"RMM self-enrollment: agent_id={agent_id} hostname={hostname} asset_id={asset.id}")
+        return jsonify({'ok': True, 'token': raw_token, 'agent_id': agent_id, 'asset_id': asset.id})
+
+    except Exception as e:
+        logger.error(f"RMM enroll error: {e}")
+        return jsonify({'ok': False, 'error': 'Server error during enrollment'}), 500
+
+
+# ── Per-asset installer: generates a pre-configured PS1 with one-time enrollment token ──
+@app.route('/assets/<int:asset_id>/download-installer')
+@login_required
+@license_required
+def download_asset_installer(asset_id):
+    """Generate a ready-to-run PS1 installer pre-configured for a specific asset.
+    Creates a one-time enrollment token (valid 7 days) baked into the script.
+    The user just right-clicks the downloaded PS1 → Run with PowerShell (as Administrator).
+    """
+    import hashlib, secrets as _secrets, io as _io
+    from datetime import timedelta
+
+    asset = db.session.get(Asset, asset_id)
+    if not asset:
+        return "Asset not found.", 404
+
+    # Generate a one-time enrollment token
+    raw_token = 'enroll_' + _secrets.token_hex(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.utcnow() + timedelta(days=7)
+
+    # Store in DB
+    db.session.execute(
+        text("""INSERT INTO rmm_enrollment_tokens
+                (token_sha256, asset_id, created_by, created_at, expires_at)
+                VALUES (:hash, :asid, :uid, NOW(), :exp)"""),
+        {
+            'hash': token_hash,
+            'asid': asset_id,
+            'uid': current_user.id if hasattr(current_user, 'id') else None,
+            'exp': expires_at.isoformat(),
+        }
+    )
+    db.session.commit()
+
+    tracker_url = RMM_TRACKER_URL.rstrip('/')
+    gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+
+    # Build a self-contained PS1 with all parameters pre-filled
+    ps1_content = f"""#Requires -RunAsAdministrator
+<#
+.SYNOPSIS
+    Pre-configured Cirque RMM installer for asset: {asset.name}
+    Token is valid for 7 days. Run as Administrator.
+    Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+#>
+
+# Pre-configured parameters — do not edit
+$Token      = '{raw_token}'
+$TrackerUrl = '{tracker_url}'
+$GatewayUrl = '{gateway_url}'
+$AgentId    = ''      # Leave blank to use computer hostname
+
+# Download and run the full installer with pre-filled parameters
+$InstallScript = (Invoke-WebRequest -Uri "$TrackerUrl/download/agent-ps1" -UseBasicParsing).Content
+$sb = [ScriptBlock]::Create($InstallScript)
+& $sb -Token $Token -TrackerUrl $TrackerUrl -GatewayUrl $GatewayUrl -AgentId $AgentId
+"""
+
+    safe_name = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in asset.name)
+    filename = f'CirqueRMM-Install-{safe_name}.ps1'
+
+    buf = _io.BytesIO(ps1_content.encode('utf-8-sig'))  # BOM for Windows PowerShell
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=filename,
+                     mimetype='application/octet-stream')
 
 
 # ── Restored: /download/agent-file/<path:filename> ──
 @app.route('/download/agent-file/<path:filename>')
-@login_required
-@license_required
 def download_agent_file(filename):
-    """Serve individual agent files for the installer (authenticated users only)."""
-    import os, posixpath
-    # Whitelist allowed files
+    """Serve individual agent files for the installer.
+
+    Auth: either a logged-in browser session OR ?t=<site_enrollment_token>.
+    This allows the PS1 one-liner (irm | iex) to download files without a session.
+    """
+    import os, posixpath, hmac as _hmac
+    # Whitelist allowed files (prevent path traversal)
     allowed = {
         'agent_client.py', 'agent_launcher.py', 'tray.py',
         'requirements.txt', 'version.txt',
         'cirque_icon_ico.b64', 'cirque_icon_png.b64',
     }
-    # Sanitize filename to prevent path traversal
     clean = posixpath.basename(filename)
     if clean not in allowed:
         return "File not available.", 404
+
+    # Accept site token in ?t= (for PS1 one-liner) or a valid login session
+    t = request.args.get('t', '').strip()
+    if t:
+        expected = _get_or_create_site_enrollment_token()
+        if not _hmac.compare_digest(t, expected):
+            return "Invalid token.", 403
+    elif not current_user.is_authenticated:
+        return redirect(url_for('login', next=request.url))
+
     path = os.path.join(app.root_path, 'rmm_agent', clean)
     if not os.path.exists(path):
         return f"{clean} not found on server.", 404
@@ -8555,6 +8919,20 @@ def rmm_agent_tray():
     return send_file(tray_path, mimetype='text/x-python', as_attachment=False)
 
 
+@app.route('/rmm/agent/tray-install')
+def rmm_agent_tray_install():
+    """Serve tray_install.py — authenticated by agent token or browser session."""
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    # Accept either a valid agent token OR an active browser session
+    if not (current_user.is_authenticated or
+            (agent_id and token and _verify_agent_token(agent_id, token))):
+        return jsonify({'error': 'Unauthorized'}), 401
+    path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'tray_install.py')
+    if not os.path.isfile(path):
+        return jsonify({'error': 'tray_install.py not found'}), 404
+    return send_file(path, mimetype='text/x-python',
+                     as_attachment=True, download_name='tray_install.py')
 
 
 # ── Restored: /api/rmm/last-scan/<agent_id> ──
@@ -8596,17 +8974,17 @@ def api_rmm_metrics_history(agent_id):
     """Return CPU/RAM history for the last N hours (default 24)."""
     hours = int(request.args.get('hours', 24))
     rows = db.session.execute(
-        text("""SELECT recorded_at, cpu_percent, memory_percent
+        text("""SELECT captured_at, cpu_percent, ram_percent
                 FROM rmm_metrics_history
                 WHERE agent_id = :aid
-                  AND recorded_at >= NOW() + CAST(:delta AS INTERVAL)
-                ORDER BY recorded_at ASC"""),
+                  AND captured_at >= NOW() + CAST(:delta AS INTERVAL)
+                ORDER BY captured_at ASC"""),
         {'aid': agent_id, 'delta': f'-{hours} hours'}
     ).fetchall()
     return jsonify({
         'ok': True,
         'hours': hours,
-        'data': [{'ts': r[0], 'cpu': r[1], 'ram': r[2]} for r in rows],
+        'data': [{'ts': _dt_iso(r[0]), 'cpu': r[1], 'ram': r[2]} for r in rows],
     })
 
 
@@ -8619,16 +8997,16 @@ def api_rmm_availability(agent_id):
     """Return recent online/offline events for an agent."""
     limit = int(request.args.get('limit', 100))
     rows = db.session.execute(
-        text("""SELECT event, recorded_at
+        text("""SELECT event, occurred_at
                 FROM rmm_availability
                 WHERE agent_id = :aid
-                ORDER BY recorded_at DESC
+                ORDER BY occurred_at DESC
                 LIMIT :lim"""),
         {'aid': agent_id, 'lim': limit}
     ).fetchall()
     return jsonify({
         'ok': True,
-        'events': [{'event': r[0], 'ts': r[1]} for r in rows],
+        'events': [{'event': r[0], 'ts': _dt_iso(r[1])} for r in rows],
     })
 
 
@@ -8693,9 +9071,16 @@ def api_rmm_pending_updates(agent_id):
 @login_required
 def api_rmm_session_events(agent_id):
     """Return session activity events (logon/logoff/lock/unlock/sleep/wake) for an agent."""
-    from rmm_gateway.db import get_session_events
     days = request.args.get('days', 7, type=int)
-    events = get_session_events(agent_id, min(days, 90))
+    rows = db.session.execute(
+        text("""SELECT event_type, username, event_time
+                FROM rmm_session_events
+                WHERE agent_id = :aid
+                  AND captured_at >= NOW() - (:days * INTERVAL '1 day')
+                ORDER BY event_time DESC NULLS LAST"""),
+        {'aid': agent_id, 'days': min(days, 90)}
+    ).fetchall()
+    events = [{'type': r[0], 'username': r[1], 'time': r[2]} for r in rows]
     return jsonify({'ok': True, 'events': events})
 
 
@@ -8706,8 +9091,14 @@ def api_rmm_session_events(agent_id):
 @login_required
 def api_rmm_software(agent_id):
     """Return installed software inventory for an agent."""
-    from rmm_gateway.db import get_software
-    software = get_software(agent_id)
+    rows = db.session.execute(
+        text("""SELECT name, version, publisher, install_date
+                FROM rmm_software
+                WHERE agent_id = :aid
+                ORDER BY lower(name)"""),
+        {'aid': agent_id}
+    ).fetchall()
+    software = [{'name': r[0], 'version': r[1], 'publisher': r[2], 'install_date': r[3]} for r in rows]
     return jsonify({'ok': True, 'software': software, 'count': len(software)})
 
 
@@ -8792,9 +9183,14 @@ def api_rmm_cmd(agent_id):
     session_id = data.get('session_id') or 0
     if not session_id:
         try:
+            agent_row = db.session.execute(
+                text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = true LIMIT 1"),
+                {'aid': agent_id}
+            ).fetchone()
+            asset_id = agent_row[0] if agent_row else None
             res = db.session.execute(
-                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, NOW() - INTERVAL '7 hours') RETURNING id"),
-                {'aid': None, 'uid': current_user.id, 'reason': data.get('type', 'cmd')}
+                text("INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at) VALUES (:aid, :uid, :reason, NOW()) RETURNING id"),
+                {'aid': asset_id, 'uid': current_user.id, 'reason': data.get('type', 'cmd')}
             )
             db.session.commit()
             session_id = res.scalar()
@@ -8810,6 +9206,13 @@ def api_rmm_cmd(agent_id):
             result = _json.loads(resp.read())
         if not result.get('ok'):
             return jsonify({'ok': False, 'session_id': session_id, 'error': result.get('error', 'Gateway error')}), 502
+    except _err.HTTPError as e:
+        try:
+            body = _json.loads(e.read())
+            msg = body.get('error') or body.get('detail') or str(e)
+        except Exception:
+            msg = str(e)
+        return jsonify({'ok': False, 'session_id': session_id, 'error': msg}), 502
     except Exception as e:
         return jsonify({'ok': False, 'session_id': session_id, 'error': str(e)}), 502
     return jsonify({'ok': True, 'session_id': session_id})

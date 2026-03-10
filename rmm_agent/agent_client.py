@@ -9,7 +9,7 @@ Env vars:
   RMM_SCREENSHOT     1 = enable screenshot capture (default: 0)
 """
 
-AGENT_VERSION = "2.3.5"
+AGENT_VERSION = "2.4.9"
 
 import asyncio
 import base64
@@ -258,104 +258,130 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
             except Exception:
                 pass
 
-        # 5. Create Startup shortcut for every user profile
-        #    Skip entirely if the shortcut already exists for any logged-in user
-        import glob as _glob2
-        existing_shortcuts = _glob2.glob(
-            r'C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CirqueTray.lnk'
-        )
-        if existing_shortcuts:
-            print(f'[tray] Startup shortcut already exists ({len(existing_shortcuts)} user(s)) — skipping task', flush=True)
-        else:
-            _create_startup_shortcut_task()
+        # 5. Create Startup shortcut and (re-)launch tray now
+        _create_startup_shortcut_task()
 
     except Exception as e:
         print(f'[tray] _setup_tray error: {e}', flush=True)
 
 
 def _create_startup_shortcut_task():
-    """Register and run the CirqueTraySetup schtask to create the per-user startup shortcut."""
-    import subprocess as _sp, re as _re, glob as _glob
-    ps_lnk = r"""
-$WS = New-Object -ComObject WScript.Shell
-$startup = [System.Environment]::GetFolderPath('Startup')
-$lnk = $WS.CreateShortcut("$startup\CirqueTray.lnk")
-$lnk.TargetPath = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
-if (-not $lnk.TargetPath) {
-    $lnk.TargetPath = (Get-ChildItem "C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe" | Select-Object -First 1).FullName
-}
-if (-not $lnk.TargetPath) { exit 1 }
-$lnk.Arguments = "C:\CirqueRMM\tray.py"
-$lnk.WorkingDirectory = "C:\CirqueRMM"
-$lnk.WindowStyle = 7  # minimized
-$lnk.Description = "Cirque IT Support Tray"
-$lnk.Save()
-Write-Host "Shortcut created: $startup\CirqueTray.lnk"
-"""
-    task_xml_template = r"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
-  <Actions Context="InteractiveToken">
-    <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NoProfile -WindowStyle Hidden -Command "{PS}"</Arguments>
-    </Exec>
-  </Actions>
-</Task>"""
-    ps_oneliner = ' '.join(ps_lnk.strip().splitlines())
-    xml_src = task_xml_template.replace('{PS}', ps_oneliner.replace('"', '&quot;'))
-    xml_path = r'C:\CirqueRMM\create_tray_lnk.xml'
-    with open(xml_path, 'w', encoding='utf-16') as fh:
-        fh.write(xml_src)
-    setup_q = _sp.run(['schtasks', '/Query', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
-    if setup_q.returncode != 0:
-        _sp.run(
-            ['schtasks', '/Create', '/F', '/TN', 'CirqueTraySetup', '/XML', xml_path],
-            capture_output=True, timeout=15
-        )
-    _sp.run(['schtasks', '/Run', '/TN', 'CirqueTraySetup'], capture_output=True, timeout=10)
-    print('[tray] Startup shortcut task triggered', flush=True)
+    """Write tray startup entries to All-Users and per-user Startup folders,
+    then launch the tray immediately in the current interactive user's session."""
+    import subprocess as _sp, glob as _glob
 
-    # Launch the tray right now in the interactive user desktop session
+    # ── 1. Find pythonw.exe ──────────────────────────────────────────────────
     pythonw_path = ''
-    for _py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe'):
-        pythonw_path = _py
-        break
-    if pythonw_path:
-        query = _sp.run(
-            ['schtasks', '/Query', '/TN', 'CirqueTrayLaunch', '/FO', 'LIST'],
-            capture_output=True, timeout=10
+    _candidate = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
+    if os.path.isfile(_candidate):
+        pythonw_path = _candidate
+    if not pythonw_path:
+        for _py in _glob.glob(r'C:\Users\*\AppData\Local\Programs\Python\Python*\pythonw.exe'):
+            pythonw_path = _py; break
+    if not pythonw_path:
+        for _py in _glob.glob(r'C:\Program Files\Python*\pythonw.exe'):
+            pythonw_path = _py; break
+    if not pythonw_path:
+        for _py in _glob.glob(r'C:\Python*\pythonw.exe'):
+            pythonw_path = _py; break
+    if not pythonw_path:
+        try:
+            _r = _sp.run(['where', 'pythonw.exe'], capture_output=True, text=True, timeout=5)
+            if _r.returncode == 0:
+                pythonw_path = _r.stdout.strip().splitlines()[0].strip()
+        except Exception:
+            pass
+    if not pythonw_path:
+        print('[tray] No pythonw.exe found — cannot launch tray', flush=True)
+        return
+
+    # ── 2. Write VBScript to startup folders (SYSTEM can write directly) ────
+    # VBS runs pythonw.exe silently so no console window appears
+    _vbs = (
+        'Set oShell = CreateObject("WScript.Shell")\r\n'
+        f'oShell.Run Chr(34) & "{pythonw_path}" & Chr(34) & " C:\\CirqueRMM\\tray.py", 0, False\r\n'
+    )
+    # All-Users startup
+    _common_startup = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
+    try:
+        os.makedirs(_common_startup, exist_ok=True)
+        with open(os.path.join(_common_startup, 'CirqueTray.vbs'), 'w', encoding='utf-8') as _fh:
+            _fh.write(_vbs)
+        print('[tray] Wrote VBS to CommonStartup', flush=True)
+    except Exception as _e:
+        print(f'[tray] CommonStartup VBS write failed: {_e}', flush=True)
+    # Per-user startup folders
+    _skip = {'All Users', 'Default', 'Default User', 'Public'}
+    for _profile in _glob.glob(r'C:\Users\*'):
+        _uname = os.path.basename(_profile)
+        if _uname in _skip:
+            continue
+        _user_startup = os.path.join(
+            _profile,
+            r'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
         )
-        tray_task_exists = query.returncode == 0 and b'CirqueTrayLaunch' in (query.stdout or b'')
-        if not tray_task_exists:
-            launch_xml = (
-                '<?xml version="1.0" encoding="UTF-16"?>\n'
-                '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
-                '  <Triggers><RegistrationTrigger><Enabled>true</Enabled></RegistrationTrigger></Triggers>\n'
-                '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>'
-                '<ExecutionTimeLimit>PT5M</ExecutionTimeLimit></Settings>\n'
-                '  <Actions Context="InteractiveToken">\n'
-                '    <Exec>\n'
-                f'      <Command>{pythonw_path}</Command>\n'
-                f'      <Arguments>C:\\CirqueRMM\\tray.py</Arguments>\n'
-                '    </Exec>\n'
-                '  </Actions>\n'
-                '</Task>'
-            )
-            launch_xml_path = r'C:\CirqueRMM\launch_tray.xml'
-            with open(launch_xml_path, 'w', encoding='utf-16') as fh:
-                fh.write(launch_xml)
-            _sp.run(
-                ['schtasks', '/Create', '/F', '/TN', 'CirqueTrayLaunch', '/XML', launch_xml_path],
-                capture_output=True, timeout=15
-            )
-            _sp.run(['schtasks', '/Run', '/TN', 'CirqueTrayLaunch'], capture_output=True, timeout=10)
-            print(f'[tray] Launch task triggered (InteractiveToken) with {pythonw_path}', flush=True)
-        else:
-            print('[tray] Tray launch task already registered — skipping', flush=True)
-    else:
-        print('[tray] No user pythonw.exe found, tray not launched immediately', flush=True)
+        try:
+            os.makedirs(_user_startup, exist_ok=True)
+            with open(os.path.join(_user_startup, 'CirqueTray.vbs'), 'w', encoding='utf-8') as _fh:
+                _fh.write(_vbs)
+            print(f'[tray] Wrote VBS to startup for user: {_uname}', flush=True)
+        except Exception as _e:
+            print(f'[tray] User startup write failed ({_uname}): {_e}', flush=True)
+
+    # ── 3. Kill any existing tray.py process ────────────────────────────────
+    try:
+        _sp.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+             'Get-WmiObject Win32_Process | Where-Object { $_.Name -eq "pythonw.exe" '
+             '-and $_.CommandLine -like "*tray.py*" } | '
+             'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
+    import time as _time
+    _time.sleep(2)
+
+    # ── 4. Immediate launch in the active interactive user's session ─────────
+    # Use New-ScheduledTaskPrincipal with the actual logged-in username —
+    # more reliable than generic InteractiveToken when called from session 0.
+    _py_escaped = pythonw_path.replace("'", "''")
+    ps_launch = (
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        # Resolve logged-in user via WMI (returns domain\\user)
+        "$wmiUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
+        "if (-not $wmiUser) {\n"
+        "    # Fallback: parse qwinsta output\n"
+        "    $qw = & qwinsta 2>$null\n"
+        "    $line = ($qw | Select-String 'Active' | Select-Object -First 1).ToString()\n"
+        "    $cols = ($line -replace '>','').Trim() -split '\\s+'\n"
+        "    $wmiUser = $cols[1]\n"
+        "}\n"
+        "$username = ($wmiUser -replace '.*\\\\','')\n"
+        "if (-not $username) { Write-Host 'No interactive user found'; exit 1 }\n"
+        "Write-Host \"Targeting user: $username\"\n"
+        "$action   = New-ScheduledTaskAction -Execute '" + _py_escaped + "' "
+        "-Argument 'C:\\CirqueRMM\\tray.py' -WorkingDirectory 'C:\\CirqueRMM'\n"
+        "$prin     = New-ScheduledTaskPrincipal -UserId $username "
+        "-LogonType Interactive -RunLevel Limited\n"
+        "$regErr = $null\n"
+        "Register-ScheduledTask -TaskName 'CirqueTrayLaunch' "
+        "-Action $action -Principal $prin -Force -ErrorVariable regErr | Out-Null\n"
+        "if ($regErr) { Write-Host \"Tray task error: $regErr\" } else {\n"
+        "  Start-ScheduledTask -TaskName 'CirqueTrayLaunch' -ErrorAction SilentlyContinue\n"
+        "  Write-Host 'Tray launch task started'\n"
+        "}\n"
+    )
+    _result = _sp.run(
+        ['powershell', '-NoProfile', '-Command', ps_launch],
+        capture_output=True, text=True, timeout=25,
+    )
+    _out = (_result.stdout or '').strip()
+    _err = (_result.stderr or '').strip()
+    if _out:
+        print(f'[tray] Launch: {_out}', flush=True)
+    if _err and _result.returncode != 0:
+        print(f'[tray] Launch stderr: {_err[:300]}', flush=True)
 
 def _ensure_rustdesk_password() -> str:
     """Return the permanent RustDesk access password for this machine.
@@ -2920,6 +2946,21 @@ async def main() -> None:
                             await asyncio.sleep(86400)  # refresh every 24h
 
                     asyncio.create_task(tray_watchdog())
+
+                # Periodic self-update check — every 4 hours while running
+                async def periodic_update_check():
+                    while True:
+                        await asyncio.sleep(4 * 3600)
+                        try:
+                            updated = await loop.run_in_executor(
+                                None, check_for_update, tracker_url, agent_id, token
+                            )
+                            if updated:
+                                sys.exit(7)
+                        except Exception:
+                            pass
+
+                asyncio.create_task(periodic_update_check())
 
                 # Eagle Eyes monitoring task (started on demand via eagle_eyes_config)
                 eagle_task: Optional[asyncio.Task] = None

@@ -127,14 +127,33 @@ def main():
 
     # --- Launch the agent ---
     print("[launcher] agent_client.py OK — launching", flush=True)
-    # Replace process so NSSM sees agent_client.py as the running process
+    # Use runpy to run agent_client.py in-process so NSSM keeps tracking this PID.
+    # os.execv on Windows spawns a new process then exits, causing NSSM to restart
+    # the launcher in a loop and the spawned child inherits unquoted argv that splits
+    # on spaces in "C:\Program Files\..." paths.
+    import runpy
+    sys.argv = [_AGENT_PY]
     try:
-        os.execv(sys.executable, [sys.executable, _AGENT_PY] + sys.argv[1:])
-    except AttributeError:
-        # os.execv not available (shouldn't happen on Windows but just in case)
-        import runpy
-        sys.argv = [_AGENT_PY] + sys.argv[1:]
         runpy.run_path(_AGENT_PY, run_name="__main__")
+    except (KeyboardInterrupt, SystemExit):
+        # Normal service stop — exit cleanly without traceback
+        sys.exit(0)
+    except BaseException as _e:
+        # CancelledError and other asyncio exceptions — suppress traceback, let NSSM restart
+        if type(_e).__name__ in ("CancelledError", "TaskGroupError"):
+            sys.exit(0)
+        # Log the crash to disk so we can diagnose it, then exit so NSSM can restart
+        import traceback as _tb
+        _crash_log = os.path.join(_AGENT_DIR, 'logs', 'agent.log')
+        try:
+            os.makedirs(os.path.join(_AGENT_DIR, 'logs'), exist_ok=True)
+            with open(_crash_log, 'a', encoding='utf-8') as _lf:
+                _lf.write(f'\n=== LAUNCHER CRASH {__import__("datetime").datetime.now().isoformat()} ===\n')
+                _tb.print_exc(file=_lf)
+        except Exception:
+            pass
+        _tb.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

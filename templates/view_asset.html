@@ -11,7 +11,6 @@
     padding: 2rem 2.5rem 1.75rem;
     margin-bottom: 1.5rem;
     position: relative;
-    overflow: hidden;
 }
 .asset-hero::before {
     content: "";
@@ -182,6 +181,34 @@
             {% else %}
                 <span class="badge bg-secondary fs-6 px-3 py-2">{{ asset.status }}</span>
             {% endif %}
+            {% if current_user.role in ['admin', 'manager'] %}
+            <div class="dropdown">
+                <button class="btn btn-outline-light btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-gear"></i> Manage
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><a class="dropdown-item" href="{{ url_for('edit_asset', asset_id=asset.id) }}">
+                        <i class="bi bi-pencil-fill me-2"></i>Edit Asset
+                    </a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('download_agent_installer') }}">
+                        <i class="bi bi-download me-2"></i>Download Agent (.msi)
+                    </a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('rmm_agent_download') }}">
+                        <i class="bi bi-file-zip me-2"></i>Download Agent (.zip)
+                    </a></li>
+                    <li><a class="dropdown-item text-success" href="{{ url_for('download_asset_installer', asset_id=asset.id) }}">
+                        <i class="bi bi-box-arrow-down me-2"></i>Generate Installer (.ps1)
+                    </a></li>
+                    {% if current_user.is_admin %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item text-danger" href="#" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                        <i class="bi bi-trash me-2"></i>Delete Asset
+                    </a></li>
+                    {% endif %}
+                </ul>
+            </div>
+            {% endif %}
             <a href="{{ url_for('asset_qr', asset_id=asset.id) }}" class="btn btn-outline-light btn-sm" target="_blank">
                 <i class="bi bi-qr-code"></i> QR
             </a>
@@ -191,17 +218,10 @@
         </div>
     </div>
 </div>
-{% if current_user.role in ['admin', 'manager'] %}
-<div class="mb-3">
-    <a href="{{ url_for('edit_asset', asset_id=asset.id) }}" class="btn btn-warning">
-        <i class="bi bi-pencil-fill me-1"></i> Edit Asset
-    </a>
-</div>
-{% endif %}
 
 <!-- ── STAT CARDS ─────────────────────────────────────────────── -->
 <div class="row g-3 mb-4">
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-cash-coin sc-icon text-success"></i>
             <div>
@@ -210,7 +230,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-calendar-check sc-icon text-primary"></i>
             <div>
@@ -219,7 +239,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}border-danger{% endif %} d-flex align-items-center gap-3">
             <i class="bi bi-shield-check sc-icon {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}text-danger{% else %}text-warning{% endif %}"></i>
             <div>
@@ -235,7 +255,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-hourglass-split sc-icon text-info"></i>
             <div>
@@ -249,7 +269,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-star sc-icon text-warning"></i>
             <div>
@@ -258,7 +278,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-cpu sc-icon text-primary"></i>
             <div>
@@ -267,7 +287,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-2">
+    <div class="col-6 col-md-4 col-lg">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-geo-alt sc-icon text-secondary"></i>
             <div>
@@ -328,7 +348,7 @@
                     <div class="d-flex justify-content-between mb-1"><span class="text-muted">Disk</span><span id="ov-disk-label">—</span></div>
                     <div class="progress" style="height:4px;"><div id="ov-disk-bar" class="progress-bar bg-success" style="width:0%"></div></div>
                 </div>
-                <a href="#" onclick="document.querySelector('[data-bs-target='#tab-rmm']').click();return false;"
+                <a href="#" onclick="switchToRmmTab();return false;"
                    class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:.75rem;">
                     <i class="bi bi-robot me-1"></i>RMM Details
                 </a>
@@ -748,18 +768,7 @@
             </div>
             {% endif %}
 
-            <!-- Danger Zone -->
-            {% if current_user.is_admin %}
-            <div class="card border-danger section-card">
-                <div class="card-header bg-danger text-white"><i class="bi bi-exclamation-triangle me-2"></i>Danger Zone</div>
-                <div class="card-body">
-                    <p class="small text-muted mb-3">Permanently delete this asset and all associated records.</p>
-                    <button type="button" class="btn btn-danger btn-sm w-100" data-bs-toggle="modal" data-bs-target="#deleteModal">
-                        <i class="bi bi-trash"></i> Delete Asset
-                    </button>
-                </div>
-            </div>
-            {% endif %}
+
         </div>
     </div>
 </div>
@@ -783,6 +792,7 @@
                     <i class="bi bi-arrow-repeat"></i> Refresh</button>
                 <button id="rmm-update-agent-btn" class="btn btn-sm btn-outline-info disabled" onclick="rmmUpdateAgent()">
                     <i class="bi bi-cloud-download"></i> Update Agent</button>
+                <button id="rmm-tray-install-btn" class="btn btn-sm btn-outline-secondary" onclick="rmmInstallTray()"><i class="bi bi-display"></i> Install Tray</button>
                 <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
                     <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
             </div>
@@ -1025,7 +1035,7 @@
                             <a class="text-muted" data-bs-toggle="collapse" href="#rmm-installed-collapse" style="font-size:.8rem;">
                                 <i class="bi bi-chevron-down me-1"></i>View installed hotfixes
                             </a>
-                            <div class="collapse" id="rmm-installed-collapse">
+                            <div class="collapse show" id="rmm-installed-collapse">
                                 <div id="rmm-patches-content" style="max-height:200px;overflow-y:auto;font-size:.8rem;margin-top:.5rem;">
                                     <span class="text-muted">Click to expand…</span>
                                 </div>
@@ -1254,7 +1264,12 @@
                     function fmtLocal(ts){
                         if(!ts) return '—';
                         try {
-                            const d = new Date(ts);
+                            // Date-only strings ("2026-03-09") must NOT go through Date() as UTC midnight
+                            if(/^\d{4}-\d{2}-\d{2}$/.test(ts)){
+                                const [y,m,d]=ts.split('-'); return `${+m}/${+d}/${y}`;
+                            }
+                            // Normalize space-separated datetimes to ISO T-format
+                            const d = new Date(ts.replace(' ','T'));
                             if(isNaN(d)) return ts;
                             return d.toLocaleString('en-US', {month:'numeric',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
                         } catch(_) { return ts; }
@@ -1436,6 +1451,79 @@
 
                     function rmmRefreshTelemetry(){ rmmLoad(); }
 
+                    async function rmmInstallTray(){
+                        const btn = el('rmm-tray-install-btn');
+                        if(!agentId){ alert('No RMM agent linked to this asset.'); return; }
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running…';
+                        const done = () => { btn.disabled=false; btn.innerHTML='<i class="bi bi-display"></i> Install Tray'; };
+                        try {
+                        const psCode = `$out = [System.Collections.Generic.List[string]]::new()
+function L($m){ $out.Add($m) }
+L('=== Tray Installer ===')
+L('User: ' + $env:USERNAME)
+L('Agent: ' + $env:RMM_AGENT_ID)
+$tray = 'C:\\CirqueRMM\\tray.py'
+if (Test-Path $tray) { L("tray.py exists OK") } else { L("MISSING: $tray"); $out -join "\`n"; exit 1 }
+$trayLog = 'C:\\CirqueRMM\\tray.log'
+if (Test-Path $trayLog) {
+    L('--- tray.log (last 20 lines) ---')
+    Get-Content $trayLog -Tail 20 | ForEach-Object { L("  $_") }
+    L('--- end tray.log ---')
+} else { L('tray.log not found (tray never started)') }
+$pyw = $null
+$candidates = @(
+    (Join-Path (Split-Path (Get-Command python.exe -EA SilentlyContinue | Select-Object -Exp Source)) 'pythonw.exe'),
+    (Get-ChildItem 'C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python*\\pythonw.exe' -EA SilentlyContinue | Select-Object -First 1 -Exp FullName),
+    (Get-ChildItem 'C:\\Program Files\\Python*\\pythonw.exe' -EA SilentlyContinue | Select-Object -First 1 -Exp FullName),
+    (Get-ChildItem 'C:\\Python*\\pythonw.exe' -EA SilentlyContinue | Select-Object -First 1 -Exp FullName)
+) | Where-Object { $_ -and (Test-Path $_) }
+if ($candidates) { $pyw = $candidates[0]; L("pythonw: $pyw") } else { L('FATAL: No pythonw.exe found') }
+$py = (Get-Command python.exe -EA SilentlyContinue | Select-Object -Exp Source)
+if (-not $py) { L('FATAL: python.exe not found in PATH'); $out -join "\`n"; exit 1 }
+L("python.exe: $py")
+L('--- pip install pystray pillow ---')
+& $py -m pip install --quiet pystray pillow 2>&1 | ForEach-Object { L("  $_") }
+L('--- import test ---')
+$test = & $py -c "import pystray; from PIL import Image; print('OK pystray=' + pystray.__version__)" 2>&1
+L("  $test")
+L('--- session info ---')
+$sess = & qwinsta 2>$null | Select-String 'Active'
+L("  qwinsta Active: $sess")
+$wmiUser = (Get-WmiObject Win32_ComputerSystem -EA SilentlyContinue).UserName
+L("  WMI UserName: $wmiUser")
+$sessId = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+$activeSession = (Get-WmiObject -Class Win32_LogonSession -EA SilentlyContinue | Where-Object {$_.LogonType -eq 2} | Select-Object -First 1)
+L("  Interactive sessions: " + (@(Get-WmiObject -Class Win32_LogonSession -EA SilentlyContinue | Where-Object {$_.LogonType -eq 2}).Count))
+L('--- killing old tray ---')
+Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'pythonw.exe' -and $_.CommandLine -like '*tray.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue; L("  Killed PID $($_.ProcessId)") }
+Start-Sleep 1
+if ($pyw) {
+    L('--- launching tray via schtask ---')
+    $username = $wmiUser -replace '.*\\\\',''
+    if (-not $username) { $username = ($sess -replace '.*>','').Trim() -split '\\s+' | Select-Object -Index 1 }
+    L("  Target user: $username")
+    if ($username) {
+        $a = New-ScheduledTaskAction -Execute $pyw -Argument 'C:\\CirqueRMM\\tray.py' -WorkingDirectory 'C:\\CirqueRMM'
+        $p = New-ScheduledTaskPrincipal -UserId $username -LogonType Interactive -RunLevel Limited
+        $regErr = $null
+        Register-ScheduledTask -TaskName 'CirqueTrayLaunch' -Action $a -Principal $p -Force -ErrorVariable regErr | Out-Null
+        if ($regErr) { L("  ERROR registering task: $regErr") } else {
+          Start-ScheduledTask -TaskName 'CirqueTrayLaunch' -ErrorAction SilentlyContinue
+          L('  Task registered and started — check taskbar in 3 seconds')
+        }
+    } else { L('  WARN: could not determine username, skipping task') }
+} else { L('Cannot launch: no pythonw.exe') }
+L('=== Done ===')
+$out -join "\`n" `;
+                        const r = await rmmSend({type:'run_script', shell:'powershell', code:psCode, timeout:120});
+                        if(!r.ok){ done(); alert('Agent offline: '+(r.error||'?')); return; }
+                        const res = await rmmPoll(r.session_id, 'script_result', 125000);
+                        done();
+                        const out = res ? ((res.data.stdout||'') + (res.data.stderr ? '\nSTDERR: '+res.data.stderr : '')).trim() : '(no response)';
+                        alert('Install Tray output (exit ' + (res?res.data.exit_code:'?') + '):\n\n' + out);
+                        } catch(e) { done(); alert('Error: '+e.message); }
+                    }
                     async function rmmRestartAgent(){
                         const btn = el('rmm-restart-agent-btn');
                         if(!confirm('Restart the RMM agent service on this machine?')) return;
@@ -1725,7 +1813,8 @@
                             document.querySelector('#rmm-tab-metrics').innerHTML='<p class="text-muted">No metrics history yet.</p>';
                             return;
                         }
-                        const rows=data.data, labels=rows.map(r=>r.ts.slice(11,16)),
+                        const rows=data.data,
+                              labels=rows.map(r=>{ const d=new Date(r.ts); return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); }),
                               cpuVals=rows.map(r=>r.cpu||0), ramVals=rows.map(r=>r.ram||0);
                         const ctx=el('rmm-metrics-chart');
                         if(!ctx) return;
@@ -1791,11 +1880,15 @@
                         }
                     }
                     async function rmmEagleToggle(enabled){
-                        await fetch(`/api/rmm/eagle-eyes/${agentId}`,{
+                        if(!agentId){ alert('No RMM agent linked to this asset.'); return; }
+                        const r = await fetch(`/api/rmm/eagle-eyes/${agentId}`,{
                             method:'POST', headers:{'Content-Type':'application/json'},
                             body:JSON.stringify({enabled})
-                        });
+                        }).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!r.ok){ alert('Failed to save Eagle Eyes setting.'); return; }
                         _eagleEnabled = enabled;
+                        const tog = el('rmm-eagle-toggle');
+                        if(tog) tog.checked = enabled;
                         const dashBtn = el('rmm-eagle-dash-btn');
                         if(dashBtn) dashBtn.style.display = enabled?'':'none';
                     }
@@ -2280,7 +2373,7 @@
                         rmmLoadEvents,
                         rmmFsTabClick, rmmFsNav, rmmFsSelect, rmmFsBack, rmmFsRefresh, rmmFsDownload, rmmFsUpload,
                         rmmPowerAction, rmmRequestScreenshot,
-                        rmmRestartAgent, rmmUpdateAgent
+                        rmmRestartAgent, rmmUpdateAgent, rmmInstallTray
                     });
 
                     rmmLoad().catch(err => {
@@ -2288,6 +2381,8 @@
                         if(b){ b.className='badge bg-danger'; b.textContent='JS Error: '+err.message; }
                         console.error('[RMM] rmmLoad failed:', err);
                     });
+                    // Pre-load patches so data is visible when the Patches tab is clicked
+                    rmmLoadPatches().catch(() => {});
                 })();
                 </script>
     </div><!-- /.card -->
@@ -2426,26 +2521,43 @@
 
 <!-- ══ HISTORY TAB ══════════════════════════════════════════ -->
 <div class="tab-pane fade" id="tab-history" role="tabpanel">
+  <div class="card section-card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history me-2"></i>Activity Log</span>
+        <small class="text-muted">{{ history|length }} event{{ 's' if history|length != 1 else '' }}</small>
+    </div>
+    <div class="card-body p-0">
     {% if history %}
-    <div class="list-unstyled">
+    <div class="px-3 py-1">
         {% for entry in history %}
-        <div class="history-item {% if 'assign' in entry.action|lower %}assign{% elif 'status' in entry.action|lower %}status{% elif 'edit' in entry.action|lower or 'update' in entry.action|lower %}edit{% endif %}">
-            <div class="d-flex justify-content-between align-items-start">
-                <div>
-                    <strong style="font-size:.9rem;">{{ entry.action }}</strong>
-                    {% if entry.description %}
-                    <p class="mb-0 text-muted" style="font-size:.83rem;">{{ entry.description }}</p>
-                    {% endif %}
-                    {% if entry.changed_by %}<small class="text-muted">by {{ entry.changed_by }}</small>{% endif %}
+        {% set al = entry.action|lower %}
+        {% if 'assign' in al or 'unassign' in al %}{% set icon='bi-person-check' %}{% set icolor='text-primary' %}
+        {% elif 'checkout' in al %}{% set icon='bi-box-arrow-right' %}{% set icolor='text-warning' %}
+        {% elif 'checkin' in al or 'check in' in al %}{% set icon='bi-box-arrow-in-left' %}{% set icolor='text-success' %}
+        {% elif 'status' in al %}{% set icon='bi-arrow-repeat' %}{% set icolor='text-info' %}
+        {% elif 'delete' in al or 'remov' in al %}{% set icon='bi-trash' %}{% set icolor='text-danger' %}
+        {% elif 'creat' in al or 'add' in al %}{% set icon='bi-plus-circle' %}{% set icolor='text-success' %}
+        {% else %}{% set icon='bi-pencil' %}{% set icolor='text-secondary' %}{% endif %}
+        <div class="d-flex gap-3 py-2" style="border-bottom:1px solid rgba(128,128,128,.1);">
+            <div class="mt-1 flex-shrink-0 fs-6"><i class="bi {{ icon }} {{ icolor }}"></i></div>
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-1">
+                    <span class="fw-semibold" style="font-size:.88rem;">{{ entry.action }}</span>
+                    <small class="text-muted text-nowrap">{{ entry.timestamp.strftime('%b %d, %Y %H:%M') }}</small>
                 </div>
-                <small class="text-muted text-nowrap ms-3">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+                {% if entry.description %}<div class="text-muted mt-1" style="font-size:.82rem;">{{ entry.description }}</div>{% endif %}
+                {% if entry.changed_by %}<small class="text-muted" style="font-size:.75rem;"><i class="bi bi-person me-1"></i>{{ entry.changed_by }}</small>{% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
     {% else %}
-    <p class="text-muted">No history available.</p>
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-clock-history fs-2 d-block mb-2 opacity-50"></i>No activity recorded yet.
+    </div>
     {% endif %}
+    </div>
+  </div>
 </div>
 
 <!-- ══ LIFECYCLE TAB ════════════════════════════════════════════ -->
@@ -2645,35 +2757,37 @@
             <tr><th>Notes</th><td>{{ active_loan.notes }}</td></tr>
             {% endif %}
           </table>
-          {# TODO: Implement asset_checkin endpoint
           {% if current_user.role in ['admin','manager'] %}
           <form method="POST" action="{{ url_for('asset_checkin', asset_id=asset.id, loan_id=active_loan.id) }}"
                 onsubmit="return confirm('Confirm check-in?')">
             <button type="submit" class="btn btn-success w-100"><i class="bi bi-box-arrow-in-left me-1"></i>Check In</button>
           </form>
           {% endif %}
-          #}
           {% else %}
           <div class="alert alert-success">Asset is currently <strong>available</strong>.</div>
-          {# TODO: Implement asset_checkout endpoint
           {% if current_user.role in ['admin','manager'] %}
           <form method="POST" action="{{ url_for('asset_checkout', asset_id=asset.id) }}">
             <div class="mb-2">
-              <label class="form-label">Borrower Name *</label>
-              <input type="text" name="checked_out_to" class="form-control" required placeholder="Full name">
+              <label class="form-label fw-semibold">Borrower Name <span class="text-danger">*</span></label>
+              <input type="text" name="checked_out_to" id="borrowerInput" class="form-control" required
+                     placeholder="Search employee…" autocomplete="off" list="employeeList">
+              <datalist id="employeeList">
+                {% for emp in employees %}
+                <option value="{{ emp.name }}">{{ emp.name }}{% if emp.department %} — {{ emp.department }}{% endif %}</option>
+                {% endfor %}
+              </datalist>
             </div>
             <div class="mb-2">
-              <label class="form-label">Due Back</label>
+              <label class="form-label fw-semibold">Due Back</label>
               <input type="date" name="due_back_at" class="form-control">
             </div>
             <div class="mb-3">
-              <label class="form-label">Notes</label>
-              <textarea name="notes" class="form-control" rows="2"></textarea>
+              <label class="form-label fw-semibold">Notes</label>
+              <textarea name="notes" class="form-control" rows="2" placeholder="Reason for checkout…"></textarea>
             </div>
             <button type="submit" class="btn btn-warning w-100"><i class="bi bi-box-arrow-right me-1"></i>Check Out</button>
           </form>
           {% endif %}
-          #}
           {% endif %}
     <div class="col-lg-6">
       <div class="card section-card">
@@ -3031,6 +3145,10 @@ async function pollAssetCveJob(cveId, cveKey, jobId, attempt=0) {
   } catch(e) {
     pollAssetCveJob(cveId, cveKey, jobId, attempt + 1);
   }
+}
+function switchToRmmTab() {
+    var btn = document.querySelector('#assetMainTabs [data-bs-target="#tab-rmm"]');
+    if (btn) { bootstrap.Tab.getOrCreateInstance(btn).show(); }
 }
 </script>
 {% endblock %}

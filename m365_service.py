@@ -257,33 +257,36 @@ class M365Service:
     def get_all_devices_with_hardware(self):
         """Get all managed devices with detailed hardware information"""
         logger.info("Fetching all devices with hardware details")
-        # Use $select to reduce payload; the beta managedDevices entity can be very large.
-        select_fields = [
-            'id',
-            'deviceName',
-            'serialNumber',
-            'userPrincipalName',
-            'operatingSystem',
-            'osVersion',
-            'manufacturer',
-            'model',
-            'complianceState',
-            'managementState',
-            'enrolledDateTime',
-            'lastSyncDateTime',
-            'azureADDeviceId',
-            'processorArchitecture',
-            'physicalMemoryInBytes',
-            'totalStorageSpaceInBytes',
-            'freeStorageSpaceInBytes',
-            'wiFiMacAddress',
-            'ethernetMacAddress',
-            'tpmVersion'
+        # Extended fields — some may not be available depending on Intune license tier.
+        extended_fields = [
+            'id', 'deviceName', 'serialNumber', 'userPrincipalName',
+            'operatingSystem', 'osVersion', 'manufacturer', 'model',
+            'complianceState', 'managementState', 'enrolledDateTime',
+            'lastSyncDateTime', 'azureADDeviceId',
+            'processorArchitecture', 'totalStorageSpaceInBytes',
+            'freeStorageSpaceInBytes', 'wiFiMacAddress',
+            'ethernetMacAddress', 'tpmVersion',
         ]
-        endpoint = 'deviceManagement/managedDevices?$select=' + ','.join(select_fields)
-        devices = self._get_all_pages(endpoint, use_beta=True)
-        logger.info(f"Retrieved {len(devices)} devices with hardware details")
-        return devices
+        # Minimal fallback fields — always available.
+        minimal_fields = [
+            'id', 'deviceName', 'serialNumber', 'userPrincipalName',
+            'operatingSystem', 'osVersion', 'manufacturer', 'model',
+            'complianceState', 'managementState', 'enrolledDateTime',
+            'lastSyncDateTime', 'azureADDeviceId',
+        ]
+        try:
+            endpoint = 'deviceManagement/managedDevices?$select=' + ','.join(extended_fields)
+            devices = self._get_all_pages(endpoint, use_beta=True)
+            logger.info(f"Retrieved {len(devices)} devices with hardware details")
+            return devices
+        except Exception as e:
+            if '400' in str(e) or 'Bad Request' in str(e):
+                logger.warning("Extended hardware fields rejected (400); falling back to minimal fields")
+                endpoint = 'deviceManagement/managedDevices?$select=' + ','.join(minimal_fields)
+                devices = self._get_all_pages(endpoint, use_beta=True)
+                logger.info(f"Retrieved {len(devices)} devices (minimal fields)")
+                return devices
+            raise
     
     def get_device_compliance(self):
         """Get device compliance status"""

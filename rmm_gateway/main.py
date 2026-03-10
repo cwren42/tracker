@@ -13,6 +13,8 @@ from .db import (
     log_rmm_event,
     mark_agent_offline,
     store_eagle_event,
+    store_patches,
+    store_pending_updates,
     store_screenshot,
     store_telemetry,
     validate_agent,
@@ -76,6 +78,29 @@ async def screenshot_request(agent_id: str, request: Request):
     try:
         await agent_ws.send_text(json.dumps({"type": "screenshot_request", "session_id": 0}))
         return JSONResponse({"ok": True, "message": "Screenshot requested"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/send-msg/{agent_id}")
+async def send_msg(agent_id: str, request: Request):
+    """Flask calls this to forward a JSON command to a connected agent."""
+    agent_ws = agents.get(agent_id)
+    if not agent_ws:
+        return JSONResponse({"ok": False, "error": "Agent not connected"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    try:
+        await agent_ws.send_text(json.dumps(body))
+        session_id = body.get("session_id")
+        if session_id:
+            try:
+                log_rmm_event(int(session_id), "tech", body.get("type") or "cmd", body)
+            except Exception:
+                pass
+        return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -178,6 +203,26 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                         )
                     except Exception as e:
                         print(f"[gw] eagle_screenshot store error: {e}", flush=True)
+                continue
+
+            # --- Store installed patches ---
+            if msg_type == "patch_report":
+                patches = payload.get("patches") or []
+                try:
+                    store_patches(agent_id, patches)
+                    print(f"[gw] stored {len(patches)} patches for {agent_id}", flush=True)
+                except Exception as e:
+                    print(f"[gw] store_patches error: {e}", flush=True)
+                continue
+
+            # --- Store pending Windows Updates ---
+            if msg_type == "pending_updates":
+                updates = payload.get("updates") or []
+                try:
+                    store_pending_updates(agent_id, updates)
+                    print(f"[gw] stored {len(updates)} pending updates for {agent_id}", flush=True)
+                except Exception as e:
+                    print(f"[gw] store_pending_updates error: {e}", flush=True)
                 continue
 
             # --- Store screenshot and relay ---

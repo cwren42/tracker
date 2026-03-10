@@ -494,53 +494,112 @@
                                     <h5 class="mb-0"><i class="bi bi-robot"></i> Cirque RMM Agent</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p class="mb-3">Deploy the Cirque RMM agent to Windows endpoints so technicians can open remote shell sessions directly from an asset's page.</p>
+                                    <p class="mb-3">Deploy the RMM agent to any Windows device &mdash; no file transfer needed.</p>
 
-                                    <div class="alert alert-info">
-                                        <strong><i class="bi bi-info-circle"></i> Gateway URL:</strong>
-                                        <code class="ms-2">wss://rmm.corp.cirque.com</code>
+                                    <h6 class="mb-2"><i class="bi bi-1-circle-fill text-primary me-1"></i> PowerShell one-liner (recommended)</h6>
+                                    <p class="small text-muted mb-1">Open <strong>PowerShell as Administrator</strong> on the target machine and paste:</p>
+                                    <div class="input-group mb-1">
+                                        <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                               id="ps1OneLiner" readonly style="font-size:.75rem;">
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="copyPs1Liner(this)" title="Copy to clipboard">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <script>
+                                    (function(){
+                                        var tok = "{{ rmm_site_token }}";
+                                        var base = "{{ request.host_url }}".replace(/\/+$/, "");
+                                        document.getElementById("ps1OneLiner").value =
+                                            "irm '" + base + "/download/site-install.ps1?t=" + tok + "' | iex";
+                                    })();
+                                    function copyPs1Liner(btn) {
+                                        var val = document.getElementById("ps1OneLiner").value;
+                                        navigator.clipboard.writeText(val).then(function() {
+                                            btn.innerHTML = '<i class="bi bi-check text-success"></i>';
+                                            setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+                                        }).catch(function(){});
+                                    }
+                                    </script>
+                                    <p class="small text-muted mb-4">The script auto-enrolls, installs the service, and starts the tray. Logs: <code>C:\CirqueRMM\logs\setup.log</code> and <code>%TEMP%\CirqueRMM_install.log</code></p>
+
+                                    <h6 class="mb-2"><i class="bi bi-2-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
+                                    <div class="d-flex gap-2 mb-4">
+                                        <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-sm">
+                                            <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
+                                        </a>
                                     </div>
 
-                                    <h6 class="mt-4 mb-2">Quick-Deploy Steps</h6>
-                                    <ol class="mb-4">
-                                        <li>Download the agent bundle below and extract it on the target Windows machine.</li>
-                                        <li>Obtain an agent enrollment token from your administrator (one token per machine).</li>
-                                        <li>Open an <strong>elevated PowerShell</strong> prompt and run:<br>
-                                            <code class="d-block mt-1 p-2 bg-light border rounded">.\ install_service.ps1 -Token "&lt;AGENT_TOKEN&gt;"</code>
-                                        </li>
-                                        <li>The installer registers and starts the <strong>CirqueRMM</strong> Windows service automatically.</li>
-                                    </ol>
-
-                                    <a href="{{ url_for('rmm_agent_download') }}" class="btn btn-success">
-                                        <i class="bi bi-download"></i> Download Agent Installer (.msi)
-                                    </a>
+                                    <h6 class="mb-2"><i class="bi bi-3-circle-fill text-primary me-1"></i> Per-asset installer (optional)</h6>
+                                    <p class="text-muted small mb-0">On any asset page, use <strong>Manage &rarr; Generate Installer (.ps1)</strong> to get a pre-configured script linked to that asset.</p>
                                 </div>
-                            </div>
                         </div>
 
                         <div class="col-lg-4">
-                            <div class="card shadow-sm mb-3">
-                                <div class="card-header">
-                                    <h6 class="mb-0"><i class="bi bi-key-fill"></i> Token Management</h6>
+                            <div class="card shadow-sm mb-3 border-warning">
+                                <div class="card-header bg-warning bg-opacity-10">
+                                    <h6 class="mb-0"><i class="bi bi-key-fill text-warning me-1"></i> Site Enrollment Token</h6>
                                 </div>
                                 <div class="card-body">
-                                    <p class="small text-muted mb-2">Each endpoint needs a unique enrollment token. Generate tokens from the server:</p>
-                                    <code class="d-block p-2 bg-light border rounded small">python scripts/enroll_rmm_agent.py &lt;HOSTNAME&gt; [asset_id]</code>
+                                    <p class="small text-muted mb-2">Baked into the MSI at build time. All devices use it to auto-register. Keep it secret.</p>
+                                    <div class="input-group mb-2">
+                                        <input type="password" id="siteTokenInput" class="form-control form-control-sm font-monospace"
+                                               value="{{ rmm_site_token }}" readonly>
+                                        <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                onclick="toggleSiteToken()" title="Show/hide">
+                                            <i class="bi bi-eye" id="siteTokenEyeIcon"></i>
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                onclick="copySiteToken()" title="Copy">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm w-100" onclick="regenerateSiteToken()">
+                                        <i class="bi bi-arrow-clockwise me-1"></i> Regenerate Token
+                                    </button>
+                                    <p class="small text-danger mt-1 mb-0">
+                                        <i class="bi bi-exclamation-triangle me-1"></i>
+                                        Invalidates the current MSI &mdash; rebuild after regenerating.
+                                    </p>
                                 </div>
                             </div>
 
                             <div class="card shadow-sm">
                                 <div class="card-header">
-                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Tech API Key</h6>
+                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Rebuild EXE</h6>
                                 </div>
                                 <div class="card-body">
-                                    <p class="small text-muted mb-2">Technicians need an API key with the <code>rmm_connect</code> permission to open remote sessions:</p>
-                                    <code class="d-block p-2 bg-light border rounded small">python scripts/create_api_key.py &lt;username&gt; rmm_connect</code>
+                                    <p class="small text-muted mb-2">After changing the token, rebuild on the server:</p>
+                                    <code class="d-block p-2 bg-light border rounded small" style="font-size:.75rem">cd /var/www/tracker/rmm_agent<br>source /var/www/tracker/rmm_gateway/.venv/bin/activate<br>python3 build_exe.py</code>
+                                    <p class="small text-muted mt-2 mb-0">Token is fetched from the DB automatically.</p>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
+
+                    <script>
+                    function toggleSiteToken() {
+                        const inp = document.getElementById('siteTokenInput');
+                        const icon = document.getElementById('siteTokenEyeIcon');
+                        if (inp.type === 'password') { inp.type = 'text'; icon.className = 'bi bi-eye-slash'; }
+                        else { inp.type = 'password'; icon.className = 'bi bi-eye'; }
+                    }
+                    function copySiteToken() {
+                        navigator.clipboard.writeText(document.getElementById('siteTokenInput').value);
+                        if (typeof showToast === 'function') showToast('Token copied!', 'success');
+                    }
+                    function regenerateSiteToken() {
+                        if (!confirm('Regenerate the site enrollment token?\n\nThis invalidates the current MSI — rebuild before deploying to new devices.')) return;
+                        fetch('/api/rmm/site-token/regenerate', {method: 'POST'})
+                            .then(r => r.json()).then(d => {
+                                if (d.ok) {
+                                    document.getElementById('siteTokenInput').value = d.token;
+                                    if (typeof showToast === 'function') showToast('Token regenerated. Rebuild the MSI.', 'warning');
+                                    else alert('Token regenerated. Rebuild the MSI before deploying.');
+                                }
+                            });
+                    }
+                    </script>
 
                 <!-- UniFi Settings Tab -->
                 <div class="tab-pane fade" id="unifi" role="tabpanel">

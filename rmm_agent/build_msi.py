@@ -4,20 +4,23 @@ Build CirqueRMM.msi using gcab (cabinet builder) + msibuild (MSI database builde
 These are native Linux tools from the msitools package.
 
 Usage:
-    python3 build_msi.py
+    python3 build_msi.py                     # prompts for site token from DB
+    python3 build_msi.py --site-token TOKEN  # supply token on CLI
     => produces CirqueRMM.msi in the same directory
 
 The MSI installs agent files to C:\\Program Files\\CirqueRMM\\ then runs
-install_agent.ps1 -SkipDownload as a deferred elevated custom action.
+install_agent.ps1 with the site token.  The PS1 auto-enrolls the device,
+receiving a unique per-device token from the server.  Double-click to install.
 
 Deploy:
-    msiexec /i CirqueRMM.msi ENROLLMENT_TOKEN=agent_xxxx
+    msiexec /i CirqueRMM.msi       # no extra parameters needed!
 """
 import os
 import subprocess
 import sys
 import tempfile
 import uuid
+import argparse
 
 # -- Configuration ----------------------------------------------------------
 
@@ -75,10 +78,44 @@ def ins(table, data):
 
 # -- Builder ----------------------------------------------------------------
 
+def get_site_token_from_db() -> str:
+    """Fetch (or create) the site enrollment token from the tracker DB."""
+    import psycopg2
+    conn = psycopg2.connect(
+        host="localhost", dbname="tracker",
+        user="tracker_user", password="tracker_secure_2026"
+    )
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM setting WHERE key = 'rmm_site_enrollment_token'")
+    row = cur.fetchone()
+    conn.close()
+    if row and row[0]:
+        return row[0]
+    # Token not yet set — tell the user to visit the tracker first
+    print("\nERROR: No site enrollment token found in the database.")
+    print("Visit Settings → RMM in the Tracker web UI to generate one first.")
+    print("Or pass it directly: python3 build_msi.py --site-token YOUR_TOKEN")
+    sys.exit(1)
+
+
 def build():
+    parser = argparse.ArgumentParser(description="Build CirqueRMM.msi")
+    parser.add_argument("--site-token", default="",
+                        help="Site-wide enrollment token (fetched from DB if omitted)")
+    parser.add_argument("--tracker-url", default="https://tracker.corp.cirque.com")
+    parser.add_argument("--gateway-url", default="wss://rmm.corp.cirque.com")
+    args = parser.parse_args()
+
+    site_token  = args.site_token.strip() or get_site_token_from_db()
+    tracker_url = args.tracker_url.strip()
+    gateway_url = args.gateway_url.strip()
+
     print("=" * 60)
     print("  Cirque RMM Agent - MSI Builder")
     print("=" * 60)
+    print(f"  Tracker URL : {tracker_url}")
+    print(f"  Gateway URL : {gateway_url}")
+    print(f"  Site token  : {site_token[:12]}...{site_token[-6:]}  ({len(site_token)} chars)")
 
     file_entries = []
     for seq, fname in enumerate(BUNDLE_FILES, start=1):
@@ -95,10 +132,61 @@ def build():
         print("ERROR: No files to bundle"); sys.exit(1)
 
     with tempfile.TemporaryDirectory() as tmp:
+        # -- Produce a configured PS1 with the site token baked in ----------
+        # This eliminates ALL MSI property expansion from the custom action.
+        # The CA only needs [INSTALLDIR], which is the most reliable MSI property.
+        ps1_src = os.path.join(AGENT_DIR, "install_agent.ps1")
+        ps1_content = open(ps1_src).read()
+        # Replace the default parameter values directly in the script
+        ps1_configured = ps1_content
+        ps1_configured = ps1_configured.replace(
+            '[string]$SiteToken = "",',
+            f'[string]$SiteToken = "{site_token}",',
+            1)
+        ps1_configured = ps1_configured.replace(
+            f'[string]$TrackerUrl  = "https://tracker.corp.cirque.com",',
+            f'[string]$TrackerUrl  = "{tracker_url}",',
+            1)
+        ps1_configured = ps1_configured.replace(
+            f'[string]$GatewayUrl  = "wss://rmm.corp.cirque.com",',
+            f'[string]$GatewayUrl  = "{gateway_url}",',
+            1)
+        print(f"  Configured PS1: site token baked in ({len(ps1_configured)} chars)")
+
+        # Write configured PS1 to tmp so it gets bundled instead of the original
+        configured_ps1_path = os.path.join(tmp, "install_agent.ps1")
+        with open(configured_ps1_path, 'w', encoding='utf-8') as f:
+            f.write(ps1_configured)
+
+        # Write run.bat — the CA target. It calls PowerShell via %~dp0 (self-relative
+        # path), which means no MSI property expansion is needed for the PS1 path.
+        # This eliminates ALL quoting and property-expansion issues in the CA.
+        bat_content = (
+            '@echo off\r\n'
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive'
+            ' -File "%~dp0install_agent.ps1" -SkipDownload\r\n'
+        )
+        bat_path = os.path.join(tmp, "run.bat")
+        with open(bat_path, 'w', encoding='ascii') as f:
+            f.write(bat_content)
+        run_bat_seq = max(fe["seq"] for fe in file_entries) + 1
+        file_entries.append({
+            "key":  "F_RUN_BAT",
+            "name": "run.bat",
+            "src":  bat_path,
+            "size": os.path.getsize(bat_path),
+            "seq":  run_bat_seq,
+        })
+        print(f"  Generated run.bat ({len(bat_content)} bytes) → seq {run_bat_seq}")
+
         # Build cabinet
         cab_path = os.path.join(tmp, "files.cab")
         for fe in file_entries:
-            subprocess.run(["cp", fe["src"], os.path.join(tmp, fe["name"])], check=True)
+            dest = os.path.join(tmp, fe["name"])
+            if not os.path.exists(dest):  # don't overwrite configured PS1 or generated run.bat
+                subprocess.run(["cp", fe["src"], dest], check=True)
+            # Update size to match the configured version
+            fe["size"] = os.path.getsize(dest)
         flist = " ".join(f'"{fe["name"]}"' for fe in file_entries)
         print(f"\nBuilding cabinet ({len(file_entries)} files)...")
         subprocess.run(f'cd "{tmp}" && gcab -cn "{cab_path}" {flist}', shell=True, check=True)
@@ -119,12 +207,10 @@ def build():
             ("UpgradeCode",              UPGRADE_CODE),
             ("INSTALLLEVEL",             "3"),
             ("MSIRESTARTMANAGERCONTROL", "Disable"),
-            ("ENROLLMENT_TOKEN",         "(not set)"),
-            ("TRACKER_URL",              "https://tracker.corp.cirque.com"),
-            ("GATEWAY_URL",              "wss://rmm.corp.cirque.com"),
-            ("AGENT_ID",                 "(not set)"),
-            ("PSEXEPATH",                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
-            ("SecureCustomProperties",   "ENROLLMENT_TOKEN;TRACKER_URL;GATEWAY_URL;AGENT_ID"),
+            # ComSpec = C:\Windows\System32\cmd.exe (always set by Windows)
+            # We use cmd /c to launch PowerShell — more reliable than calling
+            # powershell.exe directly via a property-based type-50 CA.
+            ("PSEXEPATH",               r"C:\Windows\System32\cmd.exe"),
         ]:
             sql.append(ins("Property", {"Property": k, "Value": v}))
 
@@ -167,19 +253,16 @@ def build():
                                   "DiskPrompt": "Disk 1", "Cabinet": "#files.cab"}))
 
         # CustomAction -------------------------------------------------------
-        # Type 4658 = 50 (exe from property) + 512 (deferred) + 4096 (system ctx)
-        # Do NOT add ExtendedType column - libmsi INSERT with NULL for it fails.
-        ca_target = (
-            "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden"
-            " -File \"[INSTALLDIR]install_agent.ps1\""
-            " -Token \"[ENROLLMENT_TOKEN]\""
-            " -TrackerUrl \"[TRACKER_URL]\""
-            " -GatewayUrl \"[GATEWAY_URL]\""
-            " -AgentId \"[AGENT_ID]\""
-            " -SkipDownload"
-        )
+        # Call cmd.exe with just [INSTALLDIR]run.bat — the simplest possible CA.
+        # run.bat uses %~dp0 (its own directory) to find install_agent.ps1, so
+        # there are zero quoting issues and zero extra property expansions needed.
+        #
+        # Type 50 = exe from property (immediate, runs as logged-in user context
+        # but under elevated msiexec). PSEXEPATH = cmd.exe full path.
+        # [INSTALLDIR] is the single most-reliable MSI property — always set.
+        ca_target = '/c "[INSTALLDIR]run.bat"'
         sql.append("CREATE TABLE CustomAction (Action CHAR(72) NOT NULL, Type INTEGER NOT NULL, Source CHAR(72), Target CHAR(255) PRIMARY KEY Action)")
-        sql.append(ins("CustomAction", {"Action": "RunAgentSetup", "Type": 4658,
+        sql.append(ins("CustomAction", {"Action": "RunAgentSetup", "Type": 50,
                                         "Source": "PSEXEPATH", "Target": ca_target}))
 
         # InstallExecuteSequence ---------------------------------------------
@@ -246,8 +329,9 @@ def build():
     print(f"  SUCCESS: {OUTPUT_MSI}")
     print(f"  Size:    {size:,} bytes ({size//1024} KB)")
     print(f"{'='*60}")
-    print("\nInstall:")
-    print("  msiexec /i CirqueRMM.msi ENROLLMENT_TOKEN=agent_xxxx\n")
+    print("\nInstall (no parameters required — just double-click!):")
+    print(f"  msiexec /i CirqueRMM.msi")
+    print(f"  (site token is baked in: {site_token[:12]}...)\n")
 
 
 if __name__ == "__main__":

@@ -848,13 +848,15 @@ function setAllLoading() {
 /* ── Main ─────────────────────────────────────────────────────────────── */
 window.eeLoad = async function() {
   const dp = dateParams();
+  const wh = document.getElementById('ee-work-hours').checked;
+  const whParam = wh ? '&work_hours=1' : '';
   setAllLoading();
   const [sumRes,dailyRes,hourlyRes,evtRes,sitesRes] = await Promise.all([
-    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/app-summary?${dp}`),
-    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/daily?${dp}`),
-    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/hourly?${dp}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/app-summary?${dp}${whParam}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/daily?${dp}${whParam}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/hourly?${dp}${whParam}`),
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/events?${dp}&limit=500`),
-    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?${dp}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?${dp}${whParam}`),
   ]);
   const [sumData,dailyData,hourlyData,evtData,sitesData] = await Promise.all(
     [sumRes.json(),dailyRes.json(),hourlyRes.json(),evtRes.json(),sitesRes.json()]
@@ -865,14 +867,14 @@ window.eeLoad = async function() {
   const daily  = dailyData.ok  ? dailyData.daily  : [];
   const hourly = hourlyData.ok ? hourlyData.hourly : [];
 
+  // Server already applied work_hours filter to lastSummary when wh=true
+  // workHoursFilter still used for the events table display (limited to 500 events)
   const filteredEvt = workHoursFilter(lastEvents);
-  const filteredSum = filteredEvt.length < lastEvents.length
-    ? rebuildSummary(filteredEvt) : lastSummary;
 
-  renderStats(filteredSum, daily, hourly);
+  renderStats(lastSummary, daily, hourly);
   renderProductivity(filteredEvt);
-  renderUsage(filteredSum);
-  renderCategories(filteredSum);
+  renderUsage(lastSummary);
+  renderCategories(lastSummary);
   renderTopSites(lastSites);
   renderDaily(daily);
   renderHourly(hourly);
@@ -904,11 +906,8 @@ async function eeLoadCurrent() {
       return;
     }
     const c = data.current;
-    // Keep agentTzOffsetH updated for gantt day calculation
-    if (c.captured_at) {
-      const _m = String(c.captured_at).match(/([+-])(\d{2}):(\d{2})$/);
-      if (_m) agentTzOffsetH = (_m[1]==='+' ? 1 : -1) * (parseInt(_m[2]) + parseInt(_m[3])/60);
-    } else if (typeof c.tz_offset_h === 'number') {
+    // Keep agentTzOffsetH updated for gantt day calculation (server provides correct DST-aware value)
+    if (typeof c.tz_offset_h === 'number') {
       agentTzOffsetH = c.tz_offset_h;
     }
     // Update the "Updated" label with browser local time
@@ -949,6 +948,7 @@ async function loadGantt() {
   try {
     const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/gantt?day=${day}`);
     const data = await res.json();
+    if (typeof data.tz_offset_h === 'number') agentTzOffsetH = data.tz_offset_h;  // keep day picker in sync
     document.getElementById('ee-gantt-spin').style.display = 'none';
     if (!data.ok || !data.events.length) { document.getElementById('ee-gantt-empty').style.display=''; return; }
     renderGantt(data.events, day);

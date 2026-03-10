@@ -303,18 +303,18 @@ def run_unifi_sync_job(flask_app_instance):
             logger.debug('UniFi sync already running in another worker — skipping')
             return
 
-    with flask_app_instance.app_context():
-        try:
-            from app import db, Asset, Setting, AssetHistory, MonitoringAlert
-            from unifi_service import sync_unifi_assets
-            sync_unifi_assets(flask_app_instance, db, Asset, Setting, AssetHistory, MonitoringAlert)
-        except Exception:
-            logger.exception('UniFi sync job crashed')
-        finally:
+        with flask_app_instance.app_context():
             try:
-                db.session.remove()
+                from app import db, Asset, Setting, AssetHistory, MonitoringAlert
+                from unifi_service import sync_unifi_assets
+                sync_unifi_assets(flask_app_instance, db, Asset, Setting, AssetHistory, MonitoringAlert)
             except Exception:
-                pass
+                logger.exception('UniFi sync job crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
 
 
 def run_proxmox_sync_job(flask_app_instance):

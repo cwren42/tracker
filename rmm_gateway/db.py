@@ -208,6 +208,30 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
     cur = get_cursor(conn)
     try:
         captured_at = data.get("captured_at") or now_iso()
+
+        # Extended fields — only update when the agent sends them (non-None).
+        # This preserves previously stored values if a periodic update omits them.
+        def _js(key, alias=None):
+            val = data.get(alias or key) or data.get(key)
+            return json.dumps(val) if val is not None else None
+
+        def _s(key):
+            v = data.get(key)
+            return str(v).strip() if v else None
+
+        vendor       = _s("vendor")
+        model_name   = _s("model_name")
+        serial_num   = _s("serial_number")
+        motherboard  = _s("motherboard")
+        bios_mfr     = _s("bios_manufacturer")
+        bios_ver     = _s("bios_version")
+        bios_date    = _s("bios_date")
+        gpu_json     = _js("gpu")
+        sound_card   = _s("sound_card")
+        os_edition   = _s("os_edition")
+        security_j   = _js("security")
+        sysinfo_j    = _js("sysinfo")
+
         cur.execute(
             """
             INSERT INTO rmm_telemetry (
@@ -216,8 +240,12 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 ram_total_gb, ram_available_gb, ram_percent,
                 battery_present, battery_percent, battery_charging, battery_minutes_left,
                 disk_json, network_json, logged_in_user, uptime_seconds,
-                screen_resolution, domain, agent_version, captured_at
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                screen_resolution, domain, agent_version, captured_at,
+                vendor, model_name, serial_number, motherboard,
+                bios_manufacturer, bios_version, bios_date,
+                gpu_json, sound_card, os_edition, security_json, sysinfo_json
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                      %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -231,11 +259,22 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 disk_json=EXCLUDED.disk_json, network_json=EXCLUDED.network_json,
                 logged_in_user=EXCLUDED.logged_in_user, uptime_seconds=EXCLUDED.uptime_seconds,
                 screen_resolution=EXCLUDED.screen_resolution, domain=EXCLUDED.domain,
-                agent_version=EXCLUDED.agent_version, captured_at=EXCLUDED.captured_at
+                agent_version=EXCLUDED.agent_version, captured_at=EXCLUDED.captured_at,
+                vendor=COALESCE(EXCLUDED.vendor, rmm_telemetry.vendor),
+                model_name=COALESCE(EXCLUDED.model_name, rmm_telemetry.model_name),
+                serial_number=COALESCE(EXCLUDED.serial_number, rmm_telemetry.serial_number),
+                motherboard=COALESCE(EXCLUDED.motherboard, rmm_telemetry.motherboard),
+                bios_manufacturer=COALESCE(EXCLUDED.bios_manufacturer, rmm_telemetry.bios_manufacturer),
+                bios_version=COALESCE(EXCLUDED.bios_version, rmm_telemetry.bios_version),
+                bios_date=COALESCE(EXCLUDED.bios_date, rmm_telemetry.bios_date),
+                gpu_json=COALESCE(EXCLUDED.gpu_json, rmm_telemetry.gpu_json),
+                sound_card=COALESCE(EXCLUDED.sound_card, rmm_telemetry.sound_card),
+                os_edition=COALESCE(EXCLUDED.os_edition, rmm_telemetry.os_edition),
+                security_json=COALESCE(EXCLUDED.security_json, rmm_telemetry.security_json),
+                sysinfo_json=COALESCE(EXCLUDED.sysinfo_json, rmm_telemetry.sysinfo_json)
             """,
             (
-                agent_id,
-                asset_id,
+                agent_id, asset_id,
                 data.get("hostname", ""),
                 data.get("os_name", ""),
                 data.get("os_version", ""),
@@ -259,6 +298,9 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 data.get("domain", ""),
                 data.get("agent_version", ""),
                 captured_at,
+                vendor, model_name, serial_num, motherboard,
+                bios_mfr, bios_ver, bios_date,
+                gpu_json, sound_card, os_edition, security_j, sysinfo_j,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update
@@ -381,6 +423,63 @@ def get_latest_screenshot(agent_id: str) -> Optional[Dict[str, Any]]:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def store_patches(agent_id: str, patches: list) -> None:
+    """Replace installed hotfixes for an agent."""
+    conn = get_conn()
+    cur = get_cursor(conn)
+    try:
+        cur.execute("DELETE FROM rmm_patch WHERE agent_id = %s", (agent_id,))
+        now = now_iso()
+        for p in patches:
+            cur.execute(
+                """
+                INSERT INTO rmm_patch (agent_id, hotfix_id, description, installed_on, captured_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    agent_id,
+                    p.get("hotfix_id") or "",
+                    p.get("description") or "",
+                    p.get("installed_on") or "",
+                    now,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def store_pending_updates(agent_id: str, updates: list) -> None:
+    """Replace pending Windows Update entries for an agent."""
+    conn = get_conn()
+    cur = get_cursor(conn)
+    try:
+        cur.execute("DELETE FROM rmm_pending_update WHERE agent_id = %s", (agent_id,))
+        now = now_iso()
+        for u in updates:
+            cur.execute(
+                """
+                INSERT INTO rmm_pending_update
+                    (agent_id, update_id, title, kb_ids, severity, size_mb, reboot_required, category, recorded_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    agent_id,
+                    u.get("update_id") or "",
+                    u.get("title") or "",
+                    u.get("kb_ids") or "",
+                    u.get("severity") or "",
+                    float(u.get("size_mb") or 0) or None,
+                    bool(u.get("reboot_required", False)),
+                    u.get("category") or "",
+                    now,
+                ),
+            )
+        conn.commit()
     finally:
         conn.close()
 

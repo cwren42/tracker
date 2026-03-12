@@ -2,14 +2,21 @@
 """Cirque RMM Agent - full telemetry + streaming shell + screenshot.
 
 Env vars:
-  RMM_GATEWAY_URL    wss://rmm.corp.cirque.com
+  RMM_GATEWAY_URL         wss://rmm.corp.cirque.com        (primary: internal LAN)
+  RMM_GATEWAY_URL_PUBLIC  wss://rmm.cirquetools.com        (fallback: Cloudflare)
+  RMM_TRACKER_URL         https://tracker.corp.cirque.com  (primary: internal LAN)
+  RMM_TRACKER_URL_PUBLIC  https://tracker.cirquetools.com  (fallback: Cloudflare)
   RMM_AGENT_TOKEN    token from enroll script
   RMM_AGENT_ID       optional (defaults to hostname)
-  RMM_TRACKER_URL    https://tracker.corp.cirque.com
   RMM_SCREENSHOT     1 = enable screenshot capture (default: 0)
+
+Connection strategy: on startup and after every disconnect the agent probes
+tracker.corp.cirque.com:443 via TCP (2.5s timeout). If reachable, it uses the
+internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
+falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.5.2"
+AGENT_VERSION = "2.5.5"
 
 import asyncio
 import base64
@@ -66,6 +73,37 @@ def _ps_json(script: str, timeout: int = 15):
     except Exception:
         pass
     return None
+
+
+# Internal LAN hostnames — only resolvable via corporate internal DNS.
+# External DNS has no record for these, so a successful TCP connect proves we're on LAN.
+_LAN_GATEWAY_HOST = "rmm.corp.cirque.com"
+_LAN_TRACKER_URL  = "https://tracker.corp.cirque.com"
+_LAN_GATEWAY_URL  = "wss://rmm.corp.cirque.com"
+
+
+def _can_reach(host: str, port: int = 443, timeout: float = 2.5) -> bool:
+    """Return True if a TCP connection to host:port succeeds within *timeout* seconds."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _resolve_urls(fallback_tracker: str, fallback_gateway: str) -> tuple:
+    """Probe the internal LAN gateway hostname directly.
+
+    _LAN_GATEWAY_HOST only resolves on the corporate LAN (internal DNS only).
+    Cloudflare hostnames are never probed here — Cloudflare's edge always
+    accepts TCP:443 even when the tunnel backend is offline (returns HTTP 530),
+    which would cause false-positive LAN detection.
+    """
+    if _can_reach(_LAN_GATEWAY_HOST):
+        print(f"[agent] LAN reachable ({_LAN_GATEWAY_HOST}) — using internal endpoints", flush=True)
+        return _LAN_TRACKER_URL, _LAN_GATEWAY_URL
+    print(f"[agent] LAN unreachable — falling back to Cloudflare endpoints", flush=True)
+    return fallback_tracker, fallback_gateway
 
 
 # ---------------------------------------------------------------------------
@@ -2812,12 +2850,18 @@ def _get_idle_seconds() -> int:
 
 
 async def main() -> None:
-    gateway = get_env("RMM_GATEWAY_URL").rstrip("/")
+    # Cloudflare fallback endpoints — used when LAN (rmm.corp.cirque.com) is unreachable
+    fallback_gateway = os.environ.get("RMM_GATEWAY_URL_PUBLIC", "wss://rmm.cirquetools.com").rstrip("/")
+    fallback_tracker = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
+
     agent_id = os.environ.get("RMM_AGENT_ID") or socket.gethostname()
     token = get_env("RMM_AGENT_TOKEN")
-    tracker_url = os.environ.get("RMM_TRACKER_URL", "https://tracker.corp.cirque.com").rstrip("/")
     screenshot_enabled = os.environ.get("RMM_SCREENSHOT", "0") == "1"
-    ws_url = f"{gateway}/ws/agent/{agent_id}?token={token}"
+
+    # Probe _LAN_GATEWAY_HOST (internal DNS only) to decide which endpoints to use.
+    # Never probes Cloudflare hostnames — their TCP port 443 is always reachable
+    # even when the tunnel backend is down.
+    tracker_url, gateway = _resolve_urls(fallback_tracker, fallback_gateway)
 
     # Self-update check on startup
     if check_for_update(tracker_url, agent_id, token):
@@ -2829,6 +2873,8 @@ async def main() -> None:
     shells: Dict[int, ShellSession] = {}
     shell_tasks: Dict[int, asyncio.Task] = {}
     shell_stop_events: Dict[int, asyncio.Event] = {}
+
+    ws_url = f"{gateway}/ws/agent/{agent_id}?token={token}"
 
     while True:
         try:
@@ -4009,6 +4055,10 @@ async def main() -> None:
                 t.cancel()
             shell_tasks.clear()
             await asyncio.sleep(5)
+            # Re-resolve endpoints every reconnect: if LAN came back up, prefer it;
+            # if LAN went away, switch to Cloudflare automatically.
+            tracker_url, gateway = _resolve_urls(fallback_tracker, fallback_gateway)
+            ws_url = f"{gateway}/ws/agent/{agent_id}?token={token}"
 
 
 if __name__ == "__main__":

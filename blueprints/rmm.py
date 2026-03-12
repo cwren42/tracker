@@ -514,7 +514,7 @@ def rmm_agent_download():
     """Serve the RMM agent folder as a zip for admins to push to endpoints."""
     import zipfile
 
-    agent_dir = os.path.join(os.path.dirname(__file__), 'rmm_agent')
+    agent_dir = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent')
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for fname in ['agent_client.py', 'requirements.txt', 'install_service.ps1', 'README.md']:
@@ -595,7 +595,7 @@ def rmm_agent_version():
         return jsonify({'error': 'Unauthorized'}), 401
 
     import hashlib
-    agent_dir = os.path.join(os.path.dirname(__file__), 'rmm_agent')
+    agent_dir = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent')
     version_path = os.path.join(agent_dir, 'version.txt')
     agent_path = os.path.join(agent_dir, 'agent_client.py')
 
@@ -618,7 +618,7 @@ def rmm_agent_file():
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
 
-    agent_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_client.py')
+    agent_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'agent_client.py')
     return send_file(agent_path, mimetype='text/x-python', as_attachment=False)
 
 

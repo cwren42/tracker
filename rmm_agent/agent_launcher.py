@@ -48,6 +48,8 @@ def _try_download_fresh() -> bool:
     """
     tracker_url = os.environ.get("RMM_TRACKER_URL",
                                  "https://tracker.corp.cirque.com").rstrip("/")
+    fallback_url = os.environ.get("RMM_TRACKER_URL_PUBLIC",
+                                  "https://tracker.cirquetools.com").rstrip("/")
     agent_id    = os.environ.get("RMM_AGENT_ID", "")
     token       = os.environ.get("RMM_AGENT_TOKEN", "")
 
@@ -55,45 +57,48 @@ def _try_download_fresh() -> bool:
         print("[launcher] RMM_AGENT_ID/TOKEN not set — cannot download fresh copy", flush=True)
         return False
 
-    try:
-        # Fetch version manifest to get expected checksum
-        ver_url = f"{tracker_url}/rmm/agent/version?agent_id={agent_id}&token={token}"
-        req = urllib.request.Request(ver_url, headers={"User-Agent": "CirqueLauncher/1.0"})
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=15) as r:
-            data = json.loads(r.read())
-        server_cksum = data.get("checksum", "")
+    for tracker in (tracker_url, fallback_url):
+        try:
+            # Fetch version manifest to get expected checksum
+            ver_url = f"{tracker}/rmm/agent/version?agent_id={agent_id}&token={token}"
+            req = urllib.request.Request(ver_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+            with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=15) as r:
+                data = json.loads(r.read())
+            server_cksum = data.get("checksum", "")
 
-        # Download the file
-        file_url = f"{tracker_url}/rmm/agent/file?agent_id={agent_id}&token={token}"
-        req2 = urllib.request.Request(file_url, headers={"User-Agent": "CirqueLauncher/1.0"})
-        with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
-            new_code = r.read()
+            # Download the file
+            file_url = f"{tracker}/rmm/agent/file?agent_id={agent_id}&token={token}"
+            req2 = urllib.request.Request(file_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+            with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
+                new_code = r.read()
 
-        # Verify checksum
-        if server_cksum and hashlib.sha256(new_code).hexdigest() != server_cksum:
-            print("[launcher] Checksum mismatch on downloaded agent — aborting", flush=True)
-            return False
+            # Verify checksum
+            if server_cksum and hashlib.sha256(new_code).hexdigest() != server_cksum:
+                print("[launcher] Checksum mismatch on downloaded agent — aborting", flush=True)
+                continue
 
-        # Write and validate
-        tmp = _AGENT_PY + ".dl"
-        with open(tmp, "wb") as f:
-            f.write(new_code)
+            # Write and validate
+            tmp = _AGENT_PY + ".dl"
+            with open(tmp, "wb") as f:
+                f.write(new_code)
 
-        if not _is_valid(tmp):
-            print("[launcher] Downloaded agent has syntax errors — keeping current", flush=True)
-            os.remove(tmp)
-            return False
+            if not _is_valid(tmp):
+                print("[launcher] Downloaded agent has syntax errors — keeping current", flush=True)
+                os.remove(tmp)
+                continue
 
-        # Atomically replace
-        if os.path.exists(_AGENT_PY):
-            shutil.copy2(_AGENT_PY, _AGENT_OLD)
-        shutil.move(tmp, _AGENT_PY)
-        print("[launcher] Fresh agent downloaded and installed", flush=True)
-        return True
+            # Atomically replace
+            if os.path.exists(_AGENT_PY):
+                shutil.copy2(_AGENT_PY, _AGENT_OLD)
+            shutil.move(tmp, _AGENT_PY)
+            print(f"[launcher] Fresh agent downloaded from {tracker}", flush=True)
+            return True
 
-    except Exception as e:
-        print(f"[launcher] Download failed: {e}", flush=True)
-        return False
+        except Exception as e:
+            print(f"[launcher] Download from {tracker} failed: {e}", flush=True)
+            continue
+
+    return False
 
 
 def _restore_old() -> bool:

@@ -21,7 +21,7 @@ import argparse
 AGENT_DIR    = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_EXE   = os.path.join(AGENT_DIR, "CirqueRMM.exe")
 PRODUCT_NAME = "Cirque RMM Agent"
-VERSION      = "2.4.2"
+VERSION      = "2.5.2"
 PUBLISHER    = "Cirque IT"
 INSTALL_DIR  = r"C:\CirqueRMM"  # No spaces — avoids quoting issues with NSSM AppParameters
 
@@ -207,15 +207,20 @@ Section "Install" SEC_MAIN
   ; ── Run the PowerShell setup script ──────────────────────────────────────
   ; ExecWait is NSIS native — no msiexec CA mechanics involved.
   ; $SYSDIR resolves correctly for 32-bit and 64-bit Windows.
+  ; -File mode: the script's own TrustAll block handles internal-CA SSL bypass.
   DetailPrint "Configuring Cirque RMM Agent service..."
   ExecWait '$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\\install_agent.ps1" -SkipDownload' $0
   DetailPrint "PowerShell exited with code $0"
   ${{If}} $0 != 0
-    MessageBox MB_ICONEXCLAMATION|MB_YESNO "Agent setup failed (exit $0).$\\n$\\nOpen log file for details?$\\n(Also check %TEMP%\\CirqueRMM_install.log)" IDNO setup_skip_log
-    ExecShell "open" "notepad.exe" "$INSTDIR\\logs\\setup.log"
-    setup_skip_log:
+    SetErrorLevel $0
+    IfSilent silent_fail_done
+    MessageBox MB_ICONEXCLAMATION "Agent setup failed (exit $0).$\\nCheck log: $INSTDIR\\logs\\setup.log$\\n(Also check %TEMP%\\CirqueRMM_install.log)"
+    silent_fail_done:
+    Abort "Agent setup failed with exit code $0"
   ${{Else}}
+    IfSilent silent_ok_done
     MessageBox MB_ICONINFORMATION "Cirque RMM Agent installed successfully!"
+    silent_ok_done:
   ${{EndIf}}
 SectionEnd
 

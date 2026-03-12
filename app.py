@@ -2,10 +2,13 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_mail import Mail, Message
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta, timezone
 import os
+import subprocess
 import time as _time
 import threading
 # ── Force server timezone to MST (Mountain Standard Time, UTC-7) ──────────
@@ -20,6 +23,7 @@ import csv
 import json
 import requests
 import logging
+import re
 import msal
 import uuid
 from openpyxl import Workbook
@@ -41,7 +45,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production-2024')
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    raise RuntimeError('SECRET_KEY environment variable is not set. Set it in /etc/tracker/secrets.env')
+app.config['SECRET_KEY'] = _secret_key
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://tracker_user:tracker_secure_2026@localhost/tracker'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -74,12 +81,37 @@ app.config['MAIL_DEFAULT_SENDER'] = 'assettracker@cirque.com'
 app.config['SEND_EMPLOYEE_EMAILS'] = False  # Disabled for now
 
 # Linux Agent Configuration
-app.config['LINUX_AGENT_API_KEY'] = os.environ.get('LINUX_AGENT_API_KEY', 'CirqueLinuxAgent2024!')
+_linux_agent_key = os.environ.get('LINUX_AGENT_API_KEY')
+if not _linux_agent_key:
+    raise RuntimeError('LINUX_AGENT_API_KEY environment variable is not set. Set it in /etc/tracker/secrets.env')
+app.config['LINUX_AGENT_API_KEY'] = _linux_agent_key
+
+def _valid_agent_key(key):
+    return bool(key) and key == app.config.get('LINUX_AGENT_API_KEY', '')
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 mail = Mail(app)
+
+# Rate limiter — in-memory storage (no Redis dep)
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[],  # No global limit; apply per-route
+    storage_uri='memory://'
+)
+
+# --- Security headers ---
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    # HSTS: 1 year, include subdomains
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
 
 # Import SOC2 models
 from soc2_models import (
@@ -96,7 +128,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(200), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     role = db.Column(db.String(20), default='viewer')  # admin, manager, viewer
-    theme = db.Column(db.String(30), default='default')  # Theme preference
+    theme = db.Column(db.String(30), default='dark')  # Theme preference
     last_login = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     azure_id = db.Column(db.String(100))  # Azure AD user object ID
@@ -107,7 +139,9 @@ class User(UserMixin, db.Model):
         permissions = {
             'admin': ['view', 'edit', 'delete', 'manage_users'],
             'manager': ['view', 'edit'],
-            'viewer': ['view']
+            'viewer': ['view'],
+            'eagle_eyes': ['view'],
+            'base_user': ['view'],
         }
         return permission in permissions.get(self.role, [])
 
@@ -704,6 +738,28 @@ def manager_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def eagle_eyes_required(f):
+    """Decorator to require admin or eagle_eyes role"""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role not in ['admin', 'eagle_eyes']:
+            flash('Access denied. Eagle Eyes access required.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def ticket_access_required(f):
+    """Decorator to allow admin, manager, eagle_eyes, viewer, or base_user access to tickets"""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager', 'eagle_eyes', 'viewer', 'base_user']:
+            flash('Access denied.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 def license_required(f):
     """Decorator to check license validity before allowing access"""
     from functools import wraps
@@ -736,7 +792,30 @@ def license_required(f):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    real_user = User.query.get(int(user_id))
+    # Admin impersonation: if a valid impersonation is stored in session, return that user
+    if real_user and real_user.role == 'admin':
+        impersonate_id = session.get('impersonate_user_id')
+        if impersonate_id and int(impersonate_id) != int(user_id):
+            imp_user = User.query.get(int(impersonate_id))
+            if imp_user:
+                return imp_user
+    return real_user
+
+
+@app.context_processor
+def inject_impersonation_state():
+    """Make impersonation info available in every template."""
+    try:
+        if current_user.is_authenticated:
+            real_admin_id = session.get('impersonate_real_admin_id')
+            if real_admin_id:
+                real_admin = User.query.get(int(real_admin_id))
+                if real_admin and real_admin.role == 'admin':
+                    return dict(impersonating=True, real_admin=real_admin)
+    except Exception:
+        pass
+    return dict(impersonating=False, real_admin=None)
 
 # ─── SQLAlchemy Audit Event Listeners ────────────────────────────────────────
 from sqlalchemy import event as _sa_event
@@ -936,6 +1015,13 @@ def send_lifecycle_alert(asset):
 @login_required
 @license_required
 def index():
+    # Eagle Eyes role: their home is the fleet monitor, not the full dashboard
+    if current_user.role == 'eagle_eyes':
+        return redirect(url_for('rmm_eagle_eyes_fleet'))
+    # Base users and viewers: their home is tickets
+    if current_user.role in ['base_user', 'viewer']:
+        return redirect(url_for('tickets'))
+
     # Get user's dashboard configuration
     user_widgets = DashboardWidget.query.filter_by(
         user_id=current_user.id,
@@ -1506,25 +1592,16 @@ def add_widget_to_dashboard():
         return jsonify({'success': False, 'message': str(e)}), 400
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute; 30 per hour")
 def login():
     """Login page - supports local and Azure AD authentication"""
     if current_user.is_authenticated:
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        user = User.query.filter_by(username=username).first()
-        
-        if user and check_password_hash(user.password_hash, password):
-            session.permanent = True
-            login_user(user)
-            user.last_login = datetime.utcnow()
-            db.session.commit()
-            flash('Logged in successfully!', 'success')
-            return redirect(url_for('index'))
-        else:
-            flash('Invalid username or password', 'danger')
+        # Local login disabled — use Microsoft 365 SSO
+        flash('Local login is disabled. Please sign in with Microsoft.', 'warning')
+        return redirect(url_for('login'))
     
     # Check if Azure AD is configured for SSO button
     azure_config = AzureIntegrationConfig.query.filter_by(enabled=True, app_name='tracker').first()
@@ -1671,11 +1748,34 @@ def logout():
 
 # ==================== SETTINGS ====================
 
-@app.route('/settings', methods=['GET', 'POST'])
+@app.route('/settings', defaults={'section': None}, methods=['GET', 'POST'])
+@app.route('/settings/<section>', methods=['GET', 'POST'])
 @login_required
 @admin_required
-def settings():
+def settings(section):
     """Admin settings page for email configuration and testing"""
+    allowed_sections = {
+        'theme', 'license', 'email',
+        'directory', 'rmm', 'scripts', 'eagleeye',
+        'unifi', 'proxmox', 'ai', 'cloudflare'
+    }
+    section_endpoints = {
+        'theme': 'settings_theme',
+        'license': 'settings_license',
+        'email': 'settings_email',
+        'directory': 'settings_directory',
+        'rmm': 'settings_rmm',
+        'scripts': 'settings_scripts',
+        'eagleeye': 'settings_eagleeye',
+        'unifi': 'settings_unifi',
+        'proxmox': 'settings_proxmox',
+        'ai': 'settings_ai',
+        'cloudflare': 'settings_cloudflare',
+    }
+    if section and section not in allowed_sections:
+        flash('Unknown settings page.', 'warning')
+        return redirect(url_for('settings'))
+
     if request.method == 'POST':
         action = request.form.get('action')
         
@@ -1790,7 +1890,7 @@ def settings():
 
         elif action == 'update_theme':
             # Update user's theme preference
-            theme = request.form.get('theme', 'default')
+            theme = request.form.get('theme', 'dark')
             current_user.theme = theme
             db.session.commit()
             flash('Theme updated successfully!', 'success')
@@ -1839,34 +1939,106 @@ def settings():
             except Exception as e:
                 db.session.rollback()
                 flash(f'Error updating AD/LDAP settings: {str(e)}', 'danger')
-        
-        return redirect(url_for('settings'))
-    
-    # Load SMTP settings from database
-    smtp_settings = {
-        'smtp_server': Setting.query.filter_by(key='smtp_server').first(),
-        'smtp_port': Setting.query.filter_by(key='smtp_port').first(),
-        'smtp_username': Setting.query.filter_by(key='smtp_username').first(),
-        'smtp_password': Setting.query.filter_by(key='smtp_password').first(),
-        'smtp_use_tls': Setting.query.filter_by(key='smtp_use_tls').first(),
-        'smtp_use_ssl': Setting.query.filter_by(key='smtp_use_ssl').first(),
-        'smtp_sender': Setting.query.filter_by(key='smtp_sender').first()
-    }
-    
-    # Get current configuration
-    config = {
-        'mail_server': smtp_settings['smtp_server'].value if smtp_settings['smtp_server'] else app.config['MAIL_SERVER'],
-        'mail_port': smtp_settings['smtp_port'].value if smtp_settings['smtp_port'] else str(app.config['MAIL_PORT']),
-        'mail_username': smtp_settings['smtp_username'].value if smtp_settings['smtp_username'] else (app.config['MAIL_USERNAME'] or ''),
-        'mail_password': smtp_settings['smtp_password'].value if smtp_settings['smtp_password'] else (app.config['MAIL_PASSWORD'] or ''),
-        'mail_use_tls': smtp_settings['smtp_use_tls'].value == 'true' if smtp_settings['smtp_use_tls'] else app.config['MAIL_USE_TLS'],
-        'mail_use_ssl': smtp_settings['smtp_use_ssl'].value == 'true' if smtp_settings['smtp_use_ssl'] else app.config['MAIL_USE_SSL'],
-        'mail_sender': smtp_settings['smtp_sender'].value if smtp_settings['smtp_sender'] else app.config['MAIL_DEFAULT_SENDER'],
-        'employee_emails_enabled': app.config['SEND_EMPLOYEE_EMAILS'],
-        'admin_count': User.query.filter_by(role='admin').count(),
-        'admin_emails': [u.email for u in User.query.filter_by(role='admin').all() if u.email]
-    }
 
+        elif action == 'update_cloudflare':
+            cf_enabled = request.form.get('cf_enabled') == 'on'
+            cf_account_id = request.form.get('cf_account_id', '').strip()
+            cf_tunnel_id = request.form.get('cf_tunnel_id', '').strip()
+            cf_tunnel_name = request.form.get('cf_tunnel_name', '').strip()
+            cf_hostname = request.form.get('cf_hostname', '').strip()
+
+            try:
+                settings_to_update = {
+                    'cf_enabled': 'true' if cf_enabled else 'false',
+                    'cf_account_id': cf_account_id,
+                    'cf_tunnel_id': cf_tunnel_id,
+                    'cf_tunnel_name': cf_tunnel_name,
+                    'cf_hostname': cf_hostname,
+                }
+                for key, value in settings_to_update.items():
+                    setting = Setting.query.filter_by(key=key).first()
+                    if not setting:
+                        setting = Setting(key=key)
+                    setting.value = value
+                    setting.updated_by = current_user.username
+                    setting.updated_at = datetime.utcnow()
+                    db.session.add(setting)
+
+                db.session.commit()
+                flash('Cloudflare settings updated successfully!', 'success')
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Error updating Cloudflare settings: {str(e)}', 'danger')
+        
+        if section:
+            return redirect(url_for(section_endpoints[section]))
+        return redirect(url_for('index'))
+
+
+@app.route('/settings/theme', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_theme():
+    if request.method == 'POST':
+        return settings('theme')
+    return render_template('settings_theme.html')
+
+
+@app.route('/settings/license', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_license():
+    if request.method == 'POST':
+        return settings('license')
+    
+    # GET request — load license information
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+    
+    license_config = {
+        'license_key': get_setting_value('license_key', ''),
+        'license_api_key': get_setting_value('license_api_key', ''),
+        'license_device_id': get_setting_value('license_device_id', ''),
+        'license_company': get_setting_value('license_company', ''),
+    }
+    
+    return render_template('settings_license.html', license_config=license_config)
+
+
+@app.route('/settings/email', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_email():
+    if request.method == 'POST':
+        return settings('email')
+    
+    # GET request — render the Email settings page
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+
+    config = {
+        'mail_server': get_setting_value('smtp_server', app.config['MAIL_SERVER']),
+        'mail_port': get_setting_value('smtp_port', str(app.config['MAIL_PORT'])),
+        'mail_username': get_setting_value('smtp_username', app.config.get('MAIL_USERNAME', '')),
+        'mail_password': get_setting_value('smtp_password', app.config.get('MAIL_PASSWORD', '')),
+        'mail_use_tls': get_setting_value('smtp_use_tls', 'false') == 'true',
+        'mail_use_ssl': get_setting_value('smtp_use_ssl', 'false') == 'true',
+        'mail_sender': get_setting_value('smtp_sender', app.config['MAIL_DEFAULT_SENDER']),
+    }
+    
+    return render_template('settings_email.html', config=config)
+
+
+@app.route('/settings/directory', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_directory():
+    if request.method == 'POST':
+        return settings('directory')
+    
+    # GET request — render the Directory settings page
     def get_setting_value(key, default=''):
         s = Setting.query.filter_by(key=key).first()
         return s.value if s and s.value is not None else default
@@ -1881,6 +2053,77 @@ def settings():
         'ad_bind_password': get_setting_value('ad_bind_password', ''),
         'ad_user_ou_dn': get_setting_value('ad_user_ou_dn', ''),
     }
+    
+    return render_template('settings_directory.html', ad_config=ad_config)
+
+
+@app.route('/settings/rmm', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_rmm():
+    if request.method == 'POST':
+        return settings('rmm')
+    
+    rmm_site_token = _get_or_create_site_enrollment_token()
+    return render_template('settings_rmm.html', rmm_site_token=rmm_site_token)
+
+
+@app.route('/settings/scripts', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_scripts():
+    if request.method == 'POST':
+        return settings('scripts')
+    return render_template('settings_scripts.html')
+
+
+@app.route('/settings/eagleeye', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_eagleeye():
+    if request.method == 'POST':
+        return settings('eagleeye')
+    
+    # GET request — render the Eagle Eyes settings page
+    # Load all available agents and current exclusions
+    try:
+        exclusions = db.session.execute(text(
+            "SELECT agent_id, hostname FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
+        )).mappings().fetchall()
+        all_agents = db.session.execute(text(
+            """SELECT ec.agent_id, COALESCE(t.hostname, ec.agent_id) AS hostname
+               FROM rmm_eagle_config ec
+               LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
+               WHERE ec.enabled = true
+               ORDER BY COALESCE(t.hostname, ec.agent_id)"""
+        )).mappings().fetchall()
+        exclusions_list = [dict(r) for r in exclusions]
+        all_agents_list = [dict(r) for r in all_agents]
+        excluded_ids = {r['agent_id'] for r in exclusions_list}
+        active_agents = [r for r in all_agents_list if r['agent_id'] not in excluded_ids]
+        
+        context = {
+            'ee_all_agents': all_agents_list,
+            'ee_active_agents': active_agents,
+            'ee_excluded_agents': exclusions_list,
+        }
+    except Exception as e:
+        context = {'ee_all_agents': [], 'ee_active_agents': [], 'ee_excluded_agents': [], 'ee_error': str(e)}
+    
+    return render_template('settings_eagleeye.html', **context)
+
+
+@app.route('/settings/unifi', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_unifi():
+    if request.method == 'POST':
+        return settings('unifi')  # Handle form submission via settings()
+    
+    # GET request — render the UniFi settings page
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
 
     unifi_config = {
         'host': get_setting_value('unifi_host', ''),
@@ -1891,6 +2134,21 @@ def settings():
         'last_sync_message': get_setting_value('unifi_last_sync_message', ''),
         'last_sync_time': get_setting_value('unifi_last_sync_time', ''),
     }
+    
+    return render_template('settings_unifi.html', unifi_config=unifi_config)
+
+
+@app.route('/settings/proxmox', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_proxmox():
+    if request.method == 'POST':
+        return settings('proxmox')  # Handle form submission via settings()
+    
+    # GET request — render the Proxmox settings page
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
 
     proxmox_settings = {
         'cluster_host': get_setting_value('proxmox_cluster_host', ''),
@@ -1903,15 +2161,694 @@ def settings():
         'backup_verify_ssl': get_setting_value('proxmox_backup_verify_ssl', '0'),
         'stale_hours': get_setting_value('proxmox_stale_hours', '26'),
     }
+    
+    return render_template('settings_proxmox.html', proxmox_settings=proxmox_settings)
 
-    rmm_site_token = _get_or_create_site_enrollment_token()
 
-    return render_template('settings.html',
-                          config=config,
-                          ad_config=ad_config,
-                          unifi_config=unifi_config,
-                          proxmox_settings=proxmox_settings,
-                          rmm_site_token=rmm_site_token)
+@app.route('/settings/ai', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_ai():
+    if request.method == 'POST':
+        return settings('ai')  # Handle form submission via settings()
+    
+    # GET request — render the AI settings page
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+
+    openai_key = get_setting_value('openai_api_key', '')
+    ai_config = {
+        'openai_api_key_masked': (openai_key[:8] + '…' + openai_key[-4:]) if openai_key else '',
+        'openai_model': get_setting_value('openai_model', 'gpt-4o'),
+        'ai_ticket_enabled': get_setting_value('ai_ticket_enabled', 'false') == 'true',
+        'ai_ticket_auto_mode': get_setting_value('ai_ticket_auto_mode', 'false') == 'true',
+        'ai_security_monitor_enabled': get_setting_value('ai_security_monitor_enabled', 'false') == 'true',
+    }
+    
+    return render_template('settings_ai.html', ai_config=ai_config)
+
+
+def _get_cloudflare_service_status():
+    """Return cloudflared tunnel service status for UI/API display."""
+    service_name = 'cloudflared'
+    result = {
+        'service_name': service_name,
+        'installed': False,
+        'active': False,
+        'enabled_on_boot': False,
+        'status': 'unknown',
+        'message': '',
+    }
+
+    def _run_cmd(cmd, timeout=5):
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    try:
+        # Use absolute path to avoid PATH issues under systemd services.
+        cmd = ['/bin/systemctl', 'is-active', service_name]
+        is_active = _run_cmd(cmd)
+        if is_active.returncode != 0 and not (is_active.stdout or '').strip():
+            is_active = _run_cmd(['/usr/bin/systemctl', 'is-active', service_name])
+        active_text = (is_active.stdout or '').strip()
+        result['active'] = active_text == 'active'
+        result['installed'] = active_text in {'active', 'inactive', 'failed', 'activating', 'deactivating'}
+        result['status'] = active_text or 'unknown'
+    except FileNotFoundError:
+        result['message'] = 'systemctl is not available on this host.'
+        return result
+    except Exception as e:
+        result['message'] = str(e)
+        return result
+
+    try:
+        cmd = ['/bin/systemctl', 'is-enabled', service_name]
+        is_enabled = _run_cmd(cmd)
+        if is_enabled.returncode != 0 and not (is_enabled.stdout or '').strip():
+            is_enabled = _run_cmd(['/usr/bin/systemctl', 'is-enabled', service_name])
+        enabled_text = (is_enabled.stdout or '').strip()
+        result['enabled_on_boot'] = enabled_text == 'enabled'
+        if enabled_text and enabled_text not in {'enabled', 'disabled'}:
+            result['message'] = enabled_text
+    except Exception:
+        # Non-fatal for page rendering
+        pass
+
+    return result
+
+
+def _mask_secret(value, prefix=8, suffix=4):
+    if not value:
+        return ''
+    if len(value) <= prefix + suffix:
+        return '*' * len(value)
+    return f"{value[:prefix]}...{value[-suffix:]}"
+
+
+def _decode_cloudflare_tunnel_token(token):
+    """Decode cloudflared JWT tunnel token payload for account/tunnel IDs."""
+    result = {}
+    try:
+        raw = (token or '').strip()
+        parts = raw.split('.')
+        # cloudflared may provide either JWT-like token (3 parts)
+        # or base64url-encoded JSON blob (single part).
+        payload = parts[1] if len(parts) == 3 else raw
+        payload += '=' * (-len(payload) % 4)
+        payload_obj = json.loads(base64.urlsafe_b64decode(payload.encode('utf-8')).decode('utf-8'))
+        result['cf_account_id'] = payload_obj.get('a', '')
+        result['cf_tunnel_id'] = payload_obj.get('t', '')
+    except Exception:
+        # Non-fatal; UI will still show service status.
+        return {}
+    return result
+
+
+def _read_cloudflare_server_config():
+    """Read Cloudflare tunnel config directly from server files/service."""
+    result = {
+        'source': 'none',
+        'cf_account_id': '',
+        'cf_tunnel_id': '',
+        'cf_tunnel_name': '',
+        'cf_hostname': '',
+        'cf_token_masked': '',
+    }
+
+    config_path = '/etc/cloudflared/config.yml'
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                raw = f.read()
+            tunnel_match = re.search(r'^\s*tunnel:\s*([^\n#]+)', raw, flags=re.MULTILINE)
+            host_match = re.search(r'^\s*-\s*hostname:\s*([^\n#]+)', raw, flags=re.MULTILINE)
+            if tunnel_match:
+                result['cf_tunnel_id'] = tunnel_match.group(1).strip().strip('"\'')
+            if host_match:
+                result['cf_hostname'] = host_match.group(1).strip().strip('"\'')
+            result['source'] = f'file:{config_path}'
+            return result
+        except Exception:
+            # Fall back to systemd service token inspection.
+            pass
+
+    try:
+        show = subprocess.run(
+            ['systemctl', 'show', '-p', 'ExecStart', 'cloudflared'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        exec_line = (show.stdout or '').strip()
+        token_match = re.search(r'--token\s+([^\s;]+)', exec_line)
+        if token_match:
+            token = token_match.group(1).strip()
+            result['cf_token_masked'] = _mask_secret(token, prefix=10, suffix=6)
+            decoded = _decode_cloudflare_tunnel_token(token)
+            result.update(decoded)
+            result['source'] = 'systemd:cloudflared-token'
+    except Exception:
+        pass
+
+    return result
+
+
+@app.route('/settings/cloudflare', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def settings_cloudflare():
+    if request.method == 'POST':
+        return settings('cloudflare')
+
+    def get_setting_value(key, default=''):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+
+    cf_config = {
+        'cf_enabled': get_setting_value('cf_enabled', 'false') == 'true',
+        'cf_account_id': get_setting_value('cf_account_id', ''),
+        'cf_tunnel_id': get_setting_value('cf_tunnel_id', ''),
+        'cf_tunnel_name': get_setting_value('cf_tunnel_name', ''),
+        'cf_hostname': get_setting_value('cf_hostname', ''),
+    }
+
+    server_cf = _read_cloudflare_server_config()
+    # Auto-populate empty DB-backed fields from actual server config.
+    for key in ('cf_account_id', 'cf_tunnel_id', 'cf_tunnel_name', 'cf_hostname'):
+        if not cf_config.get(key) and server_cf.get(key):
+            cf_config[key] = server_cf.get(key)
+
+    return render_template(
+        'settings_cloudflare.html',
+        cf_config=cf_config,
+        cf_status=_get_cloudflare_service_status(),
+        cf_server=server_cf,
+    )
+
+
+@app.route('/api/cloudflare/status', methods=['GET'])
+@login_required
+@admin_required
+def api_cloudflare_status():
+    return jsonify({'ok': True, 'status': _get_cloudflare_service_status()})
+
+
+@app.route('/api/cloudflare/tunnel/toggle', methods=['POST'])
+@login_required
+@admin_required
+def api_cloudflare_tunnel_toggle():
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled'))
+    action = 'start' if enabled else 'stop'
+    candidate_cmds = [
+        ['/bin/systemctl', action, 'cloudflared'],
+        ['/usr/bin/systemctl', action, 'cloudflared'],
+        ['sudo', '-n', '/bin/systemctl', action, 'cloudflared'],
+        ['sudo', '-n', '/usr/bin/systemctl', action, 'cloudflared'],
+    ]
+
+    try:
+        proc = None
+        for cmd in candidate_cmds:
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            except FileNotFoundError:
+                continue
+            if proc.returncode == 0:
+                break
+
+        if not proc or proc.returncode != 0:
+            err = (proc.stderr if proc else '') or (proc.stdout if proc else '') or 'Failed to toggle cloudflared service.'
+            err = err.strip()
+            low = err.lower()
+            if 'authentication is required' in low or 'interactive authentication required' in low or 'access denied' in low or 'not in the sudoers file' in low:
+                err = 'Tracker service user cannot manage cloudflared via systemctl. Add a sudoers rule for /bin/systemctl start/stop cloudflared.'
+            return jsonify({'ok': False, 'error': err, 'status': _get_cloudflare_service_status()}), 500
+    except FileNotFoundError:
+        return jsonify({'ok': False, 'error': 'systemctl is not available on this host.'}), 500
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+    return jsonify({'ok': True, 'status': _get_cloudflare_service_status()})
+
+
+_SCRIPT_FILE_TYPES = {
+    '.ps1': 'powershell',
+    '.bat': 'cmd',
+    '.sh': 'bash',
+}
+
+
+def _normalize_script_file_type(raw: str) -> str:
+    ft = (raw or '').strip().lower()
+    if not ft:
+        raise ValueError('file_type is required')
+    if not ft.startswith('.'):
+        ft = f'.{ft}'
+    if ft not in _SCRIPT_FILE_TYPES:
+        raise ValueError('file_type must be one of: .ps1, .bat, .sh')
+    return ft
+
+
+def _ensure_rmm_script_library_table():
+    db.session.execute(text("""
+        CREATE TABLE IF NOT EXISTS rmm_script_library (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            file_type TEXT NOT NULL,
+            shell TEXT NOT NULL,
+            script_content TEXT NOT NULL,
+            is_tested BOOLEAN NOT NULL DEFAULT false,
+            last_tested_at TIMESTAMPTZ,
+            last_tested_agent_id TEXT,
+            last_test_result TEXT,
+            created_by_user_id INTEGER,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_active BOOLEAN NOT NULL DEFAULT true
+        )
+    """))
+    db.session.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_rmm_script_library_active
+        ON rmm_script_library (is_active, is_tested, name)
+    """))
+    db.session.commit()
+
+
+def _send_script_to_agent(agent_id: str, shell: str, code: str, timeout_s: int, reason: str):
+    import json as _json, urllib.request as _req, urllib.error as _err
+    agent_row = db.session.execute(
+        text("SELECT asset_id FROM rmm_agent WHERE agent_id = :aid AND enabled = true LIMIT 1"),
+        {'aid': agent_id}
+    ).fetchone()
+    asset_id = agent_row[0] if agent_row else None
+
+    res = db.session.execute(
+        text("""INSERT INTO rmm_session (asset_id, started_by_user_id, reason, started_at)
+                VALUES (:aid, :uid, :reason, NOW()) RETURNING id"""),
+        {'aid': asset_id, 'uid': current_user.id if hasattr(current_user, 'id') else None, 'reason': reason}
+    )
+    db.session.commit()
+    session_id = int(res.scalar() or 0)
+
+    payload = _json.dumps({
+        'type': 'run_script',
+        'shell': shell,
+        'code': code,
+        'timeout': int(timeout_s),
+        'session_id': session_id,
+    }).encode()
+    try:
+        req = _req.Request(
+            f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with _req.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read())
+        if not result.get('ok'):
+            return False, session_id, result.get('error', 'Gateway error')
+    except _err.HTTPError as e:
+        try:
+            body = _json.loads(e.read())
+            msg = body.get('error') or body.get('detail') or str(e)
+        except Exception:
+            msg = str(e)
+        return False, session_id, msg
+    except Exception as e:
+        return False, session_id, str(e)
+    return True, session_id, None
+
+
+def _wait_for_script_result(session_id: int, timeout_s: int):
+    import json as _json
+    deadline = _time.time() + max(5, int(timeout_s) + 15)
+    while _time.time() < deadline:
+        row = db.session.execute(
+            text("""SELECT data_json
+                    FROM rmm_event
+                    WHERE session_id = :sid
+                      AND actor_type = 'agent'
+                      AND event_type = 'script_result'
+                    ORDER BY id DESC
+                    LIMIT 1"""),
+            {'sid': session_id}
+        ).fetchone()
+        if row:
+            try:
+                return _json.loads(row[0] or '{}')
+            except Exception:
+                return {'stdout': '', 'stderr': 'Invalid result payload', 'exit_code': 1}
+        _time.sleep(1.0)
+    return None
+
+
+@app.route('/api/rmm/online-agents')
+@login_required
+def api_rmm_online_agents():
+    """Return online agents based on last_seen_at <= 5 min."""
+    rows = db.session.execute(text("""
+        SELECT ra.agent_id,
+               COALESCE(t.hostname, a.name, ra.agent_id) AS hostname,
+               ra.last_seen_at
+        FROM rmm_agent ra
+        LEFT JOIN rmm_telemetry t ON t.agent_id = ra.agent_id
+        LEFT JOIN asset a ON a.id = ra.asset_id
+        WHERE ra.enabled = true
+          AND ra.last_seen_at > NOW() - INTERVAL '5 minutes'
+        ORDER BY ra.last_seen_at DESC
+    """)).mappings().fetchall()
+    return jsonify(ok=True, agents=[{
+        'agent_id': r['agent_id'],
+        'hostname': r['hostname'],
+        'last_seen_at': _dt_iso(r['last_seen_at']),
+    } for r in rows])
+
+
+@app.route('/api/settings/scripts', methods=['GET'])
+@login_required
+@admin_required
+def api_settings_scripts_list():
+    _ensure_rmm_script_library_table()
+    rows = db.session.execute(text("""
+        SELECT id, name, description, file_type, shell, script_content,
+               is_tested, last_tested_at, last_tested_agent_id,
+               created_at, updated_at
+        FROM rmm_script_library
+        WHERE is_active = true
+        ORDER BY name ASC, id DESC
+    """)).mappings().fetchall()
+    scripts = []
+    for r in rows:
+        item = dict(r)
+        item['last_tested_at'] = _dt_iso(item.get('last_tested_at'))
+        item['created_at'] = _dt_iso(item.get('created_at'))
+        item['updated_at'] = _dt_iso(item.get('updated_at'))
+        scripts.append(item)
+    return jsonify(ok=True, scripts=scripts)
+
+
+@app.route('/api/settings/scripts', methods=['POST'])
+@login_required
+@admin_required
+def api_settings_scripts_save():
+    _ensure_rmm_script_library_table()
+    data = request.get_json(force=True) or {}
+    script_id = data.get('id')
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    script_content = (data.get('script_content') or '').strip()
+    try:
+        file_type = _normalize_script_file_type(data.get('file_type'))
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+    if not name:
+        return jsonify(ok=False, error='name is required'), 400
+    if not script_content:
+        return jsonify(ok=False, error='script_content is required'), 400
+
+    shell = _SCRIPT_FILE_TYPES[file_type]
+    if script_id:
+        row = db.session.execute(
+            text("SELECT script_content, file_type FROM rmm_script_library WHERE id = :id AND is_active = true"),
+            {'id': int(script_id)}
+        ).fetchone()
+        if not row:
+            return jsonify(ok=False, error='script not found'), 404
+        content_changed = (row[0] or '') != script_content or (row[1] or '') != file_type
+        db.session.execute(text("""
+            UPDATE rmm_script_library
+            SET name = :name,
+                description = :description,
+                file_type = :file_type,
+                shell = :shell,
+                script_content = :script_content,
+                is_tested = CASE WHEN :changed THEN false ELSE is_tested END,
+                updated_at = NOW()
+            WHERE id = :id
+        """), {
+            'id': int(script_id),
+            'name': name,
+            'description': description,
+            'file_type': file_type,
+            'shell': shell,
+            'script_content': script_content,
+            'changed': bool(content_changed),
+        })
+        db.session.commit()
+        return jsonify(ok=True, id=int(script_id), message='Script updated')
+
+    row = db.session.execute(text("""
+        INSERT INTO rmm_script_library
+            (name, description, file_type, shell, script_content,
+             created_by_user_id, created_at, updated_at, is_active)
+        VALUES
+            (:name, :description, :file_type, :shell, :script_content,
+             :uid, NOW(), NOW(), true)
+        RETURNING id
+    """), {
+        'name': name,
+        'description': description,
+        'file_type': file_type,
+        'shell': shell,
+        'script_content': script_content,
+        'uid': current_user.id if hasattr(current_user, 'id') else None,
+    }).fetchone()
+    db.session.commit()
+    return jsonify(ok=True, id=int(row[0]), message='Script saved')
+
+
+@app.route('/api/settings/scripts/upload', methods=['POST'])
+@login_required
+@admin_required
+def api_settings_scripts_upload():
+    _ensure_rmm_script_library_table()
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify(ok=False, error='file is required'), 400
+
+    filename = secure_filename(f.filename)
+    if '.' not in filename:
+        return jsonify(ok=False, error='uploaded file must have an extension'), 400
+    ext = f".{filename.rsplit('.', 1)[1].lower()}"
+    try:
+        file_type = _normalize_script_file_type(ext)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+    raw = f.read()
+    if len(raw) > 1024 * 1024:
+        return jsonify(ok=False, error='script file too large (max 1 MB)'), 400
+    try:
+        script_content = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        script_content = raw.decode('latin-1')
+
+    script_content = script_content.replace('\r\n', '\n').strip()
+    if not script_content:
+        return jsonify(ok=False, error='script file is empty'), 400
+
+    name = (request.form.get('name') or os.path.splitext(filename)[0]).strip()
+    description = (request.form.get('description') or '').strip()
+    shell = _SCRIPT_FILE_TYPES[file_type]
+
+    row = db.session.execute(text("""
+        INSERT INTO rmm_script_library
+            (name, description, file_type, shell, script_content,
+             created_by_user_id, created_at, updated_at, is_active)
+        VALUES
+            (:name, :description, :file_type, :shell, :script_content,
+             :uid, NOW(), NOW(), true)
+        RETURNING id
+    """), {
+        'name': name,
+        'description': description,
+        'file_type': file_type,
+        'shell': shell,
+        'script_content': script_content,
+        'uid': current_user.id if hasattr(current_user, 'id') else None,
+    }).fetchone()
+    db.session.commit()
+    return jsonify(ok=True, id=int(row[0]), message='Script uploaded')
+
+
+@app.route('/api/settings/scripts/<int:script_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def api_settings_scripts_delete(script_id):
+    _ensure_rmm_script_library_table()
+    db.session.execute(text("""
+        UPDATE rmm_script_library
+        SET is_active = false, updated_at = NOW()
+        WHERE id = :id
+    """), {'id': script_id})
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+@app.route('/api/settings/scripts/<int:script_id>/test', methods=['POST'])
+@login_required
+@admin_required
+def api_settings_scripts_test(script_id):
+    _ensure_rmm_script_library_table()
+    data = request.get_json(force=True) or {}
+    agent_id = (data.get('agent_id') or '').strip()
+    timeout_s = int(data.get('timeout', 90) or 90)
+    if not agent_id:
+        return jsonify(ok=False, error='agent_id is required'), 400
+
+    script = db.session.execute(text("""
+        SELECT id, name, file_type, shell, script_content
+        FROM rmm_script_library
+        WHERE id = :id AND is_active = true
+    """), {'id': script_id}).mappings().fetchone()
+    if not script:
+        return jsonify(ok=False, error='script not found'), 404
+
+    online_row = db.session.execute(text("""
+        SELECT 1
+        FROM rmm_agent
+        WHERE agent_id = :aid
+          AND enabled = true
+          AND last_seen_at > NOW() - INTERVAL '5 minutes'
+    """), {'aid': agent_id}).fetchone()
+    if not online_row:
+        return jsonify(ok=False, error='selected agent is offline'), 400
+
+    ok, session_id, err = _send_script_to_agent(
+        agent_id=agent_id,
+        shell=script['shell'],
+        code=script['script_content'],
+        timeout_s=timeout_s,
+        reason=f"Test script: {script['name']}",
+    )
+    if not ok:
+        return jsonify(ok=False, error=err or 'failed to dispatch script'), 502
+
+    result = _wait_for_script_result(session_id, timeout_s)
+    if result is None:
+        db.session.execute(text("""
+            UPDATE rmm_script_library
+            SET is_tested = false,
+                last_tested_at = NOW(),
+                last_tested_agent_id = :aid,
+                last_test_result = :res,
+                updated_at = NOW()
+            WHERE id = :id
+        """), {
+            'id': script_id,
+            'aid': agent_id,
+            'res': 'Timed out waiting for script_result',
+        })
+        db.session.commit()
+        return jsonify(ok=False, error='Timed out waiting for script result'), 504
+
+    exit_code = int(result.get('exit_code', 1) or 1)
+    stdout = (result.get('stdout') or '').strip()
+    stderr = (result.get('stderr') or '').strip()
+    summary = (stdout[:1000] + ('\n...' if len(stdout) > 1000 else '')).strip()
+    if stderr:
+        summary = (summary + '\nSTDERR:\n' + stderr[:1000]).strip()
+
+    db.session.execute(text("""
+        UPDATE rmm_script_library
+        SET is_tested = :tested,
+            last_tested_at = NOW(),
+            last_tested_agent_id = :aid,
+            last_test_result = :res,
+            updated_at = NOW()
+        WHERE id = :id
+    """), {
+        'id': script_id,
+        'tested': exit_code == 0,
+        'aid': agent_id,
+        'res': summary,
+    })
+    db.session.commit()
+
+    return jsonify(
+        ok=(exit_code == 0),
+        session_id=session_id,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        tested=(exit_code == 0),
+    )
+
+
+@app.route('/api/settings/scripts/generate', methods=['POST'])
+@login_required
+@admin_required
+def api_settings_scripts_generate():
+    data = request.get_json(force=True) or {}
+    prompt = (data.get('prompt') or '').strip()
+    try:
+        file_type = _normalize_script_file_type(data.get('file_type'))
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    if not prompt:
+        return jsonify(ok=False, error='prompt is required'), 400
+
+    script_language = {
+        '.ps1': 'PowerShell',
+        '.bat': 'Windows Batch (.bat)',
+        '.sh': 'POSIX shell (.sh)',
+    }[file_type]
+
+    try:
+        raw = _ai_engine._openai_chat(
+            [
+                {
+                    'role': 'system',
+                    'content': (
+                        f'Generate only {script_language} code. '
+                        'Return code only with no markdown fences and no extra explanation.'
+                    ),
+                },
+                {
+                    'role': 'user',
+                    'content': prompt,
+                },
+            ],
+            max_tokens=1200,
+        )
+        code = (raw or '').strip()
+        if code.startswith('```'):
+            code = code.strip('`')
+            nl = code.find('\n')
+            if nl != -1:
+                code = code[nl + 1:]
+            if code.endswith('```'):
+                code = code[:-3]
+            code = code.strip()
+        return jsonify(ok=True, script_content=code)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route('/api/rmm/scripts/tested', methods=['GET'])
+@login_required
+def api_rmm_scripts_tested():
+    _ensure_rmm_script_library_table()
+    rows = db.session.execute(text("""
+        SELECT id, name, description, file_type, shell, script_content,
+               last_tested_at, last_tested_agent_id
+        FROM rmm_script_library
+        WHERE is_active = true
+          AND is_tested = true
+        ORDER BY name ASC
+    """)).mappings().fetchall()
+    scripts = []
+    for r in rows:
+        d = dict(r)
+        d['last_tested_at'] = _dt_iso(d.get('last_tested_at'))
+        scripts.append(d)
+    return jsonify(ok=True, scripts=scripts)
 
 
 @app.route('/api/rmm/site-token/regenerate', methods=['POST'])
@@ -3148,11 +4085,21 @@ def return_license(assignment_id):
 
 @app.route('/tickets')
 @login_required
-@manager_required
+@ticket_access_required
 @license_required
 def tickets():
     from collections import defaultdict
     from types import SimpleNamespace
+    # Base users, eagle_eyes, and viewers only see their own submitted tickets
+    if current_user.role in ('base_user', 'eagle_eyes', 'viewer'):
+        tickets = SupportTicket.query.filter_by(
+            created_by_user_id=current_user.id
+        ).order_by(SupportTicket.created_at.desc()).all()
+        return render_template('tickets.html', tickets=tickets,
+                               total_closed=sum(1 for t in tickets if t.status == 'Closed'),
+                               total_open=sum(1 for t in tickets if t.status in ('Open', 'In Progress')),
+                               chart_labels=[], chart_data=[], tech_loads=[],
+                               base_user_mode=True, now=datetime.utcnow())
     tickets = SupportTicket.query.order_by(SupportTicket.created_at.desc()).all()
     total_closed = SupportTicket.query.filter_by(status='Closed').count()
     total_open = SupportTicket.query.filter(SupportTicket.status.in_(['Open', 'In Progress'])).count()
@@ -3173,7 +4120,7 @@ def tickets():
     chart_data = [counts_by_date[d] for d in chart_labels]
 
     # Technician workload
-    users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(User.full_name).all()
+    users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])).order_by(User.full_name).all()
     user_map = {u.id: u for u in users}
     tech_stats = defaultdict(lambda: {'open': 0, 'in_progress': 0, 'closed': 0, 'res_hours': []})
     for t in tickets:
@@ -3210,7 +4157,7 @@ def tickets():
 
 @app.route('/tickets/new', methods=['GET', 'POST'])
 @login_required
-@manager_required
+@ticket_access_required
 @license_required
 def new_ticket():
     if request.method == 'POST':
@@ -3267,10 +4214,14 @@ def new_ticket():
 
 @app.route('/tickets/<int:ticket_id>')
 @login_required
-@manager_required
+@ticket_access_required
 @license_required
 def view_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
+    # Base users can only view tickets they submitted
+    if current_user.role == 'base_user' and ticket.created_by_user_id != current_user.id:
+        flash('You can only view your own tickets.', 'danger')
+        return redirect(url_for('tickets'))
     techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(User.display_name).all()
     # Build timeline: merge notes + activity sorted by created_at
     notes = [{'type': 'note', 'obj': n, 'ts': n.created_at} for n in ticket.notes.order_by(TicketNote.created_at).all()]
@@ -3668,9 +4619,18 @@ def agent_download():
 
 @app.route('/agent/install.sh')
 def agent_install_script():
-    """Serve the agent installer script"""
+    """Serve the agent installer script with the API key pre-filled"""
+    from flask import Response
     script_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'install.sh')
-    return send_file(script_path, mimetype='text/x-shellscript')
+    with open(script_path, 'r') as f:
+        script = f.read()
+    # Inject current API key so the installer works without any manual config
+    api_key = app.config.get('LINUX_AGENT_API_KEY', '')
+    script = script.replace(
+        'API_KEY="${API_KEY:-}"',
+        f'API_KEY="${{API_KEY:-{api_key}}}"'
+    )
+    return Response(script, mimetype='text/x-shellscript')
 
 @app.route('/agent/service')
 def agent_service_file():
@@ -4058,11 +5018,12 @@ def api_terminal_disconnect():
 # ==================== LINUX AGENT API ====================
 
 @app.route('/api/linux-agent/heartbeat', methods=['POST'])
+@limiter.limit("120 per minute")
 def api_linux_agent_heartbeat():
     """Receive heartbeat from Linux monitoring agent"""
     # Check API key
     api_key = request.headers.get('X-API-Key')
-    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+    if not _valid_agent_key(api_key):
         return jsonify({'success': False, 'error': 'Invalid API key'}), 401
     
     data = request.get_json()
@@ -4119,11 +5080,12 @@ def api_linux_agent_heartbeat():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/linux-agent/checks', methods=['GET'])
+@limiter.limit("120 per minute")
 def api_linux_agent_checks():
     """Get checks that Linux agent should execute"""
     # Check API key
     api_key = request.headers.get('X-API-Key')
-    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+    if not _valid_agent_key(api_key):
         return jsonify({'success': False, 'error': 'Invalid API key'}), 401
     
     asset_id = request.args.get('asset_id')
@@ -4165,11 +5127,12 @@ def api_linux_agent_checks():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/linux-agent/check-result', methods=['POST'])
+@limiter.limit("120 per minute")
 def api_linux_agent_check_result():
     """Receive check result from Linux agent"""
     # Check API key
     api_key = request.headers.get('X-API-Key')
-    if not api_key or api_key != app.config.get('LINUX_AGENT_API_KEY', 'change-me-in-production'):
+    if not _valid_agent_key(api_key):
         return jsonify({'success': False, 'error': 'Invalid API key'}), 401
     
     data = request.get_json()
@@ -4457,7 +5420,7 @@ def api_rmm_eagle_eyes(agent_id):
                     enabled = excluded.enabled,
                     screenshot_interval_min = excluded.screenshot_interval_min,
                     updated_at = excluded.updated_at"""),
-        {'aid': agent_id, 'en': 1 if enabled else 0, 'iv': interval}
+        {'aid': agent_id, 'en': enabled, 'iv': interval}
     )
     db.session.commit()
     # Push config to connected agent via gateway
@@ -4966,6 +5929,173 @@ def api_eagle_report_schedules():
 # ─────────────────────────────────────────────────────────────────────────────
 # Eagle Eyes — Multi-agent comparison page + data
 # ─────────────────────────────────────────────────────────────────────────────
+@app.route('/rmm/eagle-eyes')
+@login_required
+@eagle_eyes_required
+def rmm_eagle_eyes_fleet():
+    """Fleet-wide Eagle Eyes dashboard — all monitored devices."""
+    return render_template('eagle_eyes_fleet.html')
+
+
+@app.route('/api/rmm/eagle-eyes/fleet')
+@login_required
+@eagle_eyes_required
+def api_eagle_fleet():
+    """Return all eagle-eyes-enabled agents with live + daily stats."""
+    try:
+        # All enabled agents with telemetry + current app
+        agents_q = db.session.execute(text("""
+            SELECT
+                ec.agent_id,
+                COALESCE(t.hostname, ec.agent_id)       AS hostname,
+                COALESCE(t.logged_in_user, '')           AS logged_in_user,
+                cur.process_name                         AS current_app,
+                cur.captured_at                          AS last_event,
+                ra.last_seen_at
+            FROM rmm_eagle_config ec
+            LEFT JOIN rmm_telemetry t   ON t.agent_id  = ec.agent_id
+            LEFT JOIN rmm_eagle_current cur ON cur.agent_id = ec.agent_id
+            LEFT JOIN rmm_agent ra      ON ra.agent_id = ec.agent_id
+            WHERE ec.enabled = true
+            ORDER BY COALESCE(t.logged_in_user, ec.agent_id)
+        """)).mappings().fetchall()
+
+        # Filter out excluded agents for non-admins
+        if current_user.role != 'admin':
+            excluded_ids = {r['agent_id'] for r in db.session.execute(text(
+                "SELECT agent_id FROM eagle_eyes_exclusions"
+            )).mappings().fetchall()}
+            agents_q = [r for r in agents_q if r['agent_id'] not in excluded_ids]
+
+        # Today's active seconds per agent (Mountain Time day)
+        today_q = db.session.execute(text(f"""
+            SELECT agent_id, SUM(duration_s) AS today_s
+            FROM rmm_eagle_event
+            WHERE CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE)
+                  = CAST(NOW() AT TIME ZONE 'America/Denver' AS DATE)
+            {_EAGLE_SYSTEM_EXCL}
+            GROUP BY agent_id
+        """)).mappings().fetchall()
+        today_map = {r['agent_id']: int(r['today_s'] or 0) for r in today_q}
+
+        # Top app today per agent
+        top_q = db.session.execute(text(f"""
+            SELECT DISTINCT ON (agent_id)
+                agent_id, process_name, SUM(duration_s) AS total_s
+            FROM rmm_eagle_event
+            WHERE CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE)
+                  = CAST(NOW() AT TIME ZONE 'America/Denver' AS DATE)
+            {_EAGLE_SYSTEM_EXCL}
+            GROUP BY agent_id, process_name
+            ORDER BY agent_id, total_s DESC
+        """)).mappings().fetchall()
+        top_map = {r['agent_id']: r['process_name'] for r in top_q}
+
+        now_utc = datetime.utcnow()
+        result = []
+        for a in agents_q:
+            aid = a['agent_id']
+            last_seen = a['last_seen_at']
+            last_event = a['last_event']
+            online = False
+            if last_seen:
+                if hasattr(last_seen, 'tzinfo') and last_seen.tzinfo:
+                    from datetime import timezone as _tz
+                    diff = (datetime.now(_tz.utc) - last_seen).total_seconds()
+                else:
+                    diff = (now_utc - last_seen).total_seconds()
+                online = diff < 300
+            result.append({
+                'agent_id':     aid,
+                'hostname':     a['hostname'],
+                'user':         a['logged_in_user'],
+                'current_app':  a['current_app'] or '',
+                'last_event':   _dt_iso(last_event),
+                'last_seen':    _dt_iso(last_seen),
+                'online':       online,
+                'today_s':      today_map.get(aid, 0),
+                'top_app':      top_map.get(aid, ''),
+            })
+        total_today_s = sum(r['today_s'] for r in result)
+        online_count  = sum(1 for r in result if r['online'])
+        return jsonify(ok=True, agents=result,
+                       total=len(result), online=online_count,
+                       total_today_s=total_today_s)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+# ── Eagle Eyes Exclusions ──────────────────────────────────────────────────────
+@app.route('/api/settings/eagle-eye-exclusions', methods=['GET'])
+@login_required
+@admin_required
+def api_eagle_exclusions_list():
+    """Return all eagle-eyes exclusions and all available agents for the picker."""
+    try:
+        exclusions = db.session.execute(text(
+            "SELECT agent_id, hostname, notes, added_by, added_at FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
+        )).mappings().fetchall()
+        all_agents = db.session.execute(text(
+            """SELECT ec.agent_id, COALESCE(t.hostname, ec.agent_id) AS hostname
+               FROM rmm_eagle_config ec
+               LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
+               WHERE ec.enabled = true
+               ORDER BY COALESCE(t.hostname, ec.agent_id)"""
+        )).mappings().fetchall()
+        excluded_ids = {r['agent_id'] for r in exclusions}
+        return jsonify(
+            ok=True,
+            exclusions=[dict(r) for r in exclusions],
+            all_agents=[dict(r) for r in all_agents if r['agent_id'] not in excluded_ids]
+        )
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route('/api/settings/eagle-eye-exclusions', methods=['POST'])
+@login_required
+@admin_required
+def api_eagle_exclusions_add():
+    """Add an agent to the Eagle Eyes exclusion list."""
+    try:
+        data = request.get_json(force=True)
+        agent_id = (data.get('agent_id') or '').strip()
+        notes    = (data.get('notes') or '').strip()
+        if not agent_id:
+            return jsonify(ok=False, error='agent_id is required'), 400
+        # Resolve hostname
+        row = db.session.execute(text(
+            "SELECT COALESCE(t.hostname, :aid) AS hostname FROM rmm_agent a LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id WHERE a.agent_id = :aid"
+        ), {'aid': agent_id}).mappings().fetchone()
+        hostname = row['hostname'] if row else agent_id
+        db.session.execute(text(
+            """INSERT INTO eagle_eyes_exclusions (agent_id, hostname, notes, added_by, added_at)
+               VALUES (:agent_id, :hostname, :notes, :added_by, now())
+               ON CONFLICT (agent_id) DO UPDATE SET hostname=EXCLUDED.hostname, notes=EXCLUDED.notes, added_by=EXCLUDED.added_by, added_at=now()"""
+        ), {'agent_id': agent_id, 'hostname': hostname, 'notes': notes, 'added_by': current_user.username})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route('/api/settings/eagle-eye-exclusions/<path:agent_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def api_eagle_exclusions_remove(agent_id):
+    """Remove an agent from the Eagle Eyes exclusion list."""
+    try:
+        db.session.execute(text(
+            "DELETE FROM eagle_eyes_exclusions WHERE agent_id = :aid"
+        ), {'aid': agent_id})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(ok=False, error=str(e)), 500
+
+
 @app.route('/rmm/eagle-eyes/compare')
 @login_required
 def rmm_eagle_compare():
@@ -4996,12 +6126,14 @@ def api_eagle_compare_data():
                 SELECT process_name, SUM(duration_s) as total_s, COUNT(*) as events
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND captured_at >= NOW() - INTERVAL '{days} days'
+                {_EAGLE_SYSTEM_EXCL}
                 GROUP BY process_name ORDER BY total_s DESC LIMIT 10
             """), {'aid': aid}).mappings().fetchall()
             daily = db.session.execute(text(f"""
                 SELECT CAST(captured_at AS DATE) as day, SUM(duration_s) as total_s
                 FROM rmm_eagle_event
                 WHERE agent_id = :aid AND captured_at >= NOW() - INTERVAL '{days} days'
+                {_EAGLE_SYSTEM_EXCL}
                 GROUP BY day ORDER BY day
             """), {'aid': aid}).mappings().fetchall()
             hostname = db.session.execute(
@@ -5608,6 +6740,43 @@ def view_asset(asset_id):
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
                          now=datetime.utcnow, intune_device=intune_device, intune_error=intune_error,
                          rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele)
+
+
+@app.route('/assets/<int:asset_id>/rmm/<section>')
+@login_required
+def rmm_section(asset_id, section):
+    """Full-page view for an individual RMM management section."""
+    ALLOWED = {'hw', 'sec', 'sysinfo', 'metrics', 'avail', 'patches',
+               'software', 'scripts', 'services', 'events', 'transfer', 'power'}
+    if section not in ALLOWED:
+        abort(404)
+
+    asset = Asset.query.get_or_404(asset_id)
+
+    rmm_agent_id = None
+    try:
+        row = db.session.execute(
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
+            {'aid': asset_id}
+        ).fetchone()
+        if row:
+            rmm_agent_id = row[0]
+    except Exception:
+        pass
+
+    SECTION_LABELS = {
+        'hw': 'Hardware', 'sec': 'Security', 'sysinfo': 'System',
+        'metrics': 'Metrics', 'avail': 'Activity', 'patches': 'Patch Management',
+        'software': 'Software', 'scripts': 'Scripts', 'services': 'Services',
+        'events': 'Events', 'transfer': 'File Transfer', 'power': 'Power',
+    }
+
+    return render_template('rmm_section.html',
+                           asset=asset,
+                           rmm_agent_id=rmm_agent_id,
+                           section=section,
+                           section_label=SECTION_LABELS.get(section, section.title()))
+
 
 @app.route('/assets/<int:asset_id>/edit', methods=['GET', 'POST'])
 @login_required
@@ -8101,18 +9270,28 @@ def add_user():
             flash('Email already exists', 'danger')
             return redirect(url_for('add_user'))
         
+        first_name = request.form.get('first_name', '').strip()
+        last_name = request.form.get('last_name', '').strip()
+        full_name = f"{first_name} {last_name}".strip() or None
+
+        password_confirm = request.form.get('password_confirm', '')
+        if password != password_confirm:
+            flash('Passwords do not match.', 'danger')
+            return redirect(url_for('add_user'))
+
         user = User(
             username=username,
             email=email,
             password_hash=generate_password_hash(password),
             role=role,
-            is_admin=(role == 'admin')
+            is_admin=(role == 'admin'),
+            full_name=full_name,
         )
         
         db.session.add(user)
         db.session.commit()
         
-        flash(f'User {username} created successfully!', 'success')
+        flash(f'User {user.display_name} created successfully!', 'success')
         return redirect(url_for('users'))
     
     return render_template('add_user.html')
@@ -8130,17 +9309,53 @@ def edit_user(user_id):
         user.email = request.form.get('email')
         user.role = request.form.get('role')
         user.is_admin = (user.role == 'admin')
+
+        first_name = request.form.get('first_name', '').strip()
+        last_name = request.form.get('last_name', '').strip()
+        user.full_name = f"{first_name} {last_name}".strip() or None
         
         # Update password if provided
         new_password = request.form.get('password')
         if new_password:
+            if len(new_password) < 6:
+                flash('Password must be at least 6 characters.', 'danger')
+                return redirect(url_for('edit_user', user_id=user_id))
             user.password_hash = generate_password_hash(new_password)
         
         db.session.commit()
-        flash(f'User {user.username} updated successfully!', 'success')
+        flash(f'User {user.display_name} updated successfully!', 'success')
         return redirect(url_for('users'))
-    
+
+    # Split full_name into first/last for pre-population
+    name_parts = (user.full_name or '').split(' ', 1)
+    user._first_name = name_parts[0] if name_parts else ''
+    user._last_name = name_parts[1] if len(name_parts) > 1 else ''
     return render_template('edit_user.html', user=user)
+
+@app.route('/users/<int:user_id>/view-as', methods=['POST'])
+@login_required
+@admin_required
+def view_as_user(user_id):
+    """Allow an admin to impersonate another user to preview their experience."""
+    if user_id == current_user.id:
+        flash('You cannot view as yourself.', 'warning')
+        return redirect(url_for('users'))
+    target = User.query.get_or_404(user_id)
+    session['impersonate_user_id'] = user_id
+    session['impersonate_real_admin_id'] = current_user.id
+    flash(f'Now viewing as {target.display_name} ({target.role}). Use the banner at the top to stop.', 'warning')
+    return redirect(url_for('index'))
+
+
+@app.route('/users/stop-view-as', methods=['POST'])
+@login_required
+def stop_view_as():
+    """End impersonation session and return to real admin account."""
+    session.pop('impersonate_user_id', None)
+    session.pop('impersonate_real_admin_id', None)
+    flash('Returned to your admin account.', 'success')
+    return redirect(url_for('users'))
+
 
 @app.route('/users/<int:user_id>/delete', methods=['POST'])
 @login_required
@@ -8161,6 +9376,24 @@ def delete_user(user_id):
     
     flash(f'User {username} deleted successfully', 'success')
     return redirect(url_for('users'))
+
+
+@app.route('/users/<int:user_id>/reset-password', methods=['POST'])
+@login_required
+@admin_required
+@license_required
+def reset_user_password(user_id):
+    """Admin sets a new temporary password for a user"""
+    user = User.query.get_or_404(user_id)
+    new_password = request.form.get('new_password', '')
+    if len(new_password) < 6:
+        flash('Password must be at least 6 characters.', 'danger')
+        return redirect(url_for('edit_user', user_id=user_id))
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+    flash(f'Password for {user.display_name} has been reset.', 'success')
+    return redirect(url_for('users'))
+
 
 @app.route('/init-db')
 def init_db():
@@ -8693,6 +9926,7 @@ def download_agent_msi():
                      mimetype='application/x-msi')
 
 
+@app.route('/download/site-install.ps1')
 def download_site_install_ps1():
     """Serve a pre-configured PS1 authenticated by the site token in ?t=.
 
@@ -9221,12 +10455,27 @@ def api_rmm_pending_updates(agent_id):
         {'aid': agent_id}
     ).fetchall()
     import json as _json
+
+    def _parse_kb_ids(raw):
+        if not raw:
+            return []
+        if isinstance(raw, list):
+            return raw
+        s = str(raw).strip()
+        # PostgreSQL array format: {KB1234,KB5678}
+        if s.startswith('{') and s.endswith('}'):
+            return [x.strip() for x in s[1:-1].split(',') if x.strip()]
+        try:
+            return _json.loads(s)
+        except (_json.JSONDecodeError, ValueError):
+            return [s]
+
     return jsonify({
         'ok': True,
         'count': len(rows),
         'updates': [{
             'update_id':       r[0], 'title':    r[1],
-            'kb_ids':          _json.loads(r[2] or '[]'),
+            'kb_ids':          _parse_kb_ids(r[2]),
             'severity':        r[3], 'size_mb':  r[4],
             'reboot_required': bool(r[5]),
             'category':        r[6], 'recorded_at': r[7],

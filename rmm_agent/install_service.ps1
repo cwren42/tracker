@@ -72,9 +72,7 @@ Write-Host "[3/5] Removing old service if present..."
 
 Write-Host "[4/5] Installing service..."
 & $NssmPath install $ServiceName $PythonExe
-# Use agent_launcher.py as the NSSM entry point — it validates agent_client.py
-# before launching it and auto-restores from backup if there's a syntax error.
-& $NssmPath set $ServiceName AppParameters "`"$InstallDir\agent_launcher.py`""
+& $NssmPath set $ServiceName AppParameters "`"$InstallDir\agent_client.py`""
 & $NssmPath set $ServiceName AppDirectory $InstallDir
 & $NssmPath set $ServiceName DisplayName "Cirque RMM Agent"
 & $NssmPath set $ServiceName Description "Connects to the Cirque RMM gateway for remote management."
@@ -82,9 +80,12 @@ Write-Host "[4/5] Installing service..."
 & $NssmPath set $ServiceName AppRestartDelay 3000
 
 $env1 = "RMM_GATEWAY_URL=$GatewayUrl"
+$env1b = "RMM_TRACKER_URL=$TrackerUrl"
+$env1c = "RMM_GATEWAY_URL_PUBLIC=wss://rmm.cirquetools.com"
+$env1d = "RMM_TRACKER_URL_PUBLIC=https://tracker.cirquetools.com"
 $env2 = "RMM_AGENT_ID=$AgentId"
 $env3 = "RMM_AGENT_TOKEN=$Token"
-& $NssmPath set $ServiceName AppEnvironmentExtra $env1 $env2 $env3
+& $NssmPath set $ServiceName AppEnvironmentExtra $env1 $env1b $env1c $env1d $env2 $env3
 
 $LogDir = "$InstallDir\logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null

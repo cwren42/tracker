@@ -79,15 +79,27 @@ def _save_ico(path: str) -> None:
 def _get_username() -> str:
     try:
         import ctypes
+        GetUserNameEx = ctypes.windll.secur32.GetUserNameExW
         buf = ctypes.create_unicode_buffer(256)
         size = ctypes.c_ulong(256)
-        ctypes.windll.secur32.GetUserNameExW(2, buf, ctypes.byref(size))
-        full = buf.value.strip()
-        if full:
-            return full
+        if GetUserNameEx(3, buf, ctypes.byref(size)):  # 3 = NameDisplay ("First Last")
+            full = buf.value.strip()
+            if full:
+                return full
+        # Fallback: NameSamCompatible (DOMAIN\user)
+        size.value = 256
+        if GetUserNameEx(2, buf, ctypes.byref(size)):
+            full = buf.value.strip()
+            if full:
+                return full
     except Exception:
         pass
-    return os.environ.get('USERNAME', '')
+    # Final fallback: environment variables
+    domain = os.environ.get('USERDOMAIN', '')
+    user   = os.environ.get('USERNAME', '')
+    if domain and user and domain.upper() != os.environ.get('COMPUTERNAME', '').upper():
+        return f'{domain}\\{user}'
+    return user
 
 
 def _get_hostname() -> str:
@@ -277,7 +289,8 @@ def _show_ticket_form(config: dict) -> None:
 
     f.columnconfigure(1, weight=1)
     subject_entry.focus_set()
-    root.bind('<Return>', lambda e: _submit())
+    # Delay Return binding so tray-menu Enter key doesn't trigger submit on open
+    root.after(300, lambda: root.bind('<Return>', lambda e: _submit()))
     root.mainloop()
 
 

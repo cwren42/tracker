@@ -375,6 +375,14 @@
                             <a href="{{ url_for('edit_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-secondary">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            {% if current_user.role in ['admin', 'manager'] %}
+                            <button class="btn btn-sm btn-outline-danger"
+                                data-asset-id="{{ asset.id }}"
+                                data-asset-name="{{ asset.asset_tag }} – {{ asset.name }}"
+                                onclick="deleteSingleAsset(this)" title="Delete asset">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -626,6 +634,27 @@ function bulkDelete() {
     .catch(error => {
         alert('Error deleting assets: ' + error);
     });
+}
+
+// Single Asset Delete
+function deleteSingleAsset(btn) {
+    const assetId = btn.dataset.assetId;
+    const assetName = btn.dataset.assetName;
+    if (!confirm(`Delete "${assetName}"?\n\nThis action cannot be undone.`)) return;
+    fetch('/assets/bulk/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset_ids: [String(assetId)] })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(err => alert('Error deleting asset: ' + err));
 }
 
 // Saved Filters Functions

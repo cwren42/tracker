@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}UniFi Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-wifi me-2"></i>UniFi Controller Settings</h2>
+            <p class="text-muted">Manage UniFi network controller integration</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-wifi me-2"></i>Controller Configuration</h5>
+                    <button type="button" class="btn btn-sm btn-light" onclick="testUnifiConnection()">
+                        <i class="bi bi-arrow-repeat"></i> Test Connection
+                    </button>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="update_unifi">
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <label class="form-label">Controller Host/URL *</label>
+                                <input type="text" class="form-control" name="unifi_host" 
+                                       value="{{ unifi_config.host }}" required 
+                                       placeholder="https://192.168.1.100:8443">
+                                <small class="text-muted">Include protocol (http/https) and port if needed</small>
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Username *</label>
+                                <input type="text" class="form-control" name="unifi_username" 
+                                       value="{{ unifi_config.username }}" required 
+                                       placeholder="admin@example.com">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Password *</label>
+                                <input type="password" class="form-control" name="unifi_password" 
+                                       placeholder="{% if unifi_config.password_set %}••••••••{% else %}Enter password{% endif %}">
+                                {% if unifi_config.password_set %}<small class="text-muted">Password already set. Leave blank to keep current.</small>{% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Site Name</label>
+                                <input type="text" class="form-control" name="unifi_site" 
+                                       value="{{ unifi_config.site or 'default' }}" 
+                                       placeholder="default">
+                                <small class="text-muted">Leave blank for 'default' site</small>
+                            </div>
+                        </div>
+                        
+                        {% if unifi_config.last_sync_status %}
+                        <div class="alert alert-info">
+                            <strong>Last Sync:</strong> {{ unifi_config.last_sync_time or 'Never' }}<br>
+                            <strong>Status:</strong> {{ unifi_config.last_sync_status }}<br>
+                            {% if unifi_config.last_sync_message %}<strong>Message:</strong> {{ unifi_config.last_sync_message }}{% endif %}
+                        </div>
+                        {% endif %}
+                        
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-save me-1"></i>Save Settings
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card bg-light shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-info-circle me-2"></i>About UniFi Integration</h6>
+                    <p class="small text-muted mb-2">
+                        Automatically sync devices, networks, and clients from your UniFi controller to the asset database.
+                    </p>
+                    <hr>
+                    <p class="small mb-0"><strong>Status:</strong> 
+                        {% if unifi_config.host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-warning">Not Configured</span>{% endif %}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function testUnifiConnection() {
+    fetch('/api/unifi/test', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('✓ Connection successful!');
+            } else {
+                alert('✗ Connection failed: ' + (data.message || data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error: ' + err));
+}
+</script>
+{% endblock %}

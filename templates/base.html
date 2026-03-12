@@ -16,9 +16,9 @@
     <link rel="apple-touch-icon" sizes="192x192" href="{{ url_for('static', filename='favicon-192.png') }}">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
     
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/vendor/bootstrap-icons/font/bootstrap-icons.css">
+    <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
     <style>
         /* Theme CSS Variables */
         :root {
@@ -297,6 +297,37 @@
             border-color: var(--button-primary-hover);
         }
         
+        /* Theme-aware overrides for hardcoded Bootstrap light classes */
+        [data-theme="dark"] .bg-light,
+        [data-theme="dark"] .bg-white {
+            background-color: var(--card-bg) !important;
+            color: var(--text-primary) !important;
+        }
+        [data-theme="dark"] .bg-light .text-dark,
+        [data-theme="dark"] .bg-white .text-dark {
+            color: var(--text-primary) !important;
+        }
+        [data-theme="dark"] pre.bg-light,
+        [data-theme="dark"] code.bg-light {
+            background-color: #161b22 !important;
+            color: #c9d1d9 !important;
+        }
+        [data-theme="deep-forest"] .bg-light,
+        [data-theme="deep-forest"] .bg-white {
+            background-color: var(--card-bg) !important;
+            color: var(--text-primary) !important;
+        }
+        [data-theme="modern-naturalist"] .bg-light,
+        [data-theme="modern-naturalist"] .bg-white {
+            background-color: var(--card-bg) !important;
+            color: var(--text-primary) !important;
+        }
+        [data-theme="heritage"] .bg-light,
+        [data-theme="heritage"] .bg-white {
+            background-color: var(--card-bg) !important;
+            color: var(--text-primary) !important;
+        }
+
         /* Dark Mode Dropdown Menus */
         [data-theme="dark"] .dropdown-menu {
             background-color: #161b22;
@@ -318,6 +349,43 @@
         [data-theme="dark"] .table {
             color: #c9d1d9;
             border-color: #30363d;
+        }
+        [data-theme="dark"] .table thead th,
+        [data-theme="dark"] .table > thead {
+            color: #c9d1d9;
+            background-color: #21262d;
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .table tbody tr {
+            background-color: var(--card-bg);
+            border-color: #30363d;
+        }
+        [data-theme="dark"] .table-hover tbody tr:hover {
+            background-color: #21262d;
+            color: #c9d1d9;
+        }
+        /* Fix alert-info cyan for dark themes */
+        [data-theme="dark"] .alert-info {
+            background-color: #0c2d6b;
+            border-color: #0969da;
+            color: #79c0ff;
+        }
+        [data-theme="dark"] .alert-info .bi { color: #79c0ff; }
+        [data-theme="deep-forest"] .alert-info,
+        [data-theme="modern-naturalist"] .alert-info,
+        [data-theme="heritage"] .alert-info {
+            background-color: var(--card-bg);
+            border-color: var(--button-primary);
+            color: var(--text-primary);
+        }
+        [data-theme="deep-forest"] .table thead th,
+        [data-theme="modern-naturalist"] .table thead th,
+        [data-theme="heritage"] .table thead th {
+            background-color: var(--card-bg);
+            color: var(--text-primary);
+            border-color: var(--border-color);
+        }
+        [data-theme="dark"] .table {
             background-color: #161b22;
         }
         [data-theme="dark"] .table > :not(caption) > * > * {
@@ -522,229 +590,552 @@
             border: 2px solid #0d6efd;
             border-radius: 8px;
         }
+
+        /* ── Sidebar Layout ───────────────────────────────────────── */
+        :root {
+            --sidebar-width: 220px;
+            --sidebar-collapsed-width: 56px;
+            --sidebar-bg: #161b22;
+            --sidebar-text: #c9d1d9;
+            --sidebar-hover-bg: #21262d;
+            --sidebar-active-bg: #21262d;
+            --sidebar-active-text: #58a6ff;
+            --sidebar-border: #30363d;
+            --sidebar-header-bg: #0d1117;
+        }
+        /* Override per theme */
+        [data-theme="deep-forest"] {
+            --sidebar-bg: #1B3022;
+            --sidebar-text: #F2E8CF;
+            --sidebar-hover-bg: #132419;
+            --sidebar-active-bg: #0d1a10;
+            --sidebar-active-text: #BC986A;
+            --sidebar-border: #2a4a33;
+            --sidebar-header-bg: #0d1a10;
+        }
+        [data-theme="modern-naturalist"] {
+            --sidebar-bg: #2D4639;
+            --sidebar-text: #F5F2ED;
+            --sidebar-hover-bg: #1f3127;
+            --sidebar-active-bg: #1f3127;
+            --sidebar-active-text: #D6C7A1;
+            --sidebar-border: #1f3127;
+            --sidebar-header-bg: #1a2b22;
+        }
+        [data-theme="heritage"] {
+            --sidebar-bg: #354A21;
+            --sidebar-text: #FAF9F6;
+            --sidebar-hover-bg: #263617;
+            --sidebar-active-bg: #263617;
+            --sidebar-active-text: #C2B280;
+            --sidebar-border: #263617;
+            --sidebar-header-bg: #1e2c12;
+        }
+
+        body {
+            display: flex;
+            flex-direction: row;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        #sidebar {
+            width: var(--sidebar-width);
+            min-width: var(--sidebar-width);
+            background-color: var(--sidebar-bg);
+            color: var(--sidebar-text);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0; left: 0; bottom: 0;
+            z-index: 1040;
+            overflow: hidden;
+            transition: width 0.2s ease, min-width 0.2s ease;
+            border-right: 1px solid var(--sidebar-border);
+        }
+        #sidebar.collapsed {
+            width: var(--sidebar-collapsed-width);
+            min-width: var(--sidebar-collapsed-width);
+        }
+
+        /* Brand header */
+        #sidebar .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            background-color: var(--sidebar-header-bg);
+            border-bottom: 1px solid var(--sidebar-border);
+            text-decoration: none;
+            color: var(--sidebar-text);
+            white-space: nowrap;
+            overflow: hidden;
+            font-weight: 700;
+            font-size: 1rem;
+        }
+        #sidebar .sidebar-brand i { font-size: 1.25rem; flex-shrink: 0; }
+        #sidebar .sidebar-brand .brand-label { overflow: hidden; }
+
+        /* Toggle button */
+        #sidebar-toggle {
+            background: none;
+            border: none;
+            color: var(--sidebar-text);
+            padding: 8px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            border-bottom: 1px solid var(--sidebar-border);
+            width: 100%;
+        }
+        #sidebar-toggle:hover { background: var(--sidebar-hover-bg); }
+
+        /* Nav sections */
+        #sidebar .sidebar-nav {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 8px 0;
+            scrollbar-width: thin;
+            scrollbar-color: var(--sidebar-border) transparent;
+        }
+        #sidebar .nav-section-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            color: #6e7681;
+            padding: 10px 16px 4px;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        #sidebar.collapsed .nav-section-label { opacity: 0; }
+
+        /* Nav items */
+        #sidebar .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 16px;
+            color: var(--sidebar-text);
+            text-decoration: none;
+            white-space: nowrap;
+            overflow: hidden;
+            font-size: 0.875rem;
+            border-left: 3px solid transparent;
+            transition: background 0.15s, color 0.15s;
+        }
+        #sidebar .sidebar-link i { font-size: 1.05rem; flex-shrink: 0; min-width: 20px; text-align: center; }
+        #sidebar .sidebar-link .link-label { overflow: hidden; }
+        #sidebar .sidebar-link:hover {
+            background-color: var(--sidebar-hover-bg);
+            color: var(--sidebar-active-text);
+        }
+        #sidebar .sidebar-link.active {
+            background-color: var(--sidebar-active-bg);
+            color: var(--sidebar-active-text);
+            border-left-color: var(--sidebar-active-text);
+        }
+        #sidebar.collapsed .sidebar-link { justify-content: center; padding: 9px; border-left: none; }
+        #sidebar.collapsed .link-label,
+        #sidebar.collapsed .sidebar-chevron { display: none; }
+
+        /* Collapsible sub-menus */
+        .sidebar-submenu { list-style: none; padding: 0; margin: 0; overflow: hidden; }
+        .sidebar-submenu .sidebar-link {
+            padding-left: 40px;
+            font-size: 0.82rem;
+            border-left: none;
+        }
+        #sidebar.collapsed .sidebar-submenu { display: none; }
+
+        /* Chevron rotate */
+        .sidebar-chevron { margin-left: auto; font-size: 0.7rem; transition: transform 0.2s; flex-shrink: 0; }
+        .sidebar-parent[aria-expanded="true"] .sidebar-chevron { transform: rotate(180deg); }
+
+        /* Sidebar footer (user + actions) */
+        #sidebar .sidebar-footer {
+            border-top: 1px solid var(--sidebar-border);
+            padding: 8px 0;
+        }
+
+        /* Tooltips when collapsed */
+        #sidebar.collapsed .sidebar-link[data-bs-toggle="tooltip"] { position: relative; }
+
+        /* ── Page wrapper ─────────────────────────────────────────── */
+        #page-wrapper {
+            margin-left: var(--sidebar-width);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            transition: margin-left 0.2s ease;
+        }
+        #page-wrapper.sidebar-collapsed { margin-left: var(--sidebar-collapsed-width); }
+        #page-wrapper.no-sidebar { margin-left: 0; }
+
+        /* Top bar (notifications + user) */
+        #topbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 4px;
+            padding: 6px 16px;
+            background-color: var(--sidebar-bg);
+            border-bottom: 1px solid var(--sidebar-border);
+            position: sticky;
+            top: 0;
+            z-index: 1030;
+        }
+        #topbar .topbar-link {
+            color: var(--sidebar-text);
+            text-decoration: none;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #topbar .topbar-link:hover { background: var(--sidebar-hover-bg); color: var(--sidebar-active-text); }
+        #topbar .topbar-link i { font-size: 1rem; }
+
+        /* Main content area */
+        .content {
+            flex: 1;
+            padding: 20px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .footer {
+            background-color: var(--sidebar-bg);
+            border-top: 1px solid var(--sidebar-border);
+            color: #6e7681;
+            padding: 10px 20px;
+            font-size: 0.78rem;
+            text-align: right;
+        }
+
+        /* Mobile: sidebar becomes overlay */
+        @media (max-width: 768px) {
+            #sidebar { transform: translateX(-100%); transition: transform 0.2s ease, width 0.2s ease; }
+            #sidebar.mobile-open { transform: translateX(0); }
+            #page-wrapper { margin-left: 0 !important; }
+            #sidebar-overlay {
+                display: none;
+                position: fixed; inset: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 1039;
+            }
+            #sidebar-overlay.show { display: block; }
+            #mobile-toggle { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            #mobile-toggle { display: none !important; }
+        }
     </style>
     {% block styles %}{% endblock %}
 </head>
-<body {% if current_user.is_authenticated and current_user.theme %}data-theme="{{ current_user.theme }}"{% endif %}>
-    {% if current_user.is_authenticated %}
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-boxes"></i> Asset Tracker
+<body {% if current_user.is_authenticated and current_user.theme and current_user.theme != 'default' %}data-theme="{{ current_user.theme }}"{% endif %}>
+
+{% if current_user.is_authenticated %}
+<!-- Mobile overlay -->
+<div id="sidebar-overlay" onclick="sidebarClose()"></div>
+
+<!-- ── SIDEBAR ──────────────────────────────────────────────────── -->
+<nav id="sidebar">
+    <!-- Brand -->
+    <a class="sidebar-brand" href="{{ url_for('index') }}">
+        <i class="bi bi-boxes"></i>
+        <span class="brand-label">Asset Tracker</span>
+    </a>
+
+    <!-- Toggle collapse -->
+    <button id="sidebar-toggle" onclick="sidebarToggle()" title="Toggle sidebar">
+        <i class="bi bi-layout-sidebar-reverse" id="sidebar-toggle-icon"></i>
+    </button>
+
+    <div class="sidebar-nav">
+
+        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] %}
+        <a class="sidebar-link {% if request.endpoint == 'index' %}active{% endif %}"
+           href="{{ url_for('index') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Dashboard">
+            <i class="bi bi-house-door-fill"></i><span class="link-label">Dashboard</span>
+        </a>
+        {% endif %}
+
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer'] %}
+        <a class="sidebar-link {% if request.endpoint in ['tickets','new_ticket','view_ticket'] %}active{% endif %}"
+           href="{{ url_for('tickets') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Tickets">
+            <i class="bi bi-ticket-perforated-fill"></i><span class="link-label">Tickets</span>
+        </a>
+        {% endif %}
+
+        {% if current_user.role in ['admin', 'eagle_eyes'] %}
+        <a class="sidebar-link {% if request.endpoint == 'rmm_eagle_eyes_fleet' %}active{% endif %}"
+           href="{{ url_for('rmm_eagle_eyes_fleet') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eyes">
+            <i class="bi bi-eye-fill" style="color:#f59e0b"></i><span class="link-label">Eagle Eyes</span>
+        </a>
+        {% endif %}
+
+        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] %}
+        <div class="nav-section-label">IT Management</div>
+
+        <a class="sidebar-link {% if request.endpoint == 'assets' %}active{% endif %}"
+           href="{{ url_for('assets') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Assets">
+            <i class="bi bi-laptop"></i><span class="link-label">Assets</span>
+        </a>
+
+        <a class="sidebar-link {% if request.endpoint in ['employees','add_employee','edit_employee'] %}active{% endif %}"
+           href="{{ url_for('employees') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Employees">
+            <i class="bi bi-people-fill"></i><span class="link-label">Employees</span>
+        </a>
+
+        <a class="sidebar-link {% if request.endpoint == 'licenses' %}active{% endif %}"
+           href="{{ url_for('licenses') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Licenses">
+            <i class="bi bi-key-fill"></i><span class="link-label">Licenses</span>
+        </a>
+        {% endif %}
+
+        {% if current_user.role == 'admin' %}
+        <div class="nav-section-label">Operations</div>
+
+        <!-- Monitoring group -->
+        <a class="sidebar-link sidebar-parent {% if request.endpoint and request.endpoint.startswith('monitoring') %}active{% endif %}"
+           data-bs-toggle="collapse" href="#sub-monitoring" role="button"
+           aria-expanded="{% if request.endpoint and request.endpoint.startswith('monitoring') %}true{% else %}false{% endif %}">
+            <i class="bi bi-activity"></i><span class="link-label">Monitoring</span>
+            <i class="bi bi-chevron-down sidebar-chevron"></i>
+        </a>
+        <ul class="sidebar-submenu collapse {% if request.endpoint and request.endpoint.startswith('monitoring') %}show{% endif %}" id="sub-monitoring">
+            <li><a class="sidebar-link {% if request.endpoint == 'monitoring_dashboard' %}active{% endif %}" href="{{ url_for('monitoring_dashboard') }}"><i class="bi bi-speedometer2"></i><span class="link-label">Dashboard</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'monitoring_profiles' %}active{% endif %}" href="{{ url_for('monitoring_profiles') }}"><i class="bi bi-list-check"></i><span class="link-label">Profiles</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'monitoring_alerts' %}active{% endif %}" href="{{ url_for('monitoring_alerts') }}"><i class="bi bi-exclamation-triangle"></i><span class="link-label">Alerts</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'monitoring_maintenance_windows' %}active{% endif %}" href="{{ url_for('monitoring_maintenance_windows') }}"><i class="bi bi-calendar-week"></i><span class="link-label">Maintenance</span></a></li>
+        </ul>
+
+        <a class="sidebar-link {% if request.endpoint == 'backups' %}active{% endif %}"
+           href="{{ url_for('backups') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Backups">
+            <i class="bi bi-hdd-stack-fill"></i><span class="link-label">Backups</span>
+        </a>
+
+        <!-- Reports group -->
+        <a class="sidebar-link sidebar-parent {% if request.endpoint in ['reports','custom_reports'] %}active{% endif %}"
+           data-bs-toggle="collapse" href="#sub-reports" role="button"
+           aria-expanded="{% if request.endpoint in ['reports','custom_reports'] %}true{% else %}false{% endif %}">
+            <i class="bi bi-graph-up"></i><span class="link-label">Reports</span>
+            <i class="bi bi-chevron-down sidebar-chevron"></i>
+        </a>
+        <ul class="sidebar-submenu collapse {% if request.endpoint in ['reports','custom_reports'] %}show{% endif %}" id="sub-reports">
+            <li><a class="sidebar-link {% if request.endpoint == 'reports' %}active{% endif %}" href="{{ url_for('reports') }}"><i class="bi bi-bar-chart-line"></i><span class="link-label">Analytics</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'custom_reports' %}active{% endif %}" href="{{ url_for('custom_reports') }}"><i class="bi bi-file-earmark-bar-graph"></i><span class="link-label">Custom Reports</span></a></li>
+        </ul>
+
+        <div class="nav-section-label">Security &amp; Compliance</div>
+
+        <!-- Security group -->
+        <a class="sidebar-link sidebar-parent {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}active{% endif %}"
+           data-bs-toggle="collapse" href="#sub-security" role="button"
+           aria-expanded="{% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}true{% else %}false{% endif %}">
+            <i class="bi bi-shield-exclamation"></i><span class="link-label">Security</span>
+            <i class="bi bi-chevron-down sidebar-chevron"></i>
+        </a>
+        <ul class="sidebar-submenu collapse {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}show{% endif %}" id="sub-security">
+            <li><a class="sidebar-link {% if request.endpoint == 'vulnerability_dashboard' %}active{% endif %}" href="{{ url_for('vulnerability_dashboard') }}"><i class="bi bi-bug"></i><span class="link-label">Vulnerabilities</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'alert_center' %}active{% endif %}" href="{{ url_for('alert_center') }}"><i class="bi bi-bell-fill"></i><span class="link-label">Alert Center</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'workflows' %}active{% endif %}" href="{{ url_for('workflows') }}"><i class="bi bi-diagram-3"></i><span class="link-label">Workflows</span></a></li>
+        </ul>
+
+        <!-- Compliance group -->
+        <a class="sidebar-link sidebar-parent {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}active{% endif %}"
+           data-bs-toggle="collapse" href="#sub-compliance" role="button"
+           aria-expanded="{% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}true{% else %}false{% endif %}">
+            <i class="bi bi-patch-check-fill"></i><span class="link-label">Compliance</span>
+            <i class="bi bi-chevron-down sidebar-chevron"></i>
+        </a>
+        <ul class="sidebar-submenu collapse {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}show{% endif %}" id="sub-compliance">
+            <li><a class="sidebar-link {% if request.endpoint == 'soc2_dashboard' %}active{% endif %}" href="{{ url_for('soc2_dashboard') }}"><i class="bi bi-speedometer2"></i><span class="link-label">SOC2 Dashboard</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'soc2_strikegraph' %}active{% endif %}" href="{{ url_for('soc2_strikegraph') }}"><i class="bi bi-diagram-3"></i><span class="link-label">StrikeGraph</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'management_risk_review' %}active{% endif %}" href="{{ url_for('management_risk_review') }}"><i class="bi bi-clipboard-check"></i><span class="link-label">Risk Assessment</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'system_description' %}active{% endif %}" href="{{ url_for('system_description') }}"><i class="bi bi-file-earmark-text"></i><span class="link-label">System Desc.</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'policies' %}active{% endif %}" href="{{ url_for('policies') }}"><i class="bi bi-book"></i><span class="link-label">Policies</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'controls' %}active{% endif %}" href="{{ url_for('controls') }}"><i class="bi bi-shield-fill"></i><span class="link-label">Controls</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'risks' %}active{% endif %}" href="{{ url_for('risks') }}"><i class="bi bi-exclamation-triangle-fill"></i><span class="link-label">Risks</span></a></li>
+        </ul>
+
+        <div class="nav-section-label">Admin</div>
+        <a class="sidebar-link {% if request.endpoint == 'users' %}active{% endif %}"
+           href="{{ url_for('users') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Users">
+            <i class="bi bi-people-fill"></i><span class="link-label">Users</span>
+        </a>
+        <a class="sidebar-link {% if request.endpoint == 'settings' %}active{% endif %}"
+           href="{{ url_for('settings') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Settings">
+            <i class="bi bi-gear-fill"></i><span class="link-label">Settings</span>
+        </a>
+                    <a class="sidebar-link {% if request.endpoint == 'settings_theme' %}active{% endif %}"
+                            href="{{ url_for('settings_theme') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Appearance Settings">
+                        <i class="bi bi-palette-fill"></i><span class="link-label">Appearance</span>
+                </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_license' %}active{% endif %}"
+              href="{{ url_for('settings_license') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="License Settings">
+            <i class="bi bi-key-fill"></i><span class="link-label">License</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_email' %}active{% endif %}"
+              href="{{ url_for('settings_email') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Email Settings">
+            <i class="bi bi-envelope-fill"></i><span class="link-label">Email</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_directory' %}active{% endif %}"
+              href="{{ url_for('settings_directory') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Directory Settings">
+            <i class="bi bi-server"></i><span class="link-label">Directory</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_rmm' %}active{% endif %}"
+              href="{{ url_for('settings_rmm') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="RMM Settings">
+            <i class="bi bi-robot"></i><span class="link-label">RMM Agent</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_scripts' %}active{% endif %}"
+              href="{{ url_for('settings_scripts') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Scripts Settings">
+            <i class="bi bi-terminal-fill"></i><span class="link-label">Scripts</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_eagleeye' %}active{% endif %}"
+              href="{{ url_for('settings_eagleeye') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eye Settings">
+            <i class="bi bi-binoculars-fill"></i><span class="link-label">Eagle Eye</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_unifi' %}active{% endif %}"
+              href="{{ url_for('settings_unifi') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="UniFi Settings">
+            <i class="bi bi-wifi"></i><span class="link-label">UniFi</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_proxmox' %}active{% endif %}"
+              href="{{ url_for('settings_proxmox') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Proxmox Settings">
+            <i class="bi bi-hdd-stack-fill"></i><span class="link-label">Proxmox</span>
+        </a>
+          <a class="sidebar-link {% if request.endpoint == 'settings_ai' %}active{% endif %}"
+              href="{{ url_for('settings_ai') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="AI Settings">
+            <i class="bi bi-stars"></i><span class="link-label">AI</span>
+        </a>
+                    <a class="sidebar-link {% if request.endpoint == 'settings_cloudflare' %}active{% endif %}"
+                            href="{{ url_for('settings_cloudflare') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Cloudflare Settings">
+                        <i class="bi bi-cloud-fill"></i><span class="link-label">Cloudflare</span>
+                </a>
+        {% endif %}
+
+        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] and current_user.role != 'admin' %}
+        <!-- manager-level reports -->
+        <div class="nav-section-label">Reports</div>
+        <a class="sidebar-link {% if request.endpoint == 'reports' %}active{% endif %}"
+           href="{{ url_for('reports') }}">
+            <i class="bi bi-bar-chart-line"></i><span class="link-label">Analytics</span>
+        </a>
+        <a class="sidebar-link {% if request.endpoint == 'custom_reports' %}active{% endif %}"
+           href="{{ url_for('custom_reports') }}">
+            <i class="bi bi-file-earmark-bar-graph"></i><span class="link-label">Custom Reports</span>
+        </a>
+        {% endif %}
+
+    </div><!-- /sidebar-nav -->
+
+    <!-- Sidebar footer: logout -->
+    <div class="sidebar-footer">
+        <a class="sidebar-link" href="{{ url_for('logout') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Logout">
+            <i class="bi bi-box-arrow-right"></i><span class="link-label">Logout</span>
+        </a>
+    </div>
+</nav>
+{% endif %}<!-- /is_authenticated (sidebar) -->
+<!-- ── END SIDEBAR ──────────────────────────────────────────────── -->
+
+<!-- ── PAGE WRAPPER ─────────────────────────────────────────────── -->
+<div id="page-wrapper" {% if not current_user.is_authenticated %}class="no-sidebar"{% endif %}>
+{% if current_user.is_authenticated %}
+
+    <!-- Top bar -->
+    <div id="topbar">
+        <!-- Mobile hamburger -->
+        <button id="mobile-toggle" class="topbar-link" style="background:none;border:none;cursor:pointer;display:none;" onclick="sidebarOpen()">
+            <i class="bi bi-list" style="font-size:1.3rem;"></i>
+        </button>
+
+        <span class="me-auto"></span>
+
+        <!-- Incident link -->
+        <a class="topbar-link" href="https://incident.corp.cirque.com" target="_blank" rel="noopener" title="Incident Portal">
+            <i class="bi bi-shield-exclamation"></i><span class="d-none d-md-inline">Incident</span>
+        </a>
+
+        <!-- Notification Bell -->
+        <div class="dropdown" id="bell-nav">
+            <a class="topbar-link position-relative" href="#" id="bellDropdown"
+               data-bs-toggle="dropdown" aria-expanded="false" onclick="bellMarkRead(event)">
+                <i class="bi bi-bell-fill"></i>
+                <span id="bell-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                      style="display:none;font-size:.6rem;"></span>
             </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">
-                            <i class="bi bi-house-door"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('assets') }}">
-                            <i class="bi bi-laptop"></i> Assets
-                        </a>
-                    </li>
-                    {% if current_user.role in ['admin', 'manager'] %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('tickets') }}">
-                            <i class="bi bi-ticket-perforated"></i> Tickets
-                        </a>
-                    </li>
-                    {% endif %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('employees') }}">
-                            <i class="bi bi-people"></i> Employees
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('licenses') }}">
-                            <i class="bi bi-key-fill"></i> Licenses
-                        </a>
-                    </li>
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="reportsDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-graph-up"></i> Reports
-                        </a>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('reports') }}">
-                                <i class="bi bi-bar-chart-line"></i> Analytics Dashboard
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('custom_reports') }}">
-                                <i class="bi bi-file-earmark-bar-graph"></i> Custom Reports
-                            </a></li>
-                        </ul>
-                    </li>
-                    {% if current_user.role == 'admin' %}
-                    <!-- Monitoring dropdown -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle {% if request.endpoint and request.endpoint.startswith('monitoring') %}active{% endif %}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-activity"></i> Monitoring
-                        </a>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('monitoring_dashboard') }}">
-                                <i class="bi bi-speedometer2"></i> Dashboard
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('monitoring_profiles') }}">
-                                <i class="bi bi-list-check"></i> Profiles
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('monitoring_alerts') }}">
-                                <i class="bi bi-exclamation-triangle"></i> Alerts
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('monitoring_maintenance_windows') }}">
-                                <i class="bi bi-calendar-week"></i> Maintenance Windows
-                            </a></li>
-                        </ul>
-                    </li>
-                    <!-- Backups -->
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'backups' %}active{% endif %}"
-                           href="{{ url_for('backups') }}">
-                            <i class="bi bi-hdd-stack"></i> Backups
-                        </a>
-                    </li>
-                    <!-- Security dropdown -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}active{% endif %}"
-                           href="#" id="securityDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-shield-exclamation"></i> Security
-                        </a>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('vulnerability_dashboard') }}">
-                                <i class="bi bi-bug"></i> Vulnerabilities &amp; CVEs
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('alert_center') }}">
-                                <i class="bi bi-bell-fill"></i> Alert Center
-                            </a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="{{ url_for('workflows') }}">
-                                <i class="bi bi-diagram-3"></i> Workflows
-                            </a></li>
-                        </ul>
-                    </li>
-                    <!-- Compliance dropdown -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}active{% endif %}"
-                           href="#" id="complianceDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-patch-check"></i> Compliance
-                        </a>
-                        <ul class="dropdown-menu">
-                            <li><h6 class="dropdown-header">SOC2</h6></li>
-                            <li><a class="dropdown-item" href="{{ url_for('soc2_dashboard') }}">
-                                <i class="bi bi-speedometer2"></i> SOC2 Dashboard
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('soc2_strikegraph') }}">
-                                <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
-                            </a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><h6 class="dropdown-header">Governance</h6></li>
-                            <li><a class="dropdown-item" href="{{ url_for('management_risk_review') }}">
-                                <i class="bi bi-clipboard-check"></i> Risk Assessment
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('system_description') }}">
-                                <i class="bi bi-file-earmark-text"></i> System Description
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('policies') }}">
-                                <i class="bi bi-book"></i> Policy Library
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('controls') }}">
-                                <i class="bi bi-shield-fill"></i> Controls
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('risks') }}">
-                                <i class="bi bi-exclamation-triangle"></i> Risks
-                            </a></li>
-                        </ul>
-                    </li>
-                    <!-- Admin dropdown -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle {% if request.endpoint in ['users','settings'] %}active{% endif %}"
-                           href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-gear-fill"></i> Admin
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="{{ url_for('users') }}">
-                                <i class="bi bi-people-fill"></i> Users
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('settings') }}">
-                                <i class="bi bi-sliders"></i> Settings
-                            </a></li>
-                        </ul>
-                    </li>
-                    {% endif %}
-                </ul>
-                {# Search form disabled - global_search endpoint not implemented
-                <form class="d-flex me-2" action="{{ url_for('global_search') }}" method="GET" role="search">
-                    <div class="input-group input-group-sm" style="width:220px;">
-                        <input class="form-control" type="search" name="q" placeholder="Search assets, tickets…"
-                               value="{{ request.args.get('q', '') }}" aria-label="Search">
-                        <button class="btn btn-outline-light" type="submit"><i class="bi bi-search"></i></button>
-                    </div>
-                </form>
-                #}
-                <ul class="navbar-nav">
-                    <!-- Notification Bell -->
-                    <li class="nav-item dropdown" id="bell-nav">
-                        <a class="nav-link position-relative" href="#" id="bellDropdown" role="button"
-                           data-bs-toggle="dropdown" aria-expanded="false" onclick="bellMarkRead(event)">
-                            <i class="bi bi-bell-fill"></i>
-                            <span id="bell-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
-                                  style="display:none;font-size:.6rem;"></span>
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end p-0" id="bell-menu"
-                            style="width:340px;max-height:420px;overflow-y:auto;">
-                            <li class="px-3 py-2 d-flex justify-content-between align-items-center"
-                                style="border-bottom:1px solid #2a3a4a;">
-                                <strong style="font-size:.85rem;">Notifications</strong>
-                                <a href="/alerts/center" class="text-muted" style="font-size:.75rem;">View all</a>
-                            </li>
-                            <div id="bell-items"><li class="px-3 py-3 text-muted text-center" style="font-size:.8rem;">No notifications</li></div>
-                        </ul>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="https://incident.corp.cirque.com" target="_blank" rel="noopener">
-                            <i class="bi bi-shield-exclamation"></i> Incident
-                        </a>
-                    </li>
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle"></i> {{ current_user.display_name }}
-                            {% if current_user.role == 'admin' %}
-                                <span class="badge bg-danger">Admin</span>
-                            {% elif current_user.role == 'manager' %}
-                                <span class="badge bg-warning">Manager</span>
-                            {% else %}
-                                <span class="badge bg-info">Viewer</span>
-                            {% endif %}
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
-                                <i class="bi bi-box-arrow-right"></i> Logout
-                            </a></li>
-                        </ul>
-                    </li>
-                </ul>
-            </div>
+            <ul class="dropdown-menu dropdown-menu-end p-0" id="bell-menu"
+                style="width:340px;max-height:420px;overflow-y:auto;">
+                <li class="px-3 py-2 d-flex justify-content-between align-items-center"
+                    style="border-bottom:1px solid #2a3a4a;">
+                    <strong style="font-size:.85rem;">Notifications</strong>
+                    <a href="/alerts/center" class="text-muted" style="font-size:.75rem;">View all</a>
+                </li>
+                <div id="bell-items"><li class="px-3 py-3 text-muted text-center" style="font-size:.8rem;">No notifications</li></div>
+            </ul>
         </div>
-    </nav>
+
+        <!-- User dropdown -->
+        <div class="dropdown">
+            <a class="topbar-link" href="#" id="userDropdown" data-bs-toggle="dropdown">
+                <i class="bi bi-person-circle"></i>
+                <span class="d-none d-md-inline">{{ current_user.display_name }}</span>
+                {% if current_user.role == 'admin' %}
+                    <span class="badge bg-danger">Admin</span>
+                {% elif current_user.role == 'manager' %}
+                    <span class="badge bg-warning text-dark">Manager</span>
+                {% elif current_user.role == 'eagle_eyes' %}
+                    <span class="badge bg-warning text-dark">Eagle Eyes</span>
+                {% elif current_user.role == 'base_user' %}
+                    <span class="badge bg-info text-dark">User</span>
+                {% else %}
+                    <span class="badge bg-secondary">Viewer</span>
+                {% endif %}
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><span class="dropdown-item-text small text-muted">{{ current_user.email or current_user.username }}</span></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
+            </ul>
+        </div>
+    </div><!-- /topbar -->
+
+    {% if impersonating %}
+    <div class="d-flex align-items-center justify-content-between px-3 py-2" style="background:#f59e0b;color:#1c1917;font-size:.9rem;">
+      <span>
+        <i class="bi bi-eye-fill me-2"></i>
+        <strong>View As Mode:</strong> You are previewing as
+        <strong>{{ current_user.display_name }}</strong>&nbsp;({{ current_user.role }})
+        &mdash; logged in as {{ real_admin.display_name }}
+      </span>
+      <form method="POST" action="{{ url_for('stop_view_as') }}" class="mb-0">
+        <button type="submit" class="btn btn-sm btn-dark fw-semibold">
+          <i class="bi bi-x-circle me-1"></i>Stop Viewing As
+        </button>
+      </form>
+    </div>
     {% endif %}
+    {% endif %}<!-- /topbar (is_authenticated) -->
 
     <div class="content">
-        <div class="container-fluid">
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                            {{ message }}
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
-            {% block content %}{% endblock %}
-        </div>
+        {% block content %}{% endblock %}
     </div>
 
     {% if current_user.is_authenticated %}
@@ -805,14 +1196,15 @@
     </div>
 
     <footer class="footer">
-        <div class="container text-center text-muted">
-            <small>&copy; 2025 IT Asset Tracker | Logged in as {{ current_user.display_name }}</small>
-        </div>
+        <small>&copy; 2025 IT Asset Tracker | Logged in as {{ current_user.display_name }}</small>
     </footer>
     {% endif %}
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+</div><!-- /#page-wrapper -->
+
+    <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/vendor/html5-qrcode.min.js"></script>
     <script>
         // Initialize Bootstrap tooltips
         document.addEventListener('DOMContentLoaded', function() {
@@ -967,6 +1359,48 @@
       // Load on page ready and every 60 s
       document.addEventListener('DOMContentLoaded', bellLoad);
       setInterval(bellLoad, 60000);
+    })();
+    </script>
+
+    <!-- Sidebar JS -->
+    <script>
+    (function() {
+        var COLLAPSED_KEY = 'sidebarCollapsed';
+        var sidebar = document.getElementById('sidebar');
+        var wrapper = document.getElementById('page-wrapper');
+        var icon    = document.getElementById('sidebar-toggle-icon');
+
+        function applyState(collapsed) {
+            if (!sidebar) return;
+            if (collapsed) {
+                sidebar.classList.add('collapsed');
+                if (wrapper) wrapper.classList.add('sidebar-collapsed');
+                if (icon) icon.className = 'bi bi-layout-sidebar';
+            } else {
+                sidebar.classList.remove('collapsed');
+                if (wrapper) wrapper.classList.remove('sidebar-collapsed');
+                if (icon) icon.className = 'bi bi-layout-sidebar-reverse';
+            }
+        }
+
+        // Default to collapsed; only expand if user explicitly set it to '0'
+        applyState(localStorage.getItem(COLLAPSED_KEY) !== '0');
+
+        window.sidebarToggle = function() {
+            var isCollapsed = sidebar.classList.contains('collapsed');
+            localStorage.setItem(COLLAPSED_KEY, isCollapsed ? '0' : '1');
+            applyState(!isCollapsed);
+        };
+        window.sidebarOpen = function() {
+            sidebar.classList.add('mobile-open');
+            var ov = document.getElementById('sidebar-overlay');
+            if (ov) ov.classList.add('show');
+        };
+        window.sidebarClose = function() {
+            sidebar.classList.remove('mobile-open');
+            var ov = document.getElementById('sidebar-overlay');
+            if (ov) ov.classList.remove('show');
+        };
     })();
     </script>
 </body>

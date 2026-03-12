@@ -24,6 +24,7 @@ env/
 # Environment / secrets
 .env
 .env.*
+.secrets.env
 *.key
 *.pem
 

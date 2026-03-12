@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Email Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-envelope-fill me-2"></i>Email Configuration</h2>
+            <p class="text-muted">Manage SMTP settings for system notifications</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-envelope-fill me-2"></i>Email Configuration</h5>
+                    <button type="button" class="btn btn-sm btn-light" onclick="toggleSmtpEdit()">
+                        <i class="bi bi-pencil-square"></i> Edit
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- View Mode -->
+                    <div id="smtpViewMode">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <h6 class="text-muted">SMTP Server</h6>
+                                <p class="mb-0"><strong>{{ config.mail_server }}</strong></p>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Port</h6>
+                                <p class="mb-0"><strong>{{ config.mail_port }}</strong></p>
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Username</h6>
+                                <p class="mb-0">{{ config.mail_username if config.mail_username else '<span class="text-muted">Not set</span>' | safe }}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Encryption</h6>
+                                <p class="mb-0">
+                                    {% if config.mail_use_tls %}
+                                        <span class="badge bg-success">TLS Enabled</span>
+                                    {% elif config.mail_use_ssl %}
+                                        <span class="badge bg-success">SSL Enabled</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">None</span>
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h6 class="text-muted">Sender Email</h6>
+                                <p class="mb-0"><strong>{{ config.mail_sender }}</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Edit Mode -->
+                    <form method="POST" id="smtpEditMode" style="display: none;">
+                        <input type="hidden" name="action" value="update_smtp">
+                        
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> <strong>Common SMTP Ports:</strong> 25 (unencrypted), 587 (TLS), 465 (SSL)
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <label class="form-label">SMTP Server *</label>
+                                <input type="text" class="form-control" name="smtp_server" 
+                                       value="{{ config.mail_server }}" required 
+                                       placeholder="smtp.gmail.com">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Port *</label>
+                                <input type="number" class="form-control" name="smtp_port" 
+                                       value="{{ config.mail_port }}" required 
+                                       placeholder="587">
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Username (optional)</label>
+                                <input type="text" class="form-control" name="smtp_username" 
+                                       value="{{ config.mail_username }}" 
+                                       placeholder="your@email.com">
+                                <small class="text-muted">Leave blank if not required</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Password (optional)</label>
+                                <input type="password" class="form-control" name="smtp_password" 
+                                       value="{{ config.mail_password }}" 
+                                       placeholder="••••••••">
+                                <small class="text-muted">Leave blank to keep existing</small>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Encryption</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="use_tls" id="use_tls" 
+                                       {% if config.mail_use_tls %}checked{% endif %}>
+                                <label class="form-check-label" for="use_tls">
+                                    Use TLS (Port 587)
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="use_ssl" id="use_ssl" 
+                                       {% if config.mail_use_ssl %}checked{% endif %}>
+                                <label class="form-check-label" for="use_ssl">
+                                    Use SSL (Port 465)
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Sender Email *</label>
+                            <input type="email" class="form-control" name="sender_email" 
+                                   value="{{ config.mail_sender }}" required 
+                                   placeholder="noreply@company.com">
+                            <small class="text-muted">This will appear as the "From" address</small>
+                        </div>
+                        
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-success">
+                                <i class="bi bi-check-circle"></i> Save Changes
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="toggleSmtpEdit()">
+                                <i class="bi bi-x-circle"></i> Cancel
+                            </button>
+                        </div>
+                    </form>
+
+                    <hr>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="test_email">
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Test Email Configuration</strong></label>
+                            <div class="input-group">
+                                <input type="email" class="form-control" name="test_email" placeholder="Enter email address to test" required>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-send-fill"></i> Send Test Email
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleSmtpEdit() {
+    const viewMode = document.getElementById('smtpViewMode');
+    const editMode = document.getElementById('smtpEditMode');
+    
+    if (viewMode.style.display === 'none') {
+        viewMode.style.display = 'block';
+        editMode.style.display = 'none';
+    } else {
+        viewMode.style.display = 'none';
+        editMode.style.display = 'block';
+    }
+}
+</script>
+{% endblock %}

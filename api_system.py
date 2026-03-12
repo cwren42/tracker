@@ -70,7 +70,9 @@ def validate_api_key(api_key):
         return {'valid': False, 'error': 'API key disabled'}
 
     if key_info['expires_at']:
-        expires_at = datetime.fromisoformat(key_info['expires_at'])
+        expires_at = key_info['expires_at']
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
         if datetime.now() > expires_at:
             conn.close()
             return {'valid': False, 'error': 'API key expired'}

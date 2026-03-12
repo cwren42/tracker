@@ -186,11 +186,12 @@ def validate_session_token(token: str, agent_id: str) -> Dict[str, Any]:
             return {"valid": False, "error": "Invalid session token"}
         if row["used"]:
             return {"valid": False, "error": "Session token already used"}
-        now = datetime.now(timezone.utc).isoformat()
         expires = row["expires_at"]
-        if hasattr(expires, "isoformat"):
-            expires = expires.isoformat()
-        if now > str(expires):
+        if isinstance(expires, str):
+            expires = datetime.fromisoformat(expires)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
             return {"valid": False, "error": "Session token expired"}
         if row["agent_id"] != agent_id:
             return {"valid": False, "error": "Token not valid for this agent"}

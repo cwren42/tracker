@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}Cloudflare Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-cloud-fill me-2"></i>Cloudflare Tunnel</h2>
+            <p class="text-muted">Manage Cloudflare tunnel configuration and service state.</p>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-sliders me-2"></i>Cloudflare Settings</h5>
+                    <button type="button" class="btn btn-sm btn-light" onclick="refreshCloudflareStatus()">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh Status
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info py-2">
+                        <div><strong>Config Source:</strong> {{ cf_server.source or 'none detected' }}</div>
+                        {% if cf_server.cf_token_masked %}
+                        <div><strong>Tunnel Token:</strong> <code>{{ cf_server.cf_token_masked }}</code></div>
+                        {% endif %}
+                    </div>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="update_cloudflare">
+
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" name="cf_enabled" id="cfEnabled" {{ 'checked' if cf_config.cf_enabled else '' }}>
+                            <label class="form-check-label" for="cfEnabled">
+                                <strong>Enable Cloudflare Integration</strong>
+                            </label>
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Account ID</label>
+                                <input type="text" class="form-control" name="cf_account_id" value="{{ cf_config.cf_account_id }}" placeholder="Cloudflare Account ID">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Tunnel ID</label>
+                                <input type="text" class="form-control" name="cf_tunnel_id" value="{{ cf_config.cf_tunnel_id }}" placeholder="Cloudflare Tunnel UUID">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Tunnel Name</label>
+                                <input type="text" class="form-control" name="cf_tunnel_name" value="{{ cf_config.cf_tunnel_name }}" placeholder="tracker-tunnel">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Public Hostname</label>
+                                <input type="text" class="form-control" name="cf_hostname" value="{{ cf_config.cf_hostname }}" placeholder="tracker.example.com">
+                            </div>
+                        </div>
+
+                        <hr class="my-3">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i>Save Cloudflare Settings
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-dark text-white">
+                    <h6 class="mb-0"><i class="bi bi-activity me-2"></i>Cloudflare Status</h6>
+                </div>
+                <div class="card-body">
+                    <div id="cfStatusWrap">
+                        <div class="mb-2">
+                            <span class="text-muted">Service:</span>
+                            <span class="fw-semibold" id="cfServiceName">{{ cf_status.service_name }}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Installed:</span>
+                            <span id="cfInstalledBadge" class="badge {{ 'bg-success' if cf_status.installed else 'bg-secondary' }}">{{ 'Yes' if cf_status.installed else 'No' }}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Status:</span>
+                            <span id="cfStatusBadge" class="badge {{ 'bg-success' if cf_status.active else 'bg-danger' }}">{{ cf_status.status }}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Tunnel State:</span>
+                            <span id="cfStateText" class="fw-semibold {{ 'text-success' if cf_status.active else 'text-danger' }}">{{ 'ON' if cf_status.active else 'OFF' }}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Enabled On Boot:</span>
+                            <span id="cfBootBadge" class="badge {{ 'bg-success' if cf_status.enabled_on_boot else 'bg-secondary' }}">{{ 'Yes' if cf_status.enabled_on_boot else 'No' }}</span>
+                        </div>
+                        <div id="cfMessage" class="small text-muted">{{ cf_status.message or '' }}</div>
+                    </div>
+
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <button type="button" id="cfToggleBtn" class="btn {{ 'btn-danger' if cf_status.active else 'btn-success' }}" onclick="toggleCloudflareTunnel({{ 'false' if cf_status.active else 'true' }})">
+                            <i class="bi {{ 'bi-stop-circle' if cf_status.active else 'bi-play-circle' }} me-1"></i>
+                            {{ 'Turn Tunnel Off' if cf_status.active else 'Turn Tunnel On' }}
+                        </button>
+                    </div>
+                    <div id="cfActionMsg" class="small mt-2 text-muted"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function renderCloudflareStatus(status) {
+    const installedBadge = document.getElementById('cfInstalledBadge');
+    const statusBadge = document.getElementById('cfStatusBadge');
+    const bootBadge = document.getElementById('cfBootBadge');
+    const msg = document.getElementById('cfMessage');
+    const stateText = document.getElementById('cfStateText');
+    const toggleBtn = document.getElementById('cfToggleBtn');
+
+    installedBadge.textContent = status.installed ? 'Yes' : 'No';
+    installedBadge.className = 'badge ' + (status.installed ? 'bg-success' : 'bg-secondary');
+
+    statusBadge.textContent = status.status || 'unknown';
+    statusBadge.className = 'badge ' + (status.active ? 'bg-success' : 'bg-danger');
+
+    stateText.textContent = status.active ? 'ON' : 'OFF';
+    stateText.className = 'fw-semibold ' + (status.active ? 'text-success' : 'text-danger');
+
+    bootBadge.textContent = status.enabled_on_boot ? 'Yes' : 'No';
+    bootBadge.className = 'badge ' + (status.enabled_on_boot ? 'bg-success' : 'bg-secondary');
+
+    msg.textContent = status.message || '';
+
+    const turnOn = !status.active;
+    toggleBtn.className = 'btn ' + (turnOn ? 'btn-success' : 'btn-danger');
+    toggleBtn.innerHTML = '<i class="bi ' + (turnOn ? 'bi-play-circle' : 'bi-stop-circle') + ' me-1"></i>' + (turnOn ? 'Turn Tunnel On' : 'Turn Tunnel Off');
+    toggleBtn.setAttribute('onclick', 'toggleCloudflareTunnel(' + (turnOn ? 'true' : 'false') + ')');
+}
+
+async function refreshCloudflareStatus() {
+    const r = await fetch('/api/cloudflare/status');
+    const d = await r.json();
+    if (d.ok) {
+        renderCloudflareStatus(d.status);
+    }
+}
+
+async function toggleCloudflareTunnel(enable) {
+    const msg = document.getElementById('cfActionMsg');
+    msg.textContent = (enable ? 'Starting' : 'Stopping') + ' cloudflared...';
+
+    try {
+        const r = await fetch('/api/cloudflare/tunnel/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enable })
+        });
+        const d = await r.json();
+        if (!d.ok) {
+            msg.textContent = 'Error: ' + (d.error || 'Failed');
+            if (d.status) renderCloudflareStatus(d.status);
+            return;
+        }
+        renderCloudflareStatus(d.status);
+        msg.textContent = enable ? 'Tunnel started.' : 'Tunnel stopped.';
+    } catch (e) {
+        msg.textContent = 'Error: ' + e.message;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    refreshCloudflareStatus();
+    // Keep tunnel state indicator fresh while page is open.
+    setInterval(refreshCloudflareStatus, 15000);
+});
+</script>
+{% endblock %}

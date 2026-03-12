@@ -503,6 +503,12 @@ def _run_once():
         _eval_agent_alerts(con, rules_by_type)
         _eval_asset_alerts(con, rules_by_type)
         _eval_vulnerability_alerts(con, rules_by_type)
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         con.close()
 

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Directory Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-server me-2"></i>Directory Settings (AD/LDAP)</h2>
+            <p class="text-muted">Configure LDAP/LDAPS to manage users and groups in on-prem Active Directory</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-server me-2"></i>On-Premise Active Directory (LDAP)</h5>
+                    <button type="button" class="btn btn-sm btn-light" onclick="testADConnection()">
+                        <i class="bi bi-lightning me-1"></i>Test Connection
+                    </button>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="update_ad">
+                        <div class="row">
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.example.com or 10.0.0.10" required>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">LDAP Port <span class="text-danger">*</span></label>
+                                <input type="number" class="form-control" name="ad_port" value="{{ ad_config.ad_port }}" placeholder="636" required>
+                                <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
+                            <small class="form-text text-muted">Base DN for user searches.</small>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Bind DN (Service Account) <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Service Account Password</label>
+                                <input type="password" class="form-control" name="ad_bind_password" value="" placeholder="Leave blank to keep existing">
+                                <small class="form-text text-muted">Leave blank to keep the existing password.</small>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">User OU DN (optional)</label>
+                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
+                            <small class="form-text text-muted">If set, new users can be created under this OU.</small>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
+                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
+                            <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
+                        </div>
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-save me-1"></i>Save Directory Settings
+                        </button>
+                    </form>
+                    <div class="mt-3" id="adTestResult" style="display:none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+async function testADConnection() {
+    const resultEl = document.getElementById('adTestResult');
+    resultEl.style.display = 'block';
+    resultEl.className = 'alert alert-info';
+    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
+    try {
+        const res = await fetch('/api/ad/test', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+        const data = await res.json();
+        if (data.success) {
+            resultEl.className = 'alert alert-success';
+            resultEl.textContent = data.message || 'Connected successfully';
+        } else {
+            resultEl.className = 'alert alert-danger';
+            resultEl.textContent = data.error || 'Connection failed';
+        }
+    } catch (e) {
+        resultEl.className = 'alert alert-danger';
+        resultEl.textContent = e?.message || 'Connection failed';
+    }
+}
+</script>
+{% endblock %}

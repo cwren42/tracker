@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Proxmox Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Settings</h2>
+            <p class="text-muted">Manage Proxmox cluster and backup repository configuration</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Cluster Settings</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="update_proxmox">
+                        
+                        <div class="alert alert-light border">
+                            <strong><i class="bi bi-hdd-stack me-2"></i>Cluster Configuration</strong>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Cluster Host/IP *</label>
+                                <input type="text" class="form-control" name="proxmox_cluster_host" 
+                                       value="{{ proxmox_settings.cluster_host }}" required 
+                                       placeholder="192.168.1.50">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Token ID *</label>
+                                <input type="text" class="form-control" name="proxmox_cluster_token_id" 
+                                       value="{{ proxmox_settings.cluster_token_id }}" required 
+                                       placeholder="user@realm!token-name">
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <label class="form-label">Token Secret</label>
+                                <input type="password" class="form-control" name="proxmox_cluster_token_secret" 
+                                       placeholder="{% if proxmox_settings.cluster_token_set %}••••••••{% else %}Paste token here{% endif %}">
+                                {% if proxmox_settings.cluster_token_set %}<small class="text-muted">Token already set. Leave blank to keep current.</small>{% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <div class="form-check">
+                                    <input type="checkbox" class="form-check-input" id="proxyVerifySSL" 
+                                           name="proxmox_cluster_verify_ssl" value="1"
+                                           {{ 'checked' if proxmox_settings.cluster_verify_ssl else '' }}>
+                                    <label class="form-check-label" for="proxyVerifySSL">
+                                        Verify SSL Certificate
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex gap-2 mb-4">
+                            <button type="button" class="btn btn-outline-info btn-sm" onclick="testProxmoxConnection()">
+                                <i class="bi bi-arrow-repeat"></i> Test Connection
+                            </button>
+                        </div>
+                        
+                        <hr>
+                        
+                        <div class="alert alert-light border">
+                            <strong><i class="bi bi-archive me-2"></i>Backup Repository Settings (Optional)</strong>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Backup Host/IP</label>
+                                <input type="text" class="form-control" name="proxmox_backup_host" 
+                                       value="{{ proxmox_settings.backup_host }}" 
+                                       placeholder="192.168.1.51">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Backup Token ID</label>
+                                <input type="text" class="form-control" name="proxmox_backup_token_id" 
+                                       value="{{ proxmox_settings.backup_token_id }}" 
+                                       placeholder="user@realm!token-name">
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-12">
+                                <label class="form-label">Backup Token Secret</label>
+                                <input type="password" class="form-control" name="proxmox_backup_token_secret" 
+                                       placeholder="{% if proxmox_settings.backup_token_set %}••••••••{% else %}Paste token here{% endif %}">
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Stale Hours</label>
+                                <input type="number" class="form-control" name="proxmox_stale_hours" 
+                                       value="{{ proxmox_settings.stale_hours }}" min="1">
+                                <small class="text-muted">Hours without backup considered stale</small>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-info">
+                                <i class="bi bi-save me-1"></i>Save Settings
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card bg-light shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-info-circle me-2"></i>About Proxmox Integration</h6>
+                    <p class="small text-muted mb-2">
+                        Monitor VMs, backup jobs, storage health, and ZFS pool status from your Proxmox VE cluster.
+                    </p>
+                    <hr>
+                    <p class="small"><strong>Cluster:</strong> 
+                        {% if proxmox_settings.cluster_host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-warning">Not Configured</span>{% endif %}
+                    </p>
+                    <p class="small mb-0"><strong>Backup:</strong> 
+                        {% if proxmox_settings.backup_host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-secondary">Optional</span>{% endif %}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function testProxmoxConnection() {
+    fetch('/api/proxmox/test', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix: 'cluster' })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('✓ Connection successful!');
+            } else {
+                alert('✗ Connection failed: ' + (data.message || data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => alert('Error: ' + err));
+}
+</script>
+{% endblock %}

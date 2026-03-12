@@ -89,7 +89,6 @@
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 const _cmpCharts = {};
 const APP_COLORS   = ['#4dabf7','#69db7c','#fcc419','#ff8787','#da77f2','#74c0fc','#a9e34b','#ffa94d'];
@@ -106,10 +105,12 @@ function fmtDur(s) {
 function prodScore(summary) {
   const PROD   = ['slack','teams','msteams','outlook','code','devenv','winword','excel','powerpnt','zoom','onenote','pycharm','rider','webstorm','idea64'];
   const UNPROD = ['spotify','vlc','discord','reddit','netflix','youtube'];
+  const SKIP   = ['lockapp','lockscreenhost','shellhost','shellexperiencehost','startmenuexperiencehost','searchhost','searchapp','textinputhost','applicationframehost','runtimebroker','taskhostw','sihost','ctfmon','fontdrvhost','dwm','winlogon','logonui','conhost','condrv'];
   let p=0,u=0,n=0;
   for (const r of (summary||[])) {
     const proc = (r.process_name||'').toLowerCase().replace('.exe','');
     const sec  = r.total_s||0;
+    if (SKIP.some(x=>proc===x))              continue;
     if (PROD.some(x=>proc.startsWith(x)))   p+=sec;
     else if (UNPROD.some(x=>proc.startsWith(x))) u+=sec;
     else n+=sec;

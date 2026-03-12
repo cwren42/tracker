@@ -3,65 +3,130 @@
 
 {% block content %}
 <div class="row">
-    <div class="col-md-6 offset-md-3">
+    <div class="col-md-7 col-lg-6 mx-auto">
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1 class="h3">Edit User: {{ user.display_name }}</h1>
-            <a href="{{ url_for('users') }}" class="btn btn-secondary">
+            <h1 class="h3">Edit User</h1>
+            <a href="{{ url_for('users') }}" class="btn btn-secondary btn-sm">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
 
-        <div class="card">
+        <!-- User info bar -->
+        <div class="card mb-3">
+            <div class="card-body py-2 d-flex align-items-center gap-3">
+                <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold
+                    {% if user.role == 'admin' %}bg-danger text-white
+                    {% elif user.role == 'manager' %}bg-warning text-dark
+                    {% elif user.role == 'eagle_eyes' %}bg-primary text-white
+                    {% else %}bg-secondary text-white{% endif %}"
+                    style="width:44px;height:44px;min-width:44px;font-size:1rem;">
+                    {{ user.display_name[0]|upper }}
+                </div>
+                <div>
+                    <div class="fw-semibold">{{ user.display_name }}</div>
+                    <div class="text-muted small">
+                        Created {{ user.created_at.strftime('%b %d, %Y') }}
+                        &middot;
+                        {% if user.last_login %}
+                            Last login {{ user.last_login.strftime('%b %d, %Y at %H:%M') }}
+                        {% else %}
+                            Never logged in
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main edit form -->
+        <div class="card mb-3">
+            <div class="card-header py-2 fw-semibold">Profile &amp; Access</div>
             <div class="card-body">
                 <form method="POST">
                     <div class="row g-3 mb-3">
                         <div class="col-sm-6">
                             <label for="first_name" class="form-label">First Name</label>
                             <input type="text" class="form-control" id="first_name" name="first_name"
-                                   value="{{ user.first_name or '' }}" placeholder="First">
+                                   value="{{ user._first_name }}" placeholder="First">
                         </div>
                         <div class="col-sm-6">
                             <label for="last_name" class="form-label">Last Name</label>
                             <input type="text" class="form-control" id="last_name" name="last_name"
-                                   value="{{ user.last_name or '' }}" placeholder="Last">
+                                   value="{{ user._last_name }}" placeholder="Last">
                         </div>
                     </div>
+
                     <div class="mb-3">
-                        <label for="username" class="form-label">Username *</label>
+                        <label for="username" class="form-label">Username <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" id="username" name="username"
                                value="{{ user.username }}" required>
-                        <div class="form-text">Used for login only; first + last name shown on the site.</div>
+                        <div class="form-text">Used for login only.</div>
                     </div>
+
                     <div class="mb-3">
-                        <label for="email" class="form-label">Email *</label>
+                        <label for="email" class="form-label">Email <span class="text-danger">*</span></label>
                         <input type="email" class="form-control" id="email" name="email"
                                value="{{ user.email }}" required>
                     </div>
+
+                    <div class="mb-4">
+                        <label for="role" class="form-label">Role <span class="text-danger">*</span></label>
+                        <select class="form-select" id="role" name="role" required>
+                            <option value="base_user" {% if user.role == 'base_user' %}selected{% endif %}>Base User</option>
+                            <option value="viewer"     {% if user.role == 'viewer'     %}selected{% endif %}>Viewer</option>
+                            <option value="eagle_eyes" {% if user.role == 'eagle_eyes' %}selected{% endif %}>Eagle Eyes</option>
+                            <option value="manager"    {% if user.role == 'manager'    %}selected{% endif %}>Manager</option>
+                            <option value="admin"      {% if user.role == 'admin'      %}selected{% endif %}>Admin</option>
+                        </select>
+                        <div id="roleDesc" class="form-text mt-1"></div>
+                    </div>
+
+                    <hr class="mb-3">
+
                     <div class="mb-3">
                         <label for="password" class="form-label">New Password</label>
                         <input type="password" class="form-control" id="password" name="password" minlength="6">
-                        <small class="text-muted">Leave blank to keep current password</small>
-                    </div>
-                    <div class="mb-3">
-                        <label for="role" class="form-label">Role *</label>
-                        <select class="form-select" id="role" name="role" required>
-                            <option value="viewer"  {% if user.role == 'viewer'  %}selected{% endif %}>Viewer</option>
-                            <option value="manager" {% if user.role == 'manager' %}selected{% endif %}>Manager</option>
-                            <option value="admin"   {% if user.role == 'admin'   %}selected{% endif %}>Admin</option>
-                        </select>
-                    </div>
-
-                    <div class="alert alert-warning">
-                        <strong>Note:</strong> Changing a user's role will take effect on their next login.
+                        <div class="form-text">Leave blank to keep the current password.</div>
                     </div>
 
                     <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-check-circle"></i> Update User
+                        <i class="bi bi-check-circle"></i> Save Changes
                     </button>
-                    <a href="{{ url_for('users') }}" class="btn btn-secondary">Cancel</a>
+                    <a href="{{ url_for('users') }}" class="btn btn-secondary ms-2">Cancel</a>
+                </form>
+            </div>
+        </div>
+
+        <!-- Quick password reset card -->
+        <div class="card border-warning">
+            <div class="card-header py-2 fw-semibold text-warning-emphasis bg-warning-subtle">
+                <i class="bi bi-key"></i> Reset Password
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">Set a temporary password for this user. They should change it after logging in.</p>
+                <form method="POST" action="{{ url_for('reset_user_password', user_id=user.id) }}" class="d-flex gap-2 flex-wrap">
+                    <input type="password" class="form-control form-control-sm" style="max-width:220px;"
+                           name="new_password" placeholder="New temporary password" minlength="6" required>
+                    <button type="submit" class="btn btn-warning btn-sm">
+                        <i class="bi bi-arrow-repeat"></i> Reset
+                    </button>
                 </form>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+const roleDescs = {
+    base_user:  'Submit tickets and track their status. No access to other modules.',
+    viewer:     'Submit tickets and view all tickets. No Assets, Employees, Licenses, or Reports.',
+    eagle_eyes: 'Access to the Eagle Eyes fleet monitor and ticket dashboard.',
+    manager:    'View and edit assets, employees, tickets, and reports.',
+    admin:      'Full access including user management and system settings.',
+};
+const roleEl = document.getElementById('role');
+const descEl = document.getElementById('roleDesc');
+function updateDesc() { descEl.textContent = roleDescs[roleEl.value] || ''; }
+roleEl.addEventListener('change', updateDesc);
+updateDesc();
+</script>
 {% endblock %}

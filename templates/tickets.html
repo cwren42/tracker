@@ -8,7 +8,7 @@
     <i class="bi bi-plus-circle me-1"></i> New Ticket
   </a>
 </div>
-{% set ai_context = "tickets" %}{% include '_ai_search_bar.html' %}
+{% set ai_context = "tickets" %}{% if current_user.role not in ['base_user', 'eagle_eyes', 'viewer'] %}{% include '_ai_search_bar.html' %}{% endif %}
 
 {# ── Clickable stat cards ───────────────────────────────────────────── #}
 <div class="row g-3 mb-4">
@@ -80,6 +80,7 @@
 </div>
 
 {# ── Chart + workload ───────────────────────────────────────────────── #}
+{% if current_user.role == 'admin' %}
 <div class="row g-3 mb-4">
   <div class="col-lg-8">
     <div class="card h-100">
@@ -194,6 +195,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 {% endif %}
 
 {# ── Filter bar ─────────────────────────────────────────────────────── #}

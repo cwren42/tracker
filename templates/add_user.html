@@ -1,13 +1,12 @@
 {% extends "base.html" %}
-
 {% block title %}Add User - Asset Tracker{% endblock %}
 
 {% block content %}
 <div class="row">
-    <div class="col-md-6 offset-md-3">
+    <div class="col-md-7 col-lg-6 mx-auto">
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>Add New User</h1>
-            <a href="{{ url_for('users') }}" class="btn btn-secondary">
+            <h1 class="h3">Add New User</h1>
+            <a href="{{ url_for('users') }}" class="btn btn-secondary btn-sm">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
@@ -15,44 +14,121 @@
         <div class="card">
             <div class="card-body">
                 <form method="POST">
-                    <div class="mb-3">
-                        <label for="username" class="form-label">Username *</label>
-                        <input type="text" class="form-control" id="username" name="username" required>
+
+                    <!-- Name -->
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-6">
+                            <label for="first_name" class="form-label">First Name</label>
+                            <input type="text" class="form-control" id="first_name" name="first_name"
+                                   placeholder="First" value="{{ request.form.get('first_name','') }}">
+                        </div>
+                        <div class="col-sm-6">
+                            <label for="last_name" class="form-label">Last Name</label>
+                            <input type="text" class="form-control" id="last_name" name="last_name"
+                                   placeholder="Last" value="{{ request.form.get('last_name','') }}">
+                        </div>
                     </div>
+
                     <div class="mb-3">
-                        <label for="email" class="form-label">Email *</label>
-                        <input type="email" class="form-control" id="email" name="email" required>
+                        <label for="username" class="form-label">Username <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="username" name="username" required
+                               autocomplete="off" value="{{ request.form.get('username','') }}">
+                        <div class="form-text">Used for login. First + last name shown on the site.</div>
                     </div>
+
                     <div class="mb-3">
-                        <label for="password" class="form-label">Password *</label>
-                        <input type="password" class="form-control" id="password" name="password" required minlength="6">
-                        <small class="text-muted">Minimum 6 characters</small>
+                        <label for="email" class="form-label">Email <span class="text-danger">*</span></label>
+                        <input type="email" class="form-control" id="email" name="email" required
+                               value="{{ request.form.get('email','') }}">
                     </div>
+
                     <div class="mb-3">
-                        <label for="role" class="form-label">Role *</label>
+                        <label for="role" class="form-label">Role <span class="text-danger">*</span></label>
                         <select class="form-select" id="role" name="role" required>
-                            <option value="viewer">Viewer - Can only view assets</option>
-                            <option value="manager">Manager - Can view and edit assets</option>
-                            <option value="admin">Admin - Full access including user management</option>
+                            <option value="base_user" {% if request.form.get('role') == 'base_user' %}selected{% endif %}>Base User</option>
+                            <option value="viewer"    {% if request.form.get('role','viewer') == 'viewer'     %}selected{% endif %}>Viewer</option>
+                            <option value="eagle_eyes" {% if request.form.get('role') == 'eagle_eyes' %}selected{% endif %}>Eagle Eyes</option>
+                            <option value="manager"    {% if request.form.get('role') == 'manager'    %}selected{% endif %}>Manager</option>
+                            <option value="admin"      {% if request.form.get('role') == 'admin'      %}selected{% endif %}>Admin</option>
                         </select>
+                        <div id="roleDesc" class="form-text mt-1"></div>
                     </div>
-                    
-                    <div class="alert alert-info">
-                        <strong>Role Permissions:</strong>
-                        <ul class="mb-0 mt-2">
-                            <li><strong>Viewer:</strong> View assets, employees, and reports</li>
-                            <li><strong>Manager:</strong> Everything a viewer can do + create/edit/assign assets and employees</li>
-                            <li><strong>Admin:</strong> Everything a manager can do + delete assets and manage users</li>
-                        </ul>
+
+                    <hr>
+
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password <span class="text-danger">*</span></label>
+                        <input type="password" class="form-control" id="password" name="password"
+                               required minlength="6" oninput="checkStrength(this.value)">
+                        <div class="progress mt-1" style="height:4px;">
+                            <div id="strengthBar" class="progress-bar" style="width:0%;transition:width .3s,background .3s;"></div>
+                        </div>
+                        <div id="strengthLabel" class="form-text"></div>
                     </div>
-                    
+
+                    <div class="mb-4">
+                        <label for="password_confirm" class="form-label">Confirm Password <span class="text-danger">*</span></label>
+                        <input type="password" class="form-control" id="password_confirm" name="password_confirm"
+                               required minlength="6">
+                    </div>
+
                     <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-check-circle"></i> Create User
+                        <i class="bi bi-person-check"></i> Create User
                     </button>
-                    <a href="{{ url_for('users') }}" class="btn btn-secondary">Cancel</a>
+                    <a href="{{ url_for('users') }}" class="btn btn-secondary ms-2">Cancel</a>
                 </form>
+            </div>
+        </div>
+
+        <!-- Role reference card -->
+        <div class="card mt-3">
+            <div class="card-body py-2 px-3">
+                <div class="small fw-semibold mb-2">Role Reference</div>
+                <div class="d-flex flex-column gap-1 small">
+                    <div><span class="badge bg-danger me-1">Admin</span> Full system access including user management &amp; settings</div>
+                    <div><span class="badge bg-warning text-dark me-1">Manager</span> View &amp; edit assets, employees, tickets, reports</div>
+                    <div><span class="badge bg-primary me-1">Eagle Eyes</span> Fleet monitor + ticket dashboard only</div>
+                    <div><span class="badge bg-secondary me-1">Viewer</span> Submit &amp; view all tickets only</div>                    <div><span class="badge bg-info text-dark me-1">Base User</span> Submit &amp; track their own tickets only</div>                </div>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+const roleDescs = {
+    base_user:  'Submit tickets and track their status. No access to other modules.',
+    viewer:     'Submit tickets and view all tickets. No Assets, Employees, Licenses, or Reports.',
+    eagle_eyes: 'Access to the Eagle Eyes fleet monitor and ticket dashboard.',
+    manager:    'View and edit assets, employees, tickets, and reports.',
+    admin:      'Full access including user management and system settings.',
+};
+document.getElementById('role').addEventListener('change', function () {
+    document.getElementById('roleDesc').textContent = roleDescs[this.value] || '';
+});
+// Set on load
+document.getElementById('roleDesc').textContent = roleDescs[document.getElementById('role').value] || '';
+
+function checkStrength(pw) {
+    const bar = document.getElementById('strengthBar');
+    const lbl = document.getElementById('strengthLabel');
+    let score = 0;
+    if (pw.length >= 6)  score++;
+    if (pw.length >= 10) score++;
+    if (/[A-Z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+    const levels = [
+        {w:0,   c:'bg-secondary', t:''},
+        {w:20,  c:'bg-danger',    t:'Weak'},
+        {w:40,  c:'bg-warning',   t:'Fair'},
+        {w:60,  c:'bg-info',      t:'Good'},
+        {w:80,  c:'bg-success',   t:'Strong'},
+        {w:100, c:'bg-success',   t:'Very strong'},
+    ];
+    const lvl = levels[Math.min(score, levels.length - 1)];
+    bar.style.width = lvl.w + '%';
+    bar.className = 'progress-bar ' + lvl.c;
+    lbl.textContent = lvl.t;
+}
+</script>
 {% endblock %}

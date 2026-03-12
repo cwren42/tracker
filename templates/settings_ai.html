@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}AI Settings - Admin{% endblock %}
+
+{% block content %}
+<style>.ai-header { background:#0d47a1; }</style>
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-robot me-2"></i>AI Engine Settings</h2>
+            <p class="text-muted">Configure OpenAI integration and AI security features</p>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header ai-header text-white"><h5 class="mb-0"><i class="bi bi-lightning-fill me-2"></i>OpenAI Configuration</h5></div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="flex-grow-1">
+                                    <label class="form-label">API Key</label>
+                                    <div class="input-group">
+                                        <input type="password" class="form-control font-monospace" id="aiKeyInput" name="openai_api_key" autocomplete="new-password" placeholder="sk-..." value="{{ ai_config.get('openai_api_key_masked', '••••••••') }}">
+                                        <span class="input-group-text">
+                                            <span id="aiKeyStatus" class="badge bg-success">Configured</span>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div style="margin-top:26px;">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleAiKeyInput()"><i class="bi bi-pencil-square me-1"></i>Change Key</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Model</label>
+                            <select class="form-select" id="aiModel" name="openai_model" autocomplete="off">
+                                <option value="gpt-4o" {% if ai_config.get('openai_model') == 'gpt-4o' %}selected{% endif %}>GPT-4o (Latest)</option>
+                                <option value="gpt-4-turbo" {% if ai_config.get('openai_model') == 'gpt-4-turbo' %}selected{% endif %}>GPT-4 Turbo</option>
+                                <option value="gpt-4" {% if ai_config.get('openai_model') == 'gpt-4' %}selected{% endif %}>GPT-4</option>
+                                <option value="gpt-3.5-turbo" {% if ai_config.get('openai_model') == 'gpt-3.5-turbo' %}selected{% endif %}>GPT-3.5 Turbo</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6"><button type="button" class="btn btn-outline-primary w-100" style="margin-top:26px;" onclick="testAiConnection()"><i class="bi bi-check2-circle me-1"></i>Test Connection</button></div>
+                    </div>
+                    <hr class="my-3">
+                    <div class="row g-2">
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="aiTicketEnabled" name="ai_ticket_enabled" autocomplete="off" {% if ai_config.get('ai_ticket_enabled') %}checked{% endif %}>
+                                <label class="form-check-label" for="aiTicketEnabled">
+                                    <strong>Enable Ticket AI Suggestions</strong><br>
+                                    <small class="text-muted">Automatically suggest ticket categories and priorities using AI</small>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="aiTicketAutoMode" name="ai_ticket_auto_mode" autocomplete="off" {% if ai_config.get('ai_ticket_auto_mode') %}checked{% endif %}>
+                                <label class="form-check-label" for="aiTicketAutoMode">
+                                    <strong>Auto-Apply High-Confidence Suggestions</strong><br>
+                                    <small class="text-muted">Automatically apply AI suggestions with high confidence scores</small>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="aiSecurityMonitor" name="ai_security_monitor_enabled" autocomplete="off" {% if ai_config.get('ai_security_monitor_enabled') %}checked{% endif %}>
+                                <label class="form-check-label" for="aiSecurityMonitor">
+                                    <strong>Enable Security Monitor</strong><br>
+                                    <small class="text-muted">Use AI to analyze security events and generate summaries</small>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <hr class="my-3">
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-primary" onclick="saveAiSettings()"><i class="bi bi-save me-1"></i>Save Settings</button>
+                        <span id="aiSaveStatus" class="small text-muted align-self-center"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-success text-white"><h6 class="mb-0"><i class="bi bi-shield-check me-2"></i>AI Security Summary</h6></div>
+                <div class="card-body">
+                    <p class="small text-muted">Generate AI-powered insights from recent security events</p>
+                    <div class="d-grid"><button type="button" class="btn btn-success" onclick="generateSecuritySummary()"><i class="bi bi-stars me-1"></i>Generate Now</button></div>
+                    <pre id="aiSecuritySummaryOutput" class="bg-dark text-light rounded p-2 mt-2" style="min-height:200px;max-height:400px;overflow:auto;white-space:pre-wrap;font-size:.75rem;"></pre>
+                    <div id="aiSecurityStatus" class="small text-muted mt-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function aiEsc(v) { return (v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function toggleAiKeyInput() { const inp = document.getElementById('aiKeyInput'); if (inp.type === 'password') { inp.type = 'text'; inp.value = ''; inp.placeholder = 'Paste new API key (sk-...)'; } else { inp.type = 'password'; inp.value = '••••••••'; inp.placeholder = 'sk-...'; } }
+async function saveAiSettings() {
+    const st = document.getElementById('aiSaveStatus');
+    st.textContent = 'Saving...';
+    const p = {
+        openai_api_key: document.getElementById('aiKeyInput').value.trim(),
+        openai_model: document.getElementById('aiModel').value,
+        ai_ticket_enabled: document.getElementById('aiTicketEnabled').checked ? 'true' : 'false',
+        ai_ticket_auto_mode: document.getElementById('aiTicketAutoMode').checked ? 'true' : 'false',
+        ai_security_monitor_enabled: document.getElementById('aiSecurityMonitor').checked ? 'true' : 'false',
+    };
+    try {
+        const r = await fetch('/api/ai/settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(p)
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) {
+            st.textContent = 'Error: ' + (d.error || 'Failed to save');
+            return;
+        }
+        st.textContent = 'Saved';
+        document.getElementById('aiKeyInput').type = 'password';
+        if (p.openai_api_key) {
+            const masked = p.openai_api_key.length > 12
+                ? (p.openai_api_key.slice(0, 8) + '…' + p.openai_api_key.slice(-4))
+                : '••••••••';
+            document.getElementById('aiKeyInput').value = masked;
+        }
+    } catch (e) {
+        st.textContent = 'Error: ' + e.message;
+    }
+}
+async function testAiConnection() { const st = document.getElementById('aiSaveStatus'); st.textContent = 'Testing...'; try { const r = await fetch('/api/ai/test', {method:'POST'}); const d = await r.json(); st.textContent = d.ok ? 'Connected!' : ('Error: ' + (d.error || 'Unknown')); } catch(e) { st.textContent = 'Error: ' + e.message; } }
+async function generateSecuritySummary() { const st = document.getElementById('aiSecurityStatus'); const out = document.getElementById('aiSecuritySummaryOutput'); st.textContent = 'Generating...'; out.textContent = ''; try { const r = await fetch('/api/ai/security-summary/generate', {method:'POST'}); const d = await r.json(); if (!d.ok) { st.textContent = 'Error: ' + (d.error || 'Failed'); return; } out.textContent = d.summary || 'No summary generated'; st.textContent = 'Done'; } catch(e) { st.textContent = 'Error: ' + e.message; out.textContent = e.message; } }
+document.addEventListener('DOMContentLoaded', function() { loadAiSettings(); });
+async function loadAiSettings() {
+    try {
+        const r = await fetch('/api/ai/settings');
+        const d = await r.json();
+        if (!r.ok || d.error) return;
+
+        if (d.openai_model) document.getElementById('aiModel').value = d.openai_model;
+        if (d.openai_api_key) document.getElementById('aiKeyInput').value = d.openai_api_key;
+        document.getElementById('aiTicketEnabled').checked = String(d.ai_ticket_enabled) === 'true';
+        document.getElementById('aiTicketAutoMode').checked = String(d.ai_ticket_auto_mode) === 'true';
+        document.getElementById('aiSecurityMonitor').checked = String(d.ai_security_monitor_enabled) === 'true';
+    } catch (e) {
+        // Keep page usable even if settings preload fails.
+        console.warn('Failed to load AI settings:', e);
+    }
+}
+</script>
+{% endblock %}

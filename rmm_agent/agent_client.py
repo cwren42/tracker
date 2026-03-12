@@ -9,7 +9,7 @@ Env vars:
   RMM_SCREENSHOT     1 = enable screenshot capture (default: 0)
 """
 
-AGENT_VERSION = "2.4.9"
+AGENT_VERSION = "2.5.2"
 
 import asyncio
 import base64
@@ -161,8 +161,8 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
         if rd_password:
             sync_payload["rustdesk_password"] = rd_password
         payload = json.dumps(sync_payload).encode()
-        req = _ur.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        with _ur.urlopen(req, timeout=10) as resp:
+        req = _ur.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": f"CirqueRMM/{AGENT_VERSION}"}, method="POST")
+        with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
             body = json.loads(resp.read())
             if body.get("changed"):
                 print(f"[rustdesk] Synced peer ID {peer_id} to tracker (asset {body.get('asset_id')})", flush=True)
@@ -1649,7 +1649,7 @@ def post_software_inventory(tracker_url: str, agent_id: str, token: str) -> None
         import urllib.request as _ur
         payload = json.dumps(apps).encode()
         req = _ur.Request(url, data=payload,
-                          headers={"Content-Type": "application/json"},
+                          headers={"Content-Type": "application/json", "User-Agent": f"CirqueRMM/{AGENT_VERSION}"},
                           method="POST")
         ssl_ctx = _ssl_ctx()
         with _ur.urlopen(req, timeout=30, context=ssl_ctx) as resp:

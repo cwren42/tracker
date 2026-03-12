@@ -121,8 +121,9 @@ if (-not $Token) {
         Write-Warning "No enrollment token -- service not configured. See $logDir\setup.log"
         exit 0
     } else {
-        $Token = Read-Host "Enter your enrollment token (from Tracker > Assets)"
-        if (-not $Token) { Write-Error "Token is required."; exit 1 }
+        Write-Host "ERROR: No enrollment token provided. Run the one-liner from Tracker > Settings > RMM Agent." -ForegroundColor Red
+        Write-Host "  irm 'https://YOUR-TRACKER/download/site-install.ps1?t=YOUR-TOKEN' | iex" -ForegroundColor Yellow
+        exit 1
     }
 }
 
@@ -284,6 +285,9 @@ Start-Sleep -Seconds 1
 & $NssmPath set $ServiceName AppRestartDelay  5000
 & $NssmPath set $ServiceName AppEnvironmentExtra `
     "RMM_GATEWAY_URL=$GatewayUrl" `
+    "RMM_TRACKER_URL=$TrackerUrl" `
+    "RMM_GATEWAY_URL_PUBLIC=wss://rmm.cirquetools.com" `
+    "RMM_TRACKER_URL_PUBLIC=https://tracker.cirquetools.com" `
     "RMM_AGENT_ID=$AgentId" `
     "RMM_AGENT_TOKEN=$Token" `
     "TRACKER_URL=$TrackerUrl"

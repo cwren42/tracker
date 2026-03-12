@@ -4,14 +4,62 @@
 
 {% block content %}
 <style>
-    #settingsTabs .nav-link { color:#8899aa; border-bottom:2px solid transparent; }
-    #settingsTabs .nav-link.active { color:#fff; background:transparent; }
-    #settingsTabs .nav-link:hover { color:#cdd9e5; }
-    #settingsTabs .nav-link i { margin-right: 5px; }
-    .tab-content { min-height: 400px; }
+    /* Custom tab styling for settings */
+    #settingsTabs .nav-link {
+        color: #6c757d;
+        border: 1px solid transparent;
+        border-bottom: 3px solid transparent;
+        transition: all 0.2s ease;
+    }
+    
+    #settingsTabs .nav-link:hover {
+        border-bottom-color: #dee2e6;
+        color: #495057;
+    }
+    
+    #settingsTabs .nav-link.active {
+        color: var(--bs-primary, #0d6efd);
+        border-bottom-color: var(--bs-primary, #0d6efd);
+        background-color: transparent;
+        font-weight: 600;
+    }
+    
+    #settingsTabs .nav-link i {
+        margin-right: 5px;
+    }
+
+    /* Keep all tabs reachable when many are present */
+    #settingsTabs {
+        flex-wrap: wrap;
+        row-gap: 0.25rem;
+    }
+
+    #settingsTabs .nav-item {
+        flex: 0 0 auto;
+    }
+
+    #scripts-tab {
+        border-bottom-color: #198754;
+    }
+    
+    .tab-content {
+        min-height: 400px;
+    }
+
+    .settings-single #settingsTabs {
+        display: none;
+    }
+
+    .settings-single .tab-pane {
+        display: none;
+    }
+
+    .settings-single .tab-pane.show.active {
+        display: block;
+    }
 </style>
 
-<div class="container-fluid">
+<div class="container-fluid {% if active_section %}settings-single{% endif %}">
     <div class="row mb-4">
         <div class="col-md-12">
             <h1 class="h2">
@@ -24,6 +72,7 @@
     <!-- License Expiration Warning Banner -->
     <div class="row" id="licenseWarningBanner" style="display: none;">
         <div class="col-12">
+                </div>
             <div class="alert alert-danger alert-dismissible fade show border-3 shadow-sm" role="alert">
                 <h4 class="alert-heading">
                     <i class="bi bi-exclamation-triangle-fill"></i> License Expired or Invalid
@@ -45,49 +94,123 @@
         <div class="col-12">
             <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="license-tab" data-bs-toggle="tab" data-bs-target="#license" type="button" role="tab">
+                    <button class="nav-link {% if not active_section or active_section == 'theme' %}active{% endif %}" id="theme-tab" data-bs-toggle="tab" data-bs-target="#theme" type="button" role="tab">
+                        <i class="bi bi-palette-fill"></i> Appearance
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if active_section == 'license' %}active{% endif %}" id="license-tab" data-bs-toggle="tab" data-bs-target="#license" type="button" role="tab">
                         <i class="bi bi-key-fill"></i> License
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="email-tab" data-bs-toggle="tab" data-bs-target="#email" type="button" role="tab">
+                    <button class="nav-link {% if active_section == 'email' %}active{% endif %}" id="email-tab" data-bs-toggle="tab" data-bs-target="#email" type="button" role="tab">
                         <i class="bi bi-envelope-fill"></i> Email
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="directory-tab" data-bs-toggle="tab" data-bs-target="#directory" type="button" role="tab">
+                    <button class="nav-link {% if active_section == 'teamviewer' %}active{% endif %}" id="teamviewer-tab" data-bs-toggle="tab" data-bs-target="#teamviewer" type="button" role="tab">
+                        <i class="bi bi-display"></i> TeamViewer
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if active_section == 'directory' %}active{% endif %}" id="directory-tab" data-bs-toggle="tab" data-bs-target="#directory" type="button" role="tab">
                         <i class="bi bi-server"></i> Directory
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="rmm-tab" data-bs-toggle="tab" data-bs-target="#rmm" type="button" role="tab">
+                    <button class="nav-link {% if active_section == 'rmm' %}active{% endif %}" id="rmm-tab" data-bs-toggle="tab" data-bs-target="#rmm" type="button" role="tab">
                         <i class="bi bi-robot"></i> RMM Agent
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="unifi-tab" data-bs-toggle="tab" data-bs-target="#unifi" type="button" role="tab">
-                        <i class="bi bi-router"></i> UniFi
+                    <button class="nav-link {% if active_section == 'scripts' %}active{% endif %}" id="scripts-tab" data-bs-toggle="tab" data-bs-target="#scripts" type="button" role="tab">
+                        <i class="bi bi-terminal-fill"></i> Scripts
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox" type="button" role="tab">
-                        <i class="bi bi-hdd-stack"></i> Proxmox
+                    <button class="nav-link {% if active_section == 'eagleeye' %}active{% endif %}" id="eagleeye-tab" data-bs-toggle="tab" data-bs-target="#eagleeye" type="button" role="tab">
+                        <i class="bi bi-binoculars-fill"></i> Eagle Eye
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="ai-tab" data-bs-toggle="tab" data-bs-target="#ai" type="button" role="tab">
+                    <button class="nav-link {% if active_section == 'unifi' %}active{% endif %}" id="unifi-tab" data-bs-toggle="tab" data-bs-target="#unifi" type="button" role="tab">
+                        <i class="bi bi-wifi"></i> UniFi
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if active_section == 'proxmox' %}active{% endif %}" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox" type="button" role="tab">
+                        <i class="bi bi-hdd-stack-fill"></i> Proxmox
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if active_section == 'ai' %}active{% endif %}" id="ai-tab" data-bs-toggle="tab" data-bs-target="#ai" type="button" role="tab">
                         <i class="bi bi-stars"></i> AI
                     </button>
                 </li>
             </ul>
 
             <div class="tab-content mt-4" id="settingsTabContent">
-                <!-- License Management Tab -->
-                <div class="tab-pane fade show active" id="license" role="tabpanel">
+                <!-- Theme Settings Tab -->
+                <div class="tab-pane fade {% if not active_section or active_section == 'theme' %}show active{% endif %}" id="theme" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header d-flex justify-content-between align-items-center">
+                                <div class="card-header bg-primary text-white">
+                                    <h5 class="mb-0"><i class="bi bi-palette-fill"></i> Appearance Theme</h5>
+                                </div>
+                                <div class="card-body">
+                                    <form method="POST" id="themeForm">
+                                        <input type="hidden" name="action" value="update_theme">
+                                        <div class="row">
+                                            <div class="col-md-12 mb-3">
+                                                <label class="form-label">Select Theme</label>
+                                                <select class="form-select form-select-lg" name="theme" id="themeSelector" onchange="previewTheme(this.value)">
+                                                    <option value="default" {% if not current_user.theme or current_user.theme == 'default' %}selected{% endif %}>Default (Bootstrap Blue)</option>
+                                                    <option value="deep-forest" {% if current_user.theme == 'deep-forest' %}selected{% endif %}>Deep Forest (Dark)</option>
+                                                    <option value="modern-naturalist" {% if current_user.theme == 'modern-naturalist' %}selected{% endif %}>Modern Naturalist (Light)</option>
+                                                    <option value="heritage" {% if current_user.theme == 'heritage' %}selected{% endif %}>Heritage (Classic)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Theme Preview Cards -->
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <div class="card border" id="themePreview">
+                                                    <div class="card-body">
+                                                        <h6 class="card-title">Preview</h6>
+                                                        <p class="card-text">This is how your interface will look.</p>
+                                                        <button type="button" class="btn btn-primary btn-sm">Sample Button</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <div id="themeDescription"></div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-success">
+                                                <i class="bi bi-check-circle"></i> Apply Theme
+                                            </button>
+                                            <button type="button" class="btn btn-secondary" onclick="resetThemePreview()">
+                                                <i class="bi bi-arrow-counterclockwise"></i> Reset Preview
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- License Management Tab -->
+                <div class="tab-pane fade {% if active_section == 'license' %}show active{% endif %}" id="license" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
                                     <h5 class="mb-0"><i class="bi bi-key-fill"></i> License Management</h5>
                                     <button type="button" class="btn btn-sm btn-light" onclick="verifyLicense()">
                                         <i class="bi bi-arrow-clockwise"></i> Verify Now
@@ -140,11 +263,11 @@
                 </div>
 
                 <!-- Email Configuration Tab -->
-                <div class="tab-pane fade" id="email" role="tabpanel">
+                <div class="tab-pane fade {% if active_section == 'email' %}show active{% endif %}" id="email" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header d-flex justify-content-between align-items-center">
+                                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-envelope-fill"></i> Email Configuration</h5>
                     <button type="button" class="btn btn-sm btn-light" onclick="toggleSmtpEdit()">
                         <i class="bi bi-pencil-square"></i> Edit
@@ -265,175 +388,170 @@
                         </div>
                     </form>
 
-                                    <!-- Test Email -->
-                                    <hr>
-                                    <form method="POST">
-                                        <input type="hidden" name="action" value="test_email">
-                                        <div class="mb-3">
-                                            <label class="form-label"><strong>Test Email Configuration</strong></label>
-                                            <div class="input-group">
-                                                <input type="email" class="form-control" name="test_email" 
-                                                       placeholder="Enter email address to test" required>
-                                                <button type="submit" class="btn btn-success">
-                                                    <i class="bi bi-send-fill"></i> Send Test Email
-                                                </button>
-                                            </div>
-                                            <small class="form-text text-muted">Send a test email to verify SMTP configuration</small>
-                                        </div>
-                                    </form>
-
-                                    <!-- Email Notifications -->
-                                    <div class="card shadow-sm mt-4">
-                                        <div class="card-header">
-                                            <h5 class="mb-0"><i class="bi bi-bell-fill"></i> Email Notifications</h5>
-                                        </div>
-                                        <div class="card-body">
-                                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                                <div>
-                                                    <h6 class="mb-1">Employee Email Notifications</h6>
-                                                    <p class="text-muted mb-0 small">Send emails to employees when assets are assigned to them</p>
-                                                </div>
-                                                <form method="POST" class="mb-0">
-                                                    <input type="hidden" name="action" value="toggle_employee_emails">
-                                                    <button type="submit" class="btn btn-lg {{ 'btn-success' if config.employee_emails_enabled else 'btn-secondary' }}">
-                                                        {% if config.employee_emails_enabled %}
-                                                            <i class="bi bi-toggle-on"></i> Enabled
-                                                        {% else %}
-                                                            <i class="bi bi-toggle-off"></i> Disabled
-                                                        {% endif %}
-                                                    </button>
-                                                </form>
-                                            </div>
-                                            
-                                            {% if not config.employee_emails_enabled %}
-                                            <div class="alert alert-warning mb-0">
-                                                <i class="bi bi-exclamation-triangle-fill"></i> 
-                                                <strong>Note:</strong> Employee email notifications are currently disabled. 
-                                                Employees will not receive emails when assets are assigned to them.
-                                            </div>
-                                            {% endif %}
-                                            
-                                            <hr>
-                                            
-                                            <h6 class="mb-3">Admin Notifications (Always Enabled)</h6>
-                                            <ul class="list-unstyled mb-0">
-                                                <li class="mb-2">
-                                                    <i class="bi bi-check-circle-fill text-success"></i> 
-                                                    Warranty expiring alerts
-                                                </li>
-                                                <li class="mb-2">
-                                                    <i class="bi bi-check-circle-fill text-success"></i> 
-                                                    Asset lifecycle alerts (replacement needed)
-                                                </li>
-                                                <li class="mb-2">
-                                                    <i class="bi bi-check-circle-fill text-success"></i> 
-                                                    System notifications
-                                                </li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Email Info Sidebar -->
-                                <div class="col-lg-4">
-                                    <!-- Admin Recipients -->
-                                    <div class="card shadow-sm mb-4">
-                                        <div class="card-header">
-                                            <h5 class="mb-0"><i class="bi bi-people-fill"></i> Admin Recipients</h5>
-                                        </div>
-                                        <div class="card-body">
-                                            <p class="text-muted small mb-2">Admin notifications will be sent to:</p>
-                                            {% if config.admin_emails %}
-                                                <ul class="list-unstyled mb-0">
-                                                    {% for email in config.admin_emails %}
-                                                    <li class="mb-2">
-                                                        <i class="bi bi-envelope text-primary"></i> 
-                                                        <small>{{ email }}</small>
-                                                    </li>
-                                                    {% endfor %}
-                                                </ul>
-                                            {% else %}
-                                                <div class="alert alert-warning mb-0">
-                                                    <small>
-                                                        <i class="bi bi-exclamation-triangle"></i> 
-                                                        No admin email addresses configured!
-                                                    </small>
-                                                </div>
-                                            {% endif %}
-                                            <hr>
-                                            <p class="text-muted small mb-0">
-                                                <strong>{{ config.admin_count }}</strong> admin user(s) in system
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <!-- Email Types -->
-                                    <div class="card shadow-sm mb-4">
-                                        <div class="card-header">
-                                            <h5 class="mb-0"><i class="bi bi-info-circle-fill"></i> Email Types</h5>
-                                        </div>
-                                        <div class="card-body">
-                                            <h6 class="mb-2">To Employees:</h6>
-                                            <ul class="small mb-3">
-                                                <li>Asset assignment notifications</li>
-                                                <li>Asset return reminders</li>
-                                            </ul>
-                                            
-                                            <h6 class="mb-2">To Admins:</h6>
-                                            <ul class="small mb-0">
-                                                <li>Warranty expiring soon (30 days)</li>
-                                                <li>Assets needing replacement</li>
-                                                <li>Lifecycle status changes</li>
-                                                <li>System alerts</li>
-                                            </ul>
-                                        </div>
-                                    </div>
-
-                                    <!-- SMTP Info -->
-                                    <div class="card shadow-sm">
-                                        <div class="card-header">
-                                            <h6 class="mb-0"><i class="bi bi-server"></i> SMTP Server Info</h6>
-                                        </div>
-                                        <div class="card-body">
-                                            <dl class="row mb-0 small">
-                                                <dt class="col-sm-5">Server:</dt>
-                                                <dd class="col-sm-7">{{ config.mail_server }}</dd>
-                                                
-                                                <dt class="col-sm-5">Port:</dt>
-                                                <dd class="col-sm-7">{{ config.mail_port }}</dd>
-                                                
-                                                <dt class="col-sm-5">TLS:</dt>
-                                                <dd class="col-sm-7">Disabled</dd>
-                                                
-                                                <dt class="col-sm-5">SSL:</dt>
-                                                <dd class="col-sm-7">Disabled</dd>
-                                                
-                                                <dt class="col-sm-5">Auth:</dt>
-                                                <dd class="col-sm-7 mb-0">None Required</dd>
-                                            </dl>
-                                        </div>
-                                    </div>
-                                </div>
+                    <hr>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="test_email">
+                        <div class="mb-3">
+                            <label class="form-label"><strong>Test Email Configuration</strong></label>
+                            <div class="input-group">
+                                <input type="email" class="form-control" name="test_email" placeholder="Enter email address to test" required>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-send-fill"></i> Send Test Email
+                                </button>
                             </div>
+                            <small class="form-text text-muted">Send a test email to verify SMTP configuration</small>
+                        </div>
+                    </form>
+
+                    <div class="card shadow-sm mt-4">
+                        <div class="card-header bg-dark text-white">
+                            <h5 class="mb-0"><i class="bi bi-bell-fill"></i> Email Notifications</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <div>
+                                    <h6 class="mb-1">Employee Email Notifications</h6>
+                                    <p class="text-muted mb-0 small">Send emails to employees when assets are assigned to them</p>
+                                </div>
+                                <form method="POST" class="mb-0">
+                                    <input type="hidden" name="action" value="toggle_employee_emails">
+                                    <button type="submit" class="btn btn-lg {{ 'btn-success' if config.employee_emails_enabled else 'btn-secondary' }}">
+                                        {% if config.employee_emails_enabled %}
+                                            <i class="bi bi-toggle-on"></i> Enabled
+                                        {% else %}
+                                            <i class="bi bi-toggle-off"></i> Disabled
+                                        {% endif %}
+                                    </button>
+                                </form>
+                            </div>
+
+                            {% if not config.employee_emails_enabled %}
+                            <div class="alert alert-warning mb-0">
+                                <i class="bi bi-exclamation-triangle-fill"></i>
+                                <strong>Note:</strong> Employee email notifications are currently disabled.
+                                Employees will not receive emails when assets are assigned to them.
+                            </div>
+                            {% endif %}
+
+                            <hr>
+
+                            <h6 class="mb-3">Admin Notifications (Always Enabled)</h6>
+                            <ul class="list-unstyled mb-0">
+                                <li class="mb-2">
+                                    <i class="bi bi-check-circle-fill text-success"></i>
+                                    Warranty expiring alerts
+                                </li>
+                                <li class="mb-2">
+                                    <i class="bi bi-check-circle-fill text-success"></i>
+                                    Asset lifecycle alerts (replacement needed)
+                                </li>
+                                <li class="mb-2">
+                                    <i class="bi bi-check-circle-fill text-success"></i>
+                                    System notifications
+                                </li>
+                            </ul>
                         </div>
                     </div>
                 </div>
+            </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="card shadow-sm mb-4">
+                        <div class="card-header bg-secondary text-white">
+                            <h5 class="mb-0"><i class="bi bi-people-fill"></i> Admin Recipients</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-2">Admin notifications will be sent to:</p>
+                            {% if config.admin_emails %}
+                                <ul class="list-unstyled mb-0">
+                                    {% for email in config.admin_emails %}
+                                    <li class="mb-2">
+                                        <i class="bi bi-envelope text-primary"></i>
+                                        <small>{{ email }}</small>
+                                    </li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <div class="alert alert-warning mb-0">
+                                    <small>
+                                        <i class="bi bi-exclamation-triangle"></i>
+                                        No admin email addresses configured!
+                                    </small>
+                                </div>
+                            {% endif %}
+                            <hr>
+                            <p class="text-muted small mb-0">
+                                <strong>{{ config.admin_count }}</strong> admin user(s) in system
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="card shadow-sm mb-4">
+                        <div class="card-header bg-dark text-white">
+                            <h5 class="mb-0"><i class="bi bi-info-circle-fill"></i> Email Types</h5>
+                        </div>
+                        <div class="card-body">
+                            <h6 class="mb-2">To Employees:</h6>
+                            <ul class="small mb-3">
+                                <li>Asset assignment notifications</li>
+                                <li>Asset return reminders</li>
+                            </ul>
+
+                            <h6 class="mb-2">To Admins:</h6>
+                            <ul class="small mb-0">
+                                <li>Warranty expiring soon (30 days)</li>
+                                <li>Assets needing replacement</li>
+                                <li>Lifecycle status changes</li>
+                                <li>System alerts</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-light">
+                            <h6 class="mb-0"><i class="bi bi-server"></i> SMTP Server Info</h6>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row mb-0 small">
+                                <dt class="col-sm-5">Server:</dt>
+                                <dd class="col-sm-7">{{ config.mail_server }}</dd>
+
+                                <dt class="col-sm-5">Port:</dt>
+                                <dd class="col-sm-7">{{ config.mail_port }}</dd>
+
+                                <dt class="col-sm-5">TLS:</dt>
+                                <dd class="col-sm-7">Disabled</dd>
+
+                                <dt class="col-sm-5">SSL:</dt>
+                                <dd class="col-sm-7">Disabled</dd>
+
+                                <dt class="col-sm-5">Auth:</dt>
+                                <dd class="col-sm-7 mb-0">None Required</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
                 <!-- Directory / AD / LDAP Tab -->
-                <div class="tab-pane fade" id="directory" role="tabpanel">
+                <div class="tab-pane fade {% if active_section == 'directory' %}show active{% endif %}" id="directory" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="card shadow-sm">
-                                <div class="card-header d-flex justify-content-between align-items-center">
+                                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
                                     <h5 class="mb-0"><i class="bi bi-server"></i> On-Prem Active Directory (LDAP)</h5>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="testADConnection()">
+                                    <button type="button" class="btn btn-sm btn-light" onclick="testADConnection()">
                                         <i class="bi bi-lightning"></i> Test Connection
                                     </button>
                                 </div>
                                 <div class="card-body">
                                     <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
+
                                     <form method="POST">
                                         <input type="hidden" name="action" value="update_ad">
+
                                         <div class="row">
                                             <div class="col-md-8 mb-3">
                                                 <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
@@ -445,14 +563,16 @@
                                                 <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
                                             </div>
                                         </div>
+
                                         <div class="mb-3">
                                             <label class="form-label">Base DN <span class="text-danger">*</span></label>
                                             <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
                                             <small class="form-text text-muted">Base DN for user searches.</small>
                                         </div>
+
                                         <div class="row">
                                             <div class="col-md-6 mb-3">
-                                                <label class="form-label">Bind DN (Service Account) <span class="text-danger">*</span></label>
+                                                <label class="form-label">Service Account Username (Bind DN) <span class="text-danger">*</span></label>
                                                 <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
                                             </div>
                                             <div class="col-md-6 mb-3">
@@ -461,23 +581,28 @@
                                                 <small class="form-text text-muted">Leave blank to keep the existing password.</small>
                                             </div>
                                         </div>
+
                                         <div class="mb-3">
                                             <label class="form-label">User OU DN (optional)</label>
                                             <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
                                             <small class="form-text text-muted">If set, new users can be created under this OU.</small>
                                         </div>
+
                                         <div class="form-check mb-2">
                                             <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
                                             <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
                                         </div>
+
                                         <div class="form-check mb-3">
                                             <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
                                             <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
                                         </div>
+
                                         <button type="submit" class="btn btn-success">
                                             <i class="bi bi-save"></i> Save Directory Settings
                                         </button>
                                     </form>
+
                                     <div class="mt-3" id="adTestResult" style="display:none;"></div>
                                 </div>
                             </div>
@@ -485,452 +610,991 @@
                     </div>
                 </div>
 
-                <!-- RMM Agent Tab -->
-                <div class="tab-pane fade" id="rmm" role="tabpanel">
+                <script>
+                async function testADConnection() {
+                    const resultEl = document.getElementById('adTestResult');
+                    resultEl.style.display = 'block';
+                    resultEl.className = 'alert alert-info';
+                    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
+                    try {
+                        const res = await fetch('{{ url_for("api_ad_test") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+                        const data = await res.json();
+                        if (data.success) {
+                            resultEl.className = 'alert alert-success';
+                            resultEl.textContent = data.message || 'Connected';
+                        } else {
+                            resultEl.className = 'alert alert-danger';
+                            resultEl.textContent = data.error || 'Connection failed';
+                        }
+                    } catch (e) {
+                        resultEl.className = 'alert alert-danger';
+                        resultEl.textContent = e?.message || 'Connection failed';
+                    }
+                }
+                </script>
+
+                <!-- TeamViewer Integration Tab -->
+                <div class="tab-pane fade {% if active_section == 'teamviewer' %}show active{% endif %}" id="teamviewer" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-8">
-                            <div class="card shadow-sm mb-4">
-                                <div class="card-header">
-                                    <h5 class="mb-0"><i class="bi bi-robot"></i> Cirque RMM Agent</h5>
-                                </div>
-                                <div class="card-body">
-                                    <p class="mb-3">Deploy the RMM agent to any Windows device &mdash; no file transfer needed.</p>
-
-                                    <h6 class="mb-2"><i class="bi bi-1-circle-fill text-primary me-1"></i> Quick install &mdash; one machine (run as Admin)</h6>
-                                    <p class="small text-muted mb-1">Open <strong>PowerShell as Administrator</strong> on the target machine and paste:</p>
-                                    <div class="input-group mb-1">
-                                        <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
-                                                 id="ps1OneLiner" readonly style="font-size:.75rem;">
-                                        <button class="btn btn-outline-secondary" type="button"
-                                                onclick="copyById('ps1OneLiner',this)" title="Copy to clipboard">
-                                            <i class="bi bi-clipboard"></i>
-                                        </button>
-                                    </div>
-                                    <script>
-                                    function copyById(id, btn) {
-                                        navigator.clipboard.writeText(document.getElementById(id).value).then(function() {
-                                            btn.innerHTML = '<i class="bi bi-check text-success"></i>';
-                                            setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
-                                        }).catch(function(){});
-                                    }
-                                    document.addEventListener('DOMContentLoaded', function() {
-                                        var tok  = "{{ rmm_site_token }}";
-                                        var base = "{{ request.host_url }}".replace(/\/+$/, "");
-                                        var installUrl = base + "/download/site-install.ps1?t=" + tok;
-                                        var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
-                                        document.getElementById("ps1OneLiner").value  = "irm '" + installUrl + "' | iex";
-                                        document.getElementById("gpoOneLiner").value  = "irm '" + deployUrl  + "' | iex";
-                                        document.getElementById("intuneScriptUrl").value = deployUrl;
-                                        document.getElementById("psremoteCmd").value  =
-                                            "Invoke-Command -ComputerName PC-NAME -ScriptBlock { irm '" + deployUrl + "' | iex }";
-                                        document.getElementById("intuneDownloadLink").href = deployUrl;
-                                    });
-                                    </script>
-                                    <p class="small text-muted mb-4">Logs saved to <code>C:\CirqueRMM\logs\setup.log</code></p>
-
-                                    <h6 class="mb-2"><i class="bi bi-2-circle-fill text-success me-1"></i> Silent mass deployment &mdash; users see nothing</h6>
-                                    <p class="small text-muted mb-2">The silent deploy script creates a hidden Windows Scheduled Task running as <strong>SYSTEM</strong>. No console window, no UAC prompt, no user dialog. Machines that already have the agent installed exit immediately.</p>
-
-                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
-                                        <div class="d-flex align-items-center mb-2">
-                                            <span class="badge bg-secondary me-2">Option A</span>
-                                            <strong class="small">Group Policy (domain-joined machines)</strong>
-                                        </div>
-                                        <ol class="small text-muted mb-2 ps-3">
-                                            <li>Open <strong>Group Policy Management</strong> &rarr; create/edit a GPO linked to your Computers OU</li>
-                                            <li>Navigate to <em>Computer Configuration &rarr; Windows Settings &rarr; Scripts &rarr; Startup</em></li>
-                                            <li>Add a <strong>PowerShell script</strong> with this command (no arguments needed):</li>
-                                        </ol>
-                                        <div class="input-group mb-1">
-                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
-                                                     id="gpoOneLiner" readonly style="font-size:.72rem;">
-                                            <button class="btn btn-outline-secondary btn-sm" type="button"
-                                                    onclick="copyById('gpoOneLiner',this)" title="Copy">
-                                                <i class="bi bi-clipboard"></i>
-                                            </button>
-                                        </div>
-                                        <p class="small text-muted mb-0">The script runs silently at startup as SYSTEM. Already-installed machines do nothing.</p>
-                                    </div>
-
-                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
-                                        <div class="d-flex align-items-center mb-2">
-                                            <span class="badge bg-info text-dark me-2">Option B</span>
-                                            <strong class="small">Microsoft Intune (cloud / hybrid-joined machines)</strong>
-                                        </div>
-                                        <ol class="small text-muted mb-2 ps-3">
-                                            <li>Intune Portal &rarr; <em>Devices &rarr; Windows &rarr; PowerShell Scripts &rarr; Add</em></li>
-                                            <li><a id="intuneDownloadLink" href="#" class="text-info"><i class="bi bi-download me-1"></i>Download CirqueRMM-Deploy-Silent.ps1</a></li>
-                                            <li>Upload it &rarr; set <strong>Run as logged on credentials: No</strong> (SYSTEM) &rarr; assign to device groups</li>
-                                        </ol>
-                                        <div class="input-group">
-                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
-                                                     id="intuneScriptUrl" readonly style="font-size:.72rem;">
-                                            <button class="btn btn-outline-secondary btn-sm" type="button"
-                                                    onclick="copyById('intuneScriptUrl',this)" title="Copy URL">
-                                                <i class="bi bi-clipboard"></i>
-                                            </button>
-                                        </div>
-                                        <p class="small text-muted mt-1 mb-0">Direct script URL (right-click Save As, or use the download link above).</p>
-                                    </div>
-
-                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
-                                        <div class="d-flex align-items-center mb-2">
-                                            <span class="badge bg-secondary me-2">Option C</span>
-                                            <strong class="small">PowerShell Remoting &mdash; ad-hoc, any number of machines</strong>
-                                        </div>
-                                        <p class="small text-muted mb-2">Run from your admin workstation. Replace <code>PC-NAME</code> with the target hostname, or use <code>(Get-ADComputer -Filter *).Name</code> for all domain PCs:</p>
-                                        <div class="input-group">
-                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
-                                                     id="psremoteCmd" readonly style="font-size:.72rem;">
-                                            <button class="btn btn-outline-secondary btn-sm" type="button"
-                                                    onclick="copyById('psremoteCmd',this)" title="Copy">
-                                                <i class="bi bi-clipboard"></i>
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <h6 class="mb-2 mt-1"><i class="bi bi-3-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
-                                    <div class="d-flex gap-2 mb-4">
-                                        <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-sm">
-                                            <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
-                                        </a>
-                                    </div>
-
-                                    <h6 class="mb-2"><i class="bi bi-4-circle-fill text-primary me-1"></i> Per-asset installer (optional)</h6>
-                                    <p class="text-muted small mb-0">On any asset page, use <strong>Manage &rarr; Generate Installer (.ps1)</strong> to get a pre-configured script linked to that asset.</p>
-                                </div>
-                        </div>
-
-                        <div class="col-lg-4">
-                            <div class="card shadow-sm mb-3 border-warning">
-                                <div class="card-header bg-warning bg-opacity-10">
-                                    <h6 class="mb-0"><i class="bi bi-key-fill text-warning me-1"></i> Site Enrollment Token</h6>
-                                </div>
-                                <div class="card-body">
-                                    <p class="small text-muted mb-2">Baked into the MSI at build time. All devices use it to auto-register. Keep it secret.</p>
-                                    <div class="input-group mb-2">
-                                        <input type="password" id="siteTokenInput" class="form-control form-control-sm font-monospace"
-                                               value="{{ rmm_site_token }}" readonly>
-                                        <button class="btn btn-outline-secondary btn-sm" type="button"
-                                                onclick="toggleSiteToken()" title="Show/hide">
-                                            <i class="bi bi-eye" id="siteTokenEyeIcon"></i>
-                                        </button>
-                                        <button class="btn btn-outline-secondary btn-sm" type="button"
-                                                onclick="copySiteToken()" title="Copy">
-                                            <i class="bi bi-clipboard"></i>
-                                        </button>
-                                    </div>
-                                    <button class="btn btn-outline-danger btn-sm w-100" onclick="regenerateSiteToken()">
-                                        <i class="bi bi-arrow-clockwise me-1"></i> Regenerate Token
-                                    </button>
-                                    <p class="small text-danger mt-1 mb-0">
-                                        <i class="bi bi-exclamation-triangle me-1"></i>
-                                        Invalidates the current MSI &mdash; rebuild after regenerating.
-                                    </p>
-                                </div>
-                            </div>
-
                             <div class="card shadow-sm">
-                                <div class="card-header">
-                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Rebuild EXE</h6>
+                                <div class="card-header bg-primary text-white">
+                                    <h5 class="mb-0"><i class="bi bi-camera-video-fill"></i> TeamViewer Tensor Integration</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p class="small text-muted mb-2">After changing the token, rebuild on the server:</p>
-                                    <code class="d-block p-2 bg-light border rounded small" style="font-size:.75rem">cd /var/www/tracker/rmm_agent<br>source /var/www/tracker/rmm_gateway/.venv/bin/activate<br>python3 build_exe.py</code>
-                                    <p class="small text-muted mt-2 mb-0">Token is fetched from the DB automatically.</p>
+                                    <form method="POST" id="teamviewerForm">
+                                        <input type="hidden" name="action" value="update_teamviewer">
+                                        
+                                        <div class="form-check form-switch mb-3">
+                                            <input class="form-check-input" type="checkbox" id="teamviewer_enabled" name="teamviewer_enabled" 
+                                                   {% if tv_enabled %}checked{% endif %} onchange="toggleTeamViewerFields()">
+                                            <label class="form-check-label" for="teamviewer_enabled">
+                                                <strong>Enable TeamViewer Integration</strong>
+                                            </label>
+                                        </div>
+                                        
+                                        <div id="teamviewerFields" style="{% if not tv_enabled %}display: none;{% endif %}">
+                                            <div class="alert alert-info">
+                                                <i class="bi bi-info-circle"></i> <strong>Setup Instructions:</strong>
+                                                <ol class="mb-0 mt-2 small">
+                                                    <li>Log in to your <a href="https://login.teamviewer.com" target="_blank">TeamViewer Management Console</a></li>
+                                                    <li>Go to <strong>Settings → Apps → Create script token</strong></li>
+                                                    <li>Name it "Asset Tracker"</li>
+                                                    <li>Grant these permissions (select all "View" options):
+                                                        <ul>
+                                                            <li><strong>User management → View users</strong></li>
+                                                            <li><strong>Group management → View groups</strong></li>
+                                                            <li><strong>Connection reporting → View connection reports</strong></li>
+                                                            <li>Any "View devices/computers" option if available</li>
+                                                        </ul>
+                                                    </li>
+                                                    <li>Copy the token and paste it below</li>
+                                                </ol>
+                                            </div>
+                                            
+                                            <div class="mb-3">
+                                                <label for="teamviewer_token" class="form-label">API Token (Script Token)</label>
+                                                <div class="input-group">
+                                                    <input type="password" class="form-control" id="teamviewer_token" name="teamviewer_token" 
+                                                           value="{{ tv_token }}" placeholder="Paste your TeamViewer script token here">
+                                                    <button class="btn btn-outline-secondary" type="button" onclick="toggleTokenVisibility()">
+                                                        <i class="bi bi-eye" id="toggleIcon"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="d-flex align-items-center gap-2">
+                                                <button type="button" class="btn btn-info btn-sm" onclick="testConnection()">
+                                                    <i class="bi bi-wifi"></i> Test Connection
+                                                </button>
+                                                <button type="submit" class="btn btn-success btn-sm">
+                                                    <i class="bi bi-check-circle"></i> Save
+                                                </button>
+                                                <div id="testResult" class="ms-2"></div>
+                                            </div>
+                                            
+                                            {% if tv_enabled and tv_token %}
+                                            <hr>
+                                            <div class="row text-center">
+                                                <div class="col-6">
+                                                    <h6 class="text-muted">Last Sync</h6>
+                                                    <p class="mb-0">
+                                                        {% if last_sync_time %}
+                                                            {{ last_sync_time.strftime('%Y-%m-%d %H:%M') }}
+                                                        {% else %}
+                                                            Never
+                                                        {% endif %}
+                                                    </p>
+                                                </div>
+                                                <div class="col-6">
+                                                    <h6 class="text-muted">Linked Assets</h6>
+                                                    <p class="mb-0"><strong>{{ tv_asset_count }}</strong></p>
+                                                </div>
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                    </form>
+                                    
+                                    {% if tv_enabled and tv_token %}
+                                    <hr>
+                                    <div class="d-grid gap-2 mt-3">
+                                        <form method="POST" action="{{ url_for('teamviewer_sync') }}">
+                                            <button type="submit" class="btn btn-primary w-100">
+                                                <i class="bi bi-arrow-repeat"></i> Sync TeamViewer Connections
+                                            </button>
+                                        </form>
+                                        <a href="{{ url_for('teamviewer_diagnostic') }}" class="btn btn-info">
+                                            <i class="bi bi-bug"></i> View API Data (Diagnostic)
+                                        </a>
+                                        <small class="text-muted mt-2">
+                                            <i class="bi bi-info-circle"></i> TeamViewer sync adds connection IDs to existing assets. 
+                                            Device status and monitoring are managed through Microsoft Intune.
+                                        </small>
+                                    </div>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <script>
-                    function toggleSiteToken() {
-                        const inp = document.getElementById('siteTokenInput');
-                        const icon = document.getElementById('siteTokenEyeIcon');
-                        if (inp.type === 'password') { inp.type = 'text'; icon.className = 'bi bi-eye-slash'; }
-                        else { inp.type = 'password'; icon.className = 'bi bi-eye'; }
-                    }
-                    function copySiteToken() {
-                        navigator.clipboard.writeText(document.getElementById('siteTokenInput').value);
-                        if (typeof showToast === 'function') showToast('Token copied!', 'success');
-                    }
-                    function regenerateSiteToken() {
-                        if (!confirm('Regenerate the site enrollment token?\n\nThis invalidates the current MSI — rebuild before deploying to new devices.')) return;
-                        fetch('/api/rmm/site-token/regenerate', {method: 'POST'})
-                            .then(r => r.json()).then(d => {
-                                if (d.ok) {
-                                    document.getElementById('siteTokenInput').value = d.token;
-                                    if (typeof showToast === 'function') showToast('Token regenerated. Rebuild the MSI.', 'warning');
-                                    else alert('Token regenerated. Rebuild the MSI before deploying.');
-                                }
-                            });
-                    }
-                    </script>
-
-                <!-- UniFi Settings Tab -->
-                <div class="tab-pane fade" id="unifi" role="tabpanel">
+                <!-- RMM Agent Tab -->
+                <div class="tab-pane fade {% if active_section == 'rmm' %}show active{% endif %}" id="rmm" role="tabpanel">
                     <div class="row">
-                        <div class="col-lg-7">
-                            <div class="card bg-dark border-secondary mb-4">
-                                <div class="card-header d-flex align-items-center gap-2">
-                                    <i class="bi bi-router text-info fs-5"></i>
-                                    <h5 class="mb-0">UniFi Network Controller</h5>
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header bg-dark text-white">
+                                    <h5 class="mb-0"><i class="bi bi-robot"></i> Cirque RMM Agent — One-Click Deploy</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p class="text-muted small mb-3">Connect to the UniFi Network Application on your UDM Pro to auto-discover and monitor APs, switches, cameras, gateways, and storage devices.</p>
-                                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:0.85rem;">
-                                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                                        <strong>Use a local admin account</strong> &mdash; do not use your Ubiquiti SSO (ui.com) account.
-                                        SSO accounts require MFA and cannot be used for automated access.<br>
-                                        Create a local admin in <strong>UDM Pro &rarr; Settings &rarr; Admins &amp; Users &rarr; Add Admin</strong>
-                                        and choose <em>"Local Access Only"</em>.
+                                    <p class="mb-3">Deploy the RMM agent to any Windows endpoint. No parameters, no tokens to copy — just double-click the installer.</p>
+
+                                    <h6 class="mt-2 mb-2">Deploy Steps</h6>
+                                    <ol class="mb-4">
+                                        <li>Download <strong>CirqueRMM.exe</strong> from the button below.</li>
+                                        <li>Copy it to the target Windows machine.</li>
+                                        <li>Double-click it and accept the UAC prompt.</li>
+                                        <li>The agent installs, auto-enrolls, and the <strong>CirqueRMM</strong> service starts — done.</li>
+                                    </ol>
+
+                                    <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-lg me-2">
+                                        <i class="bi bi-download me-1"></i> Download .exe
+                                    </a>
+                                    <a href="{{ url_for('download_agent_msi') }}" class="btn btn-outline-success btn-lg me-2">
+                                        <i class="bi bi-box-seam me-1"></i> Download .msi
+                                    </a>
+                                    <a href="{{ url_for('download_agent_bat') }}" class="btn btn-outline-primary btn-lg me-2">
+                                        <i class="bi bi-file-earmark-code me-1"></i> Download .bat
+                                    </a>
+                                    <a href="{{ url_for('download_agent_ps1') }}" class="btn btn-outline-secondary btn-lg">
+                                        <i class="bi bi-filetype-ps me-1"></i> Download .ps1
+                                    </a>
+                                    <div class="mt-3 small text-muted">
+                                        <ul class="mb-2 ps-3">
+                                            <li><strong>.exe</strong> — Double-click, accept UAC. NSIS installer, bundles everything, works offline.</li>
+                                            <li><strong>.msi</strong> — Deploy via Group Policy Software Installation or <code>msiexec /i CirqueRMM.msi /quiet</code>.</li>
+                                            <li><strong>.bat</strong> — Right-click → Run as administrator. Downloads &amp; installs silently via PowerShell (execution policy bypassed automatically).</li>
+                                            <li><strong>.ps1</strong> — For admins who want to inspect the script; run with <code>powershell -ExecutionPolicy Bypass -File CirqueRMM-Install.ps1</code>.</li>
+                                        </ul>
+                                        <p class="mb-0">Site token is baked into all installers. Rebuild EXE/MSI after rotating the token (BAT &amp; PS1 are generated dynamically).</p>
                                     </div>
-                                    <form method="POST" action="/settings">
+
+                                    <hr>
+                                    <h6 class="mt-3 mb-2"><i class="bi bi-terminal me-1"></i> PowerShell One-Liner (no file download needed)</h6>
+                                    <p class="small text-muted mb-2">Open PowerShell as <strong>Administrator</strong> on the target machine and paste:</p>
+                                    <div class="input-group mb-1">
+                                        <input type="text" class="form-control font-monospace small" id="ps1OneLiner"
+                                               value="irm '{{ request.host_url.rstrip('/') }}/download/site-install.ps1?t={{ rmm_site_token }}' | iex"
+                                               readonly style="font-size:.78rem;">
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="navigator.clipboard.writeText(document.getElementById('ps1OneLiner').value).then(()=>{ this.innerHTML='<i class=&quot;bi bi-check&quot;></i>'}).catch(()=>{})"
+                                                title="Copy to clipboard">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <p class="text-muted small mb-0">The script downloads, enrolls the device, installs the service, and starts the tray. Log: <code>C:\CirqueRMM\logs\setup.log</code> and <code>%TEMP%\CirqueRMM_install.log</code>.</p>
+                                </div>
+                            </div>
+
+                            {% if rmm_site_token %}
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                                    <h6 class="mb-0"><i class="bi bi-key-fill"></i> Site Enrollment Token</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-2">This token is baked into the installer at build time. All devices enrolled with this token appear as new assets automatically.</p>
+                                    <div class="input-group mb-2">
+                                        <input type="password" id="siteTokenInput" class="form-control font-monospace"
+                                               value="{{ rmm_site_token }}" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" onclick="toggleSiteToken()" title="Show/hide">
+                                            <i class="bi bi-eye" id="siteTokenEyeIcon"></i>
+                                        </button>
+                                        <button class="btn btn-outline-secondary" type="button" onclick="copySiteToken()" title="Copy">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="regenerateSiteToken()">
+                                        <i class="bi bi-arrow-clockwise me-1"></i>Rotate Token
+                                    </button>
+                                    <p class="text-muted small mt-2 mb-0">⚠ After rotating, rebuild the installer so new downloads use the new token.</p>
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-lg-4">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-secondary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-gear-fill"></i> Rebuild Installer</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-2">Run on the tracker server after rotating the site token:</p>
+                                    <code class="d-block p-2 bg-light border rounded small" style="word-break:break-all">cd /var/www/tracker/rmm_agent<br>python3 build_exe.py</code>
+                                    <p class="small text-muted mt-2 mb-0">New <code>CirqueRMM.exe</code> is served immediately — no restart needed.</p>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-secondary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-person-badge"></i> Per-Asset Installer</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-0">Need a pre-linked PS1 for a specific asset? Use the <strong>Generate Installer</strong> button in the asset's Manage menu.</p>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-secondary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Tech API Key</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-2">Technicians need an API key with <code>rmm_connect</code> to open remote sessions:</p>
+                                    <code class="d-block p-2 bg-light border rounded small">python scripts/create_api_key.py &lt;username&gt; rmm_connect</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Scripts Library Tab -->
+                <div class="tab-pane fade {% if active_section == 'scripts' %}show active{% endif %}" id="scripts" role="tabpanel">
+                    <div class="row g-3">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-dark text-white">
+                                    <h5 class="mb-0"><i class="bi bi-journal-code me-2"></i>Create Script</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Script Name</label>
+                                            <input type="text" class="form-control" id="scriptName" placeholder="Enter name">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">File Type</label>
+                                            <select class="form-select" id="scriptFileType">
+                                                <option value=".ps1">.ps1 (PowerShell)</option>
+                                                <option value=".bat">.bat (Batch)</option>
+                                                <option value=".sh">.sh (Shell)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Description</label>
+                                        <textarea class="form-control" id="scriptDescription" rows="2" placeholder="What this script does"></textarea>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Script Editor</label>
+                                        <textarea class="form-control font-monospace" id="scriptContent" rows="10" placeholder="Paste or generate script content..."></textarea>
+                                    </div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="button" class="btn btn-primary" onclick="saveScriptLibraryItem()">
+                                            <i class="bi bi-save me-1"></i>Save Script
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="clearScriptEditor()">
+                                            <i class="bi bi-eraser me-1"></i>Clear
+                                        </button>
+                                        <span id="scriptSaveStatus" class="small text-muted align-self-center"></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-secondary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-upload me-2"></i>Upload Script File</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-md-8">
+                                            <label class="form-label">File (.ps1, .bat, .sh)</label>
+                                            <input type="file" class="form-control" id="scriptUploadFile" accept=".ps1,.bat,.sh">
+                                        </div>
+                                        <div class="col-md-4 d-grid">
+                                            <button type="button" class="btn btn-outline-primary" onclick="uploadScriptFile()">
+                                                <i class="bi bi-cloud-upload me-1"></i>Upload
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div id="scriptUploadStatus" class="small text-muted mt-2"></div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                                    <h6 class="mb-0"><i class="bi bi-collection me-2"></i>Saved Scripts</h6>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadScriptLibrary()">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
+                                <div class="card-body">
+                                    <div id="scriptLibraryList" class="small text-muted">Loading scripts...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-lg-4">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-stars me-2"></i>AI Script Generator</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted">Generate scripts with Cirque AI. Describe exactly what you want the script to do.</p>
+                                    <div class="mb-2">
+                                        <label class="form-label">Prompt</label>
+                                        <textarea class="form-control" id="scriptAiPrompt" rows="5" placeholder="Example: Create a PowerShell script that clears temp files older than 7 days and prints reclaimed size."></textarea>
+                                    </div>
+                                    <div class="d-grid">
+                                        <button type="button" class="btn btn-primary" onclick="generateScriptWithAI()">
+                                            <i class="bi bi-magic me-1"></i>Generate Script
+                                        </button>
+                                    </div>
+                                    <div id="scriptAiStatus" class="small text-muted mt-2"></div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-success text-white">
+                                    <h6 class="mb-0"><i class="bi bi-play-circle me-2"></i>Test Script On Online Agent</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-2">
+                                        <label class="form-label">Online Agent</label>
+                                        <select class="form-select" id="scriptTestAgent"></select>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Script To Test</label>
+                                        <select class="form-select" id="scriptTestScript"></select>
+                                    </div>
+                                    <div class="d-grid">
+                                        <button type="button" class="btn btn-success" onclick="testSavedScript()">
+                                            <i class="bi bi-play-fill me-1"></i>Run Test
+                                        </button>
+                                    </div>
+                                    <pre id="scriptTestOutput" class="bg-dark text-light rounded p-2 mt-2 mb-1" style="min-height:70px;max-height:220px;overflow:auto;white-space:pre-wrap;font-size:.75rem;"></pre>
+                                    <div id="scriptTestStatus" class="small text-muted"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                (function() {
+                    let scriptLibraryCache = [];
+                    let scriptsAutoRefreshTimer = null;
+
+                    // Immediate boot marker: if this never appears, this script block is not executing.
+                    const bootWrap = document.getElementById('scriptLibraryList');
+                    if (bootWrap && (bootWrap.textContent || '').includes('Loading scripts')) {
+                        bootWrap.innerHTML = '<div class="text-warning">Initializing scripts module...</div>';
+                    }
+
+                    // Surface runtime errors directly in the Scripts panel for faster diagnosis.
+                    window.addEventListener('error', function(e) {
+                        const wrap = document.getElementById('scriptLibraryList');
+                        if (!wrap) return;
+                        const msg = e && e.message ? e.message : 'unknown JavaScript error';
+                        wrap.innerHTML = `<div class="text-danger">Scripts JS error: ${esc(msg)}</div>`;
+                    });
+
+                    function esc(v) {
+                        return (v || '')
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;')
+                            .replace(/'/g, '&#39;');
+                    }
+
+                    function setLibraryMessage(message, type) {
+                        const wrap = document.getElementById('scriptLibraryList');
+                        if (!wrap) return;
+                        const cls = type === 'danger' ? 'text-danger' : (type === 'warning' ? 'text-warning' : 'text-muted');
+                        wrap.innerHTML = `<div class="${cls}">${esc(message)}</div>`;
+                    }
+
+                    async function fetchJsonWithTimeout(url, options, timeoutMs) {
+                        const controller = new AbortController();
+                        const timer = setTimeout(() => controller.abort(), timeoutMs || 10000);
+                        try {
+                            const resp = await fetch(url, {...(options || {}), signal: controller.signal});
+                            return resp;
+                        } finally {
+                            clearTimeout(timer);
+                        }
+                    }
+
+                    function renderScriptTestPicker() {
+                        const picker = document.getElementById('scriptTestScript');
+                        if (!picker) return;
+                        const options = scriptLibraryCache.map(s =>
+                            `<option value="${s.id}">${esc(s.name)} ${esc(s.file_type)} ${s.is_tested ? '(tested)' : '(untested)'}</option>`
+                        ).join('');
+                        picker.innerHTML = options || '<option value="">No scripts saved</option>';
+                    }
+
+                    function renderScriptLibraryList() {
+                        const wrap = document.getElementById('scriptLibraryList');
+                        if (!wrap) return;
+                        if (!scriptLibraryCache.length) {
+                            wrap.innerHTML = '<div class="text-muted">No scripts saved yet.</div>';
+                            return;
+                        }
+
+                        wrap.innerHTML = scriptLibraryCache.map(s => {
+                            const tested = s.is_tested
+                                ? '<span class="badge bg-success">Tested</span>'
+                                : '<span class="badge bg-secondary">Untested</span>';
+                            const testedMeta = s.last_tested_at
+                                ? `<small class="text-muted">Last test: ${new Date(s.last_tested_at).toLocaleString()}${s.last_tested_agent_id ? ' on ' + esc(s.last_tested_agent_id) : ''}</small>`
+                                : '<small class="text-muted">Not tested yet</small>';
+
+                            return `
+                                <div class="border rounded p-2 mb-2">
+                                    <div class="d-flex justify-content-between align-items-center gap-2">
+                                        <div>
+                                            <strong>${esc(s.name)}</strong>
+                                            <span class="badge bg-light text-dark border ms-1">${esc(s.file_type)}</span>
+                                            ${tested}
+                                        </div>
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-sm btn-outline-secondary" title="Clone" onclick="cloneScriptLibraryItem(${s.id})"><i class="bi bi-files"></i></button>
+                                            <button class="btn btn-sm btn-outline-dark" title="Copy" onclick="copyScriptLibraryItem(${s.id})"><i class="bi bi-clipboard"></i></button>
+                                            <button class="btn btn-sm btn-outline-primary" title="Edit" onclick="editScriptLibraryItem(${s.id})"><i class="bi bi-pencil"></i></button>
+                                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="deleteScriptLibraryItem(${s.id})"><i class="bi bi-trash"></i></button>
+                                        </div>
+                                    </div>
+                                    <div class="small mt-1">${esc(s.description || '')}</div>
+                                    <div class="mt-1">${testedMeta}</div>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+
+                    async function loadScriptLibrary() {
+                        const status = document.getElementById('scriptSaveStatus');
+                        setLibraryMessage('Loading scripts...');
+                        if (status) status.textContent = 'Loading scripts...';
+                        try {
+                            const r = await fetchJsonWithTimeout('/api/settings/scripts', {cache: 'no-store'}, 10000);
+                            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                            const data = await r.json();
+                            if (!data.ok) throw new Error(data.error || 'Failed to load scripts');
+                            scriptLibraryCache = Array.isArray(data.scripts) ? data.scripts : [];
+                            renderScriptLibraryList();
+                            renderScriptTestPicker();
+                            if (status) status.textContent = `Loaded ${scriptLibraryCache.length} script(s)`;
+                        } catch (e) {
+                            scriptLibraryCache = [];
+                            renderScriptTestPicker();
+                            const msg = e && e.name === 'AbortError' ? 'request timed out' : e.message;
+                            setLibraryMessage(`Failed to load scripts: ${msg}`, 'danger');
+                            if (status) status.textContent = `Error loading scripts: ${msg}`;
+                        }
+                    }
+
+                    async function loadOnlineAgentsForScripts() {
+                        const picker = document.getElementById('scriptTestAgent');
+                        const status = document.getElementById('scriptTestStatus');
+                        if (!picker) return;
+                        picker.innerHTML = '<option value="">Loading...</option>';
+                        if (status) status.textContent = 'Loading online agents...';
+                        try {
+                            const r = await fetchJsonWithTimeout('/api/rmm/online-agents', {cache: 'no-store'}, 10000);
+                            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                            const data = await r.json();
+                            const agents = (data.ok && Array.isArray(data.agents)) ? data.agents : [];
+                            picker.innerHTML = agents.length
+                                ? agents.map(a => `<option value="${esc(a.agent_id)}">${esc(a.hostname)} (${esc(a.agent_id)})</option>`).join('')
+                                : '<option value="">No online agents</option>';
+                            if (status) status.textContent = agents.length ? `Loaded ${agents.length} online agent(s)` : 'No online agents available';
+                        } catch (e) {
+                            picker.innerHTML = '<option value="">Failed to load agents</option>';
+                            const msg = e && e.name === 'AbortError' ? 'request timed out' : e.message;
+                            if (status) status.textContent = `Failed to load agents: ${msg}`;
+                        }
+                    }
+
+                    function clearScriptEditor() {
+                        const nameEl = document.getElementById('scriptName');
+                        if (!nameEl) return;
+                        nameEl.value = '';
+                        document.getElementById('scriptDescription').value = '';
+                        document.getElementById('scriptContent').value = '';
+                        document.getElementById('scriptFileType').value = '.ps1';
+                        nameEl.removeAttribute('data-edit-id');
+                    }
+
+                    function editScriptLibraryItem(scriptId) {
+                        const item = scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+                        if (!item) return;
+                        const nameEl = document.getElementById('scriptName');
+                        nameEl.value = item.name || '';
+                        document.getElementById('scriptDescription').value = item.description || '';
+                        document.getElementById('scriptContent').value = item.script_content || '';
+                        document.getElementById('scriptFileType').value = item.file_type || '.ps1';
+                        nameEl.setAttribute('data-edit-id', String(item.id));
+                        document.getElementById('scriptSaveStatus').textContent = `Editing: ${item.name}`;
+                    }
+
+                    function cloneScriptLibraryItem(scriptId) {
+                        const item = scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+                        if (!item) return;
+                        const nameEl = document.getElementById('scriptName');
+                        nameEl.value = `${item.name || 'Script'} (Copy)`;
+                        document.getElementById('scriptDescription').value = item.description || '';
+                        document.getElementById('scriptContent').value = item.script_content || '';
+                        document.getElementById('scriptFileType').value = item.file_type || '.ps1';
+                        nameEl.removeAttribute('data-edit-id');
+                        document.getElementById('scriptSaveStatus').textContent = `Cloned from: ${item.name}`;
+                    }
+
+                    async function copyScriptLibraryItem(scriptId) {
+                        const item = scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+                        const status = document.getElementById('scriptSaveStatus');
+                        if (!item) return;
+                        try {
+                            await navigator.clipboard.writeText(item.script_content || '');
+                            if (status) status.textContent = `Copied script content: ${item.name}`;
+                        } catch (e) {
+                            if (status) status.textContent = 'Clipboard copy failed. Use Edit then copy manually.';
+                        }
+                    }
+
+                    async function saveScriptLibraryItem() {
+                        const nameEl = document.getElementById('scriptName');
+                        const status = document.getElementById('scriptSaveStatus');
+                        const payload = {
+                            id: nameEl.getAttribute('data-edit-id') || null,
+                            name: nameEl.value.trim(),
+                            description: document.getElementById('scriptDescription').value.trim(),
+                            file_type: document.getElementById('scriptFileType').value,
+                            script_content: document.getElementById('scriptContent').value,
+                        };
+                        if (!payload.name || !payload.script_content.trim()) {
+                            status.textContent = 'Name and script content are required.';
+                            return;
+                        }
+                        status.textContent = 'Saving...';
+                        try {
+                            const r = await fetch('/api/settings/scripts', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(payload),
+                            });
+                            const data = await r.json();
+                            if (!data.ok) {
+                                status.textContent = data.error || 'Failed to save script';
+                                return;
+                            }
+                            status.textContent = data.message || 'Saved';
+                            await loadScriptLibrary();
+                            clearScriptEditor();
+                        } catch (e) {
+                            status.textContent = `Save failed: ${e.message}`;
+                        }
+                    }
+
+                    async function uploadScriptFile() {
+                        const f = document.getElementById('scriptUploadFile').files[0];
+                        const status = document.getElementById('scriptUploadStatus');
+                        if (!f) {
+                            status.textContent = 'Pick a file first.';
+                            return;
+                        }
+                        const fd = new FormData();
+                        fd.append('file', f);
+                        status.textContent = 'Uploading...';
+                        try {
+                            const r = await fetch('/api/settings/scripts/upload', {method: 'POST', body: fd});
+                            const data = await r.json();
+                            if (!data.ok) {
+                                status.textContent = data.error || 'Upload failed';
+                                return;
+                            }
+                            status.textContent = 'Upload complete.';
+                            document.getElementById('scriptUploadFile').value = '';
+                            await loadScriptLibrary();
+                        } catch (e) {
+                            status.textContent = `Upload failed: ${e.message}`;
+                        }
+                    }
+
+                    async function deleteScriptLibraryItem(scriptId) {
+                        if (!confirm('Delete this script from the library?')) return;
+                        try {
+                            const r = await fetch(`/api/settings/scripts/${scriptId}`, {method: 'DELETE'});
+                            const data = await r.json();
+                            if (!data.ok) {
+                                alert(data.error || 'Delete failed');
+                                return;
+                            }
+                            await loadScriptLibrary();
+                        } catch (e) {
+                            alert(`Delete failed: ${e.message}`);
+                        }
+                    }
+
+                    async function generateScriptWithAI() {
+                        const status = document.getElementById('scriptAiStatus');
+                        const prompt = document.getElementById('scriptAiPrompt').value.trim();
+                        const fileType = document.getElementById('scriptFileType').value;
+                        if (!prompt) {
+                            status.textContent = 'Enter a prompt for AI generation.';
+                            return;
+                        }
+                        status.textContent = 'Generating script...';
+                        try {
+                            const r = await fetch('/api/settings/scripts/generate', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({prompt: prompt, file_type: fileType}),
+                            });
+                            const data = await r.json();
+                            if (!data.ok) {
+                                status.textContent = data.error || 'AI generation failed';
+                                return;
+                            }
+                            document.getElementById('scriptContent').value = data.script_content || '';
+                            status.textContent = 'Generated. Review and save the script.';
+                        } catch (e) {
+                            status.textContent = `AI generation failed: ${e.message}`;
+                        }
+                    }
+
+                    async function testSavedScript() {
+                        const scriptId = document.getElementById('scriptTestScript').value;
+                        const agentId = document.getElementById('scriptTestAgent').value;
+                        const status = document.getElementById('scriptTestStatus');
+                        const out = document.getElementById('scriptTestOutput');
+                        if (!scriptId || !agentId) {
+                            status.textContent = 'Select both a script and an online agent.';
+                            return;
+                        }
+                        status.textContent = 'Running test...';
+                        out.textContent = '';
+                        try {
+                            const r = await fetch(`/api/settings/scripts/${scriptId}/test`, {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({agent_id: agentId, timeout: 90}),
+                            });
+                            const data = await r.json();
+                            if (!data.ok) {
+                                status.textContent = data.error || 'Test failed';
+                                out.textContent = [data.stdout || '', data.stderr || ''].filter(Boolean).join('\n\n');
+                                await loadScriptLibrary();
+                                return;
+                            }
+                            status.textContent = `Success (exit ${data.exit_code})`;
+                            out.textContent = [data.stdout || '', data.stderr ? `STDERR:\n${data.stderr}` : ''].filter(Boolean).join('\n\n');
+                            await loadScriptLibrary();
+                        } catch (e) {
+                            status.textContent = `Test failed: ${e.message}`;
+                        }
+                    }
+
+                    function initScriptsTab() {
+                        const scriptsTabButton = document.getElementById('scripts-tab');
+                        if (!scriptsTabButton) return;
+                        const activeSection = {{ active_section|tojson }};
+
+                        if (activeSection && activeSection !== 'scripts') {
+                            return;
+                        }
+
+                        scriptsTabButton.addEventListener('shown.bs.tab', function() {
+                            loadScriptLibrary();
+                            loadOnlineAgentsForScripts();
+                        });
+
+                        const activeTarget = document.querySelector('#settingsTabs .nav-link.active')?.getAttribute('data-bs-target');
+                        loadScriptLibrary();
+                        if (activeTarget === '#scripts') {
+                            loadOnlineAgentsForScripts();
+                        }
+
+                        if (!scriptsAutoRefreshTimer) {
+                            scriptsAutoRefreshTimer = setInterval(function() {
+                                const currentActive = document.querySelector('#settingsTabs .nav-link.active')?.getAttribute('data-bs-target');
+                                if (currentActive === '#scripts') {
+                                    loadOnlineAgentsForScripts();
+                                }
+                            }, 15000);
+                        }
+                    }
+
+                    window.loadScriptLibrary = loadScriptLibrary;
+                    window.loadOnlineAgentsForScripts = loadOnlineAgentsForScripts;
+                    window.clearScriptEditor = clearScriptEditor;
+                    window.editScriptLibraryItem = editScriptLibraryItem;
+                    window.cloneScriptLibraryItem = cloneScriptLibraryItem;
+                    window.copyScriptLibraryItem = copyScriptLibraryItem;
+                    window.saveScriptLibraryItem = saveScriptLibraryItem;
+                    window.uploadScriptFile = uploadScriptFile;
+                    window.deleteScriptLibraryItem = deleteScriptLibraryItem;
+                    window.generateScriptWithAI = generateScriptWithAI;
+                    window.testSavedScript = testSavedScript;
+
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', initScriptsTab);
+                    } else {
+                        initScriptsTab();
+                    }
+                })();
+                </script>
+
+                <!-- Eagle Eye Exclusions Tab -->
+                <div class="tab-pane fade {% if active_section == 'eagleeye' %}show active{% endif %}" id="eagleeye" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-9">
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header bg-warning text-dark">
+                                    <h5 class="mb-0"><i class="bi bi-binoculars-fill me-2"></i>Eagle Eye Exclusions</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted mb-3">
+                                        Devices on this list are hidden from all <strong>Eagle Eyes</strong> role users. They will not appear in the fleet view or any Eagle Eyes monitoring pages.
+                                    </p>
+
+                                    <!-- Add Exclusion Form -->
+                                    <div class="border rounded p-3 mb-4" style="background:rgba(255,193,7,0.05)">
+                                        <h6 class="mb-3"><i class="bi bi-plus-circle me-1"></i>Add Device Exclusion</h6>
+                                        <div class="row g-2 align-items-end">
+                                            <div class="col-md-5">
+                                                <label class="form-label small mb-1">Device</label>
+                                                <select class="form-select form-select-sm" id="eeAgentPicker">
+                                                    <option value="">— select a device —</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-5">
+                                                <label class="form-label small mb-1">Notes (optional)</label>
+                                                <input type="text" class="form-control form-control-sm" id="eeNotes" placeholder="e.g. Executive laptop">
+                                            </div>
+                                            <div class="col-md-2">
+                                                <button class="btn btn-warning btn-sm w-100" onclick="eeAddExclusion()">
+                                                    <i class="bi bi-plus-lg"></i> Add
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div id="eeAddResult" class="mt-2" style="display:none"></div>
+                                    </div>
+
+                                    <!-- Exclusions Table -->
+                                    <div id="eeTableWrap">
+                                        <div class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- UniFi Settings Tab -->
+                <div class="tab-pane fade {% if active_section == 'unifi' %}show active{% endif %}" id="unifi" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-wifi me-2"></i>UniFi Controller Settings</h5>
+                                    <button type="button" class="btn btn-sm btn-light" onclick="testUnifiConnection()">
+                                        <i class="bi bi-arrow-repeat"></i> Test Connection
+                                    </button>
+                                </div>
+                                <div class="card-body">
+                                    <form method="POST">
                                         <input type="hidden" name="action" value="update_unifi">
-                                        <div class="mb-3">
-                                            <label class="form-label">Controller URL</label>
-                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_host"
-                                                   value="{{ unifi_config.host }}" placeholder="https://192.168.1.1">
-                                            <small class="text-muted">The IP/hostname of your UDM Pro (no trailing slash)</small>
-                                        </div>
-                                        <div class="row g-3 mb-3">
-                                            <div class="col-md-6">
-                                                <label class="form-label">Username</label>
-                                                <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_username"
-                                                       value="{{ unifi_config.username }}" placeholder="admin" autocomplete="off">
-                                            </div>
-                                            <div class="col-md-6">
-                                                <label class="form-label">Password</label>
-                                                <input type="password" class="form-control bg-dark text-light border-secondary" name="unifi_password"
-                                                       placeholder="{{ '(saved)' if unifi_config.password_set else 'Enter password' }}" autocomplete="new-password">
-                                                <small class="text-muted">Leave blank to keep existing password</small>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">Controller Host/URL *</label>
+                                                <input type="text" class="form-control" name="unifi_host" 
+                                                       value="{{ unifi_config.host }}" required 
+                                                       placeholder="https://192.168.1.100:8443">
+                                                <small class="text-muted">Include protocol (http/https) and port if needed</small>
                                             </div>
                                         </div>
-                                        <div class="mb-3">
-                                            <label class="form-label">Site Name</label>
-                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_site"
-                                                   value="{{ unifi_config.site or 'default' }}" placeholder="default">
-                                            <small class="text-muted">The site <strong>ID</strong> — almost always <code>default</code>. This is NOT the device model name. If unsure, use "Test Connection" to discover available site IDs.</small>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Username *</label>
+                                                <input type="text" class="form-control" name="unifi_username" 
+                                                       value="{{ unifi_config.username }}" required 
+                                                       placeholder="admin@example.com">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Password *</label>
+                                                <input type="password" class="form-control" name="unifi_password" 
+                                                       placeholder="{% if unifi_config.password_set %}••••••••{% else %}Enter password{% endif %}"
+                                                       {{ 'disabled' if unifi_config.password_set else '' }}>
+                                                {% if unifi_config.password_set %}<small class="text-muted">Password already set. Leave blank to keep current.</small>{% endif %}
+                                            </div>
                                         </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Site Name</label>
+                                                <input type="text" class="form-control" name="unifi_site" 
+                                                       value="{{ unifi_config.site or 'default' }}" 
+                                                       placeholder="default">
+                                                <small class="text-muted">Leave blank for 'default' site</small>
+                                            </div>
+                                        </div>
+                                        
+                                        {% if unifi_config.last_sync_status %}
+                                        <div class="alert alert-info">
+                                            <strong>Last Sync:</strong> {{ unifi_config.last_sync_time or 'Never' }}<br>
+                                            <strong>Status:</strong> {{ unifi_config.last_sync_status }}<br>
+                                            {% if unifi_config.last_sync_message %}<strong>Message:</strong> {{ unifi_config.last_sync_message }}{% endif %}
+                                        </div>
+                                        {% endif %}
+                                        
                                         <div class="d-flex gap-2">
-                                            <button type="submit" class="btn btn-primary btn-sm">
+                                            <button type="submit" class="btn btn-primary">
                                                 <i class="bi bi-save me-1"></i>Save Settings
-                                            </button>
-                                            <button type="button" class="btn btn-outline-info btn-sm" onclick="testUnifi()">
-                                                <i class="bi bi-plug me-1"></i>Test Connection
-                                            </button>
-                                            <button type="button" class="btn btn-outline-success btn-sm" onclick="syncUnifi(this)">
-                                                <i class="bi bi-arrow-clockwise me-1"></i>Sync Now
                                             </button>
                                         </div>
                                     </form>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-5">
-                            <div class="card bg-dark border-secondary mb-4">
-                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-activity me-2 text-success"></i>Sync Status</h6></div>
+                        <div class="col-lg-4">
+                            <div class="card bg-light shadow-sm">
                                 <div class="card-body">
-                                    {% if unifi_config.last_sync_time %}
-                                    <div class="mb-2">
-                                        <small class="text-muted">Last Sync</small><br>
-                                        <span class="text-light">{{ unifi_config.last_sync_time[:19].replace('T',' ') }} UTC</span>
-                                    </div>
-                                    <div class="mb-2">
-                                        <small class="text-muted">Status</small><br>
-                                        {% if unifi_config.last_sync_status == 'success' %}
-                                            <span class="badge bg-success">Success</span>
-                                        {% elif unifi_config.last_sync_status == 'error' %}
-                                            <span class="badge bg-danger">Error</span>
-                                        {% elif unifi_config.last_sync_status == 'skipped' %}
-                                            <span class="badge bg-secondary">Skipped</span>
-                                        {% endif %}
-                                    </div>
-                                    <div><small class="text-muted">{{ unifi_config.last_sync_message }}</small></div>
-                                    {% else %}
-                                    <p class="text-muted small mb-0">No sync has run yet. Save credentials and click <strong>Sync Now</strong>.</p>
-                                    {% endif %}
-                                </div>
-                            </div>
-                            <div class="card bg-dark border-secondary">
-                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2 text-info"></i>What gets synced</h6></div>
-                                <div class="card-body">
-                                    <ul class="list-unstyled small text-muted mb-0">
-                                        <li><i class="bi bi-check-circle text-success me-2"></i>Gateways / UDM Pro</li>
-                                        <li><i class="bi bi-check-circle text-success me-2"></i>Switches</li>
-                                        <li><i class="bi bi-check-circle text-success me-2"></i>Access Points</li>
-                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Cameras</li>
-                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Storage (NVR)</li>
-                                        <li class="mt-2"><i class="bi bi-arrow-repeat text-info me-2"></i>Syncs every 5 minutes</li>
-                                    </ul>
+                                    <h6 class="card-title"><i class="bi bi-info-circle me-2"></i>About UniFi Integration</h6>
+                                    <p class="small text-muted mb-2">
+                                        Automatically sync devices, networks, and clients from your UniFi controller to the asset database.
+                                    </p>
+                                    <hr>
+                                    <p class="small mb-0"><strong>Status:</strong> 
+                                        {% if unifi_config.host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-warning">Not Configured</span>{% endif %}
+                                    </p>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div id="unifi-test-result" class="mt-2"></div>
                 </div>
 
-
                 <!-- Proxmox Settings Tab -->
-                <div class="tab-pane fade" id="proxmox" role="tabpanel">
-                    <style>
-                        #proxmox .card-header { background:#1a2234; border-bottom:1px solid #2d3a50; }
-                        #proxmox .card-header h5,
-                        #proxmox .card-header h6 { color:#cdd9e5; }
-                        #proxmox .form-label { color:#cdd9e5; font-weight:500; }
-                        #proxmox .form-text { color:#8899aa; }
-                        #proxmox .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
-                        #proxmox .form-control:focus { border-color:#0d6efd; box-shadow:none; }
-                        #proxmox hr { border-color:#2d3a50; }
-                    </style>
+                <div class="tab-pane fade {% if active_section == 'proxmox' %}show active{% endif %}" id="proxmox" role="tabpanel">
                     <div class="row">
-                        <div class="col-lg-7">
-
-                            <!-- Cluster -->
-                            <div class="card shadow-sm mb-4">
-                                <div class="card-header">
-                                    <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Endor Cluster (Production)</h5>
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-info text-white">
+                                    <h5 class="mb-0"><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Cluster Settings</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p class="text-muted small mb-3">
-                                        API token credentials for any node in the Endor cluster.
-                                        Use a <strong>PVEAuditor</strong> role token (read-only).
-                                        Token format: <code>user@pve!tokenname</code>
-                                    </p>
-                                    <div class="mb-3">
-                                        <label class="form-label">Cluster Host</label>
-                                        <input type="text" class="form-control" id="prox_cluster_host"
-                                               placeholder="192.168.1.10 or pve1.corp.cirque.com"
-                                               value="{{ proxmox_settings.cluster_host }}">
-                                        <div class="form-text">Hostname or IP of any cluster node (port 8006)</div>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Token ID</label>
-                                        <input type="text" class="form-control" id="prox_cluster_token_id"
-                                               placeholder="monitoring@pve!tracker"
-                                               value="{{ proxmox_settings.cluster_token_id }}" autocomplete="off">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Token Secret</label>
-                                        <input type="password" class="form-control" id="prox_cluster_token_secret"
-                                               placeholder="{{ '(saved)' if proxmox_settings.cluster_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
-                                               autocomplete="new-password">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Verify SSL</label>
-                                        <select class="form-control" id="prox_cluster_verify_ssl">
-                                            <option value="0" {% if proxmox_settings.cluster_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
-                                            <option value="1" {% if proxmox_settings.cluster_verify_ssl == '1' %}selected{% endif %}>Yes</option>
-                                        </select>
-                                    </div>
-                                    <div class="d-flex gap-2 flex-wrap">
-                                        <button type="button" class="btn btn-outline-info btn-sm"
-                                                onclick="testProxmox('cluster')">
-                                            <i class="bi bi-plug"></i> Test Cluster
-                                        </button>
-                                        <button type="button" class="btn btn-success btn-sm"
-                                                onclick="saveProxmox()">
-                                            <i class="bi bi-check-circle"></i> Save
-                                        </button>
-                                    </div>
-                                    <div id="proxmox-cluster-result" class="mt-2"></div>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="update_proxmox">
+                                        
+                                        <div class="alert alert-light border">
+                                            <strong><i class="bi bi-hdd-stack me-2"></i>Cluster Configuration</strong>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Cluster Host/IP *</label>
+                                                <input type="text" class="form-control" name="proxmox_cluster_host" 
+                                                       value="{{ proxmox_settings.cluster_host }}" required 
+                                                       placeholder="192.168.1.50">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Token ID *</label>
+                                                <input type="text" class="form-control" name="proxmox_cluster_token_id" 
+                                                       value="{{ proxmox_settings.cluster_token_id }}" required 
+                                                       placeholder="user@realm!token-name">
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">Token Secret</label>
+                                                <input type="password" class="form-control" name="proxmox_cluster_token_secret" 
+                                                       placeholder="{% if proxmox_settings.cluster_token_set %}••••••••{% else %}Paste token here{% endif %}"
+                                                       {{ 'disabled' if proxmox_settings.cluster_token_set else '' }}>
+                                                {% if proxmox_settings.cluster_token_set %}<small class="text-muted">Token already set. Leave blank to keep current.</small>{% endif %}
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <div class="form-check">
+                                                    <input type="checkbox" class="form-check-input" id="proxyVerifySSL" 
+                                                           name="proxmox_cluster_verify_ssl" value="1"
+                                                           {{ 'checked' if proxmox_settings.cluster_verify_ssl else '' }}>
+                                                    <label class="form-check-label" for="proxyVerifySSL">
+                                                        Verify SSL Certificate
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="d-flex gap-2 mb-4">
+                                            <button type="button" class="btn btn-outline-info btn-sm" onclick="testProxmoxConnection()">
+                                                <i class="bi bi-arrow-repeat"></i> Test Connection
+                                            </button>
+                                        </div>
+                                        
+                                        <hr>
+                                        
+                                        <div class="alert alert-light border">
+                                            <strong><i class="bi bi-archive me-2"></i>Backup Repository Settings (Optional)</strong>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Backup Host/IP</label>
+                                                <input type="text" class="form-control" name="proxmox_backup_host" 
+                                                       value="{{ proxmox_settings.backup_host }}" 
+                                                       placeholder="192.168.1.51">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Backup Token ID</label>
+                                                <input type="text" class="form-control" name="proxmox_backup_token_id" 
+                                                       value="{{ proxmox_settings.backup_token_id }}" 
+                                                       placeholder="user@realm!token-name">
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">Backup Token Secret</label>
+                                                <input type="password" class="form-control" name="proxmox_backup_token_secret" 
+                                                       placeholder="{% if proxmox_settings.backup_token_set %}••••••••{% else %}Paste token here{% endif %}">
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Stale Hours</label>
+                                                <input type="number" class="form-control" name="proxmox_stale_hours" 
+                                                       value="{{ proxmox_settings.stale_hours }}" min="1">
+                                                <small class="text-muted">Hours without backup considered stale</small>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-info">
+                                                <i class="bi bi-save me-1"></i>Save Settings
+                                            </button>
+                                        </div>
+                                    </form>
                                 </div>
                             </div>
-
-                            <!-- Backup server -->
-                            <div class="card shadow-sm mb-4">
-                                <div class="card-header">
-                                    <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Bespin Backup Server</h5>
-                                </div>
-                                <div class="card-body">
-                                    <p class="text-muted small mb-3">
-                                        Optional: separate credentials for the standalone Bespin backup server.
-                                        Used to show backup storage pool usage.
-                                    </p>
-                                    <div class="mb-3">
-                                        <label class="form-label">Backup Server Host</label>
-                                        <input type="text" class="form-control" id="prox_backup_host"
-                                               placeholder="bespin.corp.cirque.com"
-                                               value="{{ proxmox_settings.backup_host }}">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Token ID</label>
-                                        <input type="text" class="form-control" id="prox_backup_token_id"
-                                               placeholder="monitoring@pve!tracker"
-                                               value="{{ proxmox_settings.backup_token_id }}" autocomplete="off">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Token Secret</label>
-                                        <input type="password" class="form-control" id="prox_backup_token_secret"
-                                               placeholder="{{ '(saved)' if proxmox_settings.backup_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
-                                               autocomplete="new-password">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Verify SSL</label>
-                                        <select class="form-control" id="prox_backup_verify_ssl">
-                                            <option value="0" {% if proxmox_settings.backup_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
-                                            <option value="1" {% if proxmox_settings.backup_verify_ssl == '1' %}selected{% endif %}>Yes</option>
-                                        </select>
-                                    </div>
-                                    <div class="d-flex gap-2 flex-wrap">
-                                        <button type="button" class="btn btn-outline-info btn-sm"
-                                                onclick="testProxmox('backup')">
-                                            <i class="bi bi-plug"></i> Test Backup Server
-                                        </button>
-                                        <button type="button" class="btn btn-success btn-sm"
-                                                onclick="saveProxmox()">
-                                            <i class="bi bi-check-circle"></i> Save
-                                        </button>
-                                    </div>
-                                    <div id="proxmox-backup-result" class="mt-2"></div>
-                                </div>
-                            </div>
-
-                            <!-- Alerting options -->
-                            <div class="card shadow-sm mb-4">
-                                <div class="card-header">
-                                    <h5 class="mb-0"><i class="bi bi-bell"></i> Alert Thresholds</h5>
-                                </div>
-                                <div class="card-body">
-                                    <div class="mb-3">
-                                        <label class="form-label">Stale Backup Threshold (hours)</label>
-                                        <input type="number" class="form-control" id="prox_stale_hours"
-                                               min="1" max="168"
-                                               value="{{ proxmox_settings.stale_hours or '26' }}"
-                                               style="width:120px;">
-                                        <div class="form-text">Alert if a VM's newest auto-snapshot is older than this. Default: 26h (daily backup + 2h buffer).</div>
-                                    </div>
-                                    <button type="button" class="btn btn-success btn-sm" onclick="saveProxmox()">
-                                        <i class="bi bi-check-circle"></i> Save
-                                    </button>
-                                </div>
-                            </div>
-
                         </div>
-                        <div class="col-lg-5">
-                            <div class="card shadow-sm">
-                                <div class="card-header">
-                                    <h6 class="mb-0"><i class="bi bi-info-circle"></i> Setup Instructions</h6>
-                                </div>
-                                <div class="card-body small text-muted">
-                                    <ol class="ps-3 mb-3">
-                                        <li class="mb-2">On any PVE node, create an API token user:<br>
-                                            <code>pveum user add monitoring@pve</code><br>
-                                            <code>pveum role add PVEReadOnly --privs "Datastore.Audit,Sys.Audit,VM.Audit"</code><br>
-                                            <code>pveum acl modify / -user monitoring@pve -role PVEReadOnly</code><br>
-                                            <code>pveum user token add monitoring@pve tracker</code>
-                                        </li>
-                                        <li class="mb-2">Copy the token ID (<code>monitoring@pve!tracker</code>) and secret UUID into the fields on the left.</li>
-                                        <li class="mb-2">Click <strong>Test</strong> to verify, then <strong>Save</strong>.</li>
-                                        <li>Go to <strong>Backups</strong> in the nav and click <strong>Sync Now</strong>.</li>
-                                    </ol>
+                        <div class="col-lg-4">
+                            <div class="card bg-light shadow-sm">
+                                <div class="card-body">
+                                    <h6 class="card-title"><i class="bi bi-info-circle me-2"></i>About Proxmox Integration</h6>
+                                    <p class="small text-muted mb-2">
+                                        Monitor VMs, backup jobs, storage health, and ZFS pool status from your Proxmox VE cluster.
+                                    </p>
                                     <hr>
-                                    <p class="mb-1"><strong>What is synced:</strong></p>
-                                    <ul class="ps-3 mb-0">
-                                        <li>ZFS pool health &amp; usage per node</li>
-                                        <li>VM / LXC auto-snapshot freshness</li>
-                                        <li>Alerts on degraded pools, &gt;80% capacity, stale backups</li>
-                                    </ul>
+                                    <p class="small"><strong>Cluster:</strong> 
+                                        {% if proxmox_settings.cluster_host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-warning">Not Configured</span>{% endif %}
+                                    </p>
+                                    <p class="small mb-0"><strong>Backup:</strong> 
+                                        {% if proxmox_settings.backup_host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-secondary">Optional</span>{% endif %}
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -938,111 +1602,81 @@
                 </div>
 
                 <!-- AI Settings Tab -->
-                <div class="tab-pane fade" id="ai" role="tabpanel">
-                    <style>
-                        #ai .card-header { background:#212d42; border-bottom:1px solid #2d3a50; }
-                        #ai .card-header h5,
-                        #ai .card-header h6 { color:#cdd9e5; }
-                        #ai .form-label { color:#cdd9e5; font-weight:500; }
-                        #ai .form-text { color:#8899aa; }
-                        #ai .form-select,
-                        #ai .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
-                        #ai .form-select:focus,
-                        #ai .form-control:focus { border-color:#0d6efd; box-shadow:none; }
-                        #ai .form-select option { background:#1a2233; }
-                        #ai hr { border-color:#2d3a50; }
-                        #ai-key-status { font-size:.82rem; }
-                    </style>
+                <div class="tab-pane fade {% if active_section == 'ai' %}show active{% endif %}" id="ai" role="tabpanel">
                     <div class="row">
-                        <div class="col-lg-7">
-                            <div class="card shadow-sm mb-4">
-                                <div class="card-header">
-                                    <h5 class="mb-0"><i class="bi bi-stars" style="color:#a855f7"></i> AI Configuration (OpenAI)</h5>
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header bg-warning text-dark">
+                                    <h5 class="mb-0"><i class="bi bi-stars me-2"></i>AI Engine Configuration</h5>
                                 </div>
                                 <div class="card-body">
-
-                                    <!-- API Key row -->
-                                    <div class="mb-3">
-                                        <label class="form-label">OpenAI API Key</label>
-                                        <div class="d-flex gap-2 align-items-center mb-1">
-                                            <span id="ai-key-status" class="badge bg-secondary">No key saved</span>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="toggleKeyInput()" id="btn-change-key">
-                                                <i class="bi bi-pencil-fill"></i> Change Key
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="update_ai">
+                                        
+                                        <div class="alert alert-warning">
+                                            <i class="bi bi-exclamation-triangle me-2"></i>
+                                            <strong>OpenAI API Key:</strong> Keep your API key secure. It will not be displayed once saved.
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label">OpenAI API Key *</label>
+                                                <input type="password" class="form-control" name="openai_api_key" 
+                                                       placeholder="sk-..." required>
+                                                <small class="text-muted">Get your API key from <a href="https://platform.openai.com/account/api-keys" target="_blank">platform.openai.com</a></small>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Model</label>
+                                                <select class="form-select" name="openai_model">
+                                                    <option value="gpt-4" {% if ai_config.model == 'gpt-4' %}selected{% endif %}>GPT-4 (Recommended)</option>
+                                                    <option value="gpt-3.5-turbo" {% if ai_config.model == 'gpt-3.5-turbo' %}selected{% endif %}>GPT-3.5 Turbo (Fast)</option>
+                                                    <option value="gpt-4-turbo" {% if ai_config.model == 'gpt-4-turbo' %}selected{% endif %}>GPT-4 Turbo</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="row mb-3">
+                                            <div class="col-md-12">
+                                                <div class="form-check">
+                                                    <input type="checkbox" class="form-check-input" id="aiTicketGeneration" 
+                                                           name="ai_ticket_enabled" value="1"
+                                                           {% if ai_config.ticket_enabled %}checked{% endif %}>
+                                                    <label class="form-check-label" for="aiTicketGeneration">
+                                                        Enable AI-powered Ticket Analysis and Suggestions
+                                                    </label>
+                                                </div>
+                                                <small class="text-muted d-block mt-2">
+                                                    Automatically analyze support tickets and suggest resolutions based on ticket content and history.
+                                                </small>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-warning">
+                                                <i class="bi bi-save me-1"></i>Save Settings
                                             </button>
-                                            <button type="button" class="btn btn-sm btn-outline-info py-0 px-2" onclick="testAiConnection()" id="btn-test-ai">
-                                                <i class="bi bi-plug-fill"></i> Test
+                                            <button type="button" class="btn btn-outline-secondary" onclick="testAIConnection()">
+                                                <i class="bi bi-arrow-repeat"></i> Test Connection
                                             </button>
                                         </div>
-                                        <div id="ai-key-input-wrap" style="display:none">
-                                            <input type="password" class="form-control" id="ai-api-key" placeholder="Paste new key: sk-proj-…">
-                                            <div class="form-text">Get your key from <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#6aacf8">platform.openai.com</a>. Stored server-side, never exposed in full.</div>
-                                        </div>
-                                        <div id="ai-test-result" class="mt-2" style="display:none"></div>
-                                    </div>
-
-                                    <!-- Model -->
-                                    <div class="mb-3">
-                                        <label class="form-label">Model</label>
-                                        <select class="form-select" id="ai-model">
-                                            <option value="gpt-4o">gpt-4o (recommended)</option>
-                                            <option value="gpt-4-turbo">gpt-4-turbo</option>
-                                            <option value="gpt-4">gpt-4</option>
-                                            <option value="gpt-3.5-turbo">gpt-3.5-turbo (faster / cheaper)</option>
-                                        </select>
-                                    </div>
-
-                                    <hr>
-
-                                    <!-- Toggles -->
-                                    <div class="mb-3 d-flex align-items-center">
-                                        <div class="flex-grow-1">
-                                            <label class="form-label mb-0">Ticket AI Suggestions</label>
-                                            <div class="form-text">Show an AI suggestion panel on every ticket page.</div>
-                                        </div>
-                                        <div class="form-check form-switch ms-3">
-                                            <input class="form-check-input" type="checkbox" id="ai-ticket-enabled">
-                                        </div>
-                                    </div>
-                                    <div class="mb-3 d-flex align-items-center">
-                                        <div class="flex-grow-1">
-                                            <label class="form-label mb-0">Auto-Apply High-Confidence Suggestions</label>
-                                            <div class="form-text">When confidence &ge; 85% and ticket allows it, AI applies the suggestion automatically.</div>
-                                        </div>
-                                        <div class="form-check form-switch ms-3">
-                                            <input class="form-check-input" type="checkbox" id="ai-auto-mode">
-                                        </div>
-                                    </div>
-                                    <div class="mb-4 d-flex align-items-center">
-                                        <div class="flex-grow-1">
-                                            <label class="form-label mb-0">Security Monitor</label>
-                                            <div class="form-text">Periodically generate AI security summaries shown on the dashboard.</div>
-                                        </div>
-                                        <div class="form-check form-switch ms-3">
-                                            <input class="form-check-input" type="checkbox" id="ai-security-monitor">
-                                        </div>
-                                    </div>
-
-                                    <button class="btn btn-primary" onclick="saveAiSettings()" id="btn-save-ai">
-                                        <i class="bi bi-floppy-fill me-1"></i>Save AI Settings
-                                    </button>
+                                    </form>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-5">
-                            <div class="card shadow-sm mb-3">
-                                <div class="card-header">
-                                    <h6 class="mb-0"><i class="bi bi-shield-check" style="color:#5fcf8b"></i> AI Security Summary</h6>
-                                </div>
+                        <div class="col-lg-4">
+                            <div class="card bg-light shadow-sm">
                                 <div class="card-body">
-                                    <p style="color:#8899aa" class="small">Generate an AI-powered security posture summary from your current vulnerability, patch, and alert data.</p>
-                                    <button class="btn btn-sm btn-outline-primary" onclick="generateSecuritySummary()" id="btn-gen-summary">
-                                        <i class="bi bi-lightning-fill me-1"></i>Generate Now
-                                    </button>
-                                    <div id="ai-summary-result" class="mt-3" style="display:none">
-                                        <div class="p-2 rounded" style="background:#1e2d45;border:1px solid #2d3a50">
-                                            <div id="ai-summary-text" class="small" style="color:#cdd9e5"></div>
-                                        </div>
-                                    </div>
+                                    <h6 class="card-title"><i class="bi bi-info-circle me-2"></i>About AI Integration</h6>
+                                    <p class="small text-muted mb-2">
+                                        Power intelligent system analysis, ticket automation, and predictive insights using OpenAI's GPT models.
+                                    </p>
+                                    <hr>
+                                    <p class="small mb-0"><strong>Status:</strong> 
+                                        {% if ai_config.enabled %}<span class="badge bg-success">Enabled</span>{% else %}<span class="badge bg-warning">Disabled</span>{% endif %}
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -1058,6 +1692,7 @@
 function toggleSmtpEdit() {
     const viewMode = document.getElementById('smtpViewMode');
     const editMode = document.getElementById('smtpEditMode');
+    
     if (viewMode.style.display === 'none') {
         viewMode.style.display = 'block';
         editMode.style.display = 'none';
@@ -1067,29 +1702,120 @@ function toggleSmtpEdit() {
     }
 }
 
-async function testADConnection() {
-    const resultEl = document.getElementById('adTestResult');
-    resultEl.style.display = 'block';
-    resultEl.className = 'alert alert-info';
-    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
-    try {
-        const res = await fetch('{{ url_for("api_ad_test") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}});
-        const data = await res.json();
-        if (data.success) {
-            resultEl.className = 'alert alert-success';
-            resultEl.textContent = data.message || 'Connected';
-        } else {
-            resultEl.className = 'alert alert-danger';
-            resultEl.textContent = data.error || 'Connection failed';
-        }
-    } catch (e) {
-        resultEl.className = 'alert alert-danger';
-        resultEl.textContent = e?.message || 'Connection failed';
+function toggleSiteToken() {
+    const inp = document.getElementById('siteTokenInput');
+    const icon = document.getElementById('siteTokenEyeIcon');
+    if (inp.type === 'password') {
+        inp.type = 'text';
+        icon.className = 'bi bi-eye-slash';
+    } else {
+        inp.type = 'password';
+        icon.className = 'bi bi-eye';
     }
 }
 
-// Initialize on page load
+function copySiteToken() {
+    const val = document.getElementById('siteTokenInput').value;
+    navigator.clipboard.writeText(val).then(() => {
+        const btn = event.currentTarget;
+        btn.innerHTML = '<i class="bi bi-check"></i>';
+        setTimeout(() => btn.innerHTML = '<i class="bi bi-clipboard"></i>', 1500);
+    });
+}
+
+function regenerateSiteToken() {
+    if (!confirm('Rotate the site enrollment token?\n\nExisting installers will stop enrolling new devices. Rebuild CirqueRMM.exe after rotating.')) return;
+    fetch('/api/rmm/site-token/regenerate', {method: 'POST', headers: {'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}})
+        .then(r => r.ok ? location.reload() : r.text().then(t => alert('Error: ' + t)));
+}
+
+// Theme preview functionality
+const themes = {
+    'default': {
+        name: 'Default',
+        description: 'Clean, professional Bootstrap theme with familiar blue accents.',
+        colors: {
+            bg: '#ffffff',
+            text: '#212529',
+            accent: '#0d6efd'
+        }
+    },
+    'deep-forest': {
+        name: 'Deep Forest',
+        description: 'Dark, sophisticated theme with forest green accents and warm tan text.',
+        colors: {
+            bg: '#0D0D0D',
+            text: '#F2E8CF',
+            accent: '#BC986A'
+        }
+    },
+    'modern-naturalist': {
+        name: 'Modern Naturalist',
+        description: 'Light, natural theme with soft sand background and forest green headers.',
+        colors: {
+            bg: '#F5F2ED',
+            text: '#1A1A1A',
+            accent: '#2D4639'
+        }
+    },
+    'heritage': {
+        name: 'Heritage',
+        description: 'Classic theme with hunter green hero sections and desert tan highlights.',
+        colors: {
+            bg: '#FAF9F6',
+            text: '#000000',
+            accent: '#C2B280'
+        }
+    }
+};
+
+function previewTheme(themeKey) {
+    const theme = themes[themeKey];
+    if (!theme) return;
+    
+    // Apply theme to body for preview
+    if (themeKey === 'default') {
+        document.body.removeAttribute('data-theme');
+    } else {
+        document.body.setAttribute('data-theme', themeKey);
+    }
+    
+    // Update description
+    const descDiv = document.getElementById('themeDescription');
+    descDiv.innerHTML = `
+        <div class="alert alert-info">
+            <h6><i class="bi bi-info-circle"></i> ${theme.name}</h6>
+            <p class="mb-2">${theme.description}</p>
+            <div class="d-flex gap-2 mt-2">
+                <div class="d-flex align-items-center">
+                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.bg}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
+                    <small>Background</small>
+                </div>
+                <div class="d-flex align-items-center">
+                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.text}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
+                    <small>Text</small>
+                </div>
+                <div class="d-flex align-items-center">
+                    <div style="width: 20px; height: 20px; background-color: ${theme.colors.accent}; border: 1px solid #ccc; border-radius: 3px;" class="me-1"></div>
+                    <small>Accent</small>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function resetThemePreview() {
+    const currentTheme = '{{ current_user.theme if current_user.theme else "default" }}';
+    document.getElementById('themeSelector').value = currentTheme;
+    previewTheme(currentTheme);
+}
+
+// Initialize theme description on page load
 document.addEventListener('DOMContentLoaded', function() {
+    const currentTheme = document.getElementById('themeSelector').value;
+    previewTheme(currentTheme);
+    
+    // Load license info
     loadLicenseInfo();
 });
 
@@ -1320,8 +2046,354 @@ function deleteLicense(licenseId) {
     });
 }
 
+function toggleTeamViewerFields() {
+    const enabled = document.getElementById('teamviewer_enabled').checked;
+    const fields = document.getElementById('teamviewerFields');
+    fields.style.display = enabled ? 'block' : 'none';
+}
+
+function toggleTokenVisibility() {
+    const input = document.getElementById('teamviewer_token');
+    const icon = document.getElementById('toggleIcon');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'bi bi-eye-slash';
+    } else {
+        input.type = 'password';
+        icon.className = 'bi bi-eye';
+    }
+}
+
+function testConnection() {
+    const token = document.getElementById('teamviewer_token').value;
+    const resultDiv = document.getElementById('testResult');
+    
+    if (!token) {
+        resultDiv.innerHTML = '<span class="text-danger"><small>Please enter a token first</small></span>';
+        return;
+    }
+    
+    resultDiv.innerHTML = '<span class="text-info"><small><i class="bi bi-hourglass-split"></i> Testing...</small></span>';
+    
+    fetch('/settings/teamviewer/test', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ token: token })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const className = data.warning ? 'text-warning' : 'text-success';
+            resultDiv.innerHTML = `<span class="${className}"><small><i class="bi bi-check-circle"></i> ${data.message}</small></span>`;
+        } else {
+            resultDiv.innerHTML = `<span class="text-danger"><small><i class="bi bi-x-circle"></i> ${data.message}</small></span>`;
+        }
+    })
+    .catch(error => {
+        resultDiv.innerHTML = `<span class="text-danger"><small><i class="bi bi-x-circle"></i> Error: ${error}</small></span>`;
+    });
+}
+
+let _scriptLibraryCache = [];
+
+function scriptEsc(v) {
+    return (v || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+async function loadOnlineAgentsForScripts() {
+    const picker = document.getElementById('scriptTestAgent');
+    const status = document.getElementById('scriptTestStatus');
+    if (!picker) return;
+    picker.innerHTML = '<option value="">Loading...</option>';
+    if (status) status.textContent = 'Loading online agents...';
+    try {
+        const r = await fetch('/api/rmm/online-agents', {cache: 'no-store'});
+        const data = await r.json();
+        const agents = (data.ok && data.agents) ? data.agents : [];
+        picker.innerHTML = agents.length
+            ? agents.map(a => `<option value="${scriptEsc(a.agent_id)}">${scriptEsc(a.hostname)} (${scriptEsc(a.agent_id)})</option>`).join('')
+            : '<option value="">No online agents</option>';
+        if (status) status.textContent = agents.length ? `Loaded ${agents.length} online agent(s)` : 'No online agents available';
+    } catch (e) {
+        picker.innerHTML = '<option value="">Failed to load agents</option>';
+        if (status) status.textContent = `Failed to load agents: ${e.message}`;
+    }
+}
+
+function renderScriptTestPicker() {
+    const picker = document.getElementById('scriptTestScript');
+    if (!picker) return;
+    const options = _scriptLibraryCache.map(s =>
+        `<option value="${s.id}">${scriptEsc(s.name)} ${s.file_type} ${s.is_tested ? '(tested)' : '(untested)'}</option>`
+    ).join('');
+    picker.innerHTML = options || '<option value="">No scripts saved</option>';
+}
+
+function renderScriptLibraryList() {
+    const wrap = document.getElementById('scriptLibraryList');
+    if (!wrap) return;
+    if (!_scriptLibraryCache.length) {
+        wrap.innerHTML = '<div class="text-muted">No scripts saved yet.</div>';
+        return;
+    }
+    wrap.innerHTML = _scriptLibraryCache.map(s => {
+        const tested = s.is_tested
+            ? `<span class="badge bg-success">Tested</span>`
+            : `<span class="badge bg-secondary">Untested</span>`;
+        const testedMeta = s.last_tested_at
+            ? `<small class="text-muted">Last test: ${new Date(s.last_tested_at).toLocaleString()}${s.last_tested_agent_id ? ' on ' + scriptEsc(s.last_tested_agent_id) : ''}</small>`
+            : '<small class="text-muted">Not tested yet</small>';
+        return `
+            <div class="border rounded p-2 mb-2">
+                <div class="d-flex justify-content-between align-items-center gap-2">
+                    <div>
+                        <strong>${scriptEsc(s.name)}</strong>
+                        <span class="badge bg-light text-dark border ms-1">${scriptEsc(s.file_type)}</span>
+                        ${tested}
+                    </div>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-secondary" title="Clone" onclick="cloneScriptLibraryItem(${s.id})"><i class="bi bi-files"></i></button>
+                        <button class="btn btn-sm btn-outline-dark" title="Copy" onclick="copyScriptLibraryItem(${s.id})"><i class="bi bi-clipboard"></i></button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="editScriptLibraryItem(${s.id})"><i class="bi bi-pencil"></i></button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteScriptLibraryItem(${s.id})"><i class="bi bi-trash"></i></button>
+                    </div>
+                </div>
+                <div class="small mt-1">${scriptEsc(s.description || '')}</div>
+                <div class="mt-1">${testedMeta}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function setScriptLibraryMessage(message, type = 'muted') {
+    const wrap = document.getElementById('scriptLibraryList');
+    if (!wrap) return;
+    const cls = type === 'danger' ? 'text-danger' : (type === 'warning' ? 'text-warning' : 'text-muted');
+    wrap.innerHTML = `<div class="${cls}">${scriptEsc(message)}</div>`;
+}
+
+async function loadScriptLibrary() {
+    const status = document.getElementById('scriptSaveStatus');
+    setScriptLibraryMessage('Loading scripts...');
+    if (status) status.textContent = 'Loading scripts...';
+    try {
+        const r = await fetch('/api/settings/scripts', {cache: 'no-store'});
+        if (!r.ok) {
+            throw new Error(`HTTP ${r.status}`);
+        }
+        const data = await r.json();
+        if (!data.ok) {
+            throw new Error(data.error || 'Failed to load scripts');
+        }
+        _scriptLibraryCache = (data.ok && data.scripts) ? data.scripts : [];
+        renderScriptLibraryList();
+        renderScriptTestPicker();
+        if (status) status.textContent = `Loaded ${_scriptLibraryCache.length} script(s)`;
+    } catch (e) {
+        _scriptLibraryCache = [];
+        renderScriptTestPicker();
+        setScriptLibraryMessage(`Failed to load scripts: ${e.message}`, 'danger');
+        if (status) status.textContent = `Error loading scripts: ${e.message}`;
+    }
+}
+
+function clearScriptEditor() {
+    document.getElementById('scriptName').value = '';
+    document.getElementById('scriptDescription').value = '';
+    document.getElementById('scriptContent').value = '';
+    document.getElementById('scriptFileType').value = '.ps1';
+    document.getElementById('scriptName').removeAttribute('data-edit-id');
+}
+
+function editScriptLibraryItem(scriptId) {
+    const item = _scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+    if (!item) return;
+    document.getElementById('scriptName').value = item.name || '';
+    document.getElementById('scriptDescription').value = item.description || '';
+    document.getElementById('scriptContent').value = item.script_content || '';
+    document.getElementById('scriptFileType').value = item.file_type || '.ps1';
+    document.getElementById('scriptName').setAttribute('data-edit-id', String(item.id));
+    document.getElementById('scriptSaveStatus').textContent = `Editing: ${item.name}`;
+}
+
+function cloneScriptLibraryItem(scriptId) {
+    const item = _scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+    if (!item) return;
+    document.getElementById('scriptName').value = `${item.name || 'Script'} (Copy)`;
+    document.getElementById('scriptDescription').value = item.description || '';
+    document.getElementById('scriptContent').value = item.script_content || '';
+    document.getElementById('scriptFileType').value = item.file_type || '.ps1';
+    document.getElementById('scriptName').removeAttribute('data-edit-id');
+    document.getElementById('scriptSaveStatus').textContent = `Cloned from: ${item.name}`;
+}
+
+async function copyScriptLibraryItem(scriptId) {
+    const item = _scriptLibraryCache.find(s => Number(s.id) === Number(scriptId));
+    const status = document.getElementById('scriptSaveStatus');
+    if (!item) return;
+    try {
+        await navigator.clipboard.writeText(item.script_content || '');
+        if (status) status.textContent = `Copied script content: ${item.name}`;
+    } catch (e) {
+        if (status) status.textContent = 'Clipboard copy failed. Use Edit then copy manually.';
+    }
+}
+
+async function saveScriptLibraryItem() {
+    const nameEl = document.getElementById('scriptName');
+    const status = document.getElementById('scriptSaveStatus');
+    const payload = {
+        id: nameEl.getAttribute('data-edit-id') || null,
+        name: nameEl.value.trim(),
+        description: document.getElementById('scriptDescription').value.trim(),
+        file_type: document.getElementById('scriptFileType').value,
+        script_content: document.getElementById('scriptContent').value,
+    };
+    if (!payload.name || !payload.script_content.trim()) {
+        status.textContent = 'Name and script content are required.';
+        return;
+    }
+    status.textContent = 'Saving...';
+    try {
+        const r = await fetch('/api/settings/scripts', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+            status.textContent = data.error || 'Failed to save script';
+            return;
+        }
+        status.textContent = data.message || 'Saved';
+        await loadScriptLibrary();
+        clearScriptEditor();
+    } catch (e) {
+        status.textContent = `Save failed: ${e.message}`;
+    }
+}
+
+async function uploadScriptFile() {
+    const f = document.getElementById('scriptUploadFile').files[0];
+    const status = document.getElementById('scriptUploadStatus');
+    if (!f) {
+        status.textContent = 'Pick a file first.';
+        return;
+    }
+    const fd = new FormData();
+    fd.append('file', f);
+    status.textContent = 'Uploading...';
+    try {
+        const r = await fetch('/api/settings/scripts/upload', {method: 'POST', body: fd});
+        const data = await r.json();
+        if (!data.ok) {
+            status.textContent = data.error || 'Upload failed';
+            return;
+        }
+        status.textContent = 'Upload complete.';
+        document.getElementById('scriptUploadFile').value = '';
+        await loadScriptLibrary();
+    } catch (e) {
+        status.textContent = `Upload failed: ${e.message}`;
+    }
+}
+
+async function deleteScriptLibraryItem(scriptId) {
+    if (!confirm('Delete this script from the library?')) return;
+    try {
+        const r = await fetch(`/api/settings/scripts/${scriptId}`, {method: 'DELETE'});
+        const data = await r.json();
+        if (!data.ok) {
+            alert(data.error || 'Delete failed');
+            return;
+        }
+        await loadScriptLibrary();
+    } catch (e) {
+        alert(`Delete failed: ${e.message}`);
+    }
+}
+
+async function generateScriptWithAI() {
+    const status = document.getElementById('scriptAiStatus');
+    const prompt = document.getElementById('scriptAiPrompt').value.trim();
+    const fileType = document.getElementById('scriptFileType').value;
+    if (!prompt) {
+        status.textContent = 'Enter a prompt for AI generation.';
+        return;
+    }
+    status.textContent = 'Generating script...';
+    try {
+        const r = await fetch('/api/settings/scripts/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt: prompt, file_type: fileType}),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+            status.textContent = data.error || 'AI generation failed';
+            return;
+        }
+        document.getElementById('scriptContent').value = data.script_content || '';
+        status.textContent = 'Generated. Review and save the script.';
+    } catch (e) {
+        status.textContent = `AI generation failed: ${e.message}`;
+    }
+}
+
+async function testSavedScript() {
+    const scriptId = document.getElementById('scriptTestScript').value;
+    const agentId = document.getElementById('scriptTestAgent').value;
+    const status = document.getElementById('scriptTestStatus');
+    const out = document.getElementById('scriptTestOutput');
+    if (!scriptId || !agentId) {
+        status.textContent = 'Select both a script and an online agent.';
+        return;
+    }
+    status.textContent = 'Running test...';
+    out.textContent = '';
+    try {
+        const r = await fetch(`/api/settings/scripts/${scriptId}/test`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({agent_id: agentId, timeout: 90}),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+            status.textContent = data.error || 'Test failed';
+            out.textContent = [data.stdout || '', data.stderr || ''].filter(Boolean).join('\n\n');
+            await loadScriptLibrary();
+            return;
+        }
+        status.textContent = `Success (exit ${data.exit_code})`;
+        out.textContent = [data.stdout || '', data.stderr ? `STDERR:\n${data.stderr}` : ''].filter(Boolean).join('\n\n');
+        await loadScriptLibrary();
+    } catch (e) {
+        status.textContent = `Test failed: ${e.message}`;
+    }
+}
+
 // Tab persistence - remember which tab was active
 document.addEventListener('DOMContentLoaded', function() {
+    const activeSection = {{ active_section|tojson }};
+
+    if (activeSection) {
+        localStorage.removeItem('settingsActiveTab');
+        if (activeSection === 'scripts') {
+            loadScriptLibrary();
+            loadOnlineAgentsForScripts();
+        }
+        checkAndShowLicenseWarning();
+        return;
+    }
+
     // Check if URL has a hash for direct tab navigation (e.g., #license-tab)
     const urlHash = window.location.hash;
     if (urlHash && urlHash.startsWith('#')) {
@@ -1356,8 +2428,31 @@ document.addEventListener('DOMContentLoaded', function() {
         button.addEventListener('shown.bs.tab', function(event) {
             const target = event.target.getAttribute('data-bs-target');
             localStorage.setItem('settingsActiveTab', target);
+            if (target === '#scripts') {
+                loadOnlineAgentsForScripts();
+                loadScriptLibrary();
+            }
         });
     });
+
+    const primeScriptsTabData = () => {
+        const activeTarget = document.querySelector('#settingsTabs .nav-link.active')?.getAttribute('data-bs-target');
+        const scriptsPaneActive = document.getElementById('scripts')?.classList.contains('show');
+        // Always prefetch scripts once so the panel never stays stuck on "Loading..."
+        loadScriptLibrary();
+        if (activeTarget === '#scripts' || scriptsPaneActive) {
+            loadOnlineAgentsForScripts();
+        }
+    };
+
+    // Prime once after tabs settle, and keep agent list fresh while Scripts is open.
+    setTimeout(primeScriptsTabData, 150);
+    setInterval(() => {
+        const activeTarget = document.querySelector('#settingsTabs .nav-link.active')?.getAttribute('data-bs-target');
+        if (activeTarget === '#scripts') {
+            loadOnlineAgentsForScripts();
+        }
+    }, 15000);
 });
 
 // Function to check license status and show warning banner
@@ -1384,271 +2479,6 @@ function checkAndShowLicenseWarning() {
         .catch(error => {
             console.error('Error checking license status:', error);
         });
-}
-
-// ── AI Settings ───────────────────────────────────────────────────────────────
-async function loadAiSettings() {
-    try {
-        const resp = await fetch('/api/ai/settings');
-        if (!resp.ok) return;
-        const d = await resp.json();
-        // Show masked key status badge
-        const statusEl = document.getElementById('ai-key-status');
-        if (d.openai_api_key) {
-            statusEl.textContent = d.openai_api_key;
-            statusEl.className = 'badge bg-success';
-        } else {
-            statusEl.textContent = 'No key saved';
-            statusEl.className = 'badge bg-secondary';
-        }
-        if (d.openai_model) document.getElementById('ai-model').value = d.openai_model;
-        document.getElementById('ai-ticket-enabled').checked   = d.ai_ticket_enabled === '1';
-        document.getElementById('ai-auto-mode').checked        = d.ai_ticket_auto_mode === '1';
-        document.getElementById('ai-security-monitor').checked = d.ai_security_monitor_enabled === '1';
-    } catch(e) {}
-}
-
-function toggleKeyInput() {
-    const wrap = document.getElementById('ai-key-input-wrap');
-    const show = wrap.style.display === 'none';
-    wrap.style.display = show ? 'block' : 'none';
-    document.getElementById('btn-change-key').innerHTML = show
-        ? '<i class="bi bi-x-lg"></i> Cancel'
-        : '<i class="bi bi-pencil-fill"></i> Change Key';
-    if (show) document.getElementById('ai-api-key').focus();
-}
-
-async function saveAiSettings() {
-    const key = document.getElementById('ai-api-key').value.trim();
-    const btn = document.getElementById('btn-save-ai');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
-    const payload = {
-        openai_model:                document.getElementById('ai-model').value,
-        ai_ticket_enabled:           document.getElementById('ai-ticket-enabled').checked ? '1' : '0',
-        ai_ticket_auto_mode:         document.getElementById('ai-auto-mode').checked ? '1' : '0',
-        ai_security_monitor_enabled: document.getElementById('ai-security-monitor').checked ? '1' : '0'
-    };
-    if (key) payload.openai_api_key = key;
-    const resp = await fetch('/api/ai/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
-    const d = await resp.json();
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-floppy-fill me-1"></i>Save AI Settings';
-    if (resp.ok) {
-        document.getElementById('ai-api-key').value = '';
-        // Hide key input and reload status badge
-        document.getElementById('ai-key-input-wrap').style.display = 'none';
-        document.getElementById('btn-change-key').innerHTML = '<i class="bi bi-pencil-fill"></i> Change Key';
-        loadAiSettings();
-        showSettingsToast('AI settings saved.', 'success');
-    } else {
-        showSettingsToast(d.error || 'Save failed', 'danger');
-    }
-}
-
-async function testAiConnection() {
-    const resultEl = document.getElementById('ai-test-result');
-    const btn = document.getElementById('btn-test-ai');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    resultEl.style.display = 'none';
-    try {
-        const resp = await fetch('/api/ai/test', { method: 'POST' });
-        const d    = await resp.json();
-        resultEl.style.display = 'block';
-        if (resp.ok && d.ok) {
-            resultEl.innerHTML = `<div class="alert alert-success p-2 small mb-0"><i class="bi bi-check-circle-fill me-1"></i><strong>Connected</strong> — Model: ${d.model || '?'}, response OK.</div>`;
-        } else {
-            resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0"><i class="bi bi-x-circle-fill me-1"></i><strong>Failed:</strong> ${d.error || 'Unknown error'}</div>`;
-        }
-    } catch(e) {
-        resultEl.style.display = 'block';
-        resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0">Network error: ${e.message}</div>`;
-    }
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-plug-fill"></i> Test';
-}
-
-async function generateSecuritySummary() {
-    const btn = document.getElementById('btn-gen-summary');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Generating…';
-    try {
-        const resp = await fetch('/api/ai/security-summary/generate', { method: 'POST' });
-        const d    = await resp.json();
-        if (resp.ok && d.summary) {
-            const riskColors = { High:'#f87171', Medium:'#f8a84a', Low:'#5fcf8b', Critical:'#e879f9' };
-            const col = riskColors[d.risk_level] || '#8899aa';
-            document.getElementById('ai-summary-text').innerHTML =
-                `<span style="color:${col};font-weight:600">Risk Level: ${d.risk_level||'?'}</span><br><br>${(d.summary||'').replace(/\n/g,'<br>')}`;
-            document.getElementById('ai-summary-result').style.display = 'block';
-        } else {
-            showSettingsToast(d.error || 'Generation failed', 'danger');
-        }
-    } catch(e) { showSettingsToast('Error: ' + e.message, 'danger'); }
-    btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-fill me-1"></i>Generate Now';
-}
-
-function showSettingsToast(msg, type) {
-    const t = document.createElement('div');
-    t.className = `alert alert-${type} position-fixed`;
-    t.style.cssText = 'bottom:20px;right:20px;z-index:9999;min-width:220px;font-size:.88rem';
-    t.textContent = msg;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3500);
-}
-
-// Load AI settings when AI tab is shown
-document.getElementById('ai-tab')?.addEventListener('shown.bs.tab', loadAiSettings);
-
-async function testUnifi() {
-    const res = document.getElementById('unifi-test-result');
-    res.innerHTML = '<span class="text-muted small">Testing...</span>';
-    try {
-        const r = await fetch('/api/unifi/test', {method:'POST'});
-        const d = await r.json();
-        res.innerHTML = d.success
-            ? `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>${d.message}</div>`
-            : `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
-    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
-}
-
-async function syncUnifi(btn) {
-    const res = document.getElementById('unifi-test-result');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing...';
-    res.innerHTML = '';
-    try {
-        const r = await fetch('/api/unifi/sync', {method:'POST'});
-        const d = await r.json();
-        if (d.success) {
-            const s = d.summary;
-            res.innerHTML = `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>Sync complete — created: ${s.created}, updated: ${s.updated}, errors: ${s.errors}</div>`;
-        } else {
-            res.innerHTML = `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
-        }
-    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Sync Now';
-}
-
-async function testProxmox(prefix) {
-    const resultId = `proxmox-${prefix}-result`;
-    const res = document.getElementById(resultId);
-    res.innerHTML = '<span class="text-muted">Testing…</span>';
-    try {
-        const r = await fetch('/api/proxmox/test', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({prefix})
-        });
-        const d = await r.json();
-        if (d.success) {
-            res.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ${(d.nodes || []).join(', ')}</span>`;
-        } else {
-            res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
-        }
-    } catch(e) {
-        res.innerHTML = `<span class="text-danger">${e}</span>`;
-    }
-}
-
-async function saveProxmox() {
-    const payload = {};
-    const fields = {
-        'prox_cluster_host':         'proxmox_cluster_host',
-        'prox_cluster_token_id':     'proxmox_cluster_token_id',
-        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
-        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
-        'prox_backup_host':          'proxmox_backup_host',
-        'prox_backup_token_id':      'proxmox_backup_token_id',
-        'prox_backup_token_secret':  'proxmox_backup_token_secret',
-        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
-        'prox_stale_hours':          'proxmox_stale_hours',
-    };
-    for (const [elId, key] of Object.entries(fields)) {
-        const el = document.getElementById(elId);
-        if (!el) continue;
-        const val = el.value.trim();
-        if (val) payload[key] = val;
-    }
-    const r = await fetch('/api/proxmox/settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    const res = document.getElementById('proxmox-cluster-result');
-    if (d.success) {
-        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
-    } else {
-        res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
-    }
-}
-
-// Jump to proxmox tab if URL has #proxmox
-if (window.location.hash === '#proxmox') {
-    const tab = document.getElementById('proxmox-tab');
-    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
-}
-
-async function testProxmox(prefix) {
-    const resultId = 'proxmox-' + prefix + '-result';
-    const res = document.getElementById(resultId);
-    res.innerHTML = '<span class="text-muted">Testing…</span>';
-    try {
-        const r = await fetch('/api/proxmox/test', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({prefix: prefix})
-        });
-        const d = await r.json();
-        if (d.success) {
-            res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ' + (d.nodes || []).join(', ') + '</span>';
-        } else {
-            res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
-        }
-    } catch(e) {
-        res.innerHTML = '<span class="text-danger">' + e + '</span>';
-    }
-}
-
-async function saveProxmox() {
-    const payload = {};
-    const fields = {
-        'prox_cluster_host':         'proxmox_cluster_host',
-        'prox_cluster_token_id':     'proxmox_cluster_token_id',
-        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
-        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
-        'prox_backup_host':          'proxmox_backup_host',
-        'prox_backup_token_id':      'proxmox_backup_token_id',
-        'prox_backup_token_secret':  'proxmox_backup_token_secret',
-        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
-        'prox_stale_hours':          'proxmox_stale_hours',
-    };
-    for (const [elId, key] of Object.entries(fields)) {
-        const el = document.getElementById(elId);
-        if (!el) continue;
-        const val = el.value.trim();
-        if (val) payload[key] = val;
-    }
-    const r = await fetch('/api/proxmox/settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    const res = document.getElementById('proxmox-cluster-result');
-    if (d.success) {
-        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
-    } else {
-        res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
-    }
-}
-
-// Jump to proxmox tab if URL has #proxmox
-if (window.location.hash === '#proxmox') {
-    const tab = document.getElementById('proxmox-tab');
-    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
 }
 </script>
 {% endblock %}

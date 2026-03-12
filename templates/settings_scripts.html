@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Scripts Settings - Admin{% endblock %}
+
+{% block content %}
+<style>
+.scripts-header { background:#212d42; }
+.form-label { font-weight: 600; display: block; margin-bottom: 0.5rem; }
+.card-body { padding: 1.5rem; }
+.mb-3 { margin-bottom: 1rem !important; }
+.mb-2 { margin-bottom: 0.75rem !important; }
+</style>
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h2><i class="bi bi-terminal-fill me-2"></i>Scripts Library</h2>
+            <p class="text-muted">Manage and deploy automation scripts to RMM agents</p>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header scripts-header text-white"><h5 class="mb-0"><i class="bi bi-journal-code me-2"></i>Create Script</h5></div>
+                <div class="card-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Script Name</label>
+                            <input type="text" class="form-control" id="scriptName" placeholder="Enter name">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">File Type</label>
+                            <select class="form-select" id="scriptFileType">
+                                <option value=".ps1">.ps1 (PowerShell)</option>
+                                <option value=".bat">.bat (Batch)</option>
+                                <option value=".sh">.sh (Shell)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="scriptDescription" rows="2"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Script Editor</label>
+                        <textarea class="form-control font-monospace" id="scriptContent" rows="10"></textarea>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-primary" onclick="saveScriptLibraryItem()"><i class="bi bi-save me-1"></i>Save Script</button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="clearScriptEditor()"><i class="bi bi-eraser me-1"></i>Clear</button>
+                        <span id="scriptSaveStatus" class="small text-muted align-self-center"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-secondary text-white"><h6 class="mb-0"><i class="bi bi-upload me-2"></i>Upload Script File</h6></div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-8">
+                            <label class="form-label">File (.ps1, .bat, .sh)</label>
+                            <input type="file" class="form-control" id="scriptUploadFile" accept=".ps1,.bat,.sh">
+                        </div>
+                        <div class="col-md-4 d-grid">
+                            <button type="button" class="btn btn-outline-primary" onclick="uploadScriptFile()"><i class="bi bi-cloud-upload me-1"></i>Upload</button>
+                        </div>
+                    </div>
+                    <div id="scriptUploadStatus" class="small text-muted mt-2"></div>
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-collection me-2"></i>Saved Scripts</h6>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadScriptLibrary()"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+                <div class="card-body">
+                    <div id="scriptLibraryList" class="text-muted">Loading scripts...</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-primary text-white"><h6 class="mb-0"><i class="bi bi-stars me-2"></i>AI Script Generator</h6></div>
+                <div class="card-body">
+                    <p class="small text-muted mb-3">Generate scripts with Cirque AI.</p>
+                    <div class="mb-3">
+                        <label class="form-label">Prompt</label>
+                        <textarea class="form-control" id="scriptAiPrompt" rows="5"></textarea>
+                    </div>
+                    <div class="d-grid">
+                        <button type="button" class="btn btn-primary" onclick="generateScriptWithAI()"><i class="bi bi-magic me-1"></i>Generate Script</button>
+                    </div>
+                    <div id="scriptAiStatus" class="small text-muted mt-2"></div>
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-header bg-success text-white"><h6 class="mb-0"><i class="bi bi-play-circle me-2"></i>Test Script On Online Agent</h6></div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Online Agent</label>
+                        <select class="form-select" id="scriptTestAgent"></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Script To Test</label>
+                        <select class="form-select" id="scriptTestScript"></select>
+                    </div>
+                    <div class="d-grid">
+                        <button type="button" class="btn btn-success" onclick="testSavedScript()"><i class="bi bi-play-fill me-1"></i>Run Test</button>
+                    </div>
+                    <pre id="scriptTestOutput" class="bg-dark text-light rounded p-2 mt-2 mb-1" style="min-height:70px;max-height:220px;overflow:auto;white-space:pre-wrap;font-size:.75rem;"></pre>
+                    <div id="scriptTestStatus" class="small text-muted mt-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let _scriptLibraryCache = [];
+function scriptEsc(v) { return (v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+async function loadOnlineAgentsForScripts() { const picker = document.getElementById('scriptTestAgent'); if (!picker) return; picker.innerHTML = '<option>Loading...</option>'; try { const r = await fetch('/api/rmm/online-agents'); const d = await r.json(); const agents = (d.ok && d.agents) ? d.agents : []; picker.innerHTML = agents.length ? agents.map(a => `<option value="${scriptEsc(a.agent_id)}">${scriptEsc(a.hostname)}</option>`).join('') : '<option>No online agents</option>'; } catch(e) { picker.innerHTML = '<option>Failed</option>'; } }
+function renderScriptTestPicker() { const picker = document.getElementById('scriptTestScript'); if (!picker) return; const opts = _scriptLibraryCache.map(s => `<option value="${s.id}">${scriptEsc(s.name)}</option>`).join(''); picker.innerHTML = opts || '<option>No scripts</option>'; }
+function renderScriptLibraryList() { const w = document.getElementById('scriptLibraryList'); if (!w) return; if (!_scriptLibraryCache.length) { w.innerHTML = '<div class="text-muted">No scripts saved yet.</div>'; return; } w.innerHTML = _scriptLibraryCache.map(s => `<div class="border rounded p-2 mb-2"><div><strong>${scriptEsc(s.name)}</strong> <span class="badge">${scriptEsc(s.file_type)}</span></div><div class="small">${scriptEsc(s.description||'')}</div></div>`).join(''); }
+async function loadScriptLibrary() { const st = document.getElementById('scriptSaveStatus'); if (st) st.textContent = 'Loading...'; try { const r = await fetch('/api/settings/scripts'); const d = await r.json(); _scriptLibraryCache = (d.ok && d.scripts) ? d.scripts : []; renderScriptLibraryList(); renderScriptTestPicker(); if (st) st.textContent = `Loaded ${_scriptLibraryCache.length} script(s)`; } catch(e) { if (st) st.textContent = `Error: ${e.message}`; } }
+function clearScriptEditor() { document.getElementById('scriptName').value = ''; document.getElementById('scriptDescription').value = ''; document.getElementById('scriptContent').value = ''; document.getElementById('scriptFileType').value = '.ps1'; }
+async function saveScriptLibraryItem() { const st = document.getElementById('scriptSaveStatus'); const p = { name: document.getElementById('scriptName').value.trim(), description: document.getElementById('scriptDescription').value.trim(), file_type: document.getElementById('scriptFileType').value, script_content: document.getElementById('scriptContent').value, }; if (!p.name || !p.script_content.trim()) { st.textContent = 'Name and content required'; return; } st.textContent = 'Saving...'; const r = await fetch('/api/settings/scripts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)}); const d = await r.json(); if (!d.ok) { st.textContent = d.error || 'Failed'; return; } st.textContent = 'Saved'; await loadScriptLibrary(); }
+async function uploadScriptFile() { const f = document.getElementById('scriptUploadFile').files[0]; const st = document.getElementById('scriptUploadStatus'); if (!f) { st.textContent = 'Select a file'; return; } const fd = new FormData(); fd.append('file', f); st.textContent = 'Uploading...'; const r = await fetch('/api/settings/scripts/upload', {method:'POST', body:fd}); const d = await r.json(); if (!d.ok) { st.textContent = d.error || 'Failed'; return; } st.textContent = 'Done'; document.getElementById('scriptUploadFile').value = ''; await loadScriptLibrary(); }
+async function generateScriptWithAI() { const st = document.getElementById('scriptAiStatus'); const p = document.getElementById('scriptAiPrompt').value.trim(); if (!p) { st.textContent = 'Enter a prompt'; return; } st.textContent = 'Generating...'; const r = await fetch('/api/settings/scripts/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:p, file_type: document.getElementById('scriptFileType').value})}); const d = await r.json(); if (!d.ok) { st.textContent = d.error || 'Failed'; return; } document.getElementById('scriptContent').value = d.script_content || ''; st.textContent = 'Generated'; }
+async function testSavedScript() { const id = document.getElementById('scriptTestScript').value; const aid = document.getElementById('scriptTestAgent').value; const st = document.getElementById('scriptTestStatus'); const out = document.getElementById('scriptTestOutput'); if (!id || !aid) { st.textContent = 'Select both'; return; } st.textContent = 'Running...'; out.textContent = ''; const r = await fetch(`/api/settings/scripts/${id}/test`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({agent_id:aid, timeout:90})}); const d = await r.json(); if (!d.ok) { st.textContent = d.error || 'Failed'; out.textContent = [d.stdout||'', d.stderr||''].filter(Boolean).join('\\n\\n'); await loadScriptLibrary(); return; } st.textContent = `Success (${d.exit_code})`; out.textContent = [d.stdout||'', d.stderr ? `STDERR:\\n${d.stderr}` : ''].filter(Boolean).join('\\n\\n'); await loadScriptLibrary(); }
+document.addEventListener('DOMContentLoaded', function() { loadScriptLibrary(); loadOnlineAgentsForScripts(); });
+</script>
+{% endblock %}

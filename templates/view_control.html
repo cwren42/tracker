@@ -7,7 +7,7 @@
     <!-- Breadcrumb -->
     <nav aria-label="breadcrumb">
         <ol class="breadcrumb">
-            <li class="breadcrumb-item"><a href="{{ url_for('controls') }}">Controls</a></li>
+            <li class="breadcrumb-item"><a href="{{ url_for('soc2.controls') }}">Controls</a></li>
             <li class="breadcrumb-item active" aria-current="page">{{ control.control_name }}</li>
         </ol>
     </nav>
@@ -78,7 +78,7 @@
             {% if policies %}
             <div class="list-group">
                 {% for policy in policies %}
-                <a href="{{ url_for('view_policy', policy_id=policy.id) }}" 
+                <a href="{{ url_for('soc2.view_policy', policy_id=policy.id) }}" 
                    class="list-group-item list-group-item-action">
                     <div class="d-flex w-100 justify-content-between">
                         <h5 class="mb-1">{{ policy.title }}</h5>
@@ -98,7 +98,7 @@
 
     <!-- Actions -->
     <div class="mt-4 mb-4">
-        <a href="{{ url_for('controls') }}" class="btn btn-secondary">
+        <a href="{{ url_for('soc2.controls') }}" class="btn btn-secondary">
             <i class="fas fa-arrow-left"></i> Back to Controls
         </a>
     </div>

@@ -1,0 +1,10 @@
+                             Table "public.rmm_eagle_config"
+         Column          |           Type           | Collation | Nullable |   Default    
+-------------------------+--------------------------+-----------+----------+--------------
+ agent_id                | text                     |           | not null | 
+ enabled                 | boolean                  |           |          | true
+ screenshot_interval_min | bigint                   |           |          | '30'::bigint
+ updated_at              | timestamp with time zone |           |          | 
+Indexes:
+    "idx_17055_sqlite_autoindex_rmm_eagle_config_1" PRIMARY KEY, btree (agent_id)
+

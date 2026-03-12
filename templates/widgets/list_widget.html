@@ -6,7 +6,7 @@
     <div class="card-body p-0">
         <div class="list-group list-group-flush">
             {% for asset in data.recent_assets %}
-            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="list-group-item list-group-item-action">
+            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="list-group-item list-group-item-action">
                 <div class="d-flex w-100 justify-content-between">
                     <h6 class="mb-1"><span class="badge bg-secondary">{{ asset.asset_tag }}</span> {{ asset.name }}</h6>
                     <small class="text-muted">{{ asset.created_at.strftime('%m/%d/%y') if asset.created_at else 'N/A' }}</small>
@@ -32,7 +32,7 @@
         </div>
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All</a>
+        <a href="{{ url_for('assets.assets') }}" class="btn btn-sm btn-outline-primary">View All</a>
     </div>
 </div>
 
@@ -59,7 +59,7 @@
                 </thead>
                 <tbody>
                     {% for asset in data.warranty_expiring %}
-                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets.view_asset', asset_id=asset.id) }}'">
                         <td><strong>{{ asset.asset_tag }}</strong></td>
                         <td>{{ asset.name }}</td>
                         <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
@@ -83,7 +83,7 @@
         {% endif %}
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
+        <a href="{{ url_for('reports.reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
     </div>
 </div>
 
@@ -112,7 +112,7 @@
                 </thead>
                 <tbody>
                     {% for asset in data.replacement_list %}
-                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets.view_asset', asset_id=asset.id) }}'">
                         <td><strong>{{ asset.asset_tag }}</strong></td>
                         <td>{{ asset.name }}</td>
                         <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
@@ -156,7 +156,7 @@
         {% endif %}
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-danger">View Full Report</a>
+        <a href="{{ url_for('reports.reports') }}" class="btn btn-sm btn-outline-danger">View Full Report</a>
     </div>
 </div>
 
@@ -183,7 +183,7 @@
                 </thead>
                 <tbody>
                     {% for license in data.licenses_expiring_list %}
-                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_license', license_id=license.id) }}'">
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('licenses.view_license', license_id=license.id) }}'">
                         <td><strong>{{ license.software_name }}</strong></td>
                         <td>{{ license.vendor or '-' }}</td>
                         <td><span class="badge bg-info">{{ license.license_type or '-' }}</span></td>
@@ -216,7 +216,7 @@
         {% endif %}
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
+        <a href="{{ url_for('reports.reports') }}" class="btn btn-sm btn-outline-warning">View Full Report</a>
     </div>
 </div>
 
@@ -239,7 +239,7 @@
                 </thead>
                 <tbody>
                     {% for asset in data.incomplete_assets %}
-                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'">
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets.view_asset', asset_id=asset.id) }}'">
                         <td><strong>{{ asset.asset_tag }}</strong></td>
                         <td>{{ asset.name }}</td>
                         <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
@@ -266,7 +266,7 @@
         {% endif %}
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
+        <a href="{{ url_for('assets.assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
     </div>
 </div>
 
@@ -278,7 +278,7 @@
     <div class="card-body p-0">
         <div class="list-group list-group-flush">
             {% for employee in data.recent_employees %}
-            <a href="{{ url_for('view_employee', employee_id=employee.id) }}" class="list-group-item list-group-item-action">
+            <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" class="list-group-item list-group-item-action">
                 <div class="d-flex w-100 justify-content-between">
                     <h6 class="mb-1">{{ employee.name }}</h6>
                     <small class="text-muted">{{ employee.created_at.strftime('%m/%d/%y') if employee.created_at else 'N/A' }}</small>
@@ -289,7 +289,7 @@
         </div>
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('employees') }}" class="btn btn-sm btn-outline-primary">View All</a>
+        <a href="{{ url_for('employees.employees') }}" class="btn btn-sm btn-outline-primary">View All</a>
     </div>
 </div>
 {% endif %}

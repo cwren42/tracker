@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% block styles %}
+<link rel="stylesheet" href="/static/css/backups.css">
+{% endblock %}
 
 {% block title %}Backups - IT Asset Tracker{% endblock %}
 
@@ -20,7 +23,7 @@
         </div>
         <div class="col-auto d-flex gap-2 align-items-start">
             {% if not cluster_configured %}
-            <a href="{{ url_for('settings') }}#proxmox" class="btn btn-outline-secondary">
+            <a href="{{ url_for('settings.settings') }}#proxmox" class="btn btn-outline-secondary">
                 <i class="bi bi-gear"></i> Configure Proxmox
             </a>
             {% endif %}
@@ -34,7 +37,7 @@
     <div class="alert alert-info">
         <i class="bi bi-info-circle"></i>
         Proxmox credentials are not configured yet.
-        <a href="{{ url_for('settings') }}#proxmox" class="alert-link">Go to Settings &rarr; Proxmox</a>
+        <a href="{{ url_for('settings.settings') }}#proxmox" class="alert-link">Go to Settings &rarr; Proxmox</a>
         to set up the API token.
     </div>
     {% endif %}
@@ -107,7 +110,7 @@
                     <div class="col-12">
                         <h6 class="fw-bold"><span class="badge bg-success me-2">6</span> Enter credentials in Settings</h6>
                         <p class="small text-muted mb-0">
-                            Go to <a href="{{ url_for('settings') }}#proxmox"><strong>Settings &rarr; Proxmox</strong></a> and enter:
+                            Go to <a href="{{ url_for('settings.settings') }}#proxmox"><strong>Settings &rarr; Proxmox</strong></a> and enter:
                         </p>
                         <ul class="small text-muted mt-1 mb-0">
                             <li><strong>Cluster Host</strong> — IP or hostname of any cluster node (e.g. <code>10.10.1.10</code>)</li>
@@ -115,7 +118,7 @@
                             <li><strong>Token Secret</strong> — the UUID shown in step 4</li>
                             <li>Optionally repeat steps 1–4 on the <strong>Bespin backup server</strong> and fill in the Backup Server section</li>
                         </ul>
-                        <a href="{{ url_for('settings') }}#proxmox" class="btn btn-sm btn-primary mt-2">
+                        <a href="{{ url_for('settings.settings') }}#proxmox" class="btn btn-sm btn-primary mt-2">
                             <i class="bi bi-gear"></i> Go to Settings &rarr; Proxmox
                         </a>
                     </div>
@@ -383,60 +386,7 @@
     </div>
 </div>
 
-<script>
-function filterVMs() {
-    const q = document.getElementById('vmSearch').value.toLowerCase();
-    document.querySelectorAll('.vm-row').forEach(row => {
-        const name = row.dataset.name || '';
-        const node = row.dataset.node || '';
-        row.style.display = (name.includes(q) || node.includes(q)) ? '' : 'none';
-    });
-}
+<script src="/static/js/backups.js"></script>
 
-function triggerSync() {
-    const btn = document.getElementById('syncBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Syncing…';
 
-    const toast = new bootstrap.Toast(document.getElementById('syncToast'), {autohide: false});
-    document.getElementById('syncToastTitle').textContent = 'Syncing…';
-    document.getElementById('syncToastBody').textContent = 'Contacting Proxmox API…';
-    document.getElementById('syncToastHeader').className = 'toast-header';
-    toast.show();
-
-    fetch('/api/proxmox/sync', {method: 'POST', headers: {'Content-Type': 'application/json'}})
-        .then(r => r.json())
-        .then(data => {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Sync Now';
-            if (data.success) {
-                document.getElementById('syncToastHeader').className = 'toast-header text-success';
-                document.getElementById('syncToastTitle').textContent = 'Sync complete';
-                const errs = (data.errors || []).length;
-                document.getElementById('syncToastBody').textContent =
-                    `Nodes: ${data.nodes_synced}, Pools: ${data.pools_synced}, ` +
-                    `VMs: ${data.vms_synced}, Alerts: ${data.alerts_fired}` +
-                    (errs ? `, Errors: ${errs}` : '');
-                // Reload after short delay so the table updates
-                setTimeout(() => location.reload(), 2000);
-            } else {
-                document.getElementById('syncToastHeader').className = 'toast-header text-danger';
-                document.getElementById('syncToastTitle').textContent = 'Sync failed';
-                document.getElementById('syncToastBody').textContent = data.error || 'Unknown error';
-            }
-        })
-        .catch(err => {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Sync Now';
-            document.getElementById('syncToastHeader').className = 'toast-header text-danger';
-            document.getElementById('syncToastTitle').textContent = 'Error';
-            document.getElementById('syncToastBody').textContent = err.toString();
-        });
-}
-</script>
-
-<style>
-.spin { animation: spin 1s linear infinite; display:inline-block; }
-@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-</style>
 {% endblock %}

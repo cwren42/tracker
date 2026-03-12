@@ -2,15 +2,18 @@
 {% block title %}User Management - Asset Tracker{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h1 class="h3 mb-0">User Management</h1>
-        <div class="text-muted small">{{ users|length }} user{{ 's' if users|length != 1 }}</div>
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col d-flex justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-people-fill me-2"></i>User Management</h2>
+                <p class="text-muted mb-0">{{ users|length }} user{{ 's' if users|length != 1 }}</p>
+            </div>
+            <a href="{{ url_for('auth.add_user') }}" class="btn btn-primary">
+                <i class="bi bi-person-plus"></i> Add User
+            </a>
+        </div>
     </div>
-    <a href="{{ url_for('add_user') }}" class="btn btn-primary">
-        <i class="bi bi-person-plus"></i> Add User
-    </a>
-</div>
 
 <!-- Search + Role Filters -->
 <div class="card mb-3">
@@ -96,12 +99,12 @@
                         </td>
                         <td class="align-middle text-muted small">{{ user.created_at.strftime('%b %d, %Y') }}</td>
                         <td class="text-end pe-3 align-middle">
-                            <a href="{{ url_for('edit_user', user_id=user.id) }}"
+                            <a href="{{ url_for('auth.edit_user', user_id=user.id) }}"
                                class="btn btn-sm btn-outline-warning" title="Edit user">
                                 <i class="bi bi-pencil"></i>
                             </a>
                             {% if user.id != current_user.id %}
-                            <form method="POST" action="{{ url_for('view_as_user', user_id=user.id) }}" class="d-inline">
+                            <form method="POST" action="{{ url_for('auth.view_as_user', user_id=user.id) }}" class="d-inline">
                                 <button type="submit" class="btn btn-sm btn-outline-info" title="Preview as this user">
                                     <i class="bi bi-eye"></i>
                                 </button>
@@ -140,7 +143,7 @@
             </div>
             <div class="modal-footer py-2">
                 <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('auth.delete_user', user_id=user.id) }}" class="d-inline">
                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                 </form>
             </div>
@@ -153,7 +156,7 @@
 {% else %}
 <div class="alert alert-info text-center">
     <i class="bi bi-info-circle"></i> No users yet.
-    <a href="{{ url_for('add_user') }}">Add your first user</a>
+    <a href="{{ url_for('auth.add_user') }}">Add your first user</a>
 </div>
 {% endif %}
 
@@ -196,29 +199,7 @@
     </div>
 </div>
 
-<script>
-let activeRole = 'all';
+</div><!-- /.container-fluid -->
 
-function setRole(btn, role) {
-    activeRole = role;
-    document.querySelectorAll('#roleFilter .btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    filterUsers();
-}
-
-function filterUsers() {
-    const q = document.getElementById('userSearch').value.toLowerCase();
-    const rows = document.querySelectorAll('#usersTable tbody tr');
-    let visible = 0;
-    rows.forEach(row => {
-        const matchRole = activeRole === 'all' || row.dataset.role === activeRole;
-        const matchText = !q || row.dataset.name.includes(q) ||
-                          row.dataset.email.includes(q) || row.dataset.username.includes(q);
-        const show = matchRole && matchText;
-        row.style.display = show ? '' : 'none';
-        if (show) visible++;
-    });
-    document.getElementById('noResults').style.display = (visible === 0 && document.querySelector('#usersTable')) ? '' : 'none';
-}
-</script>
+<script src="/static/js/users.js"></script>
 {% endblock %}

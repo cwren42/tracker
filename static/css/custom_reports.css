@@ -1,0 +1,31 @@
+/* custom_reports.html extracted CSS */
+.template-card {
+    cursor: pointer;
+    transition: all 0.3s;
+}
+.template-card:hover {
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transform: translateY(-2px);
+}
+.report-table {
+    font-size: 0.9rem;
+}
+.group-header {
+    background-color: #f8f9fa;
+    font-weight: bold;
+}
+.report-table th[draggable="true"] {
+    cursor: move;
+    user-select: none;
+    transition: background-color 0.2s;
+}
+.report-table th[draggable="true"]:hover {
+    background-color: #e9ecef;
+}
+.report-table th.dragging {
+    opacity: 0.4;
+}
+.report-table th.drag-over {
+    border-left: 3px solid #0d6efd !important;
+    background-color: #cfe2ff;
+}

@@ -8,7 +8,7 @@
         <div class="col">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring_dashboard') }}">Monitoring</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring.monitoring_dashboard') }}">Monitoring</a></li>
                     <li class="breadcrumb-item active">Alerts</li>
                 </ol>
             </nav>
@@ -121,7 +121,7 @@
                                     {% endif %}
                                     <div class="small text-muted">
                                         <i class="bi bi-hdd-rack"></i> 
-                                        <a href="{{ url_for('view_asset', asset_id=alert.asset_id) }}">
+                                        <a href="{{ url_for('assets.view_asset', asset_id=alert.asset_id) }}">
                                             {{ alert.asset.name }}
                                         </a>
                                         •
@@ -139,7 +139,7 @@
                                     </div>
                                     {% if alert.status == 'active' %}
                                     <div class="btn-group btn-group-sm">
-                                        <form method="POST" action="{{ url_for('monitoring_acknowledge_alert', alert_id=alert.id) }}" style="display:inline;">
+                                        <form method="POST" action="{{ url_for('monitoring.monitoring_acknowledge_alert', alert_id=alert.id) }}" style="display:inline;">
                                             <button type="submit" class="btn btn-outline-warning btn-sm" title="Acknowledge">
                                                 <i class="bi bi-check"></i>
                                             </button>
@@ -209,30 +209,6 @@
     </div>
 </div>
 
-<script>
-// Search functionality
-document.getElementById('searchInput')?.addEventListener('input', function(e) {
-    const searchTerm = e.target.value.toLowerCase();
-    const alerts = document.querySelectorAll('.alert-item');
-    
-    alerts.forEach(alert => {
-        const text = alert.textContent.toLowerCase();
-        alert.style.display = text.includes(searchTerm) ? '' : 'none';
-    });
-});
-
-// Resolve modal
-const resolveModal = document.getElementById('resolveModal');
-if (resolveModal) {
-    resolveModal.addEventListener('show.bs.modal', function(event) {
-        const button = event.relatedTarget;
-        const alertId = button.getAttribute('data-alert-id');
-        const alertTitle = button.getAttribute('data-alert-title');
-        
-        document.getElementById('modal-alert-title').textContent = alertTitle;
-        document.getElementById('resolveForm').action = `/monitoring/alert/${alertId}/resolve`;
-    });
-}
-</script>
+<script src="/static/js/monitoring_alerts.js"></script>
 
 {% endblock %}

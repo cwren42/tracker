@@ -1,0 +1,298 @@
+<!-- Saved Custom Reports Section -->
+<div class="row mb-4" id="customReportsSection" style="display: none;">
+    <div class="col-12">
+        <h2 class="h4"><i class="bi bi-bookmark-star text-primary"></i> My Custom Reports</h2>
+    </div>
+    <div id="customReportsContainer" class="col-12">
+        <!-- Custom reports will be loaded here -->
+    </div>
+</div>
+
+<h2 class="h4 mb-3"><i class="bi bi-graph-up text-primary"></i> Asset Analytics</h2>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Assets by Category</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="category_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Assets by Category"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="categoryChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-pie-chart-fill"></i> Assets by Status</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="status_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Assets by Status"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="statusChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-cash-stack"></i> Total Value by Category</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="category_value_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Total Value by Category"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="valueChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-building"></i> Assets by Department</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="department_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Assets by Department"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="departmentChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-table"></i> Department Asset Summary</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="department_table" 
+                        data-widget-type="table" 
+                        data-widget-title="Department Asset Summary"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                {% if dept_stats %}
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Department</th>
+                            <th>Asset Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for dept in dept_stats %}
+                        <tr>
+                            <td>{{ dept[0] or 'Unassigned' }}</td>
+                            <td>{{ dept[1] }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-muted mb-0">No data available</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Assets by Lifecycle Stage</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="lifecycle_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Lifecycle Status"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="lifecycleChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Asset Overview Statistics</h5>
+                <button class="btn btn-sm btn-primary add-to-dashboard-btn" 
+                        data-widget-id="overview_stats" 
+                        data-widget-type="overview" 
+                        data-widget-title="Asset Overview Statistics"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <h4>{{ category_stats|length }}</h4>
+                        <p class="text-muted">Categories</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h4>${{ '%.2f'|format(total_value) if total_value else '0.00' }}</h4>
+                        <p class="text-muted">Total Value</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h4>{{ dept_stats|length }}</h4>
+                        <p class="text-muted">Departments</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h4>{{ '%.1f'|format(avg_age) if avg_age else '0.0' }}y</h4>
+                        <p class="text-muted">Average Age</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if replacement_needed %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> Assets Needing Replacement</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn" 
+                        data-widget-id="replacement_needed" 
+                        data-widget-type="list" 
+                        data-widget-title="Replacement Needed"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">Assets requiring replacement within 6 months</p>
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Asset Tag</th>
+                            <th>Name</th>
+                            <th>Category</th>
+                            <th>Age</th>
+                            <th>Lifecycle Status</th>
+                            <th>Replacement Date</th>
+                            <th>Condition</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in replacement_needed %}
+                        <tr>
+                            <td><strong><a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}">{{ asset.asset_tag }}</a></strong></td>
+                            <td>{{ asset.name }}</td>
+                            <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                            <td>{{ '%.1f'|format(asset.get_age_years()) }} years</td>
+                            <td>
+                                {% set status = asset.get_lifecycle_status() %}
+                                {% if status == 'Replace Soon' %}
+                                    <span class="badge bg-warning">{{ status }}</span>
+                                {% elif status == 'End of Life' %}
+                                    <span class="badge bg-danger">{{ status }}</span>
+                                {% else %}
+                                    <span class="badge bg-info">{{ status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if asset.replacement_date %}
+                                    {{ asset.replacement_date.strftime('%Y-%m-%d') }}
+                                    {% if asset.needs_replacement() %}
+                                        <span class="badge bg-warning">Due Soon</span>
+                                    {% endif %}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if asset.condition == 'Excellent' %}
+                                    <span class="badge bg-success">{{ asset.condition }}</span>
+                                {% elif asset.condition == 'Good' %}
+                                    <span class="badge bg-primary">{{ asset.condition }}</span>
+                                {% elif asset.condition == 'Fair' %}
+                                    <span class="badge bg-warning">{{ asset.condition }}</span>
+                                {% elif asset.condition == 'Poor' %}
+                                    <span class="badge bg-danger">{{ asset.condition }}</span>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if expiring %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="card border-warning">
+            <div class="card-header bg-warning">
+                <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Warranties Expiring Soon</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Asset Tag</th>
+                            <th>Name</th>
+                            <th>Category</th>
+                            <th>Warranty Expiry</th>
+                            <th>Days Remaining</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in expiring %}
+                        <tr>
+                            <td><strong>{{ asset.asset_tag }}</strong></td>
+                            <td>{{ asset.name }}</td>
+                            <td><span class="badge bg-secondary">{{ asset.category }}</span></td>
+                            <td>{{ asset.warranty_expiry.strftime('%Y-%m-%d') }}</td>
+                            <td>
+                                {% set days_left = (asset.warranty_expiry - now().date()).days %}
+                                <span class="badge bg-warning">{{ days_left }} days</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}

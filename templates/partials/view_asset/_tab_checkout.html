@@ -1,0 +1,80 @@
+<!-- ══ CHECKOUT TAB ════════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-checkout" role="tabpanel">
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="card section-card">
+        <div class="card-header"><i class="bi bi-box-arrow-right me-2 text-warning"></i>Checkout Status</div>
+        <div class="card-body">
+          {% if active_loan %}
+          <div class="alert alert-warning mb-3">
+            <strong>Currently checked out</strong>
+            {% if active_loan.overdue %}<span class="badge bg-danger ms-2">OVERDUE</span>{% endif %}
+          </div>
+          <table class="table table-sm table-borderless mb-3">
+            <tr><th>Borrower</th><td>{{ active_loan.checked_out_to }}</td></tr>
+            <tr><th>Checked out</th><td>{{ active_loan.checked_out_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+            {% if active_loan.due_back_at %}
+            <tr><th>Due back</th><td class="{% if active_loan.overdue %}text-danger fw-bold{% endif %}">{{ active_loan.due_back_at.strftime('%Y-%m-%d') }}</td></tr>
+            {% endif %}
+            {% if active_loan.notes %}
+            <tr><th>Notes</th><td>{{ active_loan.notes }}</td></tr>
+            {% endif %}
+          </table>
+          {% if current_user.role in ['admin','manager'] %}
+          <form method="POST" action="{{ url_for('assets.asset_checkin', asset_id=asset.id, loan_id=active_loan.id) }}"
+                onsubmit="return confirm('Confirm check-in?')">
+            <button type="submit" class="btn btn-success w-100"><i class="bi bi-box-arrow-in-left me-1"></i>Check In</button>
+          </form>
+          {% endif %}
+          {% else %}
+          <div class="alert alert-success">Asset is currently <strong>available</strong>.</div>
+          {% if current_user.role in ['admin','manager'] %}
+          <form method="POST" action="{{ url_for('assets.asset_checkout', asset_id=asset.id) }}">
+            <div class="mb-2">
+              <label class="form-label fw-semibold">Borrower Name <span class="text-danger">*</span></label>
+              <input type="text" name="checked_out_to" id="borrowerInput" class="form-control" required
+                     placeholder="Search employee…" autocomplete="off" list="employeeList">
+              <datalist id="employeeList">
+                {% for emp in employees %}
+                <option value="{{ emp.name }}">{{ emp.name }}{% if emp.department %} — {{ emp.department }}{% endif %}</option>
+                {% endfor %}
+              </datalist>
+            </div>
+            <div class="mb-2">
+              <label class="form-label fw-semibold">Due Back</label>
+              <input type="date" name="due_back_at" class="form-control">
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Notes</label>
+              <textarea name="notes" class="form-control" rows="2" placeholder="Reason for checkout…"></textarea>
+            </div>
+            <button type="submit" class="btn btn-warning w-100"><i class="bi bi-box-arrow-right me-1"></i>Check Out</button>
+          </form>
+          {% endif %}
+          {% endif %}
+    <div class="col-lg-6">
+      <div class="card section-card">
+        <div class="card-header"><i class="bi bi-clock-history me-2 text-secondary"></i>Loan History</div>
+        <div class="card-body p-0">
+          {% if loan_history %}
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Borrower</th><th>Out</th><th>In</th></tr></thead>
+            <tbody>
+              {% for loan in loan_history %}
+              <tr>
+                <td>{{ loan.checked_out_to }}</td>
+                <td>{{ loan.checked_out_at.strftime('%Y-%m-%d') }}</td>
+                <td>{{ loan.checked_in_at.strftime('%Y-%m-%d') if loan.checked_in_at else '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-muted m-3">No loan history.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}

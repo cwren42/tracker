@@ -8,9 +8,11 @@ require minimal code changes for the SQLite → PostgreSQL migration.
 
 import re
 import datetime as _dt
+import threading
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 
 DB_DSN = "postgresql://tracker_user:tracker_secure_2026@localhost/tracker"
 
@@ -159,18 +161,38 @@ class _Cursor:
         return (_Row(r) for r in self._c)
 
 
+# ─── Connection pool ──────────────────────────────────────────────────────────
+# Opening a raw psycopg2 connection costs ~5-15ms (TCP + PG auth handshake).
+# A ThreadedConnectionPool keeps persistent connections ready and is safe
+# across gunicorn workers (each worker is a separate OS process with its own pool).
+_pool_lock = threading.Lock()
+_pool: 'psycopg2.pool.ThreadedConnectionPool | None' = None
+
+def _get_pool() -> 'psycopg2.pool.ThreadedConnectionPool':
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = psycopg2.pool.ThreadedConnectionPool(
+                    minconn=2, maxconn=10,
+                    dsn=DB_DSN, options='-c timezone=UTC'
+                )
+    return _pool
+
+
 # ─── Connection wrapper ───────────────────────────────────────────────────────
 
 class _Conn:
     """Wraps a psycopg2 connection to mimic the sqlite3.Connection API."""
 
     def __init__(self):
-        self._conn = psycopg2.connect(DB_DSN, options="-c timezone=UTC")
+        self._pool = _get_pool()
+        self._conn = self._pool.getconn()
 
-    def cursor(self) -> _Cursor:
+    def cursor(self) -> '_Cursor':
         return _Cursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
 
-    def execute(self, sql, params=()) -> _Cursor:
+    def execute(self, sql, params=()) -> '_Cursor':
         cur = self.cursor()
         cur.execute(sql, params)
         return cur
@@ -179,8 +201,12 @@ class _Conn:
         self._conn.commit()
 
     def close(self):
-        self._conn.close()
-
+        # Return connection to pool rather than closing it.
+        try:
+            self._conn.rollback()  # reset any uncommitted state
+        except Exception:
+            pass
+        self._pool.putconn(self._conn)
     def __enter__(self):
         return self
 

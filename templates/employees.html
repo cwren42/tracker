@@ -1,74 +1,30 @@
 {% extends "base.html" %}
+{% block styles %}
+<link rel="stylesheet" href="/static/css/employees.css">
+{% endblock %}
 
 {% block title %}Employees - Asset Tracker{% endblock %}
 
 {% block content %}
-<style>
-    .stat-card-clickable {
-        transition: transform 0.2s, box-shadow 0.2s;
-        cursor: pointer;
-        text-decoration: none;
-        color: inherit;
-    }
-    .stat-card-clickable:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2) !important;
-    }
-    .stat-card-clickable .card-body {
-        position: relative;
-    }
-    .stat-card-clickable small {
-        opacity: 0.7;
-        font-size: 0.75rem;
-    }
 
-    .employee-avatar {
-        width: 32px;
-        height: 32px;
-        border-radius: 9999px;
-        object-fit: cover;
-        flex: 0 0 auto;
-    }
-
-    .sort-link {
-        color: inherit;
-        text-decoration: none;
-    }
-
-    @media (max-width: 768px) {
-        .mobile-hide {
-            display: none;
-        }
-        .search-filters {
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-        .view-toggle {
-            width: 100%;
-        }
-        .view-toggle .btn {
-            flex: 1;
-        }
-    }
-</style>
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap">
     <h1 class="mb-2 mb-md-0"><i class="bi bi-people-fill"></i> Employees</h1>
     <div class="d-flex gap-2 flex-wrap">
         {% if current_user.role in ['admin', 'manager'] %}
-        <a href="{{ url_for('import_employees') }}" class="btn btn-info btn-sm">
+        <a href="{{ url_for('employees.import_employees') }}" class="btn btn-info btn-sm">
             <i class="bi bi-upload"></i> <span class="d-none d-md-inline">Import</span>
         </a>
-        <form method="POST" action="{{ url_for('sync_employees_from_m365') }}" class="d-inline">
+        <form method="POST" action="{{ url_for('employees.sync_employees_from_m365') }}" class="d-inline">
             <button type="submit" class="btn btn-outline-primary btn-sm">
                 <i class="bi bi-microsoft"></i> <span class="d-none d-md-inline">Sync from M365</span>
             </button>
         </form>
         {% endif %}
-        <a href="{{ url_for('export_employees_csv') }}" class="btn btn-success btn-sm">
+        <a href="{{ url_for('employees.export_employees_csv') }}" class="btn btn-success btn-sm">
             <i class="bi bi-download"></i> <span class="d-none d-md-inline">Export</span>
         </a>
-        <a href="{{ url_for('add_employee') }}" class="btn btn-primary btn-sm">
+        <a href="{{ url_for('employees.add_employee') }}" class="btn btn-primary btn-sm">
             <i class="bi bi-person-plus"></i> <span class="d-none d-md-inline">Add Employee</span>
         </a>
     </div>
@@ -79,7 +35,7 @@
 <!-- Statistics Cards -->
 <div class="row mb-4">
     <div class="col-md-3 col-sm-6 mb-3">
-        <a href="{{ url_for('employees') }}" class="text-decoration-none">
+        <a href="{{ url_for('employees.employees') }}" class="text-decoration-none">
             <div class="card bg-primary text-white stat-card-clickable">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center">
@@ -155,7 +111,7 @@
             <div class="modal-body">
                 <div class="list-group">
                     {% for dept in departments %}
-                    <a href="{{ url_for('employees', department=dept) }}" class="list-group-item list-group-item-action">
+                    <a href="{{ url_for('employees.employees', department=dept) }}" class="list-group-item list-group-item-action">
                         <div class="d-flex justify-content-between align-items-center">
                             <span><i class="bi bi-folder"></i> {{ dept }}</span>
                             <span class="badge bg-primary rounded-pill">
@@ -240,7 +196,7 @@
                     <a href="#" class="text-white ms-1" onclick="clearDepartment(); return false;">×</a>
                 </span>
                 {% endif %}
-                <a href="{{ url_for('employees') }}" class="btn btn-sm btn-outline-secondary">
+                <a href="{{ url_for('employees.employees') }}" class="btn btn-sm btn-outline-secondary">
                     <i class="bi bi-x-circle"></i> Clear All
                 </a>
             </div>
@@ -321,7 +277,7 @@
                         <i class="bi bi-key"></i> {{ employee_license_counts.get(employee.id, 0) }}
                     </span>
                 </div>
-                <a href="{{ url_for('view_employee', employee_id=employee.id) }}" 
+                <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" 
                    class="btn btn-sm btn-outline-primary w-100">
                     <i class="bi bi-eye"></i> View Details
                 </a>
@@ -380,7 +336,7 @@
                         {% endif %}
                         <span class="badge bg-info" title="Assets">{{ employee.assets|length }}</span>
                         <span class="badge bg-success" title="Licenses">{{ employee_license_counts.get(employee.id, 0) }}</span>
-                        <a href="{{ url_for('view_employee', employee_id=employee.id) }}" 
+                        <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" 
                            class="btn btn-sm btn-outline-primary">
                             <i class="bi bi-eye"></i>
                         </a>
@@ -454,7 +410,7 @@
                             {% else %}
                                 <i class="bi bi-person-circle text-primary"></i>
                             {% endif %}
-                            <a class="text-decoration-none" href="{{ url_for('view_employee', employee_id=employee.id) }}"><strong>{{ employee.name }}</strong></a>
+                            <a class="text-decoration-none" href="{{ url_for('employees.view_employee', employee_id=employee.id) }}"><strong>{{ employee.name }}</strong></a>
                         </div>
                     </td>
                     <td class="mobile-hide">{{ employee.department or '-' }}</td>
@@ -486,7 +442,7 @@
                         <span class="badge bg-success">{{ employee_license_counts.get(employee.id, 0) }}</span>
                     </td>
                     <td class="text-center">
-                        <a href="{{ url_for('view_employee', employee_id=employee.id) }}" class="btn btn-sm btn-outline-primary">
+                        <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" class="btn btn-sm btn-outline-primary">
                             <i class="bi bi-eye"></i> View
                         </a>
                     </td>
@@ -501,164 +457,20 @@
 <div class="alert alert-info text-center">
     <i class="bi bi-info-circle"></i> 
     {% if search or department_filter %}
-    No employees found matching your filters. <a href="{{ url_for('employees') }}">Clear filters</a>
+    No employees found matching your filters. <a href="{{ url_for('employees.employees') }}">Clear filters</a>
     {% else %}
-    No employees yet. <a href="{{ url_for('add_employee') }}">Add your first employee</a>
+    No employees yet. <a href="{{ url_for('employees.add_employee') }}">Add your first employee</a>
     {% endif %}
 </div>
 {% endif %}
 
 <script>
-// View mode management
-let currentView = localStorage.getItem('employeeView') || 'grid';
-
-function setView(view) {
-    currentView = view;
-    localStorage.setItem('employeeView', view);
-    
-    // Hide all views
-    document.getElementById('gridViewContainer').classList.add('d-none');
-    document.getElementById('listViewContainer').classList.add('d-none');
-    document.getElementById('tableViewContainer').classList.add('d-none');
-    
-    // Show selected view
-    document.getElementById(view + 'ViewContainer').classList.remove('d-none');
-    
-    // Update button states
-    document.querySelectorAll('.view-toggle .btn').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    document.getElementById(view + 'View').classList.add('active');
-}
-
-// Initialize view on page load
-document.addEventListener('DOMContentLoaded', function() {
-    setView(currentView);
-    
-    // View toggle buttons
-    document.getElementById('gridView').addEventListener('click', () => setView('grid'));
-    document.getElementById('listView').addEventListener('click', () => setView('list'));
-    document.getElementById('tableView').addEventListener('click', () => setView('table'));
-    
-    // Search functionality with debounce
-    let searchTimeout;
-    document.getElementById('searchInput').addEventListener('input', function(e) {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-            applyFilters();
-        }, 500);
-    });
-    
-    // Department filter
-    document.getElementById('departmentFilter').addEventListener('change', applyFilters);
-    
-    // Sort select
-    document.getElementById('sortSelect').addEventListener('change', applyFilters);
-});
-
-function applyFilters() {
-    const search = document.getElementById('searchInput').value;
-    const department = document.getElementById('departmentFilter').value;
-    const sort = document.getElementById('sortSelect').value;
-    
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    if (department) params.append('department', department);
-    if (sort) params.append('sort', sort);
-    params.append('order', '{{ sort_order }}');
-    
-    window.location.href = '{{ url_for("employees") }}?' + params.toString();
-}
-
-function sortBy(column) {
-    const currentSort = '{{ sort_by }}';
-    const currentOrder = '{{ sort_order }}';
-    let newOrder = 'asc';
-    
-    if (currentSort === column) {
-        newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
-    }
-    
-    const params = new URLSearchParams(window.location.search);
-    params.set('sort', column);
-    params.set('order', newOrder);
-    
-    window.location.href = '{{ url_for("employees") }}?' + params.toString();
-}
-
-function toggleSortOrder() {
-    const params = new URLSearchParams(window.location.search);
-    const currentOrder = '{{ sort_order }}';
-    params.set('order', currentOrder === 'asc' ? 'desc' : 'asc');
-    window.location.href = '{{ url_for("employees") }}?' + params.toString();
-}
-
-function clearSearch() {
-    document.getElementById('searchInput').value = '';
-    applyFilters();
-}
-
-function showDepartmentModal() {
-    const modal = new bootstrap.Modal(document.getElementById('departmentModal'));
-    modal.show();
-}
-
-function filterByAssets() {
-    // Filter to show only employees with assets
-    const employees = document.querySelectorAll('.employee-item');
-    let hasAssets = false;
-    
-    employees.forEach(item => {
-        const badges = item.querySelectorAll('.badge');
-        const assetBadge = Array.from(badges).find(b => b.textContent.includes('') && b.classList.contains('bg-info'));
-        const assetCount = assetBadge ? parseInt(assetBadge.textContent.trim()) : 0;
-        
-        if (assetCount > 0) {
-            item.style.display = '';
-            hasAssets = true;
-        } else {
-            item.style.display = 'none';
-        }
-    });
-    
-    // Show message if no results
-    if (!hasAssets) {
-        alert('No employees with assets assigned.');
-        employees.forEach(item => item.style.display = '');
-    }
-}
-
-function filterByLicenses() {
-    // Filter to show only employees with licenses
-    const employees = document.querySelectorAll('.employee-item');
-    let hasLicenses = false;
-    
-    employees.forEach(item => {
-        const badges = item.querySelectorAll('.badge');
-        const licenseBadge = Array.from(badges).find(b => {
-            const title = (b.getAttribute('title') || '').toLowerCase();
-            return title.includes('license');
-        });
-        const licenseCount = licenseBadge ? parseInt(licenseBadge.textContent.trim()) : 0;
-        
-        if (licenseCount > 0) {
-            item.style.display = '';
-            hasLicenses = true;
-        } else {
-            item.style.display = 'none';
-        }
-    });
-    
-    // Show message if no results
-    if (!hasLicenses) {
-        alert('No employees with licenses assigned.');
-        employees.forEach(item => item.style.display = '');
-    }
-}
-function clearDepartment() {
-    document.getElementById('departmentFilter').value = '';
-    applyFilters();
-}
+window.EMPLOYEES_CFG = {
+  sort_order: {{ sort_order }},
+  sort_by: {{ sort_by }},
+  employees_url: {{ url_for("employees.employees") }}
+};
 </script>
+<script src="/static/js/employees.js"></script>
 
 {% endblock %}

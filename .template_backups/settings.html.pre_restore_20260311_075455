@@ -1,0 +1,2001 @@
+{% extends "base.html" %}
+
+{% block title %}System Settings{% endblock %}
+
+{% block content %}
+<style>
+    #settingsTabs .nav-link { color:#8899aa; border-bottom:2px solid transparent; }
+    #settingsTabs .nav-link.active { color:#fff; background:transparent; }
+    #settingsTabs .nav-link:hover { color:#cdd9e5; }
+    #settingsTabs .nav-link i { margin-right: 5px; }
+    .tab-content { min-height: 400px; }
+</style>
+
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <h1 class="h2">
+                <i class="bi bi-gear-fill text-primary"></i> System Settings
+            </h1>
+            <p class="text-muted">Configure application preferences and integrations</p>
+        </div>
+    </div>
+
+    <!-- License Expiration Warning Banner -->
+    <div class="row" id="licenseWarningBanner" style="display: none;">
+        <div class="col-12">
+            <div class="alert alert-danger alert-dismissible fade show border-3 shadow-sm" role="alert">
+                <h4 class="alert-heading">
+                    <i class="bi bi-exclamation-triangle-fill"></i> License Expired or Invalid
+                </h4>
+                <p class="mb-2">
+                    <strong>The system license has expired or is invalid.</strong> 
+                    All features are currently locked. Please update your license information in the License tab below to restore full functionality.
+                </p>
+                <hr>
+                <p class="mb-0">
+                    <small><i class="bi bi-info-circle"></i> Contact your administrator or visit the License tab to enter a valid license key.</small>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabbed Interface -->
+    <div class="row">
+        <div class="col-12">
+            <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="license-tab" data-bs-toggle="tab" data-bs-target="#license" type="button" role="tab">
+                        <i class="bi bi-key-fill"></i> License
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="email-tab" data-bs-toggle="tab" data-bs-target="#email" type="button" role="tab">
+                        <i class="bi bi-envelope-fill"></i> Email
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="directory-tab" data-bs-toggle="tab" data-bs-target="#directory" type="button" role="tab">
+                        <i class="bi bi-server"></i> Directory
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="rmm-tab" data-bs-toggle="tab" data-bs-target="#rmm" type="button" role="tab">
+                        <i class="bi bi-robot"></i> RMM Agent
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="unifi-tab" data-bs-toggle="tab" data-bs-target="#unifi" type="button" role="tab">
+                        <i class="bi bi-router"></i> UniFi
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox" type="button" role="tab">
+                        <i class="bi bi-hdd-stack"></i> Proxmox
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="ai-tab" data-bs-toggle="tab" data-bs-target="#ai" type="button" role="tab">
+                        <i class="bi bi-stars"></i> AI
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="scripts-tab" data-bs-toggle="tab" data-bs-target="#scripts" type="button" role="tab">
+                        <i class="bi bi-terminal-fill"></i> Scripts
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="eagleeye-tab" data-bs-toggle="tab" data-bs-target="#eagleeye" type="button" role="tab">
+                        <i class="bi bi-binoculars-fill"></i> Eagle Eye
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content mt-4" id="settingsTabContent">
+                <!-- License Management Tab -->
+                <div class="tab-pane fade show active" id="license" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-key-fill"></i> License Management</h5>
+                                    <button type="button" class="btn btn-sm btn-light" onclick="verifyLicense()">
+                                        <i class="bi bi-arrow-clockwise"></i> Verify Now
+                                    </button>
+                                </div>
+                                <div class="card-body">
+                                    <div id="licenseInfo">
+                                        <div class="text-center py-4">
+                                            <div class="spinner-border text-primary" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Add/Edit License Form (hidden by default) -->
+                                    <div id="licenseForm" style="display: none;">
+                                        <form onsubmit="saveLicense(event)">
+                                            <div class="mb-3">
+                                                <label class="form-label">License Key *</label>
+                                                <input type="text" class="form-control" id="licenseKey" placeholder="LIC-XXXXX-XXXXX-XXXXX-XXXXX" required>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">License Server API Key</label>
+                                                <input type="text" class="form-control" id="apiKey" placeholder="sk_...">
+                                                <small class="text-muted">Optional: Leave blank to use server default</small>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">Device ID</label>
+                                                <input type="text" class="form-control" id="deviceId" placeholder="asset-tracker-hostname">
+                                                <small class="text-muted">Optional: Unique identifier for this installation. Auto-generated if not specified.</small>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">Company Name</label>
+                                                <input type="text" class="form-control" id="companyName" placeholder="Your Company">
+                                            </div>
+                                            <div class="d-flex gap-2">
+                                                <button type="submit" class="btn btn-success">
+                                                    <i class="bi bi-check-circle"></i> Save License
+                                                </button>
+                                                <button type="button" class="btn btn-secondary" onclick="cancelEditLicense()">
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Email Configuration Tab -->
+                <div class="tab-pane fade" id="email" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-envelope-fill"></i> Email Configuration</h5>
+                    <button type="button" class="btn btn-sm btn-light" onclick="toggleSmtpEdit()">
+                        <i class="bi bi-pencil-square"></i> Edit
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- View Mode -->
+                    <div id="smtpViewMode">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <h6 class="text-muted">SMTP Server</h6>
+                                <p class="mb-0"><strong>{{ config.mail_server }}</strong></p>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Port</h6>
+                                <p class="mb-0"><strong>{{ config.mail_port }}</strong></p>
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Username</h6>
+                                <p class="mb-0">{{ config.mail_username if config.mail_username else '<span class="text-muted">Not set</span>' | safe }}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Encryption</h6>
+                                <p class="mb-0">
+                                    {% if config.mail_use_tls %}
+                                        <span class="badge bg-success">TLS Enabled</span>
+                                    {% elif config.mail_use_ssl %}
+                                        <span class="badge bg-success">SSL Enabled</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">None</span>
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h6 class="text-muted">Sender Email</h6>
+                                <p class="mb-0"><strong>{{ config.mail_sender }}</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Edit Mode -->
+                    <form method="POST" id="smtpEditMode" style="display: none;">
+                        <input type="hidden" name="action" value="update_smtp">
+                        
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> <strong>Common SMTP Ports:</strong> 25 (unencrypted), 587 (TLS), 465 (SSL)
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <label class="form-label">SMTP Server *</label>
+                                <input type="text" class="form-control" name="smtp_server" 
+                                       value="{{ config.mail_server }}" required 
+                                       placeholder="smtp.gmail.com">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Port *</label>
+                                <input type="number" class="form-control" name="smtp_port" 
+                                       value="{{ config.mail_port }}" required 
+                                       placeholder="587">
+                            </div>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Username (optional)</label>
+                                <input type="text" class="form-control" name="smtp_username" 
+                                       value="{{ config.mail_username }}" 
+                                       placeholder="your@email.com">
+                                <small class="text-muted">Leave blank if not required</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Password (optional)</label>
+                                <input type="password" class="form-control" name="smtp_password" 
+                                       value="{{ config.mail_password }}" 
+                                       placeholder="••••••••">
+                                <small class="text-muted">Leave blank to keep existing</small>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Encryption</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="use_tls" id="use_tls" 
+                                       {% if config.mail_use_tls %}checked{% endif %}>
+                                <label class="form-check-label" for="use_tls">
+                                    Use TLS (Port 587)
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="use_ssl" id="use_ssl" 
+                                       {% if config.mail_use_ssl %}checked{% endif %}>
+                                <label class="form-check-label" for="use_ssl">
+                                    Use SSL (Port 465)
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Sender Email *</label>
+                            <input type="email" class="form-control" name="sender_email" 
+                                   value="{{ config.mail_sender }}" required 
+                                   placeholder="noreply@company.com">
+                            <small class="text-muted">This will appear as the "From" address</small>
+                        </div>
+                        
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-success">
+                                <i class="bi bi-check-circle"></i> Save Changes
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="toggleSmtpEdit()">
+                                <i class="bi bi-x-circle"></i> Cancel
+                            </button>
+                        </div>
+                    </form>
+
+                                    <!-- Test Email -->
+                                    <hr>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="test_email">
+                                        <div class="mb-3">
+                                            <label class="form-label"><strong>Test Email Configuration</strong></label>
+                                            <div class="input-group">
+                                                <input type="email" class="form-control" name="test_email" 
+                                                       placeholder="Enter email address to test" required>
+                                                <button type="submit" class="btn btn-success">
+                                                    <i class="bi bi-send-fill"></i> Send Test Email
+                                                </button>
+                                            </div>
+                                            <small class="form-text text-muted">Send a test email to verify SMTP configuration</small>
+                                        </div>
+                                    </form>
+
+                                    <!-- Email Notifications -->
+                                    <div class="card shadow-sm mt-4">
+                                        <div class="card-header">
+                                            <h5 class="mb-0"><i class="bi bi-bell-fill"></i> Email Notifications</h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <div>
+                                                    <h6 class="mb-1">Employee Email Notifications</h6>
+                                                    <p class="text-muted mb-0 small">Send emails to employees when assets are assigned to them</p>
+                                                </div>
+                                                <form method="POST" class="mb-0">
+                                                    <input type="hidden" name="action" value="toggle_employee_emails">
+                                                    <button type="submit" class="btn btn-lg {{ 'btn-success' if config.employee_emails_enabled else 'btn-secondary' }}">
+                                                        {% if config.employee_emails_enabled %}
+                                                            <i class="bi bi-toggle-on"></i> Enabled
+                                                        {% else %}
+                                                            <i class="bi bi-toggle-off"></i> Disabled
+                                                        {% endif %}
+                                                    </button>
+                                                </form>
+                                            </div>
+                                            
+                                            {% if not config.employee_emails_enabled %}
+                                            <div class="alert alert-warning mb-0">
+                                                <i class="bi bi-exclamation-triangle-fill"></i> 
+                                                <strong>Note:</strong> Employee email notifications are currently disabled. 
+                                                Employees will not receive emails when assets are assigned to them.
+                                            </div>
+                                            {% endif %}
+                                            
+                                            <hr>
+                                            
+                                            <h6 class="mb-3">Admin Notifications (Always Enabled)</h6>
+                                            <ul class="list-unstyled mb-0">
+                                                <li class="mb-2">
+                                                    <i class="bi bi-check-circle-fill text-success"></i> 
+                                                    Warranty expiring alerts
+                                                </li>
+                                                <li class="mb-2">
+                                                    <i class="bi bi-check-circle-fill text-success"></i> 
+                                                    Asset lifecycle alerts (replacement needed)
+                                                </li>
+                                                <li class="mb-2">
+                                                    <i class="bi bi-check-circle-fill text-success"></i> 
+                                                    System notifications
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Email Info Sidebar -->
+                                <div class="col-lg-4">
+                                    <!-- Admin Recipients -->
+                                    <div class="card shadow-sm mb-4">
+                                        <div class="card-header">
+                                            <h5 class="mb-0"><i class="bi bi-people-fill"></i> Admin Recipients</h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <p class="text-muted small mb-2">Admin notifications will be sent to:</p>
+                                            {% if config.admin_emails %}
+                                                <ul class="list-unstyled mb-0">
+                                                    {% for email in config.admin_emails %}
+                                                    <li class="mb-2">
+                                                        <i class="bi bi-envelope text-primary"></i> 
+                                                        <small>{{ email }}</small>
+                                                    </li>
+                                                    {% endfor %}
+                                                </ul>
+                                            {% else %}
+                                                <div class="alert alert-warning mb-0">
+                                                    <small>
+                                                        <i class="bi bi-exclamation-triangle"></i> 
+                                                        No admin email addresses configured!
+                                                    </small>
+                                                </div>
+                                            {% endif %}
+                                            <hr>
+                                            <p class="text-muted small mb-0">
+                                                <strong>{{ config.admin_count }}</strong> admin user(s) in system
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <!-- Email Types -->
+                                    <div class="card shadow-sm mb-4">
+                                        <div class="card-header">
+                                            <h5 class="mb-0"><i class="bi bi-info-circle-fill"></i> Email Types</h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <h6 class="mb-2">To Employees:</h6>
+                                            <ul class="small mb-3">
+                                                <li>Asset assignment notifications</li>
+                                                <li>Asset return reminders</li>
+                                            </ul>
+                                            
+                                            <h6 class="mb-2">To Admins:</h6>
+                                            <ul class="small mb-0">
+                                                <li>Warranty expiring soon (30 days)</li>
+                                                <li>Assets needing replacement</li>
+                                                <li>Lifecycle status changes</li>
+                                                <li>System alerts</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+
+                                    <!-- SMTP Info -->
+                                    <div class="card shadow-sm">
+                                        <div class="card-header">
+                                            <h6 class="mb-0"><i class="bi bi-server"></i> SMTP Server Info</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <dl class="row mb-0 small">
+                                                <dt class="col-sm-5">Server:</dt>
+                                                <dd class="col-sm-7">{{ config.mail_server }}</dd>
+                                                
+                                                <dt class="col-sm-5">Port:</dt>
+                                                <dd class="col-sm-7">{{ config.mail_port }}</dd>
+                                                
+                                                <dt class="col-sm-5">TLS:</dt>
+                                                <dd class="col-sm-7">Disabled</dd>
+                                                
+                                                <dt class="col-sm-5">SSL:</dt>
+                                                <dd class="col-sm-7">Disabled</dd>
+                                                
+                                                <dt class="col-sm-5">Auth:</dt>
+                                                <dd class="col-sm-7 mb-0">None Required</dd>
+                                            </dl>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Directory / AD / LDAP Tab -->
+                <div class="tab-pane fade" id="directory" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-server"></i> On-Prem Active Directory (LDAP)</h5>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="testADConnection()">
+                                        <i class="bi bi-lightning"></i> Test Connection
+                                    </button>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="update_ad">
+                                        <div class="row">
+                                            <div class="col-md-8 mb-3">
+                                                <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
+                                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.example.com or 10.0.0.10" required>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label">LDAP Port <span class="text-danger">*</span></label>
+                                                <input type="number" class="form-control" name="ad_port" value="{{ ad_config.ad_port }}" placeholder="636" required>
+                                                <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
+                                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
+                                            <small class="form-text text-muted">Base DN for user searches.</small>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Bind DN (Service Account) <span class="text-danger">*</span></label>
+                                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Service Account Password</label>
+                                                <input type="password" class="form-control" name="ad_bind_password" value="" placeholder="Leave blank to keep existing">
+                                                <small class="form-text text-muted">Leave blank to keep the existing password.</small>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">User OU DN (optional)</label>
+                                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
+                                            <small class="form-text text-muted">If set, new users can be created under this OU.</small>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
+                                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
+                                        </div>
+                                        <div class="form-check mb-3">
+                                            <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
+                                            <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
+                                        </div>
+                                        <button type="submit" class="btn btn-success">
+                                            <i class="bi bi-save"></i> Save Directory Settings
+                                        </button>
+                                    </form>
+                                    <div class="mt-3" id="adTestResult" style="display:none;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RMM Agent Tab -->
+                <div class="tab-pane fade" id="rmm" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-robot"></i> Cirque RMM Agent</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="mb-3">Deploy the RMM agent to any Windows device &mdash; no file transfer needed.</p>
+
+                                    <h6 class="mb-2"><i class="bi bi-1-circle-fill text-primary me-1"></i> Quick install &mdash; one machine (run as Admin)</h6>
+                                    <p class="small text-muted mb-1">Open <strong>PowerShell as Administrator</strong> on the target machine and paste:</p>
+                                    <div class="input-group mb-1">
+                                        <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                 id="ps1OneLiner" readonly style="font-size:.75rem;">
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="copyById('ps1OneLiner',this)" title="Copy to clipboard">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <script>
+                                    function copyById(id, btn) {
+                                        navigator.clipboard.writeText(document.getElementById(id).value).then(function() {
+                                            btn.innerHTML = '<i class="bi bi-check text-success"></i>';
+                                            setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+                                        }).catch(function(){});
+                                    }
+                                    document.addEventListener('DOMContentLoaded', function() {
+                                        var tok  = "{{ rmm_site_token }}";
+                                        var base = "{{ request.host_url }}".replace(/\/+$/, "");
+                                        var installUrl = base + "/download/site-install.ps1?t=" + tok;
+                                        var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
+                                        var sslBypass = "[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";
+                                        document.getElementById("ps1OneLiner").value  = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
+                                        document.getElementById("gpoOneLiner").value  = sslBypass + "irm '" + deployUrl  + "' -UseBasicParsing | iex";
+                                        document.getElementById("intuneScriptUrl").value = deployUrl;
+                                        document.getElementById("psremoteCmd").value  =
+                                            "Invoke-Command -ComputerName PC-NAME -ScriptBlock { irm '" + deployUrl + "' | iex }";
+                                        document.getElementById("intuneDownloadLink").href = deployUrl;
+                                    });
+                                    </script>
+                                    <p class="small text-muted mb-4">Logs saved to <code>C:\CirqueRMM\logs\setup.log</code></p>
+
+                                    <h6 class="mb-2"><i class="bi bi-2-circle-fill text-success me-1"></i> Silent mass deployment &mdash; users see nothing</h6>
+                                    <p class="small text-muted mb-2">The silent deploy script creates a hidden Windows Scheduled Task running as <strong>SYSTEM</strong>. No console window, no UAC prompt, no user dialog. Machines that already have the agent installed exit immediately.</p>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-secondary me-2">Option A</span>
+                                            <strong class="small">Group Policy (domain-joined machines)</strong>
+                                        </div>
+                                        <ol class="small text-muted mb-2 ps-3">
+                                            <li>Open <strong>Group Policy Management</strong> &rarr; create/edit a GPO linked to your Computers OU</li>
+                                            <li>Navigate to <em>Computer Configuration &rarr; Windows Settings &rarr; Scripts &rarr; Startup</em></li>
+                                            <li>Add a <strong>PowerShell script</strong> with this command (no arguments needed):</li>
+                                        </ol>
+                                        <div class="input-group mb-1">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="gpoOneLiner" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('gpoOneLiner',this)" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                        <p class="small text-muted mb-0">The script runs silently at startup as SYSTEM. Already-installed machines do nothing.</p>
+                                    </div>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-info text-dark me-2">Option B</span>
+                                            <strong class="small">Microsoft Intune (cloud / hybrid-joined machines)</strong>
+                                        </div>
+                                        <ol class="small text-muted mb-2 ps-3">
+                                            <li>Intune Portal &rarr; <em>Devices &rarr; Windows &rarr; PowerShell Scripts &rarr; Add</em></li>
+                                            <li><a id="intuneDownloadLink" href="#" class="text-info"><i class="bi bi-download me-1"></i>Download CirqueRMM-Deploy-Silent.ps1</a></li>
+                                            <li>Upload it &rarr; set <strong>Run as logged on credentials: No</strong> (SYSTEM) &rarr; assign to device groups</li>
+                                        </ol>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="intuneScriptUrl" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('intuneScriptUrl',this)" title="Copy URL">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                        <p class="small text-muted mt-1 mb-0">Direct script URL (right-click Save As, or use the download link above).</p>
+                                    </div>
+
+                                    <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span class="badge bg-secondary me-2">Option C</span>
+                                            <strong class="small">PowerShell Remoting &mdash; ad-hoc, any number of machines</strong>
+                                        </div>
+                                        <p class="small text-muted mb-2">Run from your admin workstation. Replace <code>PC-NAME</code> with the target hostname, or use <code>(Get-ADComputer -Filter *).Name</code> for all domain PCs:</p>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                                     id="psremoteCmd" readonly style="font-size:.72rem;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                    onclick="copyById('psremoteCmd',this)" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <h6 class="mb-2 mt-1"><i class="bi bi-3-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
+                                    <div class="d-flex gap-2 mb-4">
+                                        <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-sm">
+                                            <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
+                                        </a>
+                                    </div>
+
+                                    <h6 class="mb-2"><i class="bi bi-4-circle-fill text-primary me-1"></i> Per-asset installer (optional)</h6>
+                                    <p class="text-muted small mb-0">On any asset page, use <strong>Manage &rarr; Generate Installer (.ps1)</strong> to get a pre-configured script linked to that asset.</p>
+                                </div>
+                        </div>
+
+                        <div class="col-lg-4">
+                            <div class="card shadow-sm mb-3 border-warning">
+                                <div class="card-header bg-warning bg-opacity-10">
+                                    <h6 class="mb-0"><i class="bi bi-key-fill text-warning me-1"></i> Site Enrollment Token</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-2">Baked into the MSI at build time. All devices use it to auto-register. Keep it secret.</p>
+                                    <div class="input-group mb-2">
+                                        <input type="password" id="siteTokenInput" class="form-control form-control-sm font-monospace"
+                                               value="{{ rmm_site_token }}" readonly>
+                                        <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                onclick="toggleSiteToken()" title="Show/hide">
+                                            <i class="bi bi-eye" id="siteTokenEyeIcon"></i>
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm" type="button"
+                                                onclick="copySiteToken()" title="Copy">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm w-100" onclick="regenerateSiteToken()">
+                                        <i class="bi bi-arrow-clockwise me-1"></i> Regenerate Token
+                                    </button>
+                                    <p class="small text-danger mt-1 mb-0">
+                                        <i class="bi bi-exclamation-triangle me-1"></i>
+                                        Invalidates the current MSI &mdash; rebuild after regenerating.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Rebuild EXE</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-2">After changing the token, rebuild on the server:</p>
+                                    <code class="d-block p-2 bg-light border rounded small" style="font-size:.75rem">cd /var/www/tracker/rmm_agent<br>source /var/www/tracker/rmm_gateway/.venv/bin/activate<br>python3 build_exe.py</code>
+                                    <p class="small text-muted mt-2 mb-0">Token is fetched from the DB automatically.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <script>
+                    function toggleSiteToken() {
+                        const inp = document.getElementById('siteTokenInput');
+                        const icon = document.getElementById('siteTokenEyeIcon');
+                        if (inp.type === 'password') { inp.type = 'text'; icon.className = 'bi bi-eye-slash'; }
+                        else { inp.type = 'password'; icon.className = 'bi bi-eye'; }
+                    }
+                    function copySiteToken() {
+                        navigator.clipboard.writeText(document.getElementById('siteTokenInput').value);
+                        if (typeof showToast === 'function') showToast('Token copied!', 'success');
+                    }
+                    function regenerateSiteToken() {
+                        if (!confirm('Regenerate the site enrollment token?\n\nThis invalidates the current MSI — rebuild before deploying to new devices.')) return;
+                        fetch('/api/rmm/site-token/regenerate', {method: 'POST'})
+                            .then(r => r.json()).then(d => {
+                                if (d.ok) {
+                                    document.getElementById('siteTokenInput').value = d.token;
+                                    if (typeof showToast === 'function') showToast('Token regenerated. Rebuild the MSI.', 'warning');
+                                    else alert('Token regenerated. Rebuild the MSI before deploying.');
+                                }
+                            });
+                    }
+                    </script>
+                    </div> <!-- closes row -->
+                </div> <!-- closes rmm tab-pane -->
+
+                <!-- UniFi Settings Tab -->
+                <div class="tab-pane fade" id="unifi" role="tabpanel">
+                    <div class="row">
+                        <div class="col-lg-7">
+                            <div class="card bg-dark border-secondary mb-4">
+                                <div class="card-header d-flex align-items-center gap-2">
+                                    <i class="bi bi-router text-info fs-5"></i>
+                                    <h5 class="mb-0">UniFi Network Controller</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">Connect to the UniFi Network Application on your UDM Pro to auto-discover and monitor APs, switches, cameras, gateways, and storage devices.</p>
+                                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:0.85rem;">
+                                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                                        <strong>Use a local admin account</strong> &mdash; do not use your Ubiquiti SSO (ui.com) account.
+                                        SSO accounts require MFA and cannot be used for automated access.<br>
+                                        Create a local admin in <strong>UDM Pro &rarr; Settings &rarr; Admins &amp; Users &rarr; Add Admin</strong>
+                                        and choose <em>"Local Access Only"</em>.
+                                    </div>
+                                    <form method="POST" action="/settings">
+                                        <input type="hidden" name="action" value="update_unifi">
+                                        <div class="mb-3">
+                                            <label class="form-label">Controller URL</label>
+                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_host"
+                                                   value="{{ unifi_config.host }}" placeholder="https://192.168.1.1">
+                                            <small class="text-muted">The IP/hostname of your UDM Pro (no trailing slash)</small>
+                                        </div>
+                                        <div class="row g-3 mb-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label">Username</label>
+                                                <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_username"
+                                                       value="{{ unifi_config.username }}" placeholder="admin" autocomplete="off">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Password</label>
+                                                <input type="password" class="form-control bg-dark text-light border-secondary" name="unifi_password"
+                                                       placeholder="{{ '(saved)' if unifi_config.password_set else 'Enter password' }}" autocomplete="new-password">
+                                                <small class="text-muted">Leave blank to keep existing password</small>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Site Name</label>
+                                            <input type="text" class="form-control bg-dark text-light border-secondary" name="unifi_site"
+                                                   value="{{ unifi_config.site or 'default' }}" placeholder="default">
+                                            <small class="text-muted">The site <strong>ID</strong> — almost always <code>default</code>. This is NOT the device model name. If unsure, use "Test Connection" to discover available site IDs.</small>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-primary btn-sm">
+                                                <i class="bi bi-save me-1"></i>Save Settings
+                                            </button>
+                                            <button type="button" class="btn btn-outline-info btn-sm" onclick="testUnifi()">
+                                                <i class="bi bi-plug me-1"></i>Test Connection
+                                            </button>
+                                            <button type="button" class="btn btn-outline-success btn-sm" onclick="syncUnifi(this)">
+                                                <i class="bi bi-arrow-clockwise me-1"></i>Sync Now
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card bg-dark border-secondary mb-4">
+                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-activity me-2 text-success"></i>Sync Status</h6></div>
+                                <div class="card-body">
+                                    {% if unifi_config.last_sync_time %}
+                                    <div class="mb-2">
+                                        <small class="text-muted">Last Sync</small><br>
+                                        <span class="text-light">{{ unifi_config.last_sync_time[:19].replace('T',' ') }} UTC</span>
+                                    </div>
+                                    <div class="mb-2">
+                                        <small class="text-muted">Status</small><br>
+                                        {% if unifi_config.last_sync_status == 'success' %}
+                                            <span class="badge bg-success">Success</span>
+                                        {% elif unifi_config.last_sync_status == 'error' %}
+                                            <span class="badge bg-danger">Error</span>
+                                        {% elif unifi_config.last_sync_status == 'skipped' %}
+                                            <span class="badge bg-secondary">Skipped</span>
+                                        {% endif %}
+                                    </div>
+                                    <div><small class="text-muted">{{ unifi_config.last_sync_message }}</small></div>
+                                    {% else %}
+                                    <p class="text-muted small mb-0">No sync has run yet. Save credentials and click <strong>Sync Now</strong>.</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="card bg-dark border-secondary">
+                                <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2 text-info"></i>What gets synced</h6></div>
+                                <div class="card-body">
+                                    <ul class="list-unstyled small text-muted mb-0">
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Gateways / UDM Pro</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Switches</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>Access Points</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Cameras</li>
+                                        <li><i class="bi bi-check-circle text-success me-2"></i>UniFi Storage (NVR)</li>
+                                        <li class="mt-2"><i class="bi bi-arrow-repeat text-info me-2"></i>Syncs every 5 minutes</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="unifi-test-result" class="mt-2"></div>
+                </div>
+
+
+                <!-- Proxmox Settings Tab -->
+                <div class="tab-pane fade" id="proxmox" role="tabpanel">
+                    <style>
+                        #proxmox .card-header { background:#1a2234; border-bottom:1px solid #2d3a50; }
+                        #proxmox .card-header h5,
+                        #proxmox .card-header h6 { color:#cdd9e5; }
+                        #proxmox .form-label { color:#cdd9e5; font-weight:500; }
+                        #proxmox .form-text { color:#8899aa; }
+                        #proxmox .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
+                        #proxmox .form-control:focus { border-color:#0d6efd; box-shadow:none; }
+                        #proxmox hr { border-color:#2d3a50; }
+                    </style>
+                    <div class="row">
+                        <div class="col-lg-7">
+
+                            <!-- Cluster -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Endor Cluster (Production)</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">
+                                        API token credentials for any node in the Endor cluster.
+                                        Use a <strong>PVEAuditor</strong> role token (read-only).
+                                        Token format: <code>user@pve!tokenname</code>
+                                    </p>
+                                    <div class="mb-3">
+                                        <label class="form-label">Cluster Host</label>
+                                        <input type="text" class="form-control" id="prox_cluster_host"
+                                               placeholder="192.168.1.10 or pve1.corp.cirque.com"
+                                               value="{{ proxmox_settings.cluster_host }}">
+                                        <div class="form-text">Hostname or IP of any cluster node (port 8006)</div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token ID</label>
+                                        <input type="text" class="form-control" id="prox_cluster_token_id"
+                                               placeholder="monitoring@pve!tracker"
+                                               value="{{ proxmox_settings.cluster_token_id }}" autocomplete="off">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token Secret</label>
+                                        <input type="password" class="form-control" id="prox_cluster_token_secret"
+                                               placeholder="{{ '(saved)' if proxmox_settings.cluster_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
+                                               autocomplete="new-password">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Verify SSL</label>
+                                        <select class="form-control" id="prox_cluster_verify_ssl">
+                                            <option value="0" {% if proxmox_settings.cluster_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
+                                            <option value="1" {% if proxmox_settings.cluster_verify_ssl == '1' %}selected{% endif %}>Yes</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="button" class="btn btn-outline-info btn-sm"
+                                                onclick="testProxmox('cluster')">
+                                            <i class="bi bi-plug"></i> Test Cluster
+                                        </button>
+                                        <button type="button" class="btn btn-success btn-sm"
+                                                onclick="saveProxmox()">
+                                            <i class="bi bi-check-circle"></i> Save
+                                        </button>
+                                    </div>
+                                    <div id="proxmox-cluster-result" class="mt-2"></div>
+                                </div>
+                            </div>
+
+                            <!-- Backup server -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Bespin Backup Server</h5>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted small mb-3">
+                                        Optional: separate credentials for the standalone Bespin backup server.
+                                        Used to show backup storage pool usage.
+                                    </p>
+                                    <div class="mb-3">
+                                        <label class="form-label">Backup Server Host</label>
+                                        <input type="text" class="form-control" id="prox_backup_host"
+                                               placeholder="bespin.corp.cirque.com"
+                                               value="{{ proxmox_settings.backup_host }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token ID</label>
+                                        <input type="text" class="form-control" id="prox_backup_token_id"
+                                               placeholder="monitoring@pve!tracker"
+                                               value="{{ proxmox_settings.backup_token_id }}" autocomplete="off">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Token Secret</label>
+                                        <input type="password" class="form-control" id="prox_backup_token_secret"
+                                               placeholder="{{ '(saved)' if proxmox_settings.backup_token_set else 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' }}"
+                                               autocomplete="new-password">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Verify SSL</label>
+                                        <select class="form-control" id="prox_backup_verify_ssl">
+                                            <option value="0" {% if proxmox_settings.backup_verify_ssl != '1' %}selected{% endif %}>No (self-signed cert OK)</option>
+                                            <option value="1" {% if proxmox_settings.backup_verify_ssl == '1' %}selected{% endif %}>Yes</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="button" class="btn btn-outline-info btn-sm"
+                                                onclick="testProxmox('backup')">
+                                            <i class="bi bi-plug"></i> Test Backup Server
+                                        </button>
+                                        <button type="button" class="btn btn-success btn-sm"
+                                                onclick="saveProxmox()">
+                                            <i class="bi bi-check-circle"></i> Save
+                                        </button>
+                                    </div>
+                                    <div id="proxmox-backup-result" class="mt-2"></div>
+                                </div>
+                            </div>
+
+                            <!-- Alerting options -->
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-bell"></i> Alert Thresholds</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">Stale Backup Threshold (hours)</label>
+                                        <input type="number" class="form-control" id="prox_stale_hours"
+                                               min="1" max="168"
+                                               value="{{ proxmox_settings.stale_hours or '26' }}"
+                                               style="width:120px;">
+                                        <div class="form-text">Alert if a VM's newest auto-snapshot is older than this. Default: 26h (daily backup + 2h buffer).</div>
+                                    </div>
+                                    <button type="button" class="btn btn-success btn-sm" onclick="saveProxmox()">
+                                        <i class="bi bi-check-circle"></i> Save
+                                    </button>
+                                </div>
+                            </div>
+
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card shadow-sm">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="bi bi-info-circle"></i> Setup Instructions</h6>
+                                </div>
+                                <div class="card-body small text-muted">
+                                    <ol class="ps-3 mb-3">
+                                        <li class="mb-2">On any PVE node, create an API token user:<br>
+                                            <code>pveum user add monitoring@pve</code><br>
+                                            <code>pveum role add PVEReadOnly --privs "Datastore.Audit,Sys.Audit,VM.Audit"</code><br>
+                                            <code>pveum acl modify / -user monitoring@pve -role PVEReadOnly</code><br>
+                                            <code>pveum user token add monitoring@pve tracker</code>
+                                        </li>
+                                        <li class="mb-2">Copy the token ID (<code>monitoring@pve!tracker</code>) and secret UUID into the fields on the left.</li>
+                                        <li class="mb-2">Click <strong>Test</strong> to verify, then <strong>Save</strong>.</li>
+                                        <li>Go to <strong>Backups</strong> in the nav and click <strong>Sync Now</strong>.</li>
+                                    </ol>
+                                    <hr>
+                                    <p class="mb-1"><strong>What is synced:</strong></p>
+                                    <ul class="ps-3 mb-0">
+                                        <li>ZFS pool health &amp; usage per node</li>
+                                        <li>VM / LXC auto-snapshot freshness</li>
+                                        <li>Alerts on degraded pools, &gt;80% capacity, stale backups</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Settings Tab -->
+                <div class="tab-pane fade" id="ai" role="tabpanel">
+                    <style>
+                        #ai .card-header { background:#212d42; border-bottom:1px solid #2d3a50; }
+                        #ai .card-header h5,
+                        #ai .card-header h6 { color:#cdd9e5; }
+                        #ai .form-label { color:#cdd9e5; font-weight:500; }
+                        #ai .form-text { color:#8899aa; }
+                        #ai .form-select,
+                        #ai .form-control { background:#121c2b; color:#cdd9e5; border-color:#2d3a50; }
+                        #ai .form-select:focus,
+                        #ai .form-control:focus { border-color:#0d6efd; box-shadow:none; }
+                        #ai .form-select option { background:#1a2233; }
+                        #ai hr { border-color:#2d3a50; }
+                        #ai-key-status { font-size:.82rem; }
+                    </style>
+                    <div class="row">
+                        <div class="col-lg-7">
+                            <div class="card shadow-sm mb-4">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="bi bi-stars" style="color:#a855f7"></i> AI Configuration (OpenAI)</h5>
+                                </div>
+                                <div class="card-body">
+
+                                    <!-- API Key row -->
+                                    <div class="mb-3">
+                                        <label class="form-label">OpenAI API Key</label>
+                                        <div class="d-flex gap-2 align-items-center mb-1">
+                                            <span id="ai-key-status" class="badge bg-secondary">No key saved</span>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="toggleKeyInput()" id="btn-change-key">
+                                                <i class="bi bi-pencil-fill"></i> Change Key
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-info py-0 px-2" onclick="testAiConnection()" id="btn-test-ai">
+                                                <i class="bi bi-plug-fill"></i> Test
+                                            </button>
+                                        </div>
+                                        <div id="ai-key-input-wrap" style="display:none">
+                                            <input type="password" class="form-control" id="ai-api-key" placeholder="Paste new key: sk-proj-…">
+                                            <div class="form-text">Get your key from <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#6aacf8">platform.openai.com</a>. Stored server-side, never exposed in full.</div>
+                                        </div>
+                                        <div id="ai-test-result" class="mt-2" style="display:none"></div>
+                                    </div>
+
+                                    <!-- Model -->
+                                    <div class="mb-3">
+                                        <label class="form-label">Model</label>
+                                        <select class="form-select" id="ai-model">
+                                            <option value="gpt-4o">gpt-4o (recommended)</option>
+                                            <option value="gpt-4-turbo">gpt-4-turbo</option>
+                                            <option value="gpt-4">gpt-4</option>
+                                            <option value="gpt-3.5-turbo">gpt-3.5-turbo (faster / cheaper)</option>
+                                        </select>
+                                    </div>
+
+                                    <hr>
+
+                                    <!-- Toggles -->
+                                    <div class="mb-3 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Ticket AI Suggestions</label>
+                                            <div class="form-text">Show an AI suggestion panel on every ticket page.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-ticket-enabled">
+                                        </div>
+                                    </div>
+                                    <div class="mb-3 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Auto-Apply High-Confidence Suggestions</label>
+                                            <div class="form-text">When confidence &ge; 85% and ticket allows it, AI applies the suggestion automatically.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-auto-mode">
+                                        </div>
+                                    </div>
+                                    <div class="mb-4 d-flex align-items-center">
+                                        <div class="flex-grow-1">
+                                            <label class="form-label mb-0">Security Monitor</label>
+                                            <div class="form-text">Periodically generate AI security summaries shown on the dashboard.</div>
+                                        </div>
+                                        <div class="form-check form-switch ms-3">
+                                            <input class="form-check-input" type="checkbox" id="ai-security-monitor">
+                                        </div>
+                                    </div>
+
+                                    <button class="btn btn-primary" onclick="saveAiSettings()" id="btn-save-ai">
+                                        <i class="bi bi-floppy-fill me-1"></i>Save AI Settings
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header">
+                                    <h6 class="mb-0"><i class="bi bi-shield-check" style="color:#5fcf8b"></i> AI Security Summary</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p style="color:#8899aa" class="small">Generate an AI-powered security posture summary from your current vulnerability, patch, and alert data.</p>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="generateSecuritySummary()" id="btn-gen-summary">
+                                        <i class="bi bi-lightning-fill me-1"></i>Generate Now
+                                    </button>
+                                    <div id="ai-summary-result" class="mt-3" style="display:none">
+                                        <div class="p-2 rounded" style="background:#1e2d45;border:1px solid #2d3a50">
+                                            <div id="ai-summary-text" class="small" style="color:#cdd9e5"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </div>
+
+                <!-- Scripts Library Tab -->
+                <div class="tab-pane fade" id="scripts" role="tabpanel">
+                    <div class="row g-3">
+                        <div class="col-lg-8">
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-dark text-white"><h5 class="mb-0"><i class="bi bi-journal-code me-2"></i>Create Script</h5></div>
+                                <div class="card-body">
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-md-6"><label class="form-label">Script Name</label><input type="text" class="form-control" id="scriptName" placeholder="Enter name"></div>
+                                        <div class="col-md-6"><label class="form-label">File Type</label><select class="form-select" id="scriptFileType"><option value=".ps1">.ps1 (PowerShell)</option><option value=".bat">.bat (Batch)</option><option value=".sh">.sh (Shell)</option></select></div>
+                                    </div>
+                                    <div class="mb-2"><label class="form-label">Description</label><textarea class="form-control" id="scriptDescription" rows="2"></textarea></div>
+                                    <div class="mb-2"><label class="form-label">Script Editor</label><textarea class="form-control font-monospace" id="scriptContent" rows="10"></textarea></div>
+                                    <div class="d-flex gap-2 flex-wrap"><button type="button" class="btn btn-primary" onclick="saveScriptLibraryItem()"><i class="bi bi-save me-1"></i>Save Script</button><button type="button" class="btn btn-outline-secondary" onclick="clearScriptEditor()"><i class="bi bi-eraser me-1"></i>Clear</button><span id="scriptSaveStatus" class="small text-muted align-self-center"></span></div>
+                                </div>
+                            </div>
+                            <div class="card shadow-sm mb-3">
+                                <div class="card-header bg-secondary text-white"><h6 class="mb-0"><i class="bi bi-upload me-2"></i>Upload Script File</h6></div>
+                                <div class="card-body"><div class="row g-2 align-items-end"><div class="col-md-8"><label class="form-label">File (.ps1, .bat, .sh)</label><input type="file" class="form-control" id="scriptUploadFile" accept=".ps1,.bat,.sh"></div><div class="col-md-4 d-grid"><button type="button" class="btn btn-outline-primary" onclick="uploadScriptFile()"><i class="bi bi-cloud-upload me-1"></i>Upload</button></div></div><div id="scriptUploadStatus" class="small text-muted mt-2"></div></div>
+                            </div>
+                            <div class="card shadow-sm"><div class="card-header bg-light d-flex justify-content-between align-items-center"><h6 class="mb-0"><i class="bi bi-collection me-2"></i>Saved Scripts</h6><button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadScriptLibrary()"><i class="bi bi-arrow-clockwise"></i></button></div><div class="card-body"><div id="scriptLibraryList" class="small text-muted">Loading scripts...</div></div></div>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="card shadow-sm mb-3"><div class="card-header bg-primary text-white"><h6 class="mb-0"><i class="bi bi-stars me-2"></i>AI Script Generator</h6></div><div class="card-body"><p class="small text-muted">Generate scripts with Cirque AI.</p><div class="mb-2"><label class="form-label">Prompt</label><textarea class="form-control" id="scriptAiPrompt" rows="5"></textarea></div><div class="d-grid"><button type="button" class="btn btn-primary" onclick="generateScriptWithAI()"><i class="bi bi-magic me-1"></i>Generate Script</button></div><div id="scriptAiStatus" class="small text-muted mt-2"></div></div></div>
+                            <div class="card shadow-sm"><div class="card-header bg-success text-white"><h6 class="mb-0"><i class="bi bi-play-circle me-2"></i>Test Script On Online Agent</h6></div><div class="card-body"><div class="mb-2"><label class="form-label">Online Agent</label><select class="form-select" id="scriptTestAgent"></select></div><div class="mb-2"><label class="form-label">Script To Test</label><select class="form-select" id="scriptTestScript"></select></div><div class="d-grid"><button type="button" class="btn btn-success" onclick="testSavedScript()"><i class="bi bi-play-fill me-1"></i>Run Test</button></div><pre id="scriptTestOutput" class="bg-dark text-light rounded p-2 mt-2 mb-1" style="min-height:70px;max-height:220px;overflow:auto;white-space:pre-wrap;font-size:.75rem;"></pre><div id="scriptTestStatus" class="small text-muted"></div></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Eagle Eye Exclusions Tab -->
+                <div class="tab-pane fade" id="eagleeye" role="tabpanel">
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <h5 class="mb-1"><i class="bi bi-binoculars-fill me-2 text-warning"></i>Eagle Eye Exclusions</h5>
+                            <p class="text-muted small mb-0">Devices in the <strong>Excluded</strong> list are hidden from all Eagle Eyes role users. Use the arrows to move devices between lists.</p>
+                        </div>
+                    </div>
+                    <div class="row g-3 align-items-start">
+                        <!-- Active Agents -->
+                        <div class="col-md-5">
+                            <div class="card shadow-sm h-100">
+                                <div class="card-header bg-success text-white py-2">
+                                    <h6 class="mb-0"><i class="bi bi-display me-1"></i>Active Agents <span class="badge bg-white text-success ms-1" id="ee-active-count">0</span></h6>
+                                </div>
+                                <div class="card-body p-2">
+                                    <input type="text" class="form-control form-control-sm mb-2" id="ee-filter-active" placeholder="Filter active agents…" oninput="eeFilterList('ee-active-list', this.value)">
+                                    <select id="ee-active-list" class="form-select" multiple size="16" style="font-size:0.85rem;">
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Arrow Buttons -->
+                        <div class="col-md-2 d-flex flex-column align-items-center justify-content-center gap-2" style="padding-top:80px">
+                            <button class="btn btn-danger w-100" onclick="eeMoveToExcluded()" title="Exclude selected">
+                                <i class="bi bi-chevron-double-right"></i><br><small>Exclude</small>
+                            </button>
+                            <button class="btn btn-success w-100" onclick="eeMoveToActive()" title="Remove from excluded">
+                                <i class="bi bi-chevron-double-left"></i><br><small>Restore</small>
+                            </button>
+                        </div>
+
+                        <!-- Excluded Agents -->
+                        <div class="col-md-5">
+                            <div class="card shadow-sm h-100">
+                                <div class="card-header bg-danger text-white py-2">
+                                    <h6 class="mb-0"><i class="bi bi-eye-slash me-1"></i>Excluded from Eagle Eyes <span class="badge bg-white text-danger ms-1" id="ee-excluded-count">0</span></h6>
+                                </div>
+                                <div class="card-body p-2">
+                                    <input type="text" class="form-control form-control-sm mb-2" id="ee-filter-excluded" placeholder="Filter excluded agents…" oninput="eeFilterList('ee-excluded-list', this.value)">
+                                    <select id="ee-excluded-list" class="form-select" multiple size="16" style="font-size:0.85rem;">
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="ee-status" class="mt-2" style="min-height:24px;font-size:0.85rem;"></div>
+                </div>
+
+                <!-- Close tab-content and container -->
+            </div>
+        </div>
+    </div>
+
+<script>
+function toggleSmtpEdit() {
+    const viewMode = document.getElementById('smtpViewMode');
+    const editMode = document.getElementById('smtpEditMode');
+    if (viewMode.style.display === 'none') {
+        viewMode.style.display = 'block';
+        editMode.style.display = 'none';
+    } else {
+        viewMode.style.display = 'none';
+        editMode.style.display = 'block';
+    }
+}
+
+async function testADConnection() {
+    const resultEl = document.getElementById('adTestResult');
+    resultEl.style.display = 'block';
+    resultEl.className = 'alert alert-info';
+    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
+    try {
+        const res = await fetch('{{ url_for("api_ad_test") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+        const data = await res.json();
+        if (data.success) {
+            resultEl.className = 'alert alert-success';
+            resultEl.textContent = data.message || 'Connected';
+        } else {
+            resultEl.className = 'alert alert-danger';
+            resultEl.textContent = data.error || 'Connection failed';
+        }
+    } catch (e) {
+        resultEl.className = 'alert alert-danger';
+        resultEl.textContent = e?.message || 'Connection failed';
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadLicenseInfo();
+});
+
+// License Management Functions
+function loadLicenseInfo() {
+    const container = document.getElementById('licenseInfo');
+    
+    fetch('/api/license')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to fetch license information');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (!data.exists) {
+                container.innerHTML = `
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i> No license configured
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="showLicenseForm()">
+                        <i class="bi bi-plus-circle"></i> Add License
+                    </button>
+                `;
+                return;
+            }
+            
+            const lic = data.license;
+            const statusClass = lic.status === 'active' ? 'success' : lic.status === 'expired' ? 'danger' : 'warning';
+            const statusIcon = lic.status === 'active' ? 'check-circle' : lic.status === 'expired' ? 'x-circle' : 'exclamation-triangle';
+            
+            let statusBadge = `<span class="badge bg-${statusClass}"><i class="bi bi-${statusIcon}"></i> ${lic.status.toUpperCase()}</span>`;
+            
+            // Show grace period warning if applicable
+            let gracePeriodWarning = '';
+            if (lic.grace_period_ends) {
+                const graceEnd = new Date(lic.grace_period_ends);
+                gracePeriodWarning = `
+                    <div class="alert alert-warning mt-2">
+                        <i class="bi bi-exclamation-triangle"></i> <strong>Grace Period Active</strong><br>
+                        License server unreachable. Grace period expires: ${graceEnd.toLocaleString()}
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = `
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Status</h6>
+                        <p class="mb-0">${statusBadge}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">License Key</h6>
+                        <p class="mb-0"><code>${lic.license_key}</code></p>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">API Key</h6>
+                        <p class="mb-0">${lic.api_key ? '<code>' + lic.api_key + '</code>' : '<span class="text-muted">Using server default</span>'}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Device ID</h6>
+                        <p class="mb-0">${lic.device_id ? '<code>' + lic.device_id + '</code>' : '<span class="text-muted">Auto-generated</span>'}</p>
+                    </div>
+                </div>
+                ${gracePeriodWarning}
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Company</h6>
+                        <p class="mb-0">${lic.company_name || 'Not set'}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Plan</h6>
+                        <p class="mb-0">${lic.plan_name || 'N/A'}</p>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Expires</h6>
+                        <p class="mb-0">${lic.expiry_date ? new Date(lic.expiry_date).toLocaleDateString() : 'N/A'}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Days Remaining</h6>
+                        <p class="mb-0">${lic.days_remaining !== null ? lic.days_remaining + ' days' : 'N/A'}</p>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Last Checked</h6>
+                        <p class="mb-0">${lic.last_checked ? new Date(lic.last_checked).toLocaleString() : 'Never'}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Check Status</h6>
+                        <p class="mb-0">${lic.last_check_status || 'N/A'}</p>
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="showLicenseForm()">
+                        <i class="bi bi-pencil"></i> Edit License
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteLicense(${lic.id})">
+                        <i class="bi bi-trash"></i> Remove
+                    </button>
+                </div>
+            `;
+        })
+        .catch(error => {
+            console.error('Error loading license:', error);
+            container.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i> Error loading license information: ${error.message}
+                </div>
+                <button type="button" class="btn btn-primary" onclick="loadLicenseInfo()">
+                    <i class="bi bi-arrow-clockwise"></i> Retry
+                </button>
+            `;
+        });
+}
+
+function showLicenseForm() {
+    document.getElementById('licenseInfo').style.display = 'none';
+    document.getElementById('licenseForm').style.display = 'block';
+}
+
+function cancelEditLicense() {
+    document.getElementById('licenseInfo').style.display = 'block';
+    document.getElementById('licenseForm').style.display = 'none';
+}
+
+function saveLicense(event) {
+    event.preventDefault();
+    
+    const licenseKey = document.getElementById('licenseKey').value;
+    const apiKey = document.getElementById('apiKey').value;
+    const deviceId = document.getElementById('deviceId').value;
+    const companyName = document.getElementById('companyName').value;
+    
+    fetch('/api/license', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            licenseKey: licenseKey,
+            apiKey: apiKey || null,
+            deviceId: deviceId || null,
+            companyName: companyName
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+        }
+        
+        alert('License saved successfully! Click "Verify Now" to validate it.');
+        cancelEditLicense();
+        loadLicenseInfo();
+        
+        // Clear form
+        document.getElementById('licenseKey').value = '';
+        document.getElementById('apiKey').value = '';
+        document.getElementById('deviceId').value = '';
+        document.getElementById('companyName').value = '';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to save license');
+    });
+}
+
+function verifyLicense() {
+    const btn = event.target.closest('button');
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Verifying...';
+    
+    fetch('/api/license/verify', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.innerHTML = originalHTML;
+        
+        if (data.error) {
+            alert('Verification failed: ' + data.error);
+            return;
+        }
+        
+        alert('License verification completed!');
+        loadLicenseInfo();
+    })
+    .catch(error => {
+        btn.disabled = false;
+        btn.innerHTML = originalHTML;
+        console.error('Error:', error);
+        alert('Failed to verify license');
+    });
+}
+
+function deleteLicense(licenseId) {
+    if (!confirm('Are you sure you want to remove this license?')) {
+        return;
+    }
+    
+    fetch(`/api/license/${licenseId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+        }
+        
+        alert('License removed successfully');
+        loadLicenseInfo();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to remove license');
+    });
+}
+
+let _scriptLibraryCache = [];
+
+function scriptEsc(v) {
+    return (v || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+async function loadOnlineAgentsForScripts() {
+    const picker = document.getElementById('scriptTestAgent');
+    if (!picker) return;
+    picker.innerHTML = '<option value="">Loading...</option>';
+    try {
+        const r = await fetch('/api/rmm/online-agents');
+        const data = await r.json();
+        const agents = (data.ok && data.agents) ? data.agents : [];
+        picker.innerHTML = agents.length
+            ? agents.map(a => `<option value="${scriptEsc(a.agent_id)}">${scriptEsc(a.hostname)} (${scriptEsc(a.agent_id)})</option>`).join('')
+            : '<option value="">No online agents</option>';
+    } catch (e) {
+        picker.innerHTML = '<option value="">Failed to load agents</option>';
+    }
+}
+
+function renderScriptTestPicker() {
+    const picker = document.getElementById('scriptTestScript');
+    if (!picker) return;
+    const options = _scriptLibraryCache.map(s => `<option value="${s.id}">${scriptEsc(s.name)} ${s.file_type} ${s.is_tested ? '(tested)' : '(untested)'}</option>`).join('');
+    picker.innerHTML = options || '<option value="">No scripts saved</option>';
+}
+
+function renderScriptLibraryList() {
+    const wrap = document.getElementById('scriptLibraryList');
+    if (!wrap) return;
+    if (!_scriptLibraryCache.length) {
+        wrap.innerHTML = '<div class="text-muted">No scripts saved yet.</div>';
+        return;
+    }
+    wrap.innerHTML = _scriptLibraryCache.map(s => {
+        const tested = s.is_tested ? '<span class="badge bg-success">Tested</span>' : '<span class="badge bg-secondary">Untested</span>';
+        return `<div class="border rounded p-2 mb-2"><div><strong>${scriptEsc(s.name)}</strong> <span class="badge bg-light text-dark border">${scriptEsc(s.file_type)}</span> ${tested}</div><div class="small mt-1">${scriptEsc(s.description || '')}</div></div>`;
+    }).join('');
+}
+
+async function loadScriptLibrary() {
+    const status = document.getElementById('scriptSaveStatus');
+    if (status) status.textContent = 'Loading scripts...';
+    try {
+        const r = await fetch('/api/settings/scripts');
+        const data = await r.json();
+        _scriptLibraryCache = (data.ok && data.scripts) ? data.scripts : [];
+        renderScriptLibraryList();
+        renderScriptTestPicker();
+        if (status) status.textContent = `Loaded ${_scriptLibraryCache.length} script(s)`;
+    } catch (e) {
+        if (status) status.textContent = `Error loading scripts: ${e.message}`;
+    }
+}
+
+function clearScriptEditor() {
+    document.getElementById('scriptName').value = '';
+    document.getElementById('scriptDescription').value = '';
+    document.getElementById('scriptContent').value = '';
+    document.getElementById('scriptFileType').value = '.ps1';
+}
+
+async function saveScriptLibraryItem() {
+    const status = document.getElementById('scriptSaveStatus');
+    const payload = {
+        name: document.getElementById('scriptName').value.trim(),
+        description: document.getElementById('scriptDescription').value.trim(),
+        file_type: document.getElementById('scriptFileType').value,
+        script_content: document.getElementById('scriptContent').value,
+    };
+    if (!payload.name || !payload.script_content.trim()) { status.textContent = 'Name and script content are required.'; return; }
+    status.textContent = 'Saving...';
+    const r = await fetch('/api/settings/scripts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    const data = await r.json();
+    if (!data.ok) { status.textContent = data.error || 'Failed to save script'; return; }
+    status.textContent = data.message || 'Saved';
+    await loadScriptLibrary();
+}
+
+async function uploadScriptFile() {
+    const f = document.getElementById('scriptUploadFile').files[0];
+    const status = document.getElementById('scriptUploadStatus');
+    if (!f) { status.textContent = 'Pick a file first.'; return; }
+    const fd = new FormData(); fd.append('file', f);
+    status.textContent = 'Uploading...';
+    const r = await fetch('/api/settings/scripts/upload', {method:'POST', body:fd});
+    const data = await r.json();
+    if (!data.ok) { status.textContent = data.error || 'Upload failed'; return; }
+    status.textContent = 'Upload complete.';
+    document.getElementById('scriptUploadFile').value = '';
+    await loadScriptLibrary();
+}
+
+async function generateScriptWithAI() {
+    const status = document.getElementById('scriptAiStatus');
+    const prompt = document.getElementById('scriptAiPrompt').value.trim();
+    const fileType = document.getElementById('scriptFileType').value;
+    if (!prompt) { status.textContent = 'Enter a prompt for AI generation.'; return; }
+    status.textContent = 'Generating script...';
+    const r = await fetch('/api/settings/scripts/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:prompt, file_type:fileType})});
+    const data = await r.json();
+    if (!data.ok) { status.textContent = data.error || 'AI generation failed'; return; }
+    document.getElementById('scriptContent').value = data.script_content || '';
+    status.textContent = 'Generated. Review and save the script.';
+}
+
+async function testSavedScript() {
+    const scriptId = document.getElementById('scriptTestScript').value;
+    const agentId = document.getElementById('scriptTestAgent').value;
+    const status = document.getElementById('scriptTestStatus');
+    const out = document.getElementById('scriptTestOutput');
+    if (!scriptId || !agentId) { status.textContent = 'Select both a script and an online agent.'; return; }
+    status.textContent = 'Running test...'; out.textContent = '';
+    const r = await fetch(`/api/settings/scripts/${scriptId}/test`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({agent_id:agentId, timeout:90})});
+    const data = await r.json();
+    if (!data.ok) { status.textContent = data.error || 'Test failed'; out.textContent = [data.stdout||'', data.stderr||''].filter(Boolean).join('\n\n'); await loadScriptLibrary(); return; }
+    status.textContent = `Success (exit ${data.exit_code})`;
+    out.textContent = [data.stdout || '', data.stderr ? `STDERR:\n${data.stderr}` : ''].filter(Boolean).join('\n\n');
+    await loadScriptLibrary();
+}
+
+// Tab persistence - remember which tab was active
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if URL has a hash for direct tab navigation (e.g., #license-tab)
+    const urlHash = window.location.hash;
+    if (urlHash && urlHash.startsWith('#')) {
+        const targetTab = urlHash.substring(1); // Remove the #
+        const tabButton = document.getElementById(targetTab);
+        if (tabButton) {
+            const tab = new bootstrap.Tab(tabButton);
+            tab.show();
+            // Show license warning if we're on the license tab
+            if (targetTab === 'license-tab') {
+                checkAndShowLicenseWarning();
+            }
+        }
+    } else {
+        // Restore last active tab from localStorage
+        const lastActiveTab = localStorage.getItem('settingsActiveTab');
+        if (lastActiveTab) {
+            const tabButton = document.querySelector(`button[data-bs-target="${lastActiveTab}"]`);
+            if (tabButton) {
+                const tab = new bootstrap.Tab(tabButton);
+                tab.show();
+            }
+        }
+    }
+    
+    // Check and show license warning on page load
+    checkAndShowLicenseWarning();
+    
+    // Save active tab to localStorage when changed
+    const tabButtons = document.querySelectorAll('#settingsTabs button[data-bs-toggle="tab"]');
+    tabButtons.forEach(button => {
+        button.addEventListener('shown.bs.tab', function(event) {
+            const target = event.target.getAttribute('data-bs-target');
+            localStorage.setItem('settingsActiveTab', target);
+            if (target === '#scripts') {
+                loadOnlineAgentsForScripts();
+                loadScriptLibrary();
+            }
+        });
+    });
+});
+
+// Function to check license status and show warning banner
+function checkAndShowLicenseWarning() {
+    fetch('/api/license')
+        .then(response => response.json())
+        .then(data => {
+            const warningBanner = document.getElementById('licenseWarningBanner');
+            
+            if (data.exists && data.license) {
+                const status = data.license.status.toLowerCase();
+                
+                // Show warning banner only if status is expired, invalid, or suspended
+                if (status === 'expired' || status === 'invalid' || status === 'suspended') {
+                    warningBanner.style.display = 'block';
+                } else {
+                    warningBanner.style.display = 'none';
+                }
+            } else {
+                // No license exists - show warning
+                warningBanner.style.display = 'block';
+            }
+        })
+        .catch(error => {
+            console.error('Error checking license status:', error);
+        });
+}
+
+// ── AI Settings ───────────────────────────────────────────────────────────────
+async function loadAiSettings() {
+    try {
+        const resp = await fetch('/api/ai/settings');
+        if (!resp.ok) return;
+        const d = await resp.json();
+        // Show masked key status badge
+        const statusEl = document.getElementById('ai-key-status');
+        if (d.openai_api_key) {
+            statusEl.textContent = d.openai_api_key;
+            statusEl.className = 'badge bg-success';
+        } else {
+            statusEl.textContent = 'No key saved';
+            statusEl.className = 'badge bg-secondary';
+        }
+        if (d.openai_model) document.getElementById('ai-model').value = d.openai_model;
+        document.getElementById('ai-ticket-enabled').checked   = d.ai_ticket_enabled === '1';
+        document.getElementById('ai-auto-mode').checked        = d.ai_ticket_auto_mode === '1';
+        document.getElementById('ai-security-monitor').checked = d.ai_security_monitor_enabled === '1';
+    } catch(e) {}
+}
+
+function toggleKeyInput() {
+    const wrap = document.getElementById('ai-key-input-wrap');
+    const show = wrap.style.display === 'none';
+    wrap.style.display = show ? 'block' : 'none';
+    document.getElementById('btn-change-key').innerHTML = show
+        ? '<i class="bi bi-x-lg"></i> Cancel'
+        : '<i class="bi bi-pencil-fill"></i> Change Key';
+    if (show) document.getElementById('ai-api-key').focus();
+}
+
+async function saveAiSettings() {
+    const key = document.getElementById('ai-api-key').value.trim();
+    const btn = document.getElementById('btn-save-ai');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
+    const payload = {
+        openai_model:                document.getElementById('ai-model').value,
+        ai_ticket_enabled:           document.getElementById('ai-ticket-enabled').checked ? '1' : '0',
+        ai_ticket_auto_mode:         document.getElementById('ai-auto-mode').checked ? '1' : '0',
+        ai_security_monitor_enabled: document.getElementById('ai-security-monitor').checked ? '1' : '0'
+    };
+    if (key) payload.openai_api_key = key;
+    const resp = await fetch('/api/ai/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+    const d = await resp.json();
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-floppy-fill me-1"></i>Save AI Settings';
+    if (resp.ok) {
+        document.getElementById('ai-api-key').value = '';
+        // Hide key input and reload status badge
+        document.getElementById('ai-key-input-wrap').style.display = 'none';
+        document.getElementById('btn-change-key').innerHTML = '<i class="bi bi-pencil-fill"></i> Change Key';
+        loadAiSettings();
+        showSettingsToast('AI settings saved.', 'success');
+    } else {
+        showSettingsToast(d.error || 'Save failed', 'danger');
+    }
+}
+
+async function testAiConnection() {
+    const resultEl = document.getElementById('ai-test-result');
+    const btn = document.getElementById('btn-test-ai');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    resultEl.style.display = 'none';
+    try {
+        const resp = await fetch('/api/ai/test', { method: 'POST' });
+        const d    = await resp.json();
+        resultEl.style.display = 'block';
+        if (resp.ok && d.ok) {
+            resultEl.innerHTML = `<div class="alert alert-success p-2 small mb-0"><i class="bi bi-check-circle-fill me-1"></i><strong>Connected</strong> — Model: ${d.model || '?'}, response OK.</div>`;
+        } else {
+            resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0"><i class="bi bi-x-circle-fill me-1"></i><strong>Failed:</strong> ${d.error || 'Unknown error'}</div>`;
+        }
+    } catch(e) {
+        resultEl.style.display = 'block';
+        resultEl.innerHTML = `<div class="alert alert-danger p-2 small mb-0">Network error: ${e.message}</div>`;
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-plug-fill"></i> Test';
+}
+
+async function generateSecuritySummary() {
+    const btn = document.getElementById('btn-gen-summary');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Generating…';
+    try {
+        const resp = await fetch('/api/ai/security-summary/generate', { method: 'POST' });
+        const d    = await resp.json();
+        if (resp.ok && d.summary) {
+            const riskColors = { High:'#f87171', Medium:'#f8a84a', Low:'#5fcf8b', Critical:'#e879f9' };
+            const col = riskColors[d.risk_level] || '#8899aa';
+            document.getElementById('ai-summary-text').innerHTML =
+                `<span style="color:${col};font-weight:600">Risk Level: ${d.risk_level||'?'}</span><br><br>${(d.summary||'').replace(/\n/g,'<br>')}`;
+            document.getElementById('ai-summary-result').style.display = 'block';
+        } else {
+            showSettingsToast(d.error || 'Generation failed', 'danger');
+        }
+    } catch(e) { showSettingsToast('Error: ' + e.message, 'danger'); }
+    btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-fill me-1"></i>Generate Now';
+}
+
+function showSettingsToast(msg, type) {
+    const t = document.createElement('div');
+    t.className = `alert alert-${type} position-fixed`;
+    t.style.cssText = 'bottom:20px;right:20px;z-index:9999;min-width:220px;font-size:.88rem';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+}
+
+// Load AI settings when AI tab is shown
+document.getElementById('ai-tab')?.addEventListener('shown.bs.tab', loadAiSettings);
+
+async function testUnifi() {
+    const res = document.getElementById('unifi-test-result');
+    res.innerHTML = '<span class="text-muted small">Testing...</span>';
+    try {
+        const r = await fetch('/api/unifi/test', {method:'POST'});
+        const d = await r.json();
+        res.innerHTML = d.success
+            ? `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>${d.message}</div>`
+            : `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
+    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
+}
+
+async function syncUnifi(btn) {
+    const res = document.getElementById('unifi-test-result');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing...';
+    res.innerHTML = '';
+    try {
+        const r = await fetch('/api/unifi/sync', {method:'POST'});
+        const d = await r.json();
+        if (d.success) {
+            const s = d.summary;
+            res.innerHTML = `<div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-1"></i>Sync complete — created: ${s.created}, updated: ${s.updated}, errors: ${s.errors}</div>`;
+        } else {
+            res.innerHTML = `<div class="alert alert-danger py-2 mt-2"><i class="bi bi-x-circle me-1"></i>${d.message}</div>`;
+        }
+    } catch(e) { res.innerHTML = `<div class="alert alert-danger py-2 mt-2">Error: ${e.message}</div>`; }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Sync Now';
+}
+
+async function testProxmox(prefix) {
+    const resultId = `proxmox-${prefix}-result`;
+    const res = document.getElementById(resultId);
+    res.innerHTML = '<span class="text-muted">Testing…</span>';
+    try {
+        const r = await fetch('/api/proxmox/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prefix})
+        });
+        const d = await r.json();
+        if (d.success) {
+            res.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ${(d.nodes || []).join(', ')}</span>`;
+        } else {
+            res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
+        }
+    } catch(e) {
+        res.innerHTML = `<span class="text-danger">${e}</span>`;
+    }
+}
+
+async function saveProxmox() {
+    const payload = {};
+    const fields = {
+        'prox_cluster_host':         'proxmox_cluster_host',
+        'prox_cluster_token_id':     'proxmox_cluster_token_id',
+        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
+        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
+        'prox_backup_host':          'proxmox_backup_host',
+        'prox_backup_token_id':      'proxmox_backup_token_id',
+        'prox_backup_token_secret':  'proxmox_backup_token_secret',
+        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
+        'prox_stale_hours':          'proxmox_stale_hours',
+    };
+    for (const [elId, key] of Object.entries(fields)) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const val = el.value.trim();
+        if (val) payload[key] = val;
+    }
+    const r = await fetch('/api/proxmox/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    const res = document.getElementById('proxmox-cluster-result');
+    if (d.success) {
+        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
+    } else {
+        res.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> ${d.error}</span>`;
+    }
+}
+
+// Jump to proxmox tab if URL has #proxmox
+if (window.location.hash === '#proxmox') {
+    const tab = document.getElementById('proxmox-tab');
+    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+}
+
+async function testProxmox(prefix) {
+    const resultId = 'proxmox-' + prefix + '-result';
+    const res = document.getElementById(resultId);
+    res.innerHTML = '<span class="text-muted">Testing…</span>';
+    try {
+        const r = await fetch('/api/proxmox/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prefix: prefix})
+        });
+        const d = await r.json();
+        if (d.success) {
+            res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected. Nodes: ' + (d.nodes || []).join(', ') + '</span>';
+        } else {
+            res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
+        }
+    } catch(e) {
+        res.innerHTML = '<span class="text-danger">' + e + '</span>';
+    }
+}
+
+async function saveProxmox() {
+    const payload = {};
+    const fields = {
+        'prox_cluster_host':         'proxmox_cluster_host',
+        'prox_cluster_token_id':     'proxmox_cluster_token_id',
+        'prox_cluster_token_secret': 'proxmox_cluster_token_secret',
+        'prox_cluster_verify_ssl':   'proxmox_cluster_verify_ssl',
+        'prox_backup_host':          'proxmox_backup_host',
+        'prox_backup_token_id':      'proxmox_backup_token_id',
+        'prox_backup_token_secret':  'proxmox_backup_token_secret',
+        'prox_backup_verify_ssl':    'proxmox_backup_verify_ssl',
+        'prox_stale_hours':          'proxmox_stale_hours',
+    };
+    for (const [elId, key] of Object.entries(fields)) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const val = el.value.trim();
+        if (val) payload[key] = val;
+    }
+    const r = await fetch('/api/proxmox/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    const res = document.getElementById('proxmox-cluster-result');
+    if (d.success) {
+        res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved.</span>';
+    } else {
+        res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + d.error + '</span>';
+    }
+}
+
+// Jump to proxmox tab if URL has #proxmox
+if (window.location.hash === '#proxmox') {
+    const tab = document.getElementById('proxmox-tab');
+    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+}
+
+// ── Eagle Eye Exclusions (shuttle widget) ─────────────────────────────────────
+// In-memory state: agent_id -> {hostname, excluded}
+const eeState = {};
+
+async function eeLoadExclusions() {
+    eeSetStatus('<span class="spinner-border spinner-border-sm me-1"></span>Loading…');
+    try {
+        const r = await fetch('/api/settings/eagle-eye-exclusions');
+        const d = await r.json();
+        if (!d.ok) { eeSetStatus('<span class="text-danger">' + d.error + '</span>'); return; }
+
+        // Reset state
+        for (const k in eeState) delete eeState[k];
+
+        d.all_agents.forEach(a => {
+            eeState[a.agent_id] = {hostname: a.hostname, excluded: false};
+        });
+        d.exclusions.forEach(ex => {
+            if (!eeState[ex.agent_id]) eeState[ex.agent_id] = {hostname: ex.hostname || ex.agent_id, excluded: false};
+            eeState[ex.agent_id].excluded = true;
+        });
+
+        eeRenderLists();
+        eeSetStatus('');
+    } catch(e) {
+        eeSetStatus('<span class="text-danger">' + e + '</span>');
+    }
+}
+
+function eeRenderLists() {
+    const activeList   = document.getElementById('ee-active-list');
+    const excludedList = document.getElementById('ee-excluded-list');
+    const fActive   = (document.getElementById('ee-filter-active')?.value || '').toLowerCase();
+    const fExcluded = (document.getElementById('ee-filter-excluded')?.value || '').toLowerCase();
+
+    activeList.innerHTML   = '';
+    excludedList.innerHTML = '';
+
+    let activeCount = 0, excludedCount = 0;
+
+    Object.entries(eeState).sort((a,b) => (a[1].hostname||a[0]).localeCompare(b[1].hostname||b[0])).forEach(([aid, info]) => {
+        const label = info.hostname && info.hostname !== aid ? `${info.hostname}  (${aid})` : aid;
+        const opt = document.createElement('option');
+        opt.value = aid;
+        opt.textContent = label;
+        if (info.excluded) {
+            excludedCount++;
+            if (!fExcluded || label.toLowerCase().includes(fExcluded)) excludedList.appendChild(opt);
+        } else {
+            activeCount++;
+            if (!fActive || label.toLowerCase().includes(fActive)) activeList.appendChild(opt);
+        }
+    });
+
+    document.getElementById('ee-active-count').textContent   = activeCount;
+    document.getElementById('ee-excluded-count').textContent = excludedCount;
+}
+
+function eeFilterList(listId, query) {
+    eeRenderLists();
+}
+
+async function eeMoveToExcluded() {
+    const list = document.getElementById('ee-active-list');
+    const selected = Array.from(list.selectedOptions).map(o => o.value);
+    if (!selected.length) return;
+    eeSetStatus('<span class="spinner-border spinner-border-sm me-1"></span>Saving…');
+    let errors = [];
+    for (const aid of selected) {
+        try {
+            const r = await fetch('/api/settings/eagle-eye-exclusions', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({agent_id: aid, notes: ''})
+            });
+            const d = await r.json();
+            if (d.ok) { if (eeState[aid]) eeState[aid].excluded = true; }
+            else errors.push(aid + ': ' + d.error);
+        } catch(e) { errors.push(aid + ': ' + e); }
+    }
+    if (errors.length) eeSetStatus('<span class="text-danger">' + errors.join('; ') + '</span>');
+    else eeSetStatus('<span class="text-success"><i class="bi bi-check-circle me-1"></i>' + selected.length + ' device(s) excluded.</span>');
+    eeRenderLists();
+}
+
+async function eeMoveToActive() {
+    const list = document.getElementById('ee-excluded-list');
+    const selected = Array.from(list.selectedOptions).map(o => o.value);
+    if (!selected.length) return;
+    eeSetStatus('<span class="spinner-border spinner-border-sm me-1"></span>Saving…');
+    let errors = [];
+    for (const aid of selected) {
+        try {
+            const r = await fetch('/api/settings/eagle-eye-exclusions/' + encodeURIComponent(aid), {method: 'DELETE'});
+            const d = await r.json();
+            if (d.ok) { if (eeState[aid]) eeState[aid].excluded = false; }
+            else errors.push(aid + ': ' + d.error);
+        } catch(e) { errors.push(aid + ': ' + e); }
+    }
+    if (errors.length) eeSetStatus('<span class="text-danger">' + errors.join('; ') + '</span>');
+    else eeSetStatus('<span class="text-success"><i class="bi bi-check-circle me-1"></i>' + selected.length + ' device(s) restored.</span>');
+    eeRenderLists();
+}
+
+function eeSetStatus(html) {
+    const el = document.getElementById('ee-status');
+    if (el) el.innerHTML = html;
+}
+
+// Load when tab is clicked or already active on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const eeTab = document.getElementById('eagleeye-tab');
+    if (eeTab) eeTab.addEventListener('shown.bs.tab', eeLoadExclusions);
+    if (window.location.hash === '#eagleeye') {
+        if (eeTab) bootstrap.Tab.getOrCreateInstance(eeTab).show();
+        eeLoadExclusions();
+    } else if (eeTab && eeTab.classList.contains('active')) {
+        // Tab was restored by localStorage before our listener was attached
+        eeLoadExclusions();
+    }
+});
+</script>
+{% endblock %}

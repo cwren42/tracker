@@ -16,13 +16,13 @@
             {% if request.args.get('status') %}<span class="badge bg-info me-1">{{ request.args.get('status') }}</span>{% endif %}
             {% if request.args.get('lifecycle') %}<span class="badge bg-warning text-dark me-1">{{ request.args.get('lifecycle') }}</span>{% endif %}
             {% if request.args.get('warranty_status') %}<span class="badge bg-secondary me-1">Warranty: {{ request.args.get('warranty_status') }}</span>{% endif %}
-            <a href="{{ url_for('assets') }}" class="text-muted small">✕ clear</a>
+            <a href="{{ url_for('assets.assets') }}" class="text-muted small">✕ clear</a>
         </div>
         {% endif %}
     </div>
     <div class="d-flex gap-2 align-items-center">
         {% if current_user.role in ['admin', 'manager'] %}
-        <a href="{{ url_for('add_asset') }}" class="btn btn-primary">
+        <a href="{{ url_for('assets.add_asset') }}" class="btn btn-primary">
             <i class="bi bi-plus-circle"></i> Add Asset
         </a>
         <!-- Actions dropdown -->
@@ -32,29 +32,29 @@
             </button>
             <ul class="dropdown-menu dropdown-menu-end">
                 <li><h6 class="dropdown-header">Import / Export</h6></li>
-                <li><a class="dropdown-item" href="{{ url_for('import_assets') }}"><i class="bi bi-upload me-2"></i>Import Assets</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('bulk_assign_csv') }}"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Assign from CSV</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('export_assets_csv') }}"><i class="bi bi-download me-2"></i>Export CSV</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('assets.import_assets') }}"><i class="bi bi-upload me-2"></i>Import Assets</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('assets.bulk_assign_csv') }}"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Assign from CSV</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('assets.export_assets_csv') }}"><i class="bi bi-download me-2"></i>Export CSV</a></li>
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">Maintenance</h6></li>
-                <li><a class="dropdown-item" href="{{ url_for('find_duplicate_assets') }}"><i class="bi bi-files me-2"></i>Find Duplicates</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('assets.find_duplicate_assets') }}"><i class="bi bi-files me-2"></i>Find Duplicates</a></li>
                 <li>
-                    <form method="POST" action="{{ url_for('sync_assets_from_intune') }}" onsubmit="return confirm('Sync all devices from Intune?');">
+                    <form method="POST" action="{{ url_for('assets.sync_assets_from_intune') }}" onsubmit="return confirm('Sync all devices from Intune?');">
                         <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat me-2"></i>Sync from Intune</button>
                     </form>
                 </li>
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">RMM Agent</h6></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_installer') }}"><i class="bi bi-download me-2"></i>Download Windows Agent (.exe)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_msi') }}"><i class="bi bi-box-seam me-2"></i>Download Windows Agent (.msi)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_bat') }}"><i class="bi bi-file-earmark-code me-2"></i>Download BAT Launcher (.bat)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('download_agent_ps1') }}"><i class="bi bi-filetype-ps me-2"></i>Download Install Script (.ps1)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('rmm_agent_download') }}"><i class="bi bi-file-zip me-2"></i>Download Windows Agent (.zip)</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('agent_download') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Linux Agent</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_installer') }}"><i class="bi bi-download me-2"></i>Download Windows Agent (.exe)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_msi') }}"><i class="bi bi-box-seam me-2"></i>Download Windows Agent (.msi)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_bat') }}"><i class="bi bi-file-earmark-code me-2"></i>Download BAT Launcher (.bat)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_ps1') }}"><i class="bi bi-filetype-ps me-2"></i>Download Install Script (.ps1)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('rmm.rmm_agent_download') }}"><i class="bi bi-file-zip me-2"></i>Download Windows Agent (.zip)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('misc.agent_download') }}"><i class="bi bi-box-arrow-in-down me-2"></i>Download Linux Agent</a></li>
             </ul>
         </div>
         {% else %}
-        <a href="{{ url_for('export_assets_csv') }}" class="btn btn-outline-secondary">
+        <a href="{{ url_for('assets.export_assets_csv') }}" class="btn btn-outline-secondary">
             <i class="bi bi-download"></i> Export CSV
         </a>
         {% endif %}
@@ -66,32 +66,32 @@
 <!-- Quick Filters -->
 <div class="mb-3">
     <div class="btn-group" role="group" aria-label="Quick filters">
-        <a href="{{ url_for('assets', filter='noncompliant') }}" class="btn {% if request.args.get('filter') == 'noncompliant' %}btn-danger{% else %}btn-outline-danger{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='noncompliant') }}" class="btn {% if request.args.get('filter') == 'noncompliant' %}btn-danger{% else %}btn-outline-danger{% endif %}">
             <i class="bi bi-shield-exclamation"></i> Non-Compliant
         </a>
-        <a href="{{ url_for('assets', filter='low_storage') }}" class="btn {% if request.args.get('filter') == 'low_storage' %}btn-warning{% else %}btn-outline-warning{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='low_storage') }}" class="btn {% if request.args.get('filter') == 'low_storage' %}btn-warning{% else %}btn-outline-warning{% endif %}">
             <i class="bi bi-hdd"></i> Low Storage (<20%)
         </a>
-        <a href="{{ url_for('assets', filter='offline') }}" class="btn {% if request.args.get('filter') == 'offline' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='offline') }}" class="btn {% if request.args.get('filter') == 'offline' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
             <i class="bi bi-wifi-off"></i> Offline 7+ Days
         </a>
-        <a href="{{ url_for('assets', filter='warranty_expiring') }}" class="btn {% if request.args.get('filter') == 'warranty_expiring' %}btn-info{% else %}btn-outline-info{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='warranty_expiring') }}" class="btn {% if request.args.get('filter') == 'warranty_expiring' %}btn-info{% else %}btn-outline-info{% endif %}">
             <i class="bi bi-calendar-x"></i> Warranty Expiring
         </a>
-        <a href="{{ url_for('assets', filter='unassigned') }}" class="btn {% if request.args.get('filter') == 'unassigned' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='unassigned') }}" class="btn {% if request.args.get('filter') == 'unassigned' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
             <i class="bi bi-person-x"></i> Unassigned
         </a>
-        <a href="{{ url_for('assets', filter='with_agent') }}" class="btn {% if request.args.get('filter') == 'with_agent' %}btn-success{% else %}btn-outline-success{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='with_agent') }}" class="btn {% if request.args.get('filter') == 'with_agent' %}btn-success{% else %}btn-outline-success{% endif %}">
             <i class="bi bi-robot"></i> With Agent
         </a>
-        <a href="{{ url_for('assets', filter='without_agent') }}" class="btn {% if request.args.get('filter') == 'without_agent' %}btn-warning{% else %}btn-outline-warning{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='without_agent') }}" class="btn {% if request.args.get('filter') == 'without_agent' %}btn-warning{% else %}btn-outline-warning{% endif %}">
             <i class="bi bi-robot"></i> Without Agent
         </a>
-        <a href="{{ url_for('assets', filter='network_devices') }}" class="btn {% if request.args.get('filter') == 'network_devices' %}btn-info{% else %}btn-outline-info{% endif %}">
+        <a href="{{ url_for('assets.assets', filter='network_devices') }}" class="btn {% if request.args.get('filter') == 'network_devices' %}btn-info{% else %}btn-outline-info{% endif %}">
             <i class="bi bi-diagram-3"></i> Network Devices
         </a>
         {% if request.args.get('filter') %}
-        <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
+        <a href="{{ url_for('assets.assets') }}" class="btn btn-outline-secondary">
             <i class="bi bi-x"></i> Clear Filter
         </a>
         {% endif %}
@@ -171,7 +171,7 @@
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-search"></i> Apply Filters
                         </button>
-                        <a href="{{ url_for('assets') }}" class="btn btn-outline-secondary">
+                        <a href="{{ url_for('assets.assets') }}" class="btn btn-outline-secondary">
                             <i class="bi bi-x-circle"></i> Clear All
                         </a>
                     </div>
@@ -369,10 +369,10 @@
                             {% endif %}
                         </td>
                         <td>
-                            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
+                            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
                                 <i class="bi bi-eye"></i>
                             </a>
-                            <a href="{{ url_for('edit_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-secondary">
+                            <a href="{{ url_for('assets.edit_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-secondary">
                                 <i class="bi bi-pencil"></i>
                             </a>
                             {% if current_user.role in ['admin', 'manager'] %}
@@ -393,7 +393,7 @@
 </div>
 {% else %}
 <div class="alert alert-info text-center">
-    <i class="bi bi-info-circle"></i> No assets found. <a href="{{ url_for('add_asset') }}">Add your first asset</a>
+    <i class="bi bi-info-circle"></i> No assets found. <a href="{{ url_for('assets.add_asset') }}">Add your first asset</a>
 </div>
 {% endif %}
 
@@ -463,332 +463,5 @@
     </div>
 </div>
 
-<script>
-// Multi-select categories enhancement
-document.addEventListener('DOMContentLoaded', function() {
-    const categoriesSelect = document.getElementById('categoriesSelect');
-    if (categoriesSelect) {
-        categoriesSelect.size = 3;
-    }
-    
-    // Load saved filters on page load
-    loadSavedFilters();
-});
-
-// Bulk Operations Functions
-function toggleSelectAll(checkbox) {
-    const checkboxes = document.querySelectorAll('.asset-checkbox');
-    checkboxes.forEach(cb => cb.checked = checkbox.checked);
-    updateBulkToolbar();
-}
-
-function updateBulkToolbar() {
-    const checkboxes = document.querySelectorAll('.asset-checkbox:checked');
-    const count = checkboxes.length;
-    const toolbar = document.getElementById('bulkToolbar');
-    const countSpan = document.getElementById('selectedCount');
-    
-    if (count > 0) {
-        toolbar.style.display = 'block';
-        countSpan.textContent = count;
-    } else {
-        toolbar.style.display = 'none';
-        document.getElementById('selectAll').checked = false;
-    }
-}
-
-function getSelectedAssetIds() {
-    const checkboxes = document.querySelectorAll('.asset-checkbox:checked');
-    return Array.from(checkboxes).map(cb => cb.value);
-}
-
-function clearSelection() {
-    document.querySelectorAll('.asset-checkbox').forEach(cb => cb.checked = false);
-    document.getElementById('selectAll').checked = false;
-    updateBulkToolbar();
-}
-
-// Bulk Status Update
-function bulkUpdateStatus() {
-    const count = getSelectedAssetIds().length;
-    document.getElementById('bulkStatusCount').textContent = count;
-    const modal = new bootstrap.Modal(document.getElementById('bulkStatusModal'));
-    modal.show();
-}
-
-function submitBulkStatus() {
-    const assetIds = getSelectedAssetIds();
-    const status = document.getElementById('bulkStatus').value;
-    
-    fetch('/assets/bulk/status', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            asset_ids: assetIds,
-            status: status
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(`Successfully updated ${data.count} assets`);
-            location.reload();
-        } else {
-            alert('Error: ' + data.message);
-        }
-    })
-    .catch(error => {
-        alert('Error updating assets: ' + error);
-    });
-}
-
-// Bulk Department Assignment
-function bulkAssignDepartment() {
-    const count = getSelectedAssetIds().length;
-    document.getElementById('bulkDeptCount').textContent = count;
-    const modal = new bootstrap.Modal(document.getElementById('bulkDepartmentModal'));
-    modal.show();
-}
-
-function submitBulkDepartment() {
-    const assetIds = getSelectedAssetIds();
-    const department = document.getElementById('bulkDepartment').value;
-    
-    if (!department) {
-        alert('Please enter a department name');
-        return;
-    }
-    
-    fetch('/assets/bulk/department', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            asset_ids: assetIds,
-            department: department
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(`Successfully assigned ${data.count} assets to ${department}`);
-            location.reload();
-        } else {
-            alert('Error: ' + data.message);
-        }
-    })
-    .catch(error => {
-        alert('Error assigning department: ' + error);
-    });
-}
-
-// Bulk Export Selected
-function bulkExportSelected() {
-    const assetIds = getSelectedAssetIds();
-    
-    // Create a form and submit it to trigger file download
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/assets/bulk/export';
-    
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'asset_ids';
-    input.value = JSON.stringify(assetIds);
-    
-    form.appendChild(input);
-    document.body.appendChild(form);
-    form.submit();
-    document.body.removeChild(form);
-}
-
-// Bulk Delete
-function bulkDelete() {
-    const assetIds = getSelectedAssetIds();
-    
-    if (!confirm(`Are you sure you want to delete ${assetIds.length} assets? This action cannot be undone!`)) {
-        return;
-    }
-    
-    fetch('/assets/bulk/delete', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            asset_ids: assetIds
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(`Successfully deleted ${data.count} assets`);
-            location.reload();
-        } else {
-            alert('Error: ' + data.message);
-        }
-    })
-    .catch(error => {
-        alert('Error deleting assets: ' + error);
-    });
-}
-
-// Single Asset Delete
-function deleteSingleAsset(btn) {
-    const assetId = btn.dataset.assetId;
-    const assetName = btn.dataset.assetName;
-    if (!confirm(`Delete "${assetName}"?\n\nThis action cannot be undone.`)) return;
-    fetch('/assets/bulk/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ asset_ids: [String(assetId)] })
-    })
-    .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            location.reload();
-        } else {
-            alert('Error: ' + data.message);
-        }
-    })
-    .catch(err => alert('Error deleting asset: ' + err));
-}
-
-// Saved Filters Functions
-function saveCurrentFilters() {
-    const form = document.getElementById('filterForm');
-    const formData = new FormData(form);
-    const params = new URLSearchParams(formData);
-    
-    // Get all filter values
-    const filters = {
-        search: formData.get('search') || '',
-        categories: formData.getAll('categories'),
-        status: formData.get('status') || '',
-        purchase_from: formData.get('purchase_from') || '',
-        purchase_to: formData.get('purchase_to') || '',
-        warranty_status: formData.get('warranty_status') || '',
-        lifecycle: formData.get('lifecycle') || ''
-    };
-    
-    // Check if any filters are set
-    const hasFilters = Object.values(filters).some(v => 
-        Array.isArray(v) ? v.length > 0 : v !== ''
-    );
-    
-    if (!hasFilters) {
-        alert('No filters to save. Please set some filters first.');
-        return;
-    }
-    
-    const name = prompt('Enter a name for this saved search:');
-    if (!name) return;
-    
-    // Get existing saved filters
-    let savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
-    
-    // Add new filter
-    savedFilters.push({
-        id: Date.now(),
-        name: name,
-        filters: filters,
-        created: new Date().toISOString()
-    });
-    
-    // Save to localStorage
-    localStorage.setItem('assetFilters', JSON.stringify(savedFilters));
-    
-    alert('Search filter saved successfully!');
-}
-
-function loadSavedFilters() {
-    const savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
-    const listDiv = document.getElementById('savedFiltersList');
-    
-    if (savedFilters.length === 0) {
-        listDiv.innerHTML = '<p class="text-muted">No saved filters yet.</p>';
-        return;
-    }
-    
-    let html = '<div class="list-group">';
-    savedFilters.forEach(filter => {
-        const date = new Date(filter.created).toLocaleDateString();
-        html += `
-            <div class="list-group-item">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <strong>${filter.name}</strong>
-                        <br><small class="text-muted">Saved on ${date}</small>
-                    </div>
-                    <div>
-                        <button class="btn btn-sm btn-outline-primary" onclick="applyFilter(${filter.id})">
-                            <i class="bi bi-funnel"></i> Apply
-                        </button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteFilter(${filter.id})">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-    });
-    html += '</div>';
-    
-    listDiv.innerHTML = html;
-}
-
-function applyFilter(filterId) {
-    const savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
-    const filter = savedFilters.find(f => f.id === filterId);
-    
-    if (!filter) return;
-    
-    // Build URL with filter parameters
-    const params = new URLSearchParams();
-    
-    if (filter.filters.search) params.append('search', filter.filters.search);
-    if (filter.filters.status) params.append('status', filter.filters.status);
-    if (filter.filters.purchase_from) params.append('purchase_from', filter.filters.purchase_from);
-    if (filter.filters.purchase_to) params.append('purchase_to', filter.filters.purchase_to);
-    if (filter.filters.warranty_status) params.append('warranty_status', filter.filters.warranty_status);
-    if (filter.filters.lifecycle) params.append('lifecycle', filter.filters.lifecycle);
-    
-    // Add multiple categories
-    if (filter.filters.categories && filter.filters.categories.length > 0) {
-        filter.filters.categories.forEach(cat => params.append('categories', cat));
-    }
-    
-    // Navigate to filtered page
-    window.location.href = '/assets?' + params.toString();
-}
-
-function deleteFilter(filterId) {
-    if (!confirm('Delete this saved filter?')) return;
-    
-    let savedFilters = JSON.parse(localStorage.getItem('assetFilters') || '[]');
-    savedFilters = savedFilters.filter(f => f.id !== filterId);
-    localStorage.setItem('assetFilters', JSON.stringify(savedFilters));
-    
-    loadSavedFilters();
-}
-
-function sortTable(column) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentSort = urlParams.get('sort');
-    const currentDir = urlParams.get('dir') || 'asc';
-    
-    // Toggle direction if clicking same column, otherwise default to asc
-    if (currentSort === column) {
-        urlParams.set('dir', currentDir === 'asc' ? 'desc' : 'asc');
-    } else {
-        urlParams.set('sort', column);
-        urlParams.set('dir', 'asc');
-    }
-    
-    window.location.search = urlParams.toString();
-}
-</script>
+<script src="/static/js/assets.js"></script>
 {% endblock %}

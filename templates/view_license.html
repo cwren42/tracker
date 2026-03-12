@@ -13,7 +13,7 @@
         </div>
         <div class="col-md-4 text-end">
             {% if current_user.role in ['admin', 'manager'] %}
-            <a href="{{ url_for('edit_license', license_id=license.id) }}" class="btn btn-warning">
+            <a href="{{ url_for('licenses.edit_license', license_id=license.id) }}" class="btn btn-warning">
                 <i class="bi bi-pencil"></i> Edit
             </a>
             {% if current_user.role == 'admin' %}
@@ -22,7 +22,7 @@
             </button>
             {% endif %}
             {% endif %}
-            <a href="{{ url_for('licenses') }}" class="btn btn-secondary">
+            <a href="{{ url_for('licenses.licenses') }}" class="btn btn-secondary">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
@@ -195,12 +195,12 @@
                             <td>
                                 {% if assignment.asset_id %}
                                     <i class="bi bi-laptop text-primary"></i>
-                                    <a href="{{ url_for('view_asset', asset_id=assignment.asset_id) }}">
+                                    <a href="{{ url_for('assets.view_asset', asset_id=assignment.asset_id) }}">
                                         {{ assignment.asset.asset_tag }} - {{ assignment.asset.name }}
                                     </a>
                                 {% elif assignment.employee_id %}
                                     <i class="bi bi-person-fill text-success"></i>
-                                    <a href="{{ url_for('view_employee', employee_id=assignment.employee_id) }}">
+                                    <a href="{{ url_for('employees.view_employee', employee_id=assignment.employee_id) }}">
                                         {{ assignment.employee.name }}
                                     </a>
                                 {% else %}
@@ -232,7 +232,7 @@
                             <td>{{ assignment.notes or '-' }}</td>
                             <td>
                                 {% if assignment.status == 'Active' and current_user.role in ['admin', 'manager'] %}
-                                <form method="POST" action="{{ url_for('return_license', assignment_id=assignment.id) }}" style="display: inline;">
+                                <form method="POST" action="{{ url_for('licenses.return_license', assignment_id=assignment.id) }}" style="display: inline;">
                                     <button type="submit" class="btn btn-sm btn-warning" 
                                             onclick="return confirm('Return this license?')">
                                         <i class="bi bi-arrow-return-left"></i> Return
@@ -259,7 +259,7 @@
 <div class="modal fade" id="assignModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="POST" action="{{ url_for('assign_license', license_id=license.id) }}">
+            <form method="POST" action="{{ url_for('licenses.assign_license', license_id=license.id) }}">
                 <div class="modal-header">
                     <h5 class="modal-title">Assign License</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -364,7 +364,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <form method="POST" action="{{ url_for('delete_license', license_id=license.id) }}" style="display: inline;">
+                <form method="POST" action="{{ url_for('licenses.delete_license', license_id=license.id) }}" style="display: inline;">
                     <button type="submit" class="btn btn-danger">Delete License</button>
                 </form>
             </div>

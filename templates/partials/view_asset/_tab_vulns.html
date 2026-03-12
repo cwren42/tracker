@@ -1,0 +1,34 @@
+<!-- ══ VULNERABILITIES TAB ══════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-vulns" role="tabpanel">
+  <div class="card section-card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span><i class="bi bi-shield-exclamation me-2 text-danger"></i>Vulnerability Exposure</span>
+      <span class="text-muted small" id="asset-vuln-last-sync"></span>
+    </div>
+    <div class="card-body p-0">
+      <div id="asset-vuln-spinner" class="text-center py-4 text-muted">
+        <span class="spinner-border spinner-border-sm me-2"></span>Loading vulnerabilities…
+      </div>
+      <div id="asset-vuln-empty" class="text-center py-5 text-success" style="display:none;">
+        <i class="bi bi-shield-check fs-2 d-block mb-2"></i>No open vulnerabilities found for this device.
+      </div>
+      <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem;display:none;" id="asset-vuln-table">
+        <thead><tr class="text-muted small">
+          <th>CVE ID</th>
+          <th>Name</th>
+          <th style="width:80px;">Severity</th>
+          <th style="width:55px;">CVSS</th>
+          <th style="width:110px;">Product</th>
+          <th style="width:95px;">Status</th>
+          <th style="width:120px;">Change To</th>
+          <th style="width:115px;">Plan Date</th>
+          <th style="width:180px;">Note</th>
+          <th style="width:110px;">Updated By</th>
+          <th style="width:55px;"></th>
+          <th style="width:75px;">Deploy</th>
+        </tr></thead>
+        <tbody id="asset-vuln-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>

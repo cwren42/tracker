@@ -1,0 +1,12 @@
+.card {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 1rem;
+}
+
+#evidenceTable tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+.badge {
+    font-size: 0.75rem;
+}

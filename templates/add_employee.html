@@ -7,7 +7,7 @@
     <div class="col-md-6 offset-md-3">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Add New Employee</h1>
-            <a href="{{ url_for('employees') }}" class="btn btn-secondary">
+            <a href="{{ url_for('employees.employees') }}" class="btn btn-secondary">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
@@ -34,7 +34,7 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Add Employee
                     </button>
-                    <a href="{{ url_for('employees') }}" class="btn btn-secondary">Cancel</a>
+                    <a href="{{ url_for('employees.employees') }}" class="btn btn-secondary">Cancel</a>
                 </form>
             </div>
         </div>

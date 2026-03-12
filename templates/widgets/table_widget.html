@@ -17,7 +17,7 @@
                 </thead>
                 <tbody>
                     {% for asset in data.recent_assets %}
-                    <tr onclick="window.location='{{ url_for('view_asset', asset_id=asset.id) }}'" style="cursor: pointer;">
+                    <tr onclick="window.location='{{ url_for('assets.view_asset', asset_id=asset.id) }}'" style="cursor: pointer;">
                         <td><span class="badge bg-secondary">{{ asset.asset_tag }}</span></td>
                         <td>{{ asset.name }}</td>
                         <td>{{ asset.category }}</td>
@@ -40,7 +40,7 @@
         </div>
     </div>
     <div class="card-footer text-center">
-        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
+        <a href="{{ url_for('assets.assets') }}" class="btn btn-sm btn-outline-primary">View All Assets</a>
     </div>
 </div>
 
@@ -60,7 +60,7 @@
                 </thead>
                 <tbody>
                     {% for dept in data.dept_counts %}
-                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets') }}?department={{ dept[0] or 'Unassigned' }}'">
+                    <tr style="cursor: pointer;" onclick="window.location='{{ url_for('assets.assets') }}?department={{ dept[0] or 'Unassigned' }}'">
                         <td>{{ dept[0] or 'Unassigned' }}</td>
                         <td class="text-end"><span class="badge bg-info">{{ dept[1] }}</span></td>
                     </tr>

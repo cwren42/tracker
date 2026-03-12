@@ -20,7 +20,7 @@
       <thead class="table-light"><tr><th class="ps-3">Tag</th><th>Hostname</th><th>Make / Model</th><th>Serial</th><th>Status</th></tr></thead>
       <tbody>
         {% for a in assets %}
-        <tr onclick="location='{{ url_for('view_asset', asset_id=a.id) }}'" style="cursor:pointer">
+        <tr onclick="location='{{ url_for('assets.view_asset', asset_id=a.id) }}'" style="cursor:pointer">
           <td class="ps-3"><code>{{ a.asset_tag or '—' }}</code></td>
           <td>{{ a.hostname or '—' }}</td>
           <td>{{ a.make or '' }} {{ a.model or '' }}</td>
@@ -42,7 +42,7 @@
       <thead class="table-light"><tr><th class="ps-3">#</th><th>Subject</th><th>Reporter</th><th>Status</th><th>Priority</th></tr></thead>
       <tbody>
         {% for t in tickets %}
-        <tr onclick="location='{{ url_for('view_ticket', ticket_id=t.id) }}'" style="cursor:pointer">
+        <tr onclick="location='{{ url_for('tickets.view_ticket', ticket_id=t.id) }}'" style="cursor:pointer">
           <td class="ps-3 text-muted">#{{ t.id }}</td>
           <td class="fw-semibold">{{ t.subject }}</td>
           <td class="text-muted small">{{ t.reporter_name or t.reporter_email or '—' }}</td>
@@ -73,7 +73,7 @@
       <thead class="table-light"><tr><th class="ps-3">Name</th><th>Email</th><th>Department</th><th>Title</th></tr></thead>
       <tbody>
         {% for e in employees %}
-        <tr onclick="location='{{ url_for('view_employee', employee_id=e.id) }}'" style="cursor:pointer">
+        <tr onclick="location='{{ url_for('employees.view_employee', employee_id=e.id) }}'" style="cursor:pointer">
           <td class="ps-3 fw-semibold">{{ e.name }}</td>
           <td class="text-muted small">{{ e.email or '—' }}</td>
           <td class="text-muted small">{{ e.department or '—' }}</td>

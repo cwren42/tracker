@@ -5,7 +5,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>Duplicate Assets</h1>
-    <a href="{{ url_for('assets') }}" class="btn btn-secondary">
+    <a href="{{ url_for('assets.assets') }}" class="btn btn-secondary">
         <i class="bi bi-arrow-left"></i> Back to Assets
     </a>
 </div>
@@ -84,7 +84,7 @@
                         </td>
                         <td><small>{{ asset.created_at.strftime('%Y-%m-%d') }}</small></td>
                         <td>
-                            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary" target="_blank">
+                            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary" target="_blank">
                                 <i class="bi bi-eye"></i> View
                             </a>
                         </td>
@@ -114,43 +114,10 @@
 {% endif %}
 
 <script>
-function mergeDuplicates(groupName, assetIds) {
-    const keepRadio = document.querySelector(`input[name="keep-${groupName}"]:checked`);
-    if (!keepRadio) {
-        alert('Please select which asset to keep');
-        return;
-    }
-    
-    const keepId = parseInt(keepRadio.value);
-    const deleteIds = assetIds.filter(id => id !== keepId);
-    
-    if (!confirm(`Keep asset #${keepId} and delete ${deleteIds.length} duplicate(s)?`)) {
-        return;
-    }
-    
-    fetch('{{ url_for("merge_duplicate_assets") }}', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            keep_id: keepId,
-            delete_ids: deleteIds
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(data.message);
-            window.location.reload();
-        } else {
-            alert('Error: ' + data.message);
-        }
-    })
-    .catch(error => {
-        alert('Error: ' + error);
-    });
-}
+window.FINDDUPLICATES_CFG = {
+  merge_url: {{ url_for("assets.merge_duplicate_assets") }}
+};
 </script>
+<script src="/static/js/find_duplicates.js"></script>
 
 {% endblock %}

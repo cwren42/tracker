@@ -1,0 +1,17 @@
+.stat-card-clickable {
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+        }
+        .stat-card-clickable:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2) !important;
+        }
+        .stat-card-clickable .card-body {
+            position: relative;
+        }
+        .stat-card-clickable small {
+            opacity: 0.7;
+            font-size: 0.75rem;
+        }

@@ -5,9 +5,14 @@
 {% block content %}
 <div class="container-fluid mt-4">
     <div class="row mb-4">
-        <div class="col">
-            <h2><i class="bi bi-server me-2"></i>Directory Settings (AD/LDAP)</h2>
-            <p class="text-muted">Configure LDAP/LDAPS to manage users and groups in on-prem Active Directory</p>
+        <div class="col d-flex justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-server me-2"></i>Directory Settings (AD/LDAP)</h2>
+                <p class="text-muted">Configure LDAP/LDAPS to manage users and groups in on-prem Active Directory</p>
+            </div>
+            <a href="{{ url_for('settings.settings') }}" class="btn btn-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Settings
+            </a>
         </div>
     </div>
 
@@ -75,26 +80,5 @@
     </div>
 </div>
 
-<script>
-async function testADConnection() {
-    const resultEl = document.getElementById('adTestResult');
-    resultEl.style.display = 'block';
-    resultEl.className = 'alert alert-info';
-    resultEl.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Testing connection...';
-    try {
-        const res = await fetch('/api/ad/test', {method: 'POST', headers: {'Content-Type': 'application/json'}});
-        const data = await res.json();
-        if (data.success) {
-            resultEl.className = 'alert alert-success';
-            resultEl.textContent = data.message || 'Connected successfully';
-        } else {
-            resultEl.className = 'alert alert-danger';
-            resultEl.textContent = data.error || 'Connection failed';
-        }
-    } catch (e) {
-        resultEl.className = 'alert alert-danger';
-        resultEl.textContent = e?.message || 'Connection failed';
-    }
-}
-</script>
+<script src="/static/js/settings_directory.js"></script>
 {% endblock %}

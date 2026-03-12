@@ -3,7 +3,7 @@ SOC2 Compliance Models for Evidence Collection and Audit Trail
 Integrates with Microsoft 365 and Intune for automated compliance reporting
 """
 from datetime import datetime
-from app import db
+from extensions import db
 
 class SOC2Control(db.Model):
     """SOC2 Control definitions from StrikeGraph"""

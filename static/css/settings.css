@@ -1,0 +1,54 @@
+/* settings.html extracted CSS */
+/* Custom tab styling for settings */
+    #settingsTabs .nav-link {
+        color: #6c757d;
+        border: 1px solid transparent;
+        border-bottom: 3px solid transparent;
+        transition: all 0.2s ease;
+    }
+    
+    #settingsTabs .nav-link:hover {
+        border-bottom-color: #dee2e6;
+        color: #495057;
+    }
+    
+    #settingsTabs .nav-link.active {
+        color: var(--bs-primary, #0d6efd);
+        border-bottom-color: var(--bs-primary, #0d6efd);
+        background-color: transparent;
+        font-weight: 600;
+    }
+    
+    #settingsTabs .nav-link i {
+        margin-right: 5px;
+    }
+
+    /* Keep all tabs reachable when many are present */
+    #settingsTabs {
+        flex-wrap: wrap;
+        row-gap: 0.25rem;
+    }
+
+    #settingsTabs .nav-item {
+        flex: 0 0 auto;
+    }
+
+    #scripts-tab {
+        border-bottom-color: #198754;
+    }
+    
+    .tab-content {
+        min-height: 400px;
+    }
+
+    .settings-single #settingsTabs {
+        display: none;
+    }
+
+    .settings-single .tab-pane {
+        display: none;
+    }
+
+    .settings-single .tab-pane.show.active {
+        display: block;
+    }

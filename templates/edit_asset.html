@@ -26,7 +26,7 @@ input[type="file"]::file-selector-button:hover {
     <div class="col-md-8 offset-md-2">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Edit Asset: {{ asset.asset_tag }}</h1>
-            <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-secondary">
+            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="btn btn-secondary">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
@@ -211,7 +211,7 @@ input[type="file"]::file-selector-button:hover {
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-check-circle"></i> Update Asset
                         </button>
-                        <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-secondary">Cancel</a>
+                        <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="btn btn-secondary">Cancel</a>
                     </div>
                 </form>
             </div>

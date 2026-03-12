@@ -14,7 +14,7 @@
 
     <div class="card shadow-sm">
         <div class="card-body">
-            <form method="POST" action="{{ url_for('edit_license', license_id=license.id) }}">
+            <form method="POST" action="{{ url_for('licenses.edit_license', license_id=license.id) }}">
                 <div class="row">
                     <!-- Software Information -->
                     <div class="col-md-6">
@@ -117,7 +117,7 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Save Changes
                     </button>
-                    <a href="{{ url_for('view_license', license_id=license.id) }}" class="btn btn-secondary">
+                    <a href="{{ url_for('licenses.view_license', license_id=license.id) }}" class="btn btn-secondary">
                         <i class="bi bi-x-circle"></i> Cancel
                     </a>
                 </div>

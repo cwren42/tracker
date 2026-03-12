@@ -14,7 +14,7 @@
 
     <div class="card shadow-sm">
         <div class="card-body">
-            <form method="POST" action="{{ url_for('add_license') }}">
+            <form method="POST" action="{{ url_for('licenses.add_license') }}">
                 <div class="row">
                     <!-- Software Information -->
                     <div class="col-md-6">
@@ -118,7 +118,7 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Add License
                     </button>
-                    <a href="{{ url_for('licenses') }}" class="btn btn-secondary">
+                    <a href="{{ url_for('licenses.licenses') }}" class="btn btn-secondary">
                         <i class="bi bi-x-circle"></i> Cancel
                     </a>
                 </div>

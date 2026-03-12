@@ -4,98 +4,98 @@
         'color': 'primary',
         'value': data.total_assets,
         'label': 'Total Assets',
-        'link': url_for('assets')
+        'link': url_for('assets.assets')
     },
     'available': {
         'icon': 'bi-check-circle',
         'color': 'success',
         'value': data.available,
         'label': 'Available',
-        'link': url_for('assets') + '?status=Available'
+        'link': url_for('assets.assets') + '?status=Available'
     },
     'in_use': {
         'icon': 'bi-arrow-repeat',
         'color': 'info',
         'value': data.in_use,
         'label': 'In Use',
-        'link': url_for('assets') + '?status=In Use'
+        'link': url_for('assets.assets') + '?status=In Use'
     },
     'in_repair': {
         'icon': 'bi-tools',
         'color': 'warning',
         'value': data.in_repair,
         'label': 'In Repair',
-        'link': url_for('assets') + '?status=In Repair'
+        'link': url_for('assets.assets') + '?status=In Repair'
     },
     'avg_age': {
         'icon': 'bi-clock-history',
         'color': 'secondary',
         'value': "%.1f yrs"|format(data.avg_age),
         'label': 'Avg Age',
-        'link': url_for('assets')
+        'link': url_for('assets.assets')
     },
     'replacement': {
         'icon': 'bi-exclamation-circle',
         'color': 'danger',
         'value': data.replacement_needed,
         'label': 'Need Replacement',
-        'link': url_for('assets')
+        'link': url_for('assets.assets')
     },
     'total_licenses': {
         'icon': 'bi-key',
         'color': 'primary',
         'value': data.total_licenses,
         'label': 'Total Licenses',
-        'link': url_for('licenses')
+        'link': url_for('licenses.licenses')
     },
     'active_licenses': {
         'icon': 'bi-check-circle',
         'color': 'success',
         'value': data.active_licenses,
         'label': 'Active Licenses',
-        'link': url_for('licenses') + '?status=Active'
+        'link': url_for('licenses.licenses') + '?status=Active'
     },
     'license_cost': {
         'icon': 'bi-currency-dollar',
         'color': 'warning',
         'value': "$%.2f"|format(data.total_annual_license_cost),
         'label': 'Annual Cost',
-        'link': url_for('licenses')
+        'link': url_for('licenses.licenses')
     },
     'total_employees': {
         'icon': 'bi-people-fill',
         'color': 'info',
         'value': data.total_employees,
         'label': 'Total Employees',
-        'link': url_for('employees')
+        'link': url_for('employees.employees')
     },
     'tickets_open': {
         'icon': 'bi-ticket-perforated',
         'color': 'success',
         'value': data.tickets_open,
         'label': 'Open Tickets',
-        'link': url_for('tickets') + '?status=Open'
+        'link': url_for('tickets.tickets') + '?status=Open'
     },
     'tickets_inprog': {
         'icon': 'bi-hourglass-split',
         'color': 'primary',
         'value': data.tickets_inprog,
         'label': 'In Progress',
-        'link': url_for('tickets') + '?status=In+Progress'
+        'link': url_for('tickets.tickets') + '?status=In+Progress'
     },
     'tickets_unassigned': {
         'icon': 'bi-person-x',
         'color': 'warning',
         'value': data.tickets_unassigned,
         'label': 'Unassigned',
-        'link': url_for('tickets') + '?assignee=unassigned'
+        'link': url_for('tickets.tickets') + '?assignee=unassigned'
     },
     'tickets_breached': {
         'icon': 'bi-alarm',
         'color': 'danger',
         'value': data.tickets_breached,
         'label': 'SLA Breached',
-        'link': url_for('tickets')
+        'link': url_for('tickets.tickets')
     }
 } %}
 

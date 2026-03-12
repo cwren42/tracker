@@ -7,8 +7,8 @@
 
 <nav aria-label="breadcrumb" class="mb-2">
     <ol class="breadcrumb small mb-0">
-        <li class="breadcrumb-item"><a href="{{ url_for('assets') }}">Assets</a></li>
-        <li class="breadcrumb-item"><a href="{{ url_for('view_asset', asset_id=asset.id) }}">{{ asset.name }}</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('assets.assets') }}">Assets</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}">{{ asset.name }}</a></li>
         <li class="breadcrumb-item active">{{ section_label }}</li>
     </ol>
 </nav>
@@ -21,7 +21,7 @@
     </span>
     <span class="text-muted small" style="font-size:.75rem;">Agent <span id="rmm-agent-version-badge">—</span></span>
     <div class="ms-auto d-flex gap-2 flex-wrap">
-        <a href="{{ url_for('rmm_terminal', agent_id=rmm_agent_id) }}" id="rmm-shell-btn" target="_blank"
+        <a href="{{ url_for('rmm.rmm_terminal', agent_id=rmm_agent_id) }}" id="rmm-shell-btn" target="_blank"
            class="btn btn-sm btn-success disabled"><i class="bi bi-terminal-fill"></i> Open Shell</a>
         <button id="rmm-screenshot-btn" class="btn btn-sm btn-outline-secondary disabled"
                 onclick="rmmRequestScreenshot()"><i class="bi bi-camera"></i> Screenshot</button>
@@ -39,51 +39,51 @@
 
 <div class="nav nav-pills flex-wrap gap-1 mb-3">
         <a class="nav-link py-1 px-3 {% if section == 'hw' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='hw') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='hw') }}">
             <i class="bi bi-cpu me-1"></i>Hardware
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'sec' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='sec') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='sec') }}">
             <i class="bi bi-shield-check me-1"></i>Security
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'sysinfo' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='sysinfo') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='sysinfo') }}">
             <i class="bi bi-info-circle me-1"></i>System
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'metrics' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='metrics') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='metrics') }}">
             <i class="bi bi-activity me-1"></i>Metrics
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'avail' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='avail') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='avail') }}">
             <i class="bi bi-clock-history me-1"></i>Activity
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'patches' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='patches') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='patches') }}">
             <i class="bi bi-patch-check me-1"></i>Patch Management
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'software' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='software') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='software') }}">
             <i class="bi bi-box-seam me-1"></i>Software
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'scripts' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='scripts') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='scripts') }}">
             <i class="bi bi-terminal me-1"></i>Scripts
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'services' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='services') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='services') }}">
             <i class="bi bi-gear me-1"></i>Services
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'events' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='events') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='events') }}">
             <i class="bi bi-list-ul me-1"></i>Events
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'transfer' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='transfer') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='transfer') }}">
             <i class="bi bi-folder-symlink me-1"></i>File Transfer
         </a>
         <a class="nav-link py-1 px-3 {% if section == 'power' %}active{% endif %}"
-           href="{{ url_for('rmm_section', asset_id=asset.id, section='power') }}">
+           href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='power') }}">
             <i class="bi bi-power me-1"></i>Power
         </a>
 </div>
@@ -481,30 +481,16 @@
 
 <script src="{{ url_for('static', filename='js/rmm_agent.js') }}"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function(){
-    const s = '{{ section }}';
-    const loaders = {
-        avail:    () => typeof rmmLoadAvailability === 'function' && rmmLoadAvailability(),
-        patches:  () => typeof rmmLoadPatches      === 'function' && rmmLoadPatches(),
-        software: () => typeof rmmLoadSoftware     === 'function' && rmmLoadSoftware(),
-        services: () => typeof rmmLoadServices     === 'function' && rmmLoadServices(),
-        events:   () => typeof rmmLoadEvents       === 'function' && rmmLoadEvents(),
-        metrics:  () => typeof rmmLoadMetrics      === 'function' && rmmLoadMetrics(),
-        hw:       () => typeof rmmLoad             === 'function' && rmmLoad(),
-        sec:      () => typeof rmmLoad             === 'function' && rmmLoad(),
-        sysinfo:  () => typeof rmmLoad             === 'function' && rmmLoad(),
-        transfer: () => typeof rmmLoad             === 'function' && rmmLoad(),
-        power:    () => typeof rmmLoad             === 'function' && rmmLoad(),
-        scripts:  () => typeof rmmLoad             === 'function' && rmmLoad(),
-    };
-    if(loaders[s]) setTimeout(()=>loaders[s](), 600);
-});
+window.RMMSECTION_CFG = {
+  section: {{ section }}
+};
 </script>
+<script src="/static/js/rmm_section.js"></script>
 
 {% else %}
 <div class="alert alert-warning mt-4">
     <i class="bi bi-exclamation-triangle me-2"></i>No RMM agent is linked to this asset.
-    <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="alert-link ms-2">Back to asset</a>
+    <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="alert-link ms-2">Back to asset</a>
 </div>
 {% endif %}
 {% endblock %}

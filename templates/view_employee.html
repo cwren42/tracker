@@ -24,7 +24,7 @@
     </h1>
     <div class="d-flex gap-2">
         {% if current_user.role in ['admin', 'manager'] %}
-        <a href="{{ url_for('edit_employee', employee_id=employee.id) }}" class="btn btn-warning">
+        <a href="{{ url_for('employees.edit_employee', employee_id=employee.id) }}" class="btn btn-warning">
             <i class="bi bi-pencil-square"></i> Edit
         </a>
         {% endif %}
@@ -38,7 +38,7 @@
             <i class="bi bi-box-arrow-right"></i> Offboard
         </button>
         {% endif %}
-        <a href="{{ url_for('employees') }}" class="btn btn-secondary">
+        <a href="{{ url_for('employees.employees') }}" class="btn btn-secondary">
             <i class="bi bi-arrow-left"></i> Back
         </a>
     </div>
@@ -60,7 +60,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <form method="POST" action="{{ url_for('delete_employee', employee_id=employee.id) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('employees.delete_employee', employee_id=employee.id) }}" class="d-inline">
                     <button type="submit" class="btn btn-danger">
                         <i class="bi bi-trash"></i> Delete Employee
                     </button>
@@ -91,7 +91,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <form method="POST" action="{{ url_for('offboard_employee', employee_id=employee.id) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('employees.offboard_employee', employee_id=employee.id) }}" class="d-inline">
                     <button type="submit" class="btn btn-warning">
                         <i class="bi bi-box-arrow-right"></i> Start Offboarding
                     </button>
@@ -149,7 +149,7 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <a href="{{ url_for('view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
+                                    <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="btn btn-sm btn-outline-primary">
                                         <i class="bi bi-eye"></i>
                                     </a>
                                 </td>
@@ -171,7 +171,7 @@
                     <i class="bi bi-key-fill"></i> Software Licenses
                 </h5>
                 {% if current_user.role in ['admin', 'manager'] %}
-                <a href="{{ url_for('licenses') }}" class="btn btn-sm btn-light">
+                <a href="{{ url_for('licenses.licenses') }}" class="btn btn-sm btn-light">
                     <i class="bi bi-plus-circle"></i> Assign License
                 </a>
                 {% endif %}
@@ -228,7 +228,7 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <a href="{{ url_for('view_license', license_id=assignment.license.id) }}" 
+                                    <a href="{{ url_for('licenses.view_license', license_id=assignment.license.id) }}" 
                                        class="btn btn-sm btn-outline-primary">
                                         <i class="bi bi-eye"></i> View
                                     </a>
@@ -243,7 +243,7 @@
                     <i class="bi bi-key text-muted" style="font-size: 3rem;"></i>
                     <p class="text-muted mb-3">No software licenses assigned to this employee</p>
                     {% if current_user.role in ['admin', 'manager'] %}
-                    <a href="{{ url_for('licenses') }}" class="btn btn-primary">
+                    <a href="{{ url_for('licenses.licenses') }}" class="btn btn-primary">
                         <i class="bi bi-plus-circle"></i> Assign Licenses
                     </a>
                     {% endif %}

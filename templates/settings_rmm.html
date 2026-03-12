@@ -5,9 +5,14 @@
 {% block content %}
 <div class="container-fluid mt-4">
     <div class="row mb-4">
-        <div class="col">
-            <h2><i class="bi bi-robot me-2"></i>RMM Agent Configuration</h2>
-            <p class="text-muted">Deploy the RMM agent to Windows devices automatically</p>
+        <div class="col d-flex justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-robot me-2"></i>RMM Agent Configuration</h2>
+                <p class="text-muted">Deploy the RMM agent to Windows devices automatically</p>
+            </div>
+            <a href="{{ url_for('settings.settings') }}" class="btn btn-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Settings
+            </a>
         </div>
     </div>
 
@@ -93,7 +98,7 @@
 
                     <h6 class="mb-2 mt-3"><i class="bi bi-3-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
                     <div class="mb-4">
-                        <a href="{{ url_for('download_agent_installer') }}" class="btn btn-success btn-sm">
+                        <a href="{{ url_for('misc.download_agent_installer') }}" class="btn btn-success btn-sm">
                             <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
                         </a>
                     </div>
@@ -103,7 +108,7 @@
 
         <div class="col-lg-4">
             <div class="card shadow-sm mb-3 border-warning">
-                <div class="card-header bg-warning bg-opacity-10">
+                <div class="card-header bg-warning text-dark">
                     <h6 class="mb-0"><i class="bi bi-key-fill text-warning me-1"></i> Site Enrollment Token</h6>
                 </div>
                 <div class="card-body">
@@ -134,47 +139,10 @@
 </div>
 
 <script>
-function copyById(id, btn) {
-    navigator.clipboard.writeText(document.getElementById(id).value).then(function() {
-        btn.innerHTML = '<i class="bi bi-check text-success"></i>';
-        setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
-    }).catch(function(){});
-}
-
-function toggleSiteToken() {
-    const inp = document.getElementById('siteTokenInput');
-    const icon = document.getElementById('siteTokenEyeIcon');
-    if (inp.type === 'password') { inp.type = 'text'; icon.className = 'bi bi-eye-slash'; }
-    else { inp.type = 'password'; icon.className = 'bi bi-eye'; }
-}
-
-function copySiteToken() {
-    navigator.clipboard.writeText(document.getElementById('siteTokenInput').value);
-    console.log('Token copied to clipboard');
-}
-
-function regenerateSiteToken() {
-    if (!confirm('Regenerate the site enrollment token?\n\nThis invalidates the current MSI — rebuild before deploying to new devices.')) return;
-    fetch('/api/rmm/site-token/regenerate', {method: 'POST'})
-        .then(r => r.json()).then(d => {
-            if (d.ok) {
-                document.getElementById('siteTokenInput').value = d.token;
-                alert('Token regenerated. Rebuild the MSI before deploying.');
-            }
-        });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    var tok  = "{{ rmm_site_token }}";
-    var base = "{{ request.host_url }}".replace(/\/+$/, "");
-    var installUrl = base + "/download/site-install.ps1?t=" + tok;
-    var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
-    var sslBypass = "[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";
-    document.getElementById("ps1OneLiner").value  = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
-    document.getElementById("gpoOneLiner").value  = sslBypass + "irm '" + deployUrl  + "' -UseBasicParsing | iex";
-    document.getElementById("intuneScriptUrl").value = deployUrl;
-    document.getElementById("psremoteCmd").value  = "Invoke-Command -ComputerName PC-NAME -ScriptBlock { irm '" + deployUrl + "' | iex }";
-    document.getElementById("intuneDownloadLink").href = deployUrl;
-});
+window.SETTINGSRMMCFG = {
+  rmm_site_token: {{ rmm_site_token | tojson }},
+  host_url: "{{ request.host_url }}"
+};
 </script>
+<script src="/static/js/settings_rmm_page.js"></script>
 {% endblock %}

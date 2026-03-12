@@ -10,10 +10,10 @@
             <p class="text-muted">Manage monitoring profiles and track asset health</p>
         </div>
         <div class="col-auto">
-            <a href="{{ url_for('monitoring_profiles') }}" class="btn btn-outline-primary">
+            <a href="{{ url_for('monitoring.monitoring_profiles') }}" class="btn btn-outline-primary">
                 <i class="bi bi-list-check"></i> Manage Profiles
             </a>
-            <a href="{{ url_for('monitoring_alerts') }}" class="btn btn-outline-warning">
+            <a href="{{ url_for('monitoring.monitoring_alerts') }}" class="btn btn-outline-warning">
                 <i class="bi bi-exclamation-triangle"></i> View Alerts
                 {% if active_alerts > 0 %}
                 <span class="badge bg-danger">{{ active_alerts }}</span>
@@ -152,7 +152,7 @@
                             <td class="text-center">
                                 <div class="btn-group btn-group-sm">
                                     {% if asset.has_profile %}
-                                        <a href="{{ url_for('monitoring_profile_detail', profile_id=asset.profile_id) }}" 
+                                        <a href="{{ url_for('monitoring.monitoring_profile_detail', profile_id=asset.profile_id) }}" 
                                            class="btn btn-outline-primary" title="View Profile">
                                             <i class="bi bi-eye"></i>
                                         </a>
@@ -211,41 +211,6 @@
     </div>
 </div>
 
-<script>
-// Search functionality
-document.getElementById('searchInput')?.addEventListener('input', function(e) {
-    const searchTerm = e.target.value.toLowerCase();
-    const rows = document.querySelectorAll('#assetsTable tbody tr');
-    
-    rows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(searchTerm) ? '' : 'none';
-    });
-});
-
-// Assign profile modal
-const assignModal = document.getElementById('assignModal');
-if (assignModal) {
-    assignModal.addEventListener('show.bs.modal', function(event) {
-        const button = event.relatedTarget;
-        const assetId = button.getAttribute('data-asset-id');
-        const assetName = button.getAttribute('data-asset-name');
-        
-        document.getElementById('modal-asset-name').textContent = assetName;
-        document.getElementById('assignForm').action = `/monitoring/assign/${assetId}`;
-    });
-}
-
-// Unassign profile
-function unassignProfile(assetId, assetName) {
-    if (confirm(`Remove monitoring profile from "${assetName}"?`)) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = `/monitoring/unassign/${assetId}`;
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-</script>
+<script src="/static/js/monitoring_dashboard.js"></script>
 
 {% endblock %}

@@ -5,16 +5,21 @@
 {% block content %}
 <div class="container-fluid mt-4">
     <div class="row mb-4">
-        <div class="col">
-            <h2><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Settings</h2>
-            <p class="text-muted">Manage Proxmox cluster and backup repository configuration</p>
+        <div class="col d-flex justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Settings</h2>
+                <p class="text-muted">Manage Proxmox cluster and backup repository configuration</p>
+            </div>
+            <a href="{{ url_for('settings.settings') }}" class="btn btn-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Settings
+            </a>
         </div>
     </div>
 
     <div class="row">
         <div class="col-lg-8">
             <div class="card shadow-sm mb-3">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-primary text-white">
                     <h5 class="mb-0"><i class="bi bi-hdd-stack-fill me-2"></i>Proxmox Cluster Settings</h5>
                 </div>
                 <div class="card-body">

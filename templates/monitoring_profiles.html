@@ -8,7 +8,7 @@
         <div class="col">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring_dashboard') }}">Monitoring</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('monitoring.monitoring_dashboard') }}">Monitoring</a></li>
                     <li class="breadcrumb-item active">Profiles</li>
                 </ol>
             </nav>
@@ -66,7 +66,7 @@
                     </div>
                 </div>
                 <div class="card-footer bg-transparent">
-                    <a href="{{ url_for('monitoring_profile_detail', profile_id=item.profile.id) }}" 
+                    <a href="{{ url_for('monitoring.monitoring_profile_detail', profile_id=item.profile.id) }}" 
                        class="btn btn-primary btn-sm w-100">
                         <i class="bi bi-eye"></i> View Details & Checks
                     </a>

@@ -1,0 +1,14 @@
+body, html { height: 100%; }
+    #terminal-wrap {
+        background: #0d0d0d;
+        border-radius: 6px;
+        padding: 8px;
+        height: calc(100vh - 200px);
+        min-height: 400px;
+    }
+    #terminal { height: 100%; }
+    #status-bar { font-size: 0.8rem; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-connecting { background: #ffc107; }
+    .dot-online { background: #28a745; }
+    .dot-offline { background: #dc3545; }

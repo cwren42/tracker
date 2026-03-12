@@ -1,0 +1,4 @@
+.ai-search-bar .ai-search-input::placeholder { color:#94a3b8!important; }
+.ai-search-bar .ai-search-input:focus { box-shadow:none; outline:none; background:#1e293b!important; }
+.ai-search-result pre { color:#f1f5f9; font-size:.82rem; white-space:pre-wrap; word-break:break-word; margin:0; }
+.ai-result-thinking { color:#94a3b8; font-style:italic; }

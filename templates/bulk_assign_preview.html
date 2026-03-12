@@ -93,13 +93,13 @@
         </div>
     </div>
     
-    <form method="POST" action="{{ url_for('bulk_assign_csv') }}" class="mt-4">
+    <form method="POST" action="{{ url_for('assets.bulk_assign_csv') }}" class="mt-4">
         <input type="hidden" name="confirm" value="1">
         
         <button type="submit" class="btn btn-success btn-lg" {% if valid_count == 0 %}disabled{% endif %}>
             <i class="bi bi-check-circle"></i> Confirm Assignment ({{ valid_count }} assets)
         </button>
-        <a href="{{ url_for('bulk_assign_csv') }}" class="btn btn-secondary btn-lg">Cancel</a>
+        <a href="{{ url_for('assets.bulk_assign_csv') }}" class="btn btn-secondary btn-lg">Cancel</a>
         
         {% if error_count > 0 %}
         <p class="text-muted mt-2 mb-0">

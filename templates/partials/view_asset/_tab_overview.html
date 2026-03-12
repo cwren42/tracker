@@ -1,0 +1,399 @@
+<div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
+
+{% if rmm_agent_id %}
+<!-- RMM Live Summary Bar (managed devices only) -->
+<div class="card mb-3" style="background:var(--accent-secondary,rgba(0,0,0,.15));border:1px solid rgba(128,128,128,.2);">
+    <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+            <span id="ov-rmm-badge" class="badge bg-secondary" style="font-size:.8rem;">
+                <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
+            </span>
+            <span class="text-muted" style="font-size:.78rem;"><i class="bi bi-robot me-1"></i><code>{{ rmm_agent_id }}</code></span>
+            <small class="text-muted" style="font-size:.75rem;" id="ov-rmm-time"></small>
+            <div class="ms-auto d-flex gap-4 align-items-center flex-wrap" style="font-size:.78rem;">
+                <div style="min-width:100px;">
+                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">CPU</span><span id="ov-cpu-label">—</span></div>
+                    <div class="progress" style="height:4px;"><div id="ov-cpu-bar" class="progress-bar bg-info" style="width:0%"></div></div>
+                </div>
+                <div style="min-width:100px;">
+                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">RAM</span><span id="ov-ram-label">—</span></div>
+                    <div class="progress" style="height:4px;"><div id="ov-ram-bar" class="progress-bar bg-warning" style="width:0%"></div></div>
+                </div>
+                <div style="min-width:100px;">
+                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">Disk</span><span id="ov-disk-label">—</span></div>
+                    <div class="progress" style="height:4px;"><div id="ov-disk-bar" class="progress-bar bg-success" style="width:0%"></div></div>
+                </div>
+                <a href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='hw') }}"
+                   class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:.75rem;">
+                    <i class="bi bi-robot me-1"></i>RMM Details
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- RMM Identity Card (managed) — server-side rendered from cached telemetry -->
+{% if rmm_tele %}
+<div class="card section-card mb-3">
+    <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-pc-display text-success me-1"></i><strong>Device Identity</strong>
+        <span class="badge bg-secondary ms-1" style="font-size:.68rem;">RMM — Read Only</span>
+    </div>
+    <div class="card-body py-2">
+        <div class="row g-2" style="font-size:.88rem;">
+            {% if rmm_tele.hostname %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Hostname</div><div class="field-value fw-semibold">{{ rmm_tele.hostname }}</div></div>
+            {% endif %}
+            {% if rmm_tele.serial_number %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Serial Number</div><div class="field-value"><code>{{ rmm_tele.serial_number }}</code></div></div>
+            {% endif %}
+            {% if rmm_tele.vendor or rmm_tele.model_name %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Make / Model</div><div class="field-value">{{ rmm_tele.vendor or '' }} {{ rmm_tele.model_name or '' }}</div></div>
+            {% endif %}
+            {% if rmm_tele.os_name %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Operating System</div><div class="field-value">{{ rmm_tele.os_edition or rmm_tele.os_name }}{% if rmm_tele.os_version %} <small class="text-muted">{{ rmm_tele.os_version }}</small>{% endif %}</div></div>
+            {% endif %}
+            {% if rmm_tele.domain %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Domain</div><div class="field-value">{{ rmm_tele.domain }}</div></div>
+            {% endif %}
+            {% if rmm_tele.cpu_name %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">CPU</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.cpu_name }}{% if rmm_tele.cpu_cores %} ({{ rmm_tele.cpu_cores }}c){% endif %}</div></div>
+            {% endif %}
+            {% if rmm_tele.ram_total_gb %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">RAM</div><div class="field-value">{{ '%.0f'|format(rmm_tele.ram_total_gb) }} GB</div></div>
+            {% endif %}
+            {% if rmm_tele.public_ip %}
+            <div class="col-sm-6 col-md-3"><div class="field-label">Public IP</div><div class="field-value"><code>{{ rmm_tele.public_ip }}</code></div></div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+    <div class="row g-4">
+        <!-- LEFT COLUMN -->
+        <div class="col-lg-8">
+
+            {% if asset.photo %}
+            <div class="text-center mb-4">
+                <img src="{{ url_for('static', filename='uploads/' + asset.photo) }}" alt="{{ asset.name }}" class="img-fluid rounded shadow-sm" style="max-height:300px;">
+            </div>
+            {% endif %}
+
+            <!-- Core Details -->
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-clipboard-data me-2 text-primary"></i>Asset Details</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Asset Tag</div>
+                            <div class="field-value"><span class="badge bg-primary">{{ asset.asset_tag }}</span></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Category</div>
+                            <div class="field-value">{{ asset.category or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Department</div>
+                            <div class="field-value">{{ asset.department or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Manufacturer</div>
+                            <div class="field-value">{{ asset.manufacturer or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Model</div>
+                            <div class="field-value">{{ asset.model or '—' }}</div>
+                        </div>
+                        {% if asset.category == 'Server' and asset.service_urls %}
+                        <div class="col-sm-12 col-md-8">
+                            <div class="field-label"><i class="bi bi-link-45deg"></i> Service URLs</div>
+                            <div class="field-value">
+                                {% for url in asset.service_urls.split(',') %}
+                                    <a href="https://{{ url.strip() }}" target="_blank" class="badge bg-primary text-decoration-none me-2 mb-1">
+                                        <i class="bi bi-box-arrow-up-right"></i> {{ url.strip() }}
+                                    </a>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Serial Number</div>
+                            <div class="field-value"><code>{{ asset.serial_number or '—' }}</code></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">OS / Version</div>
+                            <div class="field-value">{{ asset.os_version or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">IP Address</div>
+                            <div class="field-value"><code>{{ asset.ip_address or '—' }}</code></div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">MAC Address</div>
+                            <div class="field-value">{% if asset.hardware_mac_ethernet %}
+                                    <code title="Ethernet">{{ asset.hardware_mac_ethernet }}</code>
+                                {% elif asset.hardware_mac_wifi %}
+                                    <code title="WiFi">{{ asset.hardware_mac_wifi }}</code>
+                                {% else %}
+                                    —
+                                {% endif %}</div>
+                        </div>
+                        {% if asset.purchase_date %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Purchase Date</div>
+                            <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.purchase_cost %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Purchase Cost</div>
+                            <div class="field-value">${{ '%.2f'|format(asset.purchase_cost) }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.warranty_expiry %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Warranty Expiry</div>
+                            <div class="field-value">
+                                {{ asset.warranty_expiry.strftime('%Y-%m-%d') }}
+                                {% if asset.warranty_expiry < now().date() %}
+                                <span class="badge bg-danger ms-1">Expired</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if asset.vendor %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Vendor</div>
+                            <div class="field-value">{{ asset.vendor }}</div>
+                        </div>
+                        {% endif %}
+
+                    </div>
+
+                    {% if asset.notes %}
+                    <hr>
+                    <div class="field-label mb-1">Notes</div>
+                    <p class="mb-0 text-secondary" style="font-size:.9rem; white-space:pre-wrap;">{{ asset.notes }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Lifecycle -->
+            {% if asset.category not in ['Server'] %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-recycle me-2 text-success"></i>Lifecycle</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Condition</div>
+                            <div class="field-value">
+                                {% if asset.condition == 'Excellent' %}<span class="badge bg-success">Excellent</span>
+                                {% elif asset.condition == 'Good' %}<span class="badge bg-primary">Good</span>
+                                {% elif asset.condition == 'Fair' %}<span class="badge bg-warning text-dark">Fair</span>
+                                {% elif asset.condition == 'Poor' %}<span class="badge bg-danger">Poor</span>
+                                {% else %}{{ asset.condition or '—' }}{% endif %}
+                            </div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Lifecycle Status</div>
+                            <div class="field-value">{{ asset.get_lifecycle_status() or '—' }}</div>
+                        </div>
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Expected Replacement</div>
+                            <div class="field-value">{{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else '—' }}</div>
+                        </div>
+                        {% if asset.disposal_date %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Disposal Date</div>
+                            <div class="field-value">{{ asset.disposal_date.strftime('%Y-%m-%d') }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.disposal_method %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Disposal Method</div>
+                            <div class="field-value">{{ asset.disposal_method }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            {% endif %}
+            <!-- Intune Hardware Specs (from DB) -->
+            {% if asset.hardware_cpu or asset.hardware_ram_gb or asset.hardware_storage_total_gb %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-cpu me-2 text-info"></i>Hardware Specs <small class="text-muted fw-normal">(via Intune)</small></div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        {% if asset.hardware_cpu and asset.hardware_cpu != 'unknown' %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Processor</div>
+                            <div class="field-value" style="font-size:.85rem;">{{ asset.hardware_cpu }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_ram_gb and asset.hardware_ram_gb > 0 %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">RAM</div>
+                            <div class="field-value">{{ '%.1f'|format(asset.hardware_ram_gb) }} GB</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_storage_total_gb %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Storage</div>
+                            <div class="field-value">{{ '%.1f'|format(asset.hardware_storage_total_gb) }} GB
+                                {% if asset.hardware_storage_free_gb %}
+                                <small class="text-muted d-block" style="font-size:.75rem;">{{ '%.1f'|format(asset.hardware_storage_free_gb) }} GB free ({{ '%.0f'|format(asset.hardware_storage_free_gb / asset.hardware_storage_total_gb * 100) }}%)</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_bios_version %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">BIOS</div>
+                            <div class="field-value" style="font-size:.82rem;"><code>{{ asset.hardware_bios_version }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_tpm_version %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">TPM</div>
+                            <div class="field-value">{{ asset.hardware_tpm_version }}</div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_mac_wifi %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">WiFi MAC</div>
+                            <div class="field-value"><code style="font-size:.82rem;">{{ asset.hardware_mac_wifi }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.hardware_mac_ethernet %}
+                        <div class="col-sm-6 col-md-4">
+                            <div class="field-label">Ethernet MAC</div>
+                            <div class="field-value"><code style="font-size:.82rem;">{{ asset.hardware_mac_ethernet }}</code></div>
+                        </div>
+                        {% endif %}
+                        {% if asset.azure_ad_device_id %}
+                        <div class="col-sm-12">
+                            <div class="field-label">Azure AD Device ID</div>
+                            <div class="field-value"><code style="font-size:.78rem;">{{ asset.azure_ad_device_id }}</code></div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Remote Access -->
+            {% if rmm_agent_id and not asset.rustdesk_id %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-terminal me-2 text-success"></i>Remote Shell Access</div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">This device is managed by Cirque RMM. Use the web shell for interactive remote access.</p>
+                    <a href="{{ url_for('rmm.rmm_terminal', agent_id=rmm_agent_id) }}" target="_blank" class="btn btn-success">
+                        <i class="bi bi-terminal-fill me-1"></i> Open Web Shell
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+            {% if asset.rustdesk_id %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-display me-2 text-success"></i>Remote Access</div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <div>
+                            <div class="field-label">RustDesk ID</div>
+                            <code id="rustdeskId">{{ asset.rustdesk_id }}</code>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="copyRustDeskId()" title="Copy">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                        </div>
+                        <div class="ms-auto d-flex gap-2">
+                            <button class="btn btn-success btn-sm" onclick="startRustDeskSession({{ asset.id }})">
+                                <i class="bi bi-display"></i> Start Session
+                            </button>
+                            <button id="rustdeskEndBtn" class="btn btn-sm btn-outline-danger d-none" onclick="endRustDeskSession()">
+                                <i class="bi bi-stop-circle"></i> End Session
+                            </button>
+                        </div>
+                    </div>
+                    <small class="text-muted d-block mt-2"><i class="bi bi-shield-lock me-1"></i>Sessions are logged for SOC2 audit compliance.</small>
+                </div>
+            </div>
+            <script>
+window.ASSET_CFG = { assetId: {{ asset.id }} };
+</script>
+<script src="/static/js/view_asset.js"></script>
+            {% endif %}
+
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="col-lg-4">
+
+            {% if asset.category not in ['Server'] %}
+            <!-- Assignment -->
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-person-badge me-2 text-info"></i>Assignment</div>
+                <div class="card-body">
+                    {% if asset.assigned_employee %}
+                    <div class="d-flex align-items-center gap-3 mb-3">
+                        <div class="rounded-circle bg-primary bg-opacity-10 d-flex align-items-center justify-content-center" style="width:48px;height:48px;flex-shrink:0;">
+                            <i class="bi bi-person-fill text-primary fs-4"></i>
+                        </div>
+                        <div>
+                            <div class="fw-semibold">
+                                <a href="{{ url_for('employees.view_employee', employee_id=asset.assigned_employee.id) }}" class="text-decoration-none">{{ asset.assigned_employee.name }}</a>
+                            </div>
+                            <small class="text-muted">{{ asset.assigned_employee.department or 'No department' }}</small><br>
+                            <small class="text-muted">{{ asset.assigned_employee.email or '' }}</small>
+                        </div>
+                    </div>
+                    {% if current_user.role in ['admin', 'manager'] %}
+                    <form method="POST" action="{{ url_for('assets.unassign_asset', asset_id=asset.id) }}">
+                        <button type="submit" class="btn btn-sm btn-outline-warning w-100">
+                            <i class="bi bi-x-circle"></i> Unassign
+                        </button>
+                    </form>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-muted mb-3">Not assigned to anyone.</p>
+                    {% if current_user.role in ['admin', 'manager'] %}
+                    <button type="button" class="btn btn-primary btn-sm w-100" data-bs-toggle="modal" data-bs-target="#assignModal">
+                        <i class="bi bi-person-plus"></i> Assign to Employee
+                    </button>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Intune quick status -->
+            {% if asset.intune_device_id %}
+            <div class="card section-card mb-4">
+                <div class="card-header"><i class="bi bi-microsoft me-2" style="color:#00a4ef;"></i>Intune Status</div>
+                <div class="card-body">
+                    <div class="row g-2 text-center">
+                        <div class="col-6">
+                            <div class="field-label">Compliance</div>
+                            {% if asset.intune_compliance_state == 'compliant' %}<span class="badge bg-success">Compliant</span>
+                            {% elif asset.intune_compliance_state == 'noncompliant' %}<span class="badge bg-danger">Non-Compliant</span>
+                            {% else %}<span class="badge bg-secondary">{{ asset.intune_compliance_state|title if asset.intune_compliance_state else 'Unknown' }}</span>{% endif %}
+                        </div>
+                        <div class="col-6">
+                            <div class="field-label">Management</div>
+                            <span class="badge bg-info">{{ asset.intune_management_state|title if asset.intune_management_state else 'Unknown' }}</span>
+                        </div>
+                        <div class="col-12 mt-1">
+                            <div class="field-label">Last Sync</div>
+                            <small>{% if asset.intune_last_sync %}{{ asset.intune_last_sync.strftime('%Y-%m-%d %H:%M UTC') }}{% else %}—{% endif %}</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+
+        </div>
+    </div>
+</div>

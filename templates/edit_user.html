@@ -6,7 +6,7 @@
     <div class="col-md-7 col-lg-6 mx-auto">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1 class="h3">Edit User</h1>
-            <a href="{{ url_for('users') }}" class="btn btn-secondary btn-sm">
+            <a href="{{ url_for('auth.users') }}" class="btn btn-secondary btn-sm">
                 <i class="bi bi-arrow-left"></i> Back
             </a>
         </div>
@@ -91,7 +91,7 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Save Changes
                     </button>
-                    <a href="{{ url_for('users') }}" class="btn btn-secondary ms-2">Cancel</a>
+                    <a href="{{ url_for('auth.users') }}" class="btn btn-secondary ms-2">Cancel</a>
                 </form>
             </div>
         </div>
@@ -103,7 +103,7 @@
             </div>
             <div class="card-body">
                 <p class="small text-muted mb-3">Set a temporary password for this user. They should change it after logging in.</p>
-                <form method="POST" action="{{ url_for('reset_user_password', user_id=user.id) }}" class="d-flex gap-2 flex-wrap">
+                <form method="POST" action="{{ url_for('auth.reset_user_password', user_id=user.id) }}" class="d-flex gap-2 flex-wrap">
                     <input type="password" class="form-control form-control-sm" style="max-width:220px;"
                            name="new_password" placeholder="New temporary password" minlength="6" required>
                     <button type="submit" class="btn btn-warning btn-sm">

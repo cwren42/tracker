@@ -7,7 +7,7 @@
     <!-- Breadcrumb -->
     <nav aria-label="breadcrumb">
         <ol class="breadcrumb">
-            <li class="breadcrumb-item"><a href="{{ url_for('policies') }}">Policy Library</a></li>
+            <li class="breadcrumb-item"><a href="{{ url_for('soc2.policies') }}">Policy Library</a></li>
             <li class="breadcrumb-item active" aria-current="page">{{ policy.document_id }}</li>
         </ol>
     </nav>
@@ -130,7 +130,7 @@
 
     <!-- Actions -->
     <div class="mt-4 mb-4">
-        <a href="{{ url_for('policies') }}" class="btn btn-secondary">
+        <a href="{{ url_for('soc2.policies') }}" class="btn btn-secondary">
             <i class="fas fa-arrow-left"></i> Back to Library
         </a>
         {% if policy.file_path %}

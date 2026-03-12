@@ -8,7 +8,7 @@
   <div>
     <nav aria-label="breadcrumb">
       <ol class="breadcrumb mb-1">
-        <li class="breadcrumb-item"><a href="{{ url_for('tickets') }}">Tickets</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('tickets.tickets') }}">Tickets</a></li>
         <li class="breadcrumb-item active">#{{ ticket.id }}</li>
       </ol>
     </nav>
@@ -30,22 +30,22 @@
   <div class="d-flex gap-2 flex-wrap">
     {% if ticket.status != 'Closed' %}
       {% if ticket.status == 'Open' %}
-        <form method="POST" action="{{ url_for('set_ticket_status', ticket_id=ticket.id) }}">
+        <form method="POST" action="{{ url_for('tickets.set_ticket_status', ticket_id=ticket.id) }}">
           <input type="hidden" name="status" value="In Progress">
           <button class="btn btn-primary btn-sm"><i class="bi bi-play-circle me-1"></i>Start Working</button>
         </form>
       {% endif %}
       {% if ticket.status == 'In Progress' %}
-        <form method="POST" action="{{ url_for('set_ticket_status', ticket_id=ticket.id) }}">
+        <form method="POST" action="{{ url_for('tickets.set_ticket_status', ticket_id=ticket.id) }}">
           <input type="hidden" name="status" value="Open">
           <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Back to Open</button>
         </form>
       {% endif %}
-      <form method="POST" action="{{ url_for('close_ticket', ticket_id=ticket.id) }}">
+      <form method="POST" action="{{ url_for('tickets.close_ticket', ticket_id=ticket.id) }}">
         <button class="btn btn-success btn-sm"><i class="bi bi-check2-circle me-1"></i>Close Ticket</button>
       </form>
     {% else %}
-      <form method="POST" action="{{ url_for('reopen_ticket', ticket_id=ticket.id) }}">
+      <form method="POST" action="{{ url_for('tickets.reopen_ticket', ticket_id=ticket.id) }}">
         <button class="btn btn-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Reopen</button>
       </form>
     {% endif %}
@@ -75,7 +75,7 @@
         <div id="descDisplay" style="white-space:pre-wrap;">{{ ticket.description }}</div>
         <div class="collapse mt-3" id="editForm">
           <hr>
-          <form method="POST" action="{{ url_for('edit_ticket', ticket_id=ticket.id) }}">
+          <form method="POST" action="{{ url_for('tickets.edit_ticket', ticket_id=ticket.id) }}">
             <div class="mb-2">
               <label class="form-label small fw-semibold">Subject</label>
               <input type="text" name="subject" class="form-control" value="{{ ticket.subject }}" required>
@@ -147,7 +147,7 @@
     <div class="card">
       <div class="card-header fw-semibold"><i class="bi bi-chat-left-dots me-2"></i>Add Internal Note</div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('add_ticket_note', ticket_id=ticket.id) }}">
+        <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
           <textarea name="content" class="form-control mb-2" rows="3" placeholder="Internal note — not visible to the reporter…" required></textarea>
           <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-send me-1"></i>Add Note</button>
         </form>
@@ -194,7 +194,7 @@
     <div class="card mb-3">
       <div class="card-header fw-semibold"><i class="bi bi-tag me-2"></i>Category</div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('set_ticket_category', ticket_id=ticket.id) }}" class="d-flex gap-2">
+        <form method="POST" action="{{ url_for('tickets.set_ticket_category', ticket_id=ticket.id) }}" class="d-flex gap-2">
           <select name="category" class="form-select form-select-sm">
             {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
             <option value="{{ cat }}" {% if (ticket.category or 'General') == cat %}selected{% endif %}>{{ cat }}</option>
@@ -209,7 +209,7 @@
     <div class="card mb-3">
       <div class="card-header fw-semibold"><i class="bi bi-exclamation-triangle me-2"></i>Priority</div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('set_ticket_priority', ticket_id=ticket.id) }}" class="d-flex gap-2">
+        <form method="POST" action="{{ url_for('tickets.set_ticket_priority', ticket_id=ticket.id) }}" class="d-flex gap-2">
           <select name="priority" class="form-select form-select-sm">
             <option value="Low" {% if ticket.priority=='Low' %}selected{% endif %}>Low</option>
             <option value="Normal" {% if ticket.priority=='Normal' %}selected{% endif %}>Normal</option>
@@ -225,7 +225,7 @@
     <div class="card mb-3">
       <div class="card-header fw-semibold"><i class="bi bi-person-check me-2"></i>Assignee</div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('assign_ticket', ticket_id=ticket.id) }}" class="d-flex gap-2">
+        <form method="POST" action="{{ url_for('tickets.assign_ticket', ticket_id=ticket.id) }}" class="d-flex gap-2">
           <select name="assignee_id" class="form-select form-select-sm">
             <option value="0">— Unassigned —</option>
             {% for tech in techs %}
@@ -301,7 +301,7 @@
         {% if ticket.asset_tag %}<div><strong>Tag:</strong> {{ ticket.asset_tag }}</div>{% endif %}
         {% if ticket.hostname %}<div><strong>Host:</strong> {{ ticket.hostname }}</div>{% endif %}
         {% if ticket.asset_id %}
-        <a href="{{ url_for('view_asset', asset_id=ticket.asset_id) }}" class="btn btn-sm btn-outline-secondary mt-2 w-100">
+        <a href="{{ url_for('assets.view_asset', asset_id=ticket.asset_id) }}" class="btn btn-sm btn-outline-secondary mt-2 w-100">
           <i class="bi bi-box-arrow-up-right me-1"></i>View Asset
         </a>
         {% if ticket.asset and ticket.asset.rustdesk_id %}
@@ -321,7 +321,7 @@
     <div class="card mb-3 border-warning">
       <div class="card-header fw-semibold text-warning-emphasis bg-warning-subtle"><i class="bi bi-arrows-collapse me-2"></i>Merge into another ticket</div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('merge_ticket', ticket_id=ticket.id) }}" onsubmit="return confirm('Merge this ticket? This cannot be undone.')">
+        <form method="POST" action="{{ url_for('tickets.merge_ticket', ticket_id=ticket.id) }}" onsubmit="return confirm('Merge this ticket? This cannot be undone.')">
           <div class="input-group input-group-sm">
             <span class="input-group-text">#</span>
             <input type="number" name="merge_into_id" class="form-control" placeholder="Target ticket ID" required min="1">
@@ -336,7 +336,7 @@
       <div class="card-header fw-semibold"><i class="bi bi-arrows-collapse me-2"></i>Merged</div>
       <div class="card-body small">
         <span class="text-muted">This ticket was merged into</span>
-        <a href="{{ url_for('view_ticket', ticket_id=ticket.merged_into.id) }}">Ticket #{{ ticket.merged_into.id }}</a>.
+        <a href="{{ url_for('tickets.view_ticket', ticket_id=ticket.merged_into.id) }}">Ticket #{{ ticket.merged_into.id }}</a>.
       </div>
     </div>
     {% endif %}
@@ -362,110 +362,9 @@
 </div>{# /row #}
 
 <script>
-async function startRustDeskSession(assetId) {
-  const reason = prompt('Reason for remote session (required for audit log):');
-  if (!reason || !reason.trim()) { alert('A reason is required.'); return; }
-  const resp = await fetch(`/assets/${assetId}/remote/rustdesk/start`, {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({reason: reason.trim()})
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || !data.success) { alert(data.error || 'Failed to start session'); return; }
-  const pw = (data.rustdesk_password || '').trim();
-  const id = (data.rustdesk_id || '').trim();
-  if (pw) {
-    try { await navigator.clipboard.writeText(pw); showToast('Password copied to clipboard ✓'); }
-    catch (_) { showToast('Password: ' + pw, 8000); }
-  }
-  if (id) { setTimeout(() => { window.location.href = `rustdesk://${encodeURIComponent(id)}`; }, 600); }
-}
-function showToast(msg, ms=3500) {
-  let t = document.getElementById('rdToast');
-  if (!t) {
-    t = document.createElement('div'); t.id = 'rdToast';
-    t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:#198754;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .4s';
-    document.body.appendChild(t);
-  }
-  t.textContent = msg; t.style.opacity = '1';
-  clearTimeout(t._hide); t._hide = setTimeout(() => { t.style.opacity = '0'; }, ms);
-}
-
-// ── AI Suggestion ─────────────────────────────────────────────────────────────
-const TICKET_ID = {{ ticket.id }};
-
-async function requestAiSuggestion() {
-  const btn  = document.getElementById('btn-ai-suggest');
-  const body = document.getElementById('ai-panel-body');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  body.innerHTML = '<div class="text-muted small text-center py-2">Thinking…</div>';
-  try {
-    const resp = await fetch(`/api/ai/ticket/${TICKET_ID}/suggest`, { method: 'POST' });
-    const d    = await resp.json();
-    if (!resp.ok) { body.innerHTML = `<div class="alert alert-warning p-2 small">${d.error||'AI not configured — add your OpenAI key in Settings → AI.'}</div>`; return; }
-    renderSuggestion(d, body);
-  } catch(e) {
-    body.innerHTML = `<div class="alert alert-danger p-2 small">${e.message}</div>`;
-  } finally {
-    btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-fill"></i> Suggest';
-  }
-}
-
-function renderSuggestion(d, body) {
-  const p = d.parsed || {};
-  const conf = p.confidence ? Math.round(p.confidence * 100) : null;
-  const confCol = conf >= 85 ? '#5fcf8b' : conf >= 60 ? '#f8a84a' : '#f87171';
-  const sugId = d.suggestion_id;
-  body.innerHTML = `
-    <div class="mb-2 d-flex align-items-center">
-      <strong class="small">AI Diagnosis</strong>
-      ${conf ? `<span class="ms-auto badge" style="background:${confCol}22;color:${confCol};font-size:.72rem">${conf}% confidence</span>` : ''}
-    </div>
-    <p class="small text-secondary mb-2">${escHtml(p.diagnosis||d.suggestion||'—')}</p>
-    ${p.resolution_steps&&p.resolution_steps.length ? `<div class="small mb-2"><strong>Steps:</strong><ol class="mb-1 ps-3">${p.resolution_steps.map(s=>`<li>${escHtml(s)}</li>`).join('')}</ol></div>` : ''}
-    ${p.estimated_minutes ? `<div class="small text-muted mb-2"><i class="bi bi-clock me-1"></i>Est. ${p.estimated_minutes} min</div>` : ''}
-    ${sugId ? `<div class="d-flex gap-2 mt-2">
-      <button class="btn btn-sm btn-outline-success py-0 px-2" onclick="applySugg(${sugId})"><i class="bi bi-check-lg"></i> Apply as Note</button>
-      <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="dismissSugg(${sugId})"><i class="bi bi-x-lg"></i> Dismiss</button>
-    </div>` : ''}
-  `;
-}
-
-async function applySugg(id) {
-  const resp = await fetch(`/api/ai/suggestions/${id}/apply`, { method:'POST' });
-  if (resp.ok) { showFlash('AI suggestion added as a ticket note.', 2000); document.getElementById('ai-panel-body').innerHTML='<div class="text-muted small text-center py-2">Applied ✓</div>'; }
-}
-async function dismissSugg(id) {
-  await fetch(`/api/ai/suggestions/${id}/dismiss`, { method:'POST' });
-  document.getElementById('ai-panel-body').innerHTML='<div class="text-muted small text-center py-2">Dismissed.</div>';
-}
-function escHtml(s) { return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-// Auto-load existing suggestions if any
-fetch(`/api/ai/ticket/${TICKET_ID}/suggestions`).then(r=>r.json()).then(list=>{
-  if (!list.length) return;
-  const latest = list[0];
-  if (latest.status === 'pending') renderSuggestion(latest, document.getElementById('ai-panel-body'));
-});
-
-async function aiTriage(ticket_id) {
-  const btn = document.getElementById('aiTriageBtn');
-  const box = document.getElementById('aiTriageResult');
-  btn.disabled = true;
-  box.className = 'alert alert-info mt-2';
-  box.textContent = 'AI is triaging this ticket…';
-  try {
-    const r = await fetch(`/api/ai/triage-ticket/${ticket_id}`, {method:'POST'});
-    const d = await r.json();
-    if (d.error) { box.className='alert alert-danger mt-2'; box.textContent=d.error; }
-    else {
-      box.className='alert alert-success mt-2';
-      box.innerHTML = `<strong>AI Triage Result</strong> <span class="badge bg-secondary">${escHtml(d.source)}</span><br>
-        Priority: <strong>${escHtml(d.priority)}</strong> &nbsp;|&nbsp; Category: <strong>${escHtml(d.category)}</strong><br>
-        <span class="text-muted small">${escHtml(d.reason)}</span>`;
-    }
-  } catch(e) { box.className='alert alert-danger mt-2'; box.textContent='Triage request failed.'; }
-  finally { btn.disabled = false; }
-}
+window.VIEWTICKET_CFG = {
+  ticket_id: {{ ticket.id }}
+};
 </script>
+<script src="/static/js/view_ticket.js"></script>
 {% endblock %}

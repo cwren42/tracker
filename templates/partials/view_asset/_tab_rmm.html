@@ -1,0 +1,33 @@
+<!-- ══ RMM AGENT TAB ═════════════════════════════════════════ -->
+{% if rmm_agent_id %}
+{% endif %}
+
+{% if rmm_agent_id %}
+<!-- Screenshot modal (used by status bar) -->
+<div class="modal fade" id="rmmScreenshotModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-camera me-2"></i>Device Screenshot</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-2 text-center bg-dark position-relative">
+                <div id="rmm-ss-spinner" class="py-4">
+                    <div class="spinner-border text-light"></div>
+                    <p class="text-light mt-2 mb-0">Requesting screenshot from device…</p>
+                </div>
+                <img id="rmm-ss-img" src="" style="max-width:100%;display:none;" alt="Screenshot">
+                <p id="rmm-ss-error" class="text-danger mt-2" style="display:none;"></p>
+            </div>
+            <div class="modal-footer py-2">
+                <small class="text-muted me-auto" id="rmm-ss-meta"></small>
+                <a id="rmm-ss-download" href="#" download="screenshot.jpg" class="btn btn-sm btn-outline-primary" style="display:none;">
+                    <i class="bi bi-download me-1"></i>Download
+                </a>
+                <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/rmm_agent.js') }}"></script>
+{% endif %}

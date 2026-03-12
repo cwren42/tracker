@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% block styles %}
+<link rel="stylesheet" href="/static/css/licenses.css">
+{% endblock %}
 
 {% block title %}Software Licenses{% endblock %}
 
@@ -15,7 +18,7 @@
         </div>
         <div class="col-md-4 text-end">
             {% if current_user.role in ['admin', 'manager'] %}
-            <a href="{{ url_for('add_license') }}" class="btn btn-primary">
+            <a href="{{ url_for('licenses.add_license') }}" class="btn btn-primary">
                 <i class="bi bi-plus-circle"></i> Add License
             </a>
             {% endif %}
@@ -25,28 +28,10 @@
 
 {% set ai_context = "licenses" %}{% include '_ai_search_bar.html' %}
     <!-- Statistics Cards -->
-    <style>
-        .stat-card-clickable {
-            transition: transform 0.2s, box-shadow 0.2s;
-            cursor: pointer;
-            text-decoration: none;
-            color: inherit;
-        }
-        .stat-card-clickable:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2) !important;
-        }
-        .stat-card-clickable .card-body {
-            position: relative;
-        }
-        .stat-card-clickable small {
-            opacity: 0.7;
-            font-size: 0.75rem;
-        }
-    </style>
+    
     <div class="row mb-4">
         <div class="col-md-3">
-            <a href="{{ url_for('licenses') }}" class="stat-card-clickable">
+            <a href="{{ url_for('licenses.licenses') }}" class="stat-card-clickable">
                 <div class="card border-primary shadow-sm">
                     <div class="card-body">
                         <h6 class="card-subtitle mb-2 text-muted">Total Licenses</h6>
@@ -57,7 +42,7 @@
             </a>
         </div>
         <div class="col-md-3">
-            <a href="{{ url_for('licenses', status='Active') }}" class="stat-card-clickable">
+            <a href="{{ url_for('licenses.licenses', status='Active') }}" class="stat-card-clickable">
                 <div class="card border-success shadow-sm">
                     <div class="card-body">
                         <h6 class="card-subtitle mb-2 text-muted">Active</h6>
@@ -79,7 +64,7 @@
             </a>
         </div>
         <div class="col-md-3">
-            <a href="{{ url_for('licenses') }}" class="stat-card-clickable">
+            <a href="{{ url_for('licenses.licenses') }}" class="stat-card-clickable">
                 <div class="card border-info shadow-sm">
                     <div class="card-body">
                         <h6 class="card-subtitle mb-2 text-muted">Annual Cost</h6>
@@ -94,7 +79,7 @@
     <!-- Filters -->
     <div class="card shadow-sm mb-4">
         <div class="card-body">
-            <form method="GET" action="{{ url_for('licenses') }}" class="row g-3">
+            <form method="GET" action="{{ url_for('licenses.licenses') }}" class="row g-3">
                 <div class="col-md-3">
                     <input type="text" class="form-control" name="software" 
                            placeholder="Software name" value="{{ request.args.get('software', '') }}">
@@ -199,7 +184,7 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <a href="{{ url_for('view_license', license_id=license.id) }}" 
+                                <a href="{{ url_for('licenses.view_license', license_id=license.id) }}" 
                                    class="btn btn-sm btn-outline-primary">
                                     <i class="bi bi-eye"></i>
                                 </a>
@@ -213,38 +198,6 @@
     </div>
 </div>
 
-<script>
-function filterExpiringSoon() {
-    // Get all rows in the table
-    const rows = document.querySelectorAll('tbody tr');
-    let hasExpiring = false;
-    
-    rows.forEach(row => {
-        const statusCell = row.cells[4]; // Status column
-        if (statusCell && statusCell.textContent.includes('Expiring Soon')) {
-            row.style.display = '';
-            hasExpiring = true;
-        } else {
-            row.style.display = 'none';
-        }
-    });
-    
-    if (!hasExpiring) {
-        alert('No licenses expiring soon!');
-        rows.forEach(row => row.style.display = '');
-    } else {
-        // Scroll to table
-        document.querySelector('.table-responsive').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-}
-
-// Enable tooltips
-document.addEventListener('DOMContentLoaded', function() {
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-});
-</script>
+<script src="/static/js/licenses.js"></script>
 
 {% endblock %}

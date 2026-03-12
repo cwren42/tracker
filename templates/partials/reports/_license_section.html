@@ -1,0 +1,184 @@
+<!-- License Analytics Section -->
+<div class="row mb-4 mt-5">
+    <div class="col-12">
+        <h2><i class="bi bi-key-fill text-primary"></i> License Analytics</h2>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Licenses by Vendor</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn" 
+                        data-widget-id="license_vendor_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Licenses by Vendor"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="licenseVendorChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-pie-chart-fill"></i> Licenses by Type</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn" 
+                        data-widget-id="license_type_chart" 
+                        data-widget-type="chart" 
+                        data-widget-title="Licenses by Type"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="licenseTypeChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4" id="license-costs">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-cash-stack"></i> Annual License Costs by Vendor</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn" 
+                    data-widget-id="license_cost_chart" 
+                    data-widget-type="chart" 
+                    data-widget-title="Annual License Costs by Vendor"
+                    title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="licenseCostChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> License Utilization</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn" 
+                    data-widget-id="license_utilization_chart" 
+                    data-widget-type="chart" 
+                    data-widget-title="License Utilization"
+                    title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <canvas id="licenseUtilizationChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- License Utilization Table -->
+<div class="row mb-4" id="license-utilization">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-table"></i> License Seat Utilization</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn"
+                        data-widget-id="license_seat_table"
+                        data-widget-type="table"
+                        data-widget-title="License Seat Utilization"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Software</th>
+                                <th>Vendor</th>
+                                <th>Total Seats</th>
+                                <th>Assigned</th>
+                                <th>Available</th>
+                                <th>Utilization</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for lic in license_utilization %}
+                            <tr>
+                                <td><strong>{{ lic.software }}</strong></td>
+                                <td>{{ lic.vendor or '-' }}</td>
+                                <td>{{ lic.total }}</td>
+                                <td>{{ lic.assigned }}</td>
+                                <td>{{ lic.available }}</td>
+                                <td>
+                                    <div class="progress" style="height: 25px;">
+                                        <div class="progress-bar {% if lic.utilization >= 100 %}bg-danger{% elif lic.utilization >= 80 %}bg-warning{% else %}bg-success{% endif %}" 
+                                             style="width: {{ lic.utilization }}%">
+                                            {{ '%.0f'|format(lic.utilization) }}%
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Licenses Expiring Soon -->
+{% if licenses_expiring %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card border-warning">
+            <div class="card-header bg-warning d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Licenses Expiring Soon (30 Days)</h5>
+                <button class="btn btn-sm btn-light add-to-dashboard-btn"
+                        data-widget-id="licenses_expiring"
+                        data-widget-type="list"
+                        data-widget-title="Licenses Expiring Soon"
+                        title="Add to Dashboard">
+                    <i class="bi bi-plus-circle"></i> Dashboard
+                </button>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Software</th>
+                            <th>Vendor</th>
+                            <th>Expiry Date</th>
+                            <th>Days Remaining</th>
+                            <th>Annual Cost</th>
+                            <th>Seats</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for lic in licenses_expiring %}
+                        <tr>
+                            <td><strong>{{ lic.software_name }}</strong></td>
+                            <td>{{ lic.vendor or '-' }}</td>
+                            <td>{{ lic.expiry_date.strftime('%Y-%m-%d') }}</td>
+                            <td>
+                                {% set days_left = (lic.expiry_date - today).days %}
+                                <span class="badge bg-warning">{{ days_left }} days</span>
+                            </td>
+                            <td>{{ '$%.2f'|format(lic.annual_cost) if lic.annual_cost else '-' }}</td>
+                            <td>{{ lic.total_licenses }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}

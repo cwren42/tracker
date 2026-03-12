@@ -1,0 +1,40 @@
+<!-- ══ HISTORY TAB ══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-history" role="tabpanel">
+  <div class="card section-card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history me-2"></i>Activity Log</span>
+        <small class="text-muted">{{ history|length }} event{{ 's' if history|length != 1 else '' }}</small>
+    </div>
+    <div class="card-body p-0">
+    {% if history %}
+    <div class="px-3 py-1">
+        {% for entry in history %}
+        {% set al = entry.action|lower %}
+        {% if 'assign' in al or 'unassign' in al %}{% set icon='bi-person-check' %}{% set icolor='text-primary' %}
+        {% elif 'checkout' in al %}{% set icon='bi-box-arrow-right' %}{% set icolor='text-warning' %}
+        {% elif 'checkin' in al or 'check in' in al %}{% set icon='bi-box-arrow-in-left' %}{% set icolor='text-success' %}
+        {% elif 'status' in al %}{% set icon='bi-arrow-repeat' %}{% set icolor='text-info' %}
+        {% elif 'delete' in al or 'remov' in al %}{% set icon='bi-trash' %}{% set icolor='text-danger' %}
+        {% elif 'creat' in al or 'add' in al %}{% set icon='bi-plus-circle' %}{% set icolor='text-success' %}
+        {% else %}{% set icon='bi-pencil' %}{% set icolor='text-secondary' %}{% endif %}
+        <div class="d-flex gap-3 py-2" style="border-bottom:1px solid rgba(128,128,128,.1);">
+            <div class="mt-1 flex-shrink-0 fs-6"><i class="bi {{ icon }} {{ icolor }}"></i></div>
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-1">
+                    <span class="fw-semibold" style="font-size:.88rem;">{{ entry.action }}</span>
+                    <small class="text-muted text-nowrap">{{ entry.timestamp.strftime('%b %d, %Y %H:%M') }}</small>
+                </div>
+                {% if entry.description %}<div class="text-muted mt-1" style="font-size:.82rem;">{{ entry.description }}</div>{% endif %}
+                {% if entry.changed_by %}<small class="text-muted" style="font-size:.75rem;"><i class="bi bi-person me-1"></i>{{ entry.changed_by }}</small>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-clock-history fs-2 d-block mb-2 opacity-50"></i>No activity recorded yet.
+    </div>
+    {% endif %}
+    </div>
+  </div>
+</div>

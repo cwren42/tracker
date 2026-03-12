@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% block styles %}
+<link rel="stylesheet" href="/static/css/management_risk_review.css">
+{% endblock %}
 
 {% block title %}Management Review - Risk Assessment{% endblock %}
 
@@ -320,58 +323,11 @@
 </div>
 
 <script>
-function downloadHTML() {
-    const title = 'Management Review - Risk Assessment - {{ review_date.strftime("%Y%m%d") }}';
-    const htmlContent = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title}</title>
-    <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/vendor/bootstrap-icons/font/bootstrap-icons.css">
-    <style>
-        body { padding: 40px; background-color: white; color: #333; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .card { margin-bottom: 30px; border: 1px solid #ddd; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .card-header { background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 15px 20px; }
-        .card-header h3, .card-header h4, .card-header h5 { margin: 0; color: #333; }
-        .bg-primary { background-color: #0d6efd !important; color: white; }
-        .bg-success { background-color: #198754 !important; color: white; }
-        .bg-warning { background-color: #ffc107 !important; color: #000; }
-        .bg-danger { background-color: #dc3545 !important; color: white; }
-        .bg-info { background-color: #0dcaf0 !important; color: #000; }
-        table { margin-top: 15px; }
-        .table-bordered { border: 1px solid #dee2e6; }
-        .table th { background-color: #f8f9fa; font-weight: 600; }
-        .badge { padding: 5px 10px; font-size: 0.9em; }
-        h1, h2, h3, h4, h5, h6 { color: #0d6efd; margin-top: 20px; }
-        .border-top { border-top: 2px solid #dee2e6 !important; margin-top: 30px; padding-top: 20px; }
-        @page { margin: 0.75in; }
-        @media print {
-            body { padding: 20px; }
-            .btn, .btn-group { display: none !important; }
-            .card { page-break-inside: avoid; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container-fluid">
-        ${document.getElementById('report-content').innerHTML}
-    </div>
-</body>
-</html>`;
-    
-    const blob = new Blob([htmlContent], {type: 'text/html'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Management_Review_Risk_Assessment_{{ review_date.strftime("%Y%m%d") }}.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}
+window.MANAGEMENTRISKREVIEW_CFG = {
+  review_date: {{ review_date.strftime("%Y%m%d") }}
+};
 </script>
+<script src="/static/js/management_risk_review.js"></script>
 
 <style>
 @media print {

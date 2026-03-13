@@ -267,9 +267,11 @@ def assets():
 
     rmm_asset_ids = set()
     rmm_online_ids = set()
+    agent_id_to_asset_id = {}
     for row in rmm_rows:
         agent_id, asset_id, last_seen_at = row[0], row[1], row[2]
         rmm_asset_ids.add(asset_id)
+        agent_id_to_asset_id[agent_id] = asset_id
         # Online if: gateway has live WS connection, OR last_seen_at within 5 min
         if agent_id in gateway_online:
             rmm_online_ids.add(asset_id)
@@ -282,8 +284,50 @@ def assets():
             if last_seen_at and last_seen_at > cutoff:
                 rmm_online_ids.add(asset_id)
 
+    # Build per-asset patch counts and reboot flags from rmm_pending_update
+    patch_counts = {}   # asset_id -> int
+    reboot_flags = {}   # asset_id -> bool
+    try:
+        patch_rows = db.session.execute(
+            text("""
+                SELECT ra.asset_id, COUNT(rpu.id), BOOL_OR(rpu.reboot_required)
+                FROM rmm_agent ra
+                JOIN rmm_pending_update rpu ON rpu.agent_id = ra.agent_id
+                WHERE ra.enabled = true AND ra.asset_id IS NOT NULL
+                GROUP BY ra.asset_id
+            """)
+        ).fetchall()
+        for asset_id, count, reboot in patch_rows:
+            patch_counts[asset_id] = count
+            reboot_flags[asset_id] = bool(reboot)
+    except Exception:
+        pass
+
+    # Build per-asset vulnerability counts (open Critical + High CVEs)
+    vuln_counts = {}    # asset_id -> {'critical': int, 'high': int, 'total': int}
+    try:
+        vuln_rows = db.session.execute(
+            text("""
+                SELECT asset_id, severity, COUNT(*)
+                FROM device_vulnerability
+                WHERE status = 'Open'
+                GROUP BY asset_id, severity
+            """)
+        ).fetchall()
+        for asset_id, severity, count in vuln_rows:
+            if asset_id not in vuln_counts:
+                vuln_counts[asset_id] = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'total': 0}
+            sev = severity.lower() if severity else 'low'
+            if sev in vuln_counts[asset_id]:
+                vuln_counts[asset_id][sev] += count
+            vuln_counts[asset_id]['total'] += count
+    except Exception:
+        pass
+
     return render_template('assets.html', assets=assets, categories=categories,
-                           rmm_asset_ids=rmm_asset_ids, rmm_online_ids=rmm_online_ids)
+                           rmm_asset_ids=rmm_asset_ids, rmm_online_ids=rmm_online_ids,
+                           patch_counts=patch_counts, reboot_flags=reboot_flags,
+                           vuln_counts=vuln_counts)
 
 
 @bp.route('/assets/add', methods=['GET', 'POST'])

@@ -149,58 +149,28 @@
         </ul>
 
         <div class="nav-section-label">Admin</div>
-        <a class="sidebar-link {% if request.endpoint == 'auth.users' %}active{% endif %}"
-           href="{{ url_for('auth.users') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Users">
-            <i class="bi bi-people-fill"></i><span class="link-label">Users</span>
+        {% set admin_endpoints = ['auth.users','settings.settings','settings.settings_theme','settings.settings_license','settings.settings_email','settings.settings_directory','settings.settings_rmm','settings.settings_scripts','settings.settings_eagleeye','settings.settings_unifi','settings.settings_proxmox','settings.settings_ai','settings.settings_cloudflare'] %}
+        <a class="sidebar-link sidebar-parent {% if request.endpoint in admin_endpoints %}active{% endif %}"
+           data-bs-toggle="collapse" href="#sub-admin" role="button"
+           aria-expanded="{% if request.endpoint in admin_endpoints %}true{% else %}false{% endif %}">
+            <i class="bi bi-shield-lock-fill"></i><span class="link-label">Admin</span>
+            <i class="bi bi-chevron-down sidebar-chevron"></i>
         </a>
-        <a class="sidebar-link {% if request.endpoint == 'settings.settings' %}active{% endif %}"
-           href="{{ url_for('settings.settings') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Settings">
-            <i class="bi bi-gear-fill"></i><span class="link-label">Settings</span>
-        </a>
-                    <a class="sidebar-link {% if request.endpoint == 'settings.settings_theme' %}active{% endif %}"
-                            href="{{ url_for('settings.settings_theme') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Appearance Settings">
-                        <i class="bi bi-palette-fill"></i><span class="link-label">Appearance</span>
-                </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_license' %}active{% endif %}"
-              href="{{ url_for('settings.settings_license') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="License Settings">
-            <i class="bi bi-key-fill"></i><span class="link-label">License</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_email' %}active{% endif %}"
-              href="{{ url_for('settings.settings_email') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Email Settings">
-            <i class="bi bi-envelope-fill"></i><span class="link-label">Email</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_directory' %}active{% endif %}"
-              href="{{ url_for('settings.settings_directory') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Directory Settings">
-            <i class="bi bi-server"></i><span class="link-label">Directory</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_rmm' %}active{% endif %}"
-              href="{{ url_for('settings.settings_rmm') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="RMM Settings">
-            <i class="bi bi-robot"></i><span class="link-label">RMM Agent</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_scripts' %}active{% endif %}"
-              href="{{ url_for('settings.settings_scripts') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Scripts Settings">
-            <i class="bi bi-terminal-fill"></i><span class="link-label">Scripts</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_eagleeye' %}active{% endif %}"
-              href="{{ url_for('settings.settings_eagleeye') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eye Settings">
-            <i class="bi bi-binoculars-fill"></i><span class="link-label">Eagle Eye</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_unifi' %}active{% endif %}"
-              href="{{ url_for('settings.settings_unifi') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="UniFi Settings">
-            <i class="bi bi-wifi"></i><span class="link-label">UniFi</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_proxmox' %}active{% endif %}"
-              href="{{ url_for('settings.settings_proxmox') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Proxmox Settings">
-            <i class="bi bi-hdd-stack-fill"></i><span class="link-label">Proxmox</span>
-        </a>
-          <a class="sidebar-link {% if request.endpoint == 'settings.settings_ai' %}active{% endif %}"
-              href="{{ url_for('settings.settings_ai') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="AI Settings">
-            <i class="bi bi-stars"></i><span class="link-label">AI</span>
-        </a>
-                    <a class="sidebar-link {% if request.endpoint == 'settings.settings_cloudflare' %}active{% endif %}"
-                            href="{{ url_for('settings.settings_cloudflare') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Cloudflare Settings">
-                        <i class="bi bi-cloud-fill"></i><span class="link-label">Cloudflare</span>
-                </a>
+        <ul class="sidebar-submenu collapse {% if request.endpoint in admin_endpoints %}show{% endif %}" id="sub-admin">
+            <li><a class="sidebar-link {% if request.endpoint == 'auth.users' %}active{% endif %}" href="{{ url_for('auth.users') }}"><i class="bi bi-people-fill"></i><span class="link-label">Users</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings' %}active{% endif %}" href="{{ url_for('settings.settings') }}"><i class="bi bi-gear-fill"></i><span class="link-label">Settings</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_theme' %}active{% endif %}" href="{{ url_for('settings.settings_theme') }}"><i class="bi bi-palette-fill"></i><span class="link-label">Appearance</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_license' %}active{% endif %}" href="{{ url_for('settings.settings_license') }}"><i class="bi bi-key-fill"></i><span class="link-label">License</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_email' %}active{% endif %}" href="{{ url_for('settings.settings_email') }}"><i class="bi bi-envelope-fill"></i><span class="link-label">Email</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_directory' %}active{% endif %}" href="{{ url_for('settings.settings_directory') }}"><i class="bi bi-server"></i><span class="link-label">Directory</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_rmm' %}active{% endif %}" href="{{ url_for('settings.settings_rmm') }}"><i class="bi bi-robot"></i><span class="link-label">RMM Agent</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_scripts' %}active{% endif %}" href="{{ url_for('settings.settings_scripts') }}"><i class="bi bi-terminal-fill"></i><span class="link-label">Scripts</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_eagleeye' %}active{% endif %}" href="{{ url_for('settings.settings_eagleeye') }}"><i class="bi bi-binoculars-fill"></i><span class="link-label">Eagle Eye</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_unifi' %}active{% endif %}" href="{{ url_for('settings.settings_unifi') }}"><i class="bi bi-wifi"></i><span class="link-label">UniFi</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_proxmox' %}active{% endif %}" href="{{ url_for('settings.settings_proxmox') }}"><i class="bi bi-hdd-stack-fill"></i><span class="link-label">Proxmox</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_ai' %}active{% endif %}" href="{{ url_for('settings.settings_ai') }}"><i class="bi bi-stars"></i><span class="link-label">AI</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_cloudflare' %}active{% endif %}" href="{{ url_for('settings.settings_cloudflare') }}"><i class="bi bi-cloud-fill"></i><span class="link-label">Cloudflare</span></a></li>
+        </ul>
         {% endif %}
 
         {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] and current_user.role != 'admin' %}
@@ -307,7 +277,7 @@
     {% endif %}
     {% endif %}<!-- /topbar (is_authenticated) -->
 
-    <div class="content">
+    <div class="content {% block content_class %}{% endblock %}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -379,9 +349,11 @@
         </div>
     </div>
 
+    {% block footer %}
     <footer class="footer">
         <small>&copy; 2025 IT Asset Tracker | Logged in as {{ current_user.display_name }}</small>
     </footer>
+    {% endblock %}
     {% endif %}
 
 
@@ -576,6 +548,10 @@
             });
         }
 
+        window.sidebarToggle = function() {
+            var collapsed = !sidebar.classList.contains('collapsed');
+            applyState(collapsed);
+            localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
         };
         window.sidebarOpen = function() {
             sidebar.classList.add('mobile-open');

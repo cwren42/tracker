@@ -22,6 +22,21 @@ import urllib.request
 _AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _AGENT_PY  = os.path.join(_AGENT_DIR, "agent_client.py")
 _AGENT_OLD = _AGENT_PY + ".old"
+_VER_FILE  = os.path.join(_AGENT_DIR, "version.txt")
+
+
+def _local_version() -> str:
+    try:
+        return open(_VER_FILE).read().strip()
+    except OSError:
+        return "0.0.0"
+
+
+def _parse_version(v: str):
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except Exception:
+        return (0, 0, 0)
 
 
 def _ssl_ctx():
@@ -38,6 +53,66 @@ def _is_valid(path: str) -> bool:
             ast.parse(f.read())
         return True
     except (SyntaxError, OSError):
+        return False
+
+
+def _check_for_update() -> bool:
+    """Check server version; download agent_client.py if server has a newer version.
+
+    Returns True if an update was downloaded and applied, False otherwise.
+    """
+    tracker_url = os.environ.get("RMM_TRACKER_URL",
+                                 "https://tracker.corp.cirque.com").rstrip("/")
+    agent_id    = os.environ.get("RMM_AGENT_ID", "")
+    token       = os.environ.get("RMM_AGENT_TOKEN", "")
+
+    if not agent_id or not token:
+        return False
+
+    local_ver = _local_version()
+    try:
+        ver_url = f"{tracker_url}/rmm/agent/version?agent_id={agent_id}&token={token}"
+        req = urllib.request.Request(ver_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=10) as r:
+            data = json.loads(r.read())
+        server_ver    = data.get("version", "0.0.0")
+        server_cksum  = data.get("checksum", "")
+
+        if _parse_version(server_ver) <= _parse_version(local_ver):
+            print(f"[launcher] Agent up-to-date (local={local_ver} server={server_ver})", flush=True)
+            return False
+
+        print(f"[launcher] Update available: {local_ver} → {server_ver}. Downloading...", flush=True)
+
+        file_url = f"{tracker_url}/rmm/agent/file?agent_id={agent_id}&token={token}"
+        req2 = urllib.request.Request(file_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+        with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
+            new_code = r.read()
+
+        if server_cksum and hashlib.sha256(new_code).hexdigest() != server_cksum:
+            print("[launcher] Checksum mismatch on update — skipping", flush=True)
+            return False
+
+        tmp = _AGENT_PY + ".update"
+        with open(tmp, "wb") as f:
+            f.write(new_code)
+
+        if not _is_valid(tmp):
+            print("[launcher] Downloaded update has syntax errors — skipping", flush=True)
+            os.remove(tmp)
+            return False
+
+        # Backup current, apply update, write new version
+        if os.path.exists(_AGENT_PY):
+            shutil.copy2(_AGENT_PY, _AGENT_OLD)
+        shutil.move(tmp, _AGENT_PY)
+        with open(_VER_FILE, "w") as vf:
+            vf.write(server_ver)
+        print(f"[launcher] Updated to v{server_ver}", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[launcher] Version check failed: {e}", flush=True)
         return False
 
 
@@ -116,6 +191,9 @@ def _restore_old() -> bool:
 
 def main():
     print(f"[launcher] Starting — agent: {_AGENT_PY}", flush=True)
+
+    # --- Proactive update check: download newer agent_client.py if available ---
+    _check_for_update()
 
     # --- Validate current agent_client.py ---
     if not _is_valid(_AGENT_PY):

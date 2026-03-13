@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block styles %}
-<link rel="stylesheet" href="/static/css/dashboard.css">
+<link rel="stylesheet" href="/static/css/dashboard.css?v=2">
 {% endblock %}
 
 {% block title %}Dashboard - Asset Tracker{% endblock %}
@@ -38,6 +38,7 @@
     </div>
 </div>
 {% set ai_context = "dashboard" %}{% include '_ai_search_bar.html' %}
+
 
 
 {% if edit_mode %}
@@ -225,37 +226,6 @@
         </div>
     </div>
     {% endif %}
-</div>
-
-<!-- AI Ask Panel -->
-<div class="card mb-4 mt-2 border-0 shadow-sm">
-    <div class="card-body py-3 px-4">
-        <div class="d-flex align-items-center gap-3">
-            <div class="text-primary" style="font-size:1.5rem;"><i class="bi bi-stars"></i></div>
-            <div class="flex-grow-1">
-                <div class="input-group">
-                    <input type="text" class="form-control" id="aiAskInput"
-                           placeholder="Ask anything… e.g. Which devices are low on storage? How many urgent tickets?"
-                           maxlength="500">
-                    <button class="btn btn-primary" type="button" id="aiAskBtn">
-                        <i class="bi bi-send"></i> Ask AI
-                    </button>
-                </div>
-            </div>
-        </div>
-        <div id="aiAskResult" class="mt-3" style="display:none;">
-            <div class="border rounded p-3 bg-body-tertiary">
-                <div class="d-flex align-items-start gap-2">
-                    <i class="bi bi-robot text-primary mt-1"></i>
-                    <div>
-                        <div id="aiAskAnswer" class="small" style="white-space:pre-wrap;"></div>
-                        <div class="mt-2" id="aiAskSources"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div id="aiAskError" class="mt-2 text-danger small" style="display:none;"></div>
-    </div>
 </div>
 
 <!-- Add Widget Modal -->
@@ -594,14 +564,12 @@ window.DASH_CFG = {
     indexUrl: "{{ url_for('dashboard.index') }}"
 };
 </script>
-<script src="/static/js/dashboard.js"></script>
-
 {% if edit_mode %}
 <link rel="stylesheet" href="/static/vendor/sortablejs/Sortable.min.css">
 <script src="/static/vendor/sortablejs/Sortable.min.js"></script>
-
-
 {% endif %}
+
+<script src="/static/js/dashboard.js"></script>
 
 
 {% endblock %}
@@ -609,3 +577,5 @@ window.DASH_CFG = {
 {% block scripts %}
 <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
 {% endblock %}
+
+{% block footer %}{% endblock %}

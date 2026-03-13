@@ -97,7 +97,7 @@ if (-not $Token) {
         try {
             $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId } | ConvertTo-Json
             $resp = Invoke-RestMethod -Uri "$TrackerUrl/api/rmm/enroll" `
-                       -Method POST -Body $body -ContentType "application/json" -UseBasicParsing
+                       -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 30
             if (-not $resp.ok) { throw "Server returned error: $($resp.error)" }
             $Token   = $resp.token
             $AgentId = $resp.agent_id
@@ -166,9 +166,13 @@ if (-not $PythonExe) {
     $PythonInstaller = "$env:TEMP\python_installer.exe"
     $PythonUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe"
     Write-Host "    Downloading from $PythonUrl ..."
-    Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonInstaller -UseBasicParsing
-    Write-Host "    Installing Python (silent)..."
-    Start-Process -FilePath $PythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait -NoNewWindow
+    Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonInstaller -UseBasicParsing -TimeoutSec 300
+    Write-Host "    Installing Python (silent, timeout 5 min)..."
+    $pyProc = Start-Process -FilePath $PythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -PassThru -NoNewWindow
+    if (-not $pyProc.WaitForExit(300000)) {
+        $pyProc.Kill()
+        Write-Error "Python installer timed out after 5 minutes."; exit 1
+    }
     Remove-Item $PythonInstaller -Force -ErrorAction SilentlyContinue
 
     # Refresh PATH
@@ -206,7 +210,7 @@ if ($SkipDownload) {
         $dest = "$InstallDir\$file"
         Write-Host "    GET $file ..."
         try {
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 60
         } catch {
             Write-Warning "    Failed to download $file`: $_"
         }
@@ -217,7 +221,7 @@ if ($SkipDownload) {
         $url  = "$TrackerUrl/download/agent-file/${iconFile}?t=$SiteToken"
         $dest = "$InstallDir\$iconFile"
         try {
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 60
         } catch { }
     }
 }
@@ -239,8 +243,8 @@ Write-Host "[5/7] Installing Python dependencies..." -ForegroundColor Yellow
 # Stop any running instance first so pip can overwrite in-use files
 try { sc.exe stop CirqueRMM 2>$null | Out-Null } catch {}
 Start-Sleep -Seconds 2
-& $PythonExe -m pip install -q --upgrade pip
-& $PythonExe -m pip install -q -r "$InstallDir\requirements.txt"
+& $PythonExe -m pip install -q --upgrade pip --timeout 120
+& $PythonExe -m pip install -q -r "$InstallDir\requirements.txt" --timeout 120
 if ($LASTEXITCODE -ne 0) { Write-Error "pip install failed."; exit 1 }
 Write-Host "    Dependencies installed." -ForegroundColor Green
 
@@ -260,7 +264,7 @@ if (-not (Test-Path $NssmPath)) {
     $NssmExtract = "$env:TEMP\nssm_extract"
     $NssmDir     = Split-Path $NssmPath
     New-Item -ItemType Directory -Force -Path $NssmDir | Out-Null
-    Invoke-WebRequest -Uri "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" -OutFile $NssmZip -UseBasicParsing
+    Invoke-WebRequest -Uri "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" -OutFile $NssmZip -UseBasicParsing -TimeoutSec 120
     Expand-Archive -Path $NssmZip -DestinationPath $NssmExtract -Force
     if ([Environment]::Is64BitOperatingSystem) { $arch = "win64" } else { $arch = "win32" }
     $extracted = Get-ChildItem $NssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match $arch } | Select-Object -First 1
@@ -348,6 +352,7 @@ if ($targetUser) {
     Write-Warning "    No interactive user detected — tray will start on next login via Startup folder."
 }
 
+Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
 Write-Host ""
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host "  Installation Complete!" -ForegroundColor Green

@@ -124,6 +124,45 @@ def employees():
                 'last_seen_display': last_seen_utc.strftime('%Y-%m-%d %H:%M UTC')
             }
     
+    # Build RMM agent online sets (live gateway + 5-min last_seen_at)
+    rmm_online_asset_ids = set()
+    try:
+        import requests as _requests
+        RMM_GATEWAY_INTERNAL = current_app.config.get('RMM_GATEWAY_INTERNAL', 'http://127.0.0.1:8765')
+        cutoff = datetime.utcnow() - timedelta(seconds=300)
+        rmm_rows = db.session.execute(
+            text("SELECT agent_id, asset_id, last_seen_at FROM rmm_agent WHERE enabled = true AND asset_id IS NOT NULL")
+        ).fetchall()
+        gateway_online = set()
+        try:
+            gw_resp = _requests.get(f'{RMM_GATEWAY_INTERNAL}/agents', timeout=2)
+            gateway_online = set(gw_resp.json().get('agents', []))
+        except Exception:
+            pass
+        for row in rmm_rows:
+            agent_id, asset_id, last_seen_at = row[0], row[1], row[2]
+            online = agent_id in gateway_online
+            if not online and last_seen_at:
+                if isinstance(last_seen_at, str):
+                    try:
+                        last_seen_at = datetime.fromisoformat(last_seen_at)
+                    except ValueError:
+                        last_seen_at = None
+                if last_seen_at and last_seen_at.replace(tzinfo=None) > cutoff:
+                    online = True
+            if online:
+                rmm_online_asset_ids.add(asset_id)
+    except Exception:
+        pass
+
+    # Map employee_id -> True if any assigned asset has a live RMM agent
+    employee_rmm_online = {}
+    for emp in employees:
+        for asset in emp.assets:
+            if asset.id in rmm_online_asset_ids:
+                employee_rmm_online[emp.id] = asset
+                break
+
     # Sort employees
     if sort_by == 'name':
         employees.sort(key=lambda e: e.name.lower() if e.name else '', reverse=(sort_order == 'desc'))
@@ -155,6 +194,7 @@ def employees():
                          employees=employees,
                          employee_license_counts=employee_license_counts,
                          employee_activity=employee_activity,
+                         employee_rmm_online=employee_rmm_online,
                          departments=departments,
                          search=search,
                          department_filter=department_filter,

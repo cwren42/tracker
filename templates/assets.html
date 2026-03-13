@@ -233,65 +233,36 @@
                             <input type="checkbox" id="selectAll" class="form-check-input" onchange="toggleSelectAll(this)">
                         </th>
                         {% endif %}
-                        <th style="cursor: pointer;" onclick="sortTable('asset_tag')">
-                            Asset Tag 
-                            {% if request.args.get('sort') == 'asset_tag' %}
-                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
-                            {% else %}
-                                <i class="bi bi-arrow-down-up text-muted"></i>
-                            {% endif %}
-                        </th>
                         <th style="cursor: pointer;" onclick="sortTable('name')">
-                            Name
+                            Device
                             {% if request.args.get('sort') == 'name' %}
                                 <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
                             {% else %}
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
-                        <th style="cursor: pointer;" onclick="sortTable('category')">
-                            Category
-                            {% if request.args.get('sort') == 'category' %}
+                        <th class="mobile-hide" width="50">AI</th>
+                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('last_seen')">
+                            Last Login
+                            {% if request.args.get('sort') == 'last_seen' %}
                                 <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
                             {% else %}
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
+                        <th>Availability</th>
                         <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('device_type')">
-                            Type
+                            Device Type
                             {% if request.args.get('sort') == 'device_type' %}
                                 <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
                             {% else %}
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
-                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('manufacturer')">
-                            Manufacturer
-                            {% if request.args.get('sort') == 'manufacturer' %}
-                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
-                            {% else %}
-                                <i class="bi bi-arrow-down-up text-muted"></i>
-                            {% endif %}
-                        </th>
-                        <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('serial_number')">
-                            Serial Number
-                            {% if request.args.get('sort') == 'serial_number' %}
-                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
-                            {% else %}
-                                <i class="bi bi-arrow-down-up text-muted"></i>
-                            {% endif %}
-                        </th>
-                        <th style="cursor: pointer;" onclick="sortTable('status')">
-                            Status
-                            {% if request.args.get('sort') == 'status' %}
-                                <i class="bi bi-{{ 'sort-down' if request.args.get('dir') == 'desc' else 'sort-up' }}"></i>
-                            {% else %}
-                                <i class="bi bi-arrow-down-up text-muted"></i>
-                            {% endif %}
-                        </th>
-                        <th class="mobile-hide">Online</th>
-                        <th class="mobile-hide">Lifecycle</th>
-                        <th class="mobile-hide">Assigned To</th>
+                        <th class="mobile-hide">Alerts</th>
+                        <th class="mobile-hide">Available Patches</th>
+                        <th class="mobile-hide">Pending Reboot</th>
+                        <th class="mobile-hide">Remote Access</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -303,30 +274,26 @@
                             <input type="checkbox" class="form-check-input asset-checkbox" value="{{ asset.id }}" onchange="updateBulkToolbar()">
                         </td>
                         {% endif %}
-                        <td><strong>{{ asset.asset_tag }}</strong></td>
                         <td>
-                            {{ asset.name }}
-                            {% if asset.purchase_date and asset.expected_life_years %}
-                            <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip" 
-                               title="Age: {{ '%.1f'|format(asset.get_age_years()) }} years | Replacement: {{ asset.replacement_date.strftime('%Y-%m-%d') if asset.replacement_date else 'Not set' }}"></i>
-                            {% endif %}
-                        </td>
-                        <td><span class="badge bg-primary">{{ asset.category }}</span></td>
-                        <td class="mobile-hide">{% if asset.device_type %}<span class="badge bg-secondary">{{ asset.device_type }}</span>{% else %}<span class="text-muted">-</span>{% endif %}</td>
-                        <td class="mobile-hide">{{ asset.manufacturer or '-' }}</td>
-                        <td class="mobile-hide"><small class="text-muted">{{ asset.serial_number or '-' }}</small></td>
-                        <td>
-                            {% if asset.status == 'Available' %}
-                                <span class="badge bg-success">{{ asset.status }}</span>
-                            {% elif asset.status == 'In Use' %}
-                                <span class="badge bg-info">{{ asset.status }}</span>
-                            {% elif asset.status == 'In Repair' %}
-                                <span class="badge bg-warning">{{ asset.status }}</span>
-                            {% else %}
-                                <span class="badge bg-secondary">{{ asset.status }}</span>
-                            {% endif %}
+                            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="text-decoration-none fw-semibold">{{ asset.name }}</a>
+                            <div class="text-muted" style="font-size:.75rem;">{{ asset.asset_tag }}{% if asset.manufacturer %} &middot; {{ asset.manufacturer }}{% endif %}</div>
                         </td>
                         <td class="mobile-hide">
+                            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}#ai" class="text-muted" title="AI Analysis" data-bs-toggle="tooltip">
+                                <i class="bi bi-stars"></i>
+                            </a>
+                        </td>
+                        <td class="mobile-hide">
+                            {% set ls = asset.last_seen or asset.intune_last_sync %}
+                            {% if ls %}
+                                <span title="{{ ls.strftime('%Y-%m-%d %H:%M') }}" data-bs-toggle="tooltip" style="font-size:.85rem;">
+                                    {{ ls.strftime('%b %d, %Y') }}
+                                </span>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
                             {% if asset.id in rmm_asset_ids %}
                                 {% if asset.id in rmm_online_ids %}
                                     <span class="badge bg-success"><i class="bi bi-circle-fill me-1" style="font-size:.5rem;"></i>Online</span>
@@ -344,28 +311,53 @@
                             {% endif %}
                         </td>
                         <td class="mobile-hide">
-                            {% if asset.purchase_date and asset.expected_life_years %}
-                                {% set status = asset.get_lifecycle_status() %}
-                                {% if status == 'New' %}
-                                    <span class="badge bg-success">{{ status }}</span>
-                                {% elif status == 'Active' %}
-                                    <span class="badge bg-primary">{{ status }}</span>
-                                {% elif status == 'Aging' %}
-                                    <span class="badge bg-info">{{ status }}</span>
-                                {% elif status == 'Replace Soon' %}
-                                    <span class="badge bg-warning">{{ status }}</span>
-                                {% elif status == 'End of Life' %}
-                                    <span class="badge bg-danger">{{ status }}</span>
-                                {% endif %}
+                            {% if asset.device_type %}
+                                <span class="badge bg-secondary">{{ asset.device_type }}</span>
                             {% else %}
-                                <span class="text-muted">-</span>
+                                <span class="text-muted">—</span>
                             {% endif %}
                         </td>
                         <td class="mobile-hide">
-                            {% if asset.assigned_employee %}
-                                {{ asset.assigned_employee.name }}
+                            {% if asset.id in vuln_counts %}
+                                {% set vc = vuln_counts[asset.id] %}
+                                {% set critical = vc.critical %}
+                                {% set high = vc.high %}
+                                {% set total = vc.total %}
+                                <span class="badge {% if critical > 0 %}bg-danger{% elif high > 0 %}bg-warning text-dark{% else %}bg-secondary{% endif %}"
+                                      data-bs-toggle="tooltip"
+                                      title="Critical: {{ critical }} | High: {{ high }} | Medium: {{ vc.medium }} | Low: {{ vc.low }}">
+                                    {{ total }}
+                                </span>
                             {% else %}
-                                <span class="text-muted">-</span>
+                                <span class="badge bg-light text-muted border">0</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.id in patch_counts %}
+                                {% set pc = patch_counts[asset.id] %}
+                                <span class="badge {% if pc > 0 %}bg-warning text-dark{% else %}bg-light text-muted border{% endif %}">{{ pc }}</span>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.id in reboot_flags %}
+                                {% if reboot_flags[asset.id] %}
+                                    <span class="badge bg-danger"><i class="bi bi-arrow-clockwise me-1"></i>Yes</span>
+                                {% else %}
+                                    <span class="badge bg-light text-muted border">No</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.rustdesk_id %}
+                                <a href="rustdesk://{{ asset.rustdesk_id }}" class="btn btn-sm btn-outline-primary" title="Connect via RustDesk" data-bs-toggle="tooltip">
+                                    <i class="bi bi-display"></i>
+                                </a>
+                            {% else %}
+                                <span class="text-muted">—</span>
                             {% endif %}
                         </td>
                         <td>

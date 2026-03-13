@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const selectedSize = sizeRadio ? sizeRadio.value : (this.dataset.widgetSize || 'col-md-4');
             
             // Send request to add widget to dashboard
-            fetch('window.DASH_CFG.addWidgetUrl', {
+            fetch(window.DASH_CFG.addWidgetUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -57,6 +57,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 document.addEventListener('DOMContentLoaded', function() {
     const widgetsContainer = document.getElementById('dashboardWidgets');
+    if (!widgetsContainer || typeof Sortable === 'undefined') return;
     
     // Initialize Sortable for drag-and-drop
     const sortable = new Sortable(widgetsContainer, {
@@ -164,7 +165,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         // Send to server
-        fetch('window.DASH_CFG.configureUrl', {
+        fetch(window.DASH_CFG.configureUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -174,7 +175,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                window.location.href = 'window.DASH_CFG.indexUrl';
+                window.location.href = window.DASH_CFG.indexUrl;
             } else {
                 alert('Error saving dashboard: ' + data.message);
             }

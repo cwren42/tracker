@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.5.5"
+AGENT_VERSION = "2.5.6"
 
 import asyncio
 import base64
@@ -83,21 +83,33 @@ _LAN_GATEWAY_URL  = "wss://rmm.corp.cirque.com"
 
 
 def _can_reach(host: str, port: int = 443, timeout: float = 2.5) -> bool:
-    """Return True if a TCP connection to host:port succeeds within *timeout* seconds."""
+    """Return True only if TCP connects AND the TLS certificate is valid for *host*.
+
+    A raw TCP-only probe is insufficient: external hosts (e.g. Squarespace) may
+    respond on port 443 for corp.cirque.com domain names because the public DNS
+    record points there. We verify the TLS cert so we only return True when the
+    genuine internal server (which holds a cert issued for that hostname) answers.
+    """
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
+        import ssl
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=host):
+                return True
     except OSError:
+        return False
+    except Exception:
+        # Any TLS error (hostname mismatch, expired cert, etc.) means it's not the real host
         return False
 
 
 def _resolve_urls(fallback_tracker: str, fallback_gateway: str) -> tuple:
     """Probe the internal LAN gateway hostname directly.
 
-    _LAN_GATEWAY_HOST only resolves on the corporate LAN (internal DNS only).
-    Cloudflare hostnames are never probed here — Cloudflare's edge always
-    accepts TCP:443 even when the tunnel backend is offline (returns HTTP 530),
-    which would cause false-positive LAN detection.
+    Uses a TLS-verified probe so that external hosts that respond on TCP:443
+    (e.g. Squarespace serving the public cirque.com website) are not mistaken
+    for the internal gateway. Only the genuine corp server has a cert that
+    matches rmm.corp.cirque.com.
     """
     if _can_reach(_LAN_GATEWAY_HOST):
         print(f"[agent] LAN reachable ({_LAN_GATEWAY_HOST}) — using internal endpoints", flush=True)
@@ -217,8 +229,13 @@ _RUSTDESK_PEER_ID_FILE = r'C:\CirqueRMM\rustdesk_peer_id.txt'  # cached so --get
 
 # Tray app API key (create_tickets scope) — baked in at build time
 _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
-_tray_setup_done    = False  # only run _setup_tray once per agent process
+_tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
+
+# Per-agent behaviour flags pushed by server on connect via agent_config message.
+# Servers set these to True so neither RustDesk nor the systray are installed.
+_disable_rustdesk = False
+_disable_tray     = False
 _TRAY_PY_PATH = r'C:\CirqueRMM\tray.py'
 _TRAY_CFG_PATH = r'C:\CirqueRMM\tray_config.json'
 
@@ -395,7 +412,8 @@ def _create_startup_shortcut_task():
         "    $cols = ($line -replace '>','').Trim() -split '\\s+'\n"
         "    $wmiUser = $cols[1]\n"
         "}\n"
-        "$username = ($wmiUser -replace '.*\\\\','')\n"
+        # Keep domain\\user for task principal (works on domain + local; strip only for display)
+        "$username = $wmiUser\n"
         "if (-not $username) { Write-Host 'No interactive user found'; exit 1 }\n"
         "Write-Host \"Targeting user: $username\"\n"
         "$action   = New-ScheduledTaskAction -Execute '" + _py_escaped + "' "
@@ -1537,6 +1555,44 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
+    # ── Security Event Telemetry (servers + all Windows machines) ─────────────
+    # These values feed the Windows Server monitoring profile checks.
+    try:
+        sec_events_ps = _ps_json(
+            # Failed logons (4625) in last hour
+            "$failed=(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625;StartTime=(Get-Date).AddHours(-1)} "
+            "-EA SilentlyContinue|Measure-Object).Count;"
+            # Security log cleared (1102) in last 24h
+            "$logcleared=(Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102;StartTime=(Get-Date).AddHours(-24)} "
+            "-EA SilentlyContinue|Measure-Object).Count;"
+            # New local user created (4720) in last 24h
+            "$newuser=(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4720;StartTime=(Get-Date).AddHours(-24)} "
+            "-EA SilentlyContinue|Measure-Object).Count;"
+            # Group membership changed (4732) in last 24h
+            "$grpchange=(Get-WinEvent -FilterHashtable @{LogName='Security';Id=4732;StartTime=(Get-Date).AddHours(-24)} "
+            "-EA SilentlyContinue|Measure-Object).Count;"
+            # Service crashes (7034) in last 24h
+            "$svccrash=(Get-WinEvent -FilterHashtable @{LogName='System';Id=7034;StartTime=(Get-Date).AddHours(-24)} "
+            "-EA SilentlyContinue|Measure-Object).Count;"
+            # Firewall: count of disabled profiles
+            "$fwoff=(Get-NetFirewallProfile -EA SilentlyContinue|Where-Object{$_.Enabled -ne $true}|Measure-Object).Count;"
+            "@{failed_logons_1h=$failed;sec_log_cleared_24h=$logcleared;new_user_24h=$newuser;"
+            "admin_group_change_24h=$grpchange;svc_crash_24h=$svccrash;firewall_profiles_disabled=$fwoff}"
+            "|ConvertTo-Json -Compress",
+            timeout=30,
+        )
+        if sec_events_ps and isinstance(sec_events_ps, dict):
+            result["security_events"] = {
+                "failed_logons_1h":         int(sec_events_ps.get("failed_logons_1h") or 0),
+                "sec_log_cleared_24h":      int(sec_events_ps.get("sec_log_cleared_24h") or 0),
+                "new_user_24h":             int(sec_events_ps.get("new_user_24h") or 0),
+                "admin_group_change_24h":   int(sec_events_ps.get("admin_group_change_24h") or 0),
+                "svc_crash_24h":            int(sec_events_ps.get("svc_crash_24h") or 0),
+                "firewall_profiles_disabled": int(sec_events_ps.get("firewall_profiles_disabled") or 0),
+            }
+    except Exception:
+        pass
+
     # Pack IT-detail fields into a single sysinfo subdict → stored as sysinfo_json
     _si_keys = (
         "bitlocker", "tpm", "windows_licensed", "local_admins",
@@ -1544,7 +1600,7 @@ def _collect_extended() -> dict:
         "power_plan", "last_wu", "rdp_enabled",
         "reboot_pending", "default_browser", "dns_servers", "gp_last_refresh",
         "disk_health", "last_bsod", "monitors", "wu_channel",
-        "screen_lock", "open_ports",
+        "screen_lock", "open_ports", "security_events",
     )
     _si = {k: result.pop(k) for k in _si_keys if k in result}
     if _si:
@@ -2885,8 +2941,10 @@ async def main() -> None:
                 loop = asyncio.get_event_loop()
 
                 # Ensure RustDesk is installed — runs in background after connect
-                # so it never blocks the WebSocket from establishing
-                loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
+                # so it never blocks the WebSocket from establishing.
+                # Skipped for server-mode agents where disable_rustdesk flag is set.
+                if not _disable_rustdesk:
+                    loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
 
                 # Collect extended info (hardware/OS/security) once on connect
                 extended = await loop.run_in_executor(None, _collect_extended)
@@ -2944,13 +3002,15 @@ async def main() -> None:
                 telem_task = asyncio.create_task(telemetry_loop())
 
                 # RustDesk watchdog — reinstalls if user uninstalls it (check hourly)
+                # Disabled entirely for server-mode agents.
                 async def rustdesk_watchdog():
                     while True:
                         await asyncio.sleep(3600)  # check every hour
                         try:
-                            await loop.run_in_executor(
-                                None, ensure_rustdesk, tracker_url, agent_id, token
-                            )
+                            if not _disable_rustdesk:
+                                await loop.run_in_executor(
+                                    None, ensure_rustdesk, tracker_url, agent_id, token
+                                )
                         except Exception:
                             pass
 
@@ -2977,8 +3037,9 @@ async def main() -> None:
                 asyncio.create_task(software_inventory_loop())
 
                 # Tray setup — runs once per agent process lifetime, then refreshes every 24h
+                # Disabled entirely for server-mode agents where disable_tray flag is set.
                 global _tray_setup_done
-                if not _tray_setup_done:
+                if not _tray_setup_done and not _disable_tray:
                     _tray_setup_done = True
                     async def tray_watchdog():
                         await asyncio.sleep(30)  # short delay after first connect
@@ -3139,6 +3200,14 @@ async def main() -> None:
 
                         if msg_type == "ping":
                             await ws.send(json.dumps({"type": "pong"}))
+                            continue
+
+                        # --- Agent config (server pushes flags on connect) ---
+                        if msg_type == "agent_config":
+                            global _disable_rustdesk, _disable_tray
+                            _disable_rustdesk = bool(payload.get("disable_rustdesk", False))
+                            _disable_tray     = bool(payload.get("disable_tray", False))
+                            print(f"[agent] agent_config applied: disable_rustdesk={_disable_rustdesk} disable_tray={_disable_tray}", flush=True)
                             continue
 
                         # --- Screenshot ---
@@ -4055,9 +4124,18 @@ async def main() -> None:
                 t.cancel()
             shell_tasks.clear()
             await asyncio.sleep(5)
-            # Re-resolve endpoints every reconnect: if LAN came back up, prefer it;
-            # if LAN went away, switch to Cloudflare automatically.
-            tracker_url, gateway = _resolve_urls(fallback_tracker, fallback_gateway)
+            # SSL cert mismatch means the LAN host is TCP-reachable but the TLS cert
+            # doesn't cover its hostname (machine is off-LAN with corp DNS still routing
+            # the hostname to the internal server's IP). Force Cloudflare — don't re-probe,
+            # because the TCP probe would keep succeeding and we'd loop forever.
+            err_str = str(e)
+            if 'CERTIFICATE_VERIFY_FAILED' in err_str or 'Hostname mismatch' in err_str:
+                print("[agent] SSL cert error on LAN endpoint — forcing Cloudflare fallback", flush=True)
+                tracker_url, gateway = fallback_tracker, fallback_gateway
+            else:
+                # Re-resolve endpoints every reconnect: if LAN came back up, prefer it;
+                # if LAN went away, switch to Cloudflare automatically.
+                tracker_url, gateway = _resolve_urls(fallback_tracker, fallback_gateway)
             ws_url = f"{gateway}/ws/agent/{agent_id}?token={token}"
 
 

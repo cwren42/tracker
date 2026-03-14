@@ -397,6 +397,23 @@ def get_eagle_config(agent_id: str) -> dict:
         conn.close()
 
 
+def get_agent_flags(agent_id: str) -> dict:
+    """Return per-agent behaviour flags (e.g. disable_rustdesk, disable_tray)."""
+    conn = get_conn()
+    cur = get_cursor(conn)
+    try:
+        cur.execute(
+            "SELECT disable_rustdesk, disable_tray FROM rmm_agent_flags WHERE agent_id = %s",
+            (agent_id,)
+        )
+        row = cur.fetchone()
+        if row:
+            return {"disable_rustdesk": bool(row["disable_rustdesk"]), "disable_tray": bool(row["disable_tray"])}
+        return {"disable_rustdesk": False, "disable_tray": False}
+    finally:
+        conn.close()
+
+
 def store_eagle_event(agent_id: str, captured_at_str: str, process_name: str, window_title: str,
                       duration_s: int, idle_s: int = 0, is_idle: bool = False) -> None:
     """Store a single Eagle Eyes window focus event and update rmm_eagle_current."""

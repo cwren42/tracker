@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from .db import (
     create_rmm_session,
     end_rmm_session,
+    get_agent_flags,
     get_eagle_config,
     get_latest_screenshot,
     get_latest_telemetry,
@@ -139,6 +140,14 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
 
     try:
         await websocket.send_text(json.dumps({"type": "hello", "agent_id": agent_id}))
+
+        # Push per-agent behaviour flags (disable_rustdesk, disable_tray, etc.)
+        try:
+            flags = get_agent_flags(agent_id)
+            await websocket.send_text(json.dumps({"type": "agent_config", **flags}))
+            print(f"[gw] pushed agent_config to {agent_id}: {flags}", flush=True)
+        except Exception as _e:
+            print(f"[gw] agent_config push error: {_e}", flush=True)
 
         # Auto-push eagle config on (re)connect so monitoring survives gateway restarts
         try:

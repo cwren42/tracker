@@ -30,6 +30,8 @@ param(
 
     [string]$TrackerUrl  = "https://tracker.corp.cirque.com",
     [string]$GatewayUrl  = "wss://rmm.corp.cirque.com",
+    [string]$TrackerUrlFallback = "https://tracker.cirquetools.com",
+    [string]$GatewayUrlFallback = "wss://rmm.cirquetools.com",
     [string]$InstallDir  = "C:\CirqueRMM",
     [string]$NssmPath    = "C:\Program Files\NSSM\nssm.exe",
     [string]$AgentId     = "",
@@ -49,7 +51,10 @@ $FallbackLog = "$env:TEMP\CirqueRMM_install.log"
 "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') === Install starting on $env:COMPUTERNAME (PID $PID) SiteToken=$(if($SiteToken){'set'}else{'MISSING'}) ===" | Out-File $FallbackLog -Append -Encoding UTF8
 trap {
     $errLine = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') FATAL: $_`n$($_.ScriptStackTrace)"
+    # Stop transcript first so setup.log is not locked before we write to it
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch {}
     $errLine | Out-File $FallbackLog -Append -Encoding UTF8
+    try { $errLine | Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     Write-Host "FATAL ERROR: $_ (see $FallbackLog)" -ForegroundColor Red
     break
 }
@@ -82,6 +87,11 @@ public class TrustAll : ICertificatePolicy {
     [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAll
 } catch { <# type already loaded on re-run #> }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# - Use system proxy (so corporate proxy users can reach external URLs like browser does) -
+try {
+    [System.Net.WebRequest]::DefaultWebProxy = [System.Net.WebRequest]::GetSystemWebProxy()
+    [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+} catch { }
 
 Write-Host ""
 Write-Host "=================================================" -ForegroundColor Cyan
@@ -93,19 +103,37 @@ Write-Host ""
 if (-not $Token) {
     if ($SiteToken) {
         # Auto-enroll using the site-wide token -> server returns a per-device token
-        Write-Host "[0/7] Auto-enrolling device with site token..." -ForegroundColor Yellow
-        try {
-            $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId } | ConvertTo-Json
-            $resp = Invoke-RestMethod -Uri "$TrackerUrl/api/rmm/enroll" `
-                       -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 30
-            if (-not $resp.ok) { throw "Server returned error: $($resp.error)" }
-            $Token   = $resp.token
-            $AgentId = $resp.agent_id
-            Write-Host "    Enrolled as agent '$AgentId' (asset ID $($resp.asset_id))" -ForegroundColor Green
-        } catch {
-            $errMsg = "ENROLLMENT FAILED: $_"
+        # Try primary URL first, then fallback
+        $enrollUrls = @($TrackerUrl)
+        if ($TrackerUrlFallback -and $TrackerUrlFallback -ne $TrackerUrl) {
+            $enrollUrls += $TrackerUrlFallback
+        }
+        $enrolled = $false
+        foreach ($tryUrl in $enrollUrls) {
+            Write-Host "[0/7] Auto-enrolling via $tryUrl ..." -ForegroundColor Yellow
+            try {
+                $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "$tryUrl/api/rmm/enroll" `
+                           -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
+                if (-not $resp.ok) { throw "Server returned error: $($resp.error)" }
+                $Token      = $resp.token
+                $AgentId    = $resp.agent_id
+                # Switch to the URL that actually worked
+                if ($tryUrl -ne $TrackerUrl) {
+                    Write-Host "    (LAN unreachable — using fallback URL)" -ForegroundColor Yellow
+                    $TrackerUrl = $tryUrl
+                    $GatewayUrl = $GatewayUrlFallback
+                }
+                Write-Host "    Enrolled as agent '$AgentId' (asset ID $($resp.asset_id))" -ForegroundColor Green
+                $enrolled = $true
+                break
+            } catch {
+                Write-Host "    Failed ($tryUrl): $_" -ForegroundColor DarkYellow
+            }
+        }
+        if (-not $enrolled) {
+            $errMsg = "ENROLLMENT FAILED: Could not reach tracker at any URL ($($enrollUrls -join ', '))"
             Write-Host $errMsg -ForegroundColor Red
-            Write-Host "Tracker URL attempted: $TrackerUrl/api/rmm/enroll" -ForegroundColor Yellow
             "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $errMsg" | Out-File -FilePath $LogFile -Append -Encoding UTF8
             Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
             exit 1
@@ -149,6 +177,11 @@ $candidateSources += $extraPaths
 
 foreach ($src in ($candidateSources | Select-Object -Unique)) {
     if (-not (Test-Path $src -PathType Leaf)) { continue }
+    # Skip MSYS2/Cygwin/Git-bash Pythons -- their MinGW compiler breaks psutil/Pillow wheel builds
+    if ($src -match '(?i)msys|cygwin|git.bash|mingw|usr.bin') {
+        Write-Host "    Skipping non-CPython: $src" -ForegroundColor DarkGray
+        continue
+    }
     try {
         $ver = & $src --version 2>&1
         if ($ver -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10) {
@@ -350,6 +383,45 @@ if ($targetUser) {
     }
 } else {
     Write-Warning "    No interactive user detected — tray will start on next login via Startup folder."
+}
+
+# - Watchdog scheduled task: restarts CirqueRMM if it stops/crashes, every 15 min -
+Write-Host "[+] Installing self-healing watchdog task..." -ForegroundColor Yellow
+try {
+    $watchdogScript = @"
+`$svc = Get-Service -Name '$ServiceName' -ErrorAction SilentlyContinue
+if (-not `$svc) { exit 0 }
+if (`$svc.Status -ne 'Running') {
+    # Kill any frozen python process first (handles NSSM Paused state)
+    Get-Process python, python3 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep 2
+    # Reset NSSM throttle counter so it won't stay Paused
+    `$nssmExe = if (Test-Path '$InstallDir\nssm.exe') { '$InstallDir\nssm.exe' } else { 'C:\Program Files\NSSM\nssm.exe' }
+    if (Test-Path `$nssmExe) { & `$nssmExe reset '$ServiceName' AppThrottle 2>`$null }
+    sc.exe start '$ServiceName' | Out-Null
+    Start-Sleep 5
+    `$svc.Refresh()
+    `$status = (Get-Service '$ServiceName' -ErrorAction SilentlyContinue).Status
+    "Watchdog: restarted $ServiceName at `$(Get-Date -Format 's') -> `$status" | Out-File -Append -Encoding UTF8 '$InstallDir\logs\watchdog.log'
+}
+"@
+    $watchdogPath = "$InstallDir\watchdog.ps1"
+    $watchdogScript | Out-File -FilePath $watchdogPath -Encoding UTF8 -Force
+
+    $wdAction = New-ScheduledTaskAction `
+        -Execute 'powershell.exe' `
+        -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogPath`""
+    $wdTrigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 15) -Once -At (Get-Date).Date
+    $wdPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $wdSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+        -MultipleInstances IgnoreNew -StartWhenAvailable
+    Register-ScheduledTask -TaskName 'CirqueRMM-Watchdog' `
+        -Action $wdAction -Trigger $wdTrigger -Principal $wdPrincipal -Settings $wdSettings `
+        -Description 'Restarts CirqueRMM agent service if stopped. Cirque IT self-healing watchdog.' `
+        -Force | Out-Null
+    Write-Host "    Watchdog task registered (runs as SYSTEM every 15 min)" -ForegroundColor Green
+} catch {
+    Write-Warning "    Watchdog task setup failed: $_  (non-fatal)"
 }
 
 Stop-Transcript -ErrorAction SilentlyContinue | Out-Null

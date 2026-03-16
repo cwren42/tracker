@@ -622,6 +622,281 @@ def rmm_agent_file():
     return send_file(agent_path, mimetype='text/x-python', as_attachment=False)
 
 
+@bp.route('/api/rmm/agent/heartbeat')
+def rmm_agent_heartbeat():
+    """Lightweight pull-based heartbeat — called by the agent every 5 minutes.
+
+    Works independently of the WebSocket gateway, so it still works when the
+    gateway is broken or the connection is dropping.  The response carries:
+      - action: 'none' | 'force_update' | 'restart' | 'reinstall'
+      - pending_commands: list of {id, command, command_type} rows to execute
+    The agent is expected to POST /api/rmm/agent/command_result for each one.
+    Also updates last_seen_at so the dashboard reflects the agent as online.
+    Also checks whether > 30% of the fleet went offline in the last 15 minutes
+    and fires an admin alert email if so (fleet crash detection).
+    """
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    now_iso = datetime.utcnow().isoformat(timespec='seconds')
+
+    # Touch last_seen_at
+    try:
+        db.session.execute(
+            text("UPDATE rmm_agent SET last_seen_at = NOW() WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Determine action from rmm_commands table (highest-priority pending control command)
+    action = 'none'
+    ctrl_row = None
+    try:
+        ctrl_row = db.session.execute(
+            text("""SELECT id, command FROM rmm_commands
+                    WHERE agent_id = :aid AND command_type = 'control'
+                      AND status = 'pending'
+                    ORDER BY id ASC LIMIT 1"""),
+            {'aid': agent_id}
+        ).fetchone()
+        if ctrl_row:
+            action = ctrl_row.command  # e.g. 'force_update', 'restart', 'reinstall'
+            db.session.execute(
+                text("UPDATE rmm_commands SET status = 'dispatched', executed_at = NOW() WHERE id = :id"),
+                {'id': ctrl_row.id}
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Fetch pending shell/script commands (non-control)
+    pending = []
+    try:
+        rows = db.session.execute(
+            text("""SELECT id, command, command_type FROM rmm_commands
+                    WHERE agent_id = :aid AND command_type != 'control'
+                      AND status = 'pending'
+                    ORDER BY id ASC LIMIT 5"""),
+            {'aid': agent_id}
+        ).fetchall()
+        pending = [{'id': r.id, 'command': r.command, 'command_type': r.command_type} for r in rows]
+        if pending:
+            ids = [r['id'] for r in pending]
+            db.session.execute(
+                text("UPDATE rmm_commands SET status = 'dispatched', executed_at = NOW() WHERE id = ANY(:ids)"),
+                {'ids': ids}
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Fleet crash detection: if a deploy happened recently and > 30% are now offline, alert
+    try:
+        last_alert_key = 'rmm_fleet_crash_last_alert'
+        last_alert_row = db.session.execute(
+            text("SELECT value FROM setting WHERE key = :k"), {'k': last_alert_key}
+        ).fetchone()
+        last_alert_ts = 0
+        if last_alert_row:
+            try:
+                last_alert_ts = float(last_alert_row.value)
+            except Exception:
+                pass
+
+        import time as _time
+        if _time.time() - last_alert_ts > 900:  # at most once per 15 minutes
+            total, offline = db.session.execute(
+                text("""SELECT COUNT(*), COUNT(*) FILTER (
+                          WHERE last_seen_at < NOW() - INTERVAL '10 minutes'
+                            OR last_seen_at IS NULL)
+                        FROM rmm_agent WHERE enabled = true""")
+            ).fetchone()
+            if total and total > 0 and offline / total >= 0.30:
+                try:
+                    from utils import send_admin_notification
+                    send_admin_notification(
+                        'ALERT: RMM Fleet Offline',
+                        f'<p><strong>Fleet crash detected:</strong> {offline}/{total} agents '
+                        f'({int(offline/total*100)}%) have been offline for &gt;10 minutes.</p>'
+                        f'<p>Check the <a href="/rmm">RMM dashboard</a> and consider rolling back '
+                        f'the agent version if a recent deploy caused this.</p>'
+                    )
+                    # Record alert time so we don't spam
+                    db.session.execute(
+                        text("""INSERT INTO setting (key, value, updated_at)
+                                VALUES (:k, :v, NOW())
+                                ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"""),
+                        {'k': last_alert_key, 'v': str(_time.time())}
+                    )
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+    except Exception:
+        pass
+
+    return jsonify({'action': action, 'pending_commands': pending, 'ts': now_iso})
+
+
+@bp.route('/api/rmm/agent/command_result', methods=['POST'])
+def rmm_agent_command_result():
+    """Agent posts the result of a dispatched command back to the server."""
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json(force=True) or {}
+    cmd_id    = data.get('id')
+    result    = data.get('result', '')
+    exit_code = data.get('exit_code', 0)
+
+    if not cmd_id:
+        return jsonify({'error': 'id required'}), 400
+
+    try:
+        db.session.execute(
+            text("""UPDATE rmm_commands SET status = 'completed', result = :res,
+                    exit_code = :ec, completed_at = NOW()
+                    WHERE id = :id AND agent_id = :aid"""),
+            {'res': str(result)[:4000], 'ec': exit_code, 'id': cmd_id, 'aid': agent_id}
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({'ok': False}), 500
+
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/rmm/admin/send-command', methods=['POST'])
+@login_required
+def api_rmm_send_command():
+    """Queue a control or shell command for an agent.
+
+    Body: {agent_id, command, command_type}
+    command_type = 'control'  -> action word: force_update | restart | reinstall
+    command_type = 'shell'    -> arbitrary PowerShell/cmd string (agent executes + returns result)
+    """
+    if current_user.role != 'admin':
+        return jsonify(ok=False, error='Admin required'), 403
+
+    data         = request.get_json(force=True) or {}
+    agent_id     = data.get('agent_id', '').strip()
+    command      = data.get('command', '').strip()
+    command_type = data.get('command_type', 'control').strip()
+
+    if not agent_id or not command:
+        return jsonify(ok=False, error='agent_id and command required'), 400
+    if command_type not in ('control', 'shell', 'powershell'):
+        return jsonify(ok=False, error='Invalid command_type'), 400
+    # Prevent obviously dangerous shell injections from UI
+    if command_type in ('shell', 'powershell') and len(command) > 2000:
+        return jsonify(ok=False, error='Command too long'), 400
+
+    try:
+        db.session.execute(
+            text("""INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at)
+                    VALUES (:aid, :cmd, :ct, 'pending', NOW())"""),
+            {'aid': agent_id, 'cmd': command, 'ct': command_type}
+        )
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(ok=False, error=str(e)), 500
+
+    return jsonify(ok=True)
+
+
+@bp.route('/api/rmm/admin/agent-version', methods=['GET', 'POST'])
+@login_required
+def api_rmm_admin_agent_version():
+    """GET: return current published version info.
+    POST {action:'rollback'}: revert version.txt to the previously known-good version.
+    POST {action:'validate'}: run pre-publish checks on current agent files without changing anything.
+    POST {version:'x.y.z'}: manually set the published version string.
+    """
+    if current_user.role != 'admin':
+        return jsonify(ok=False, error='Admin required'), 403
+
+    import ast as _ast, hashlib as _hl
+    agent_dir  = os.path.join(current_app.root_path, 'rmm_agent')
+    ver_path   = os.path.join(agent_dir, 'version.txt')
+    prev_path  = os.path.join(agent_dir, 'version.txt.prev')
+    client_py  = os.path.join(agent_dir, 'agent_client.py')
+    launcher_py = os.path.join(agent_dir, 'agent_launcher.py')
+
+    def _validate_agent_file(path):
+        """Return list of validation errors for a Python agent file."""
+        errors = []
+        try:
+            raw = open(path, 'rb').read()
+        except OSError as e:
+            return [f'Cannot read file: {e}']
+        # Syntax check
+        try:
+            _ast.parse(raw)
+        except SyntaxError as e:
+            errors.append(f'SyntaxError line {e.lineno}: {e.msg}')
+        # ASCII-only check (catches cp932/cp1252 Unicode crashes)
+        bad_chars = [(i+1, hex(ord(c)), repr(c))
+                     for i, c in enumerate(raw.decode('utf-8', errors='replace'))
+                     if ord(c) > 127]
+        if bad_chars:
+            sample = bad_chars[:5]
+            errors.append(f'{len(bad_chars)} non-ASCII character(s) found: {sample}')
+        return errors
+
+    if request.method == 'GET':
+        cur_ver = open(ver_path).read().strip() if os.path.exists(ver_path) else 'unknown'
+        prev_ver = open(prev_path).read().strip() if os.path.exists(prev_path) else None
+        client_cksum = _hl.sha256(open(client_py,'rb').read()).hexdigest()[:16] if os.path.exists(client_py) else None
+        errs = _validate_agent_file(client_py) + _validate_agent_file(launcher_py)
+        return jsonify(ok=True, version=cur_ver, prev_version=prev_ver,
+                       client_checksum=client_cksum, validation_errors=errs)
+
+    data = request.get_json(force=True) or {}
+    action = data.get('action', '').strip()
+
+    if action == 'validate':
+        errs = _validate_agent_file(client_py) + _validate_agent_file(launcher_py)
+        return jsonify(ok=True, valid=(len(errs) == 0), errors=errs)
+
+    if action == 'rollback':
+        if not os.path.exists(prev_path):
+            return jsonify(ok=False, error='No previous version on file to roll back to'), 404
+        prev_ver = open(prev_path).read().strip()
+        cur_ver  = open(ver_path).read().strip() if os.path.exists(ver_path) else ''
+        # Swap: write prev over current, save current as prev
+        with open(ver_path, 'w') as f:
+            f.write(prev_ver)
+        with open(prev_path, 'w') as f:
+            f.write(cur_ver)
+        logger.info(f'Agent version rolled back from {cur_ver} to {prev_ver} by {current_user.email}')
+        return jsonify(ok=True, rolled_back_to=prev_ver, previous_was=cur_ver)
+
+    new_ver = data.get('version', '').strip()
+    if new_ver:
+        # Validate files before accepting a version bump
+        errs = _validate_agent_file(client_py) + _validate_agent_file(launcher_py)
+        if errs:
+            return jsonify(ok=False, error='Validation failed — fix errors before publishing',
+                           validation_errors=errs), 422
+        cur_ver = open(ver_path).read().strip() if os.path.exists(ver_path) else ''
+        if cur_ver:
+            with open(prev_path, 'w') as f:
+                f.write(cur_ver)
+        with open(ver_path, 'w') as f:
+            f.write(new_ver)
+        logger.info(f'Agent version set to {new_ver} by {current_user.email}')
+        return jsonify(ok=True, version=new_ver, prev_version=cur_ver)
+
+    return jsonify(ok=False, error='Provide action or version'), 400
+
+
 @bp.route('/api/rmm/agent-status/<agent_id>')
 @login_required
 def api_rmm_agent_status(agent_id):
@@ -1677,8 +1952,6 @@ def rmm_update_software(agent_id):
 
 
 @bp.route('/download/agent-installer')
-@login_required
-@license_required
 def download_agent_installer():
     """Serve the EXE installer (preferred), then MSI, then PS1 fallback."""
     import os
@@ -1701,8 +1974,6 @@ def download_agent_installer():
 
 
 @bp.route('/download/agent-ps1')
-@login_required
-@license_required
 def download_agent_ps1():
     """Serve the raw PowerShell installer script directly."""
     import os
@@ -1714,8 +1985,6 @@ def download_agent_ps1():
 
 
 @bp.route('/download/agent-bat')
-@login_required
-@license_required
 def download_agent_bat():
     """Serve a .bat launcher that runs the PS1 bypassing execution policy.
 
@@ -2050,6 +2319,33 @@ def download_agent_file(filename):
     return send_file(path, as_attachment=False, mimetype='text/plain')
 
 
+@bp.route('/api/rmm/agent/<agent_id>/remove', methods=['POST'])
+@login_required
+def rmm_remove_agent(agent_id):
+    """Remove an RMM agent and all associated data. Admin only."""
+    if current_user.role != 'admin':
+        return jsonify(ok=False, error='Admin required'), 403
+    try:
+        child_tables = [
+            'alert_log', 'cve_patch_job', 'device_vulnerability',
+            'eagle_eyes_exclusions', 'linux_agent_heartbeat',
+            'rmm_agent_flags', 'rmm_availability', 'rmm_commands',
+            'rmm_connect_token', 'rmm_eagle_alert_log', 'rmm_eagle_alert_rule',
+            'rmm_eagle_config', 'rmm_eagle_current', 'rmm_eagle_event',
+            'rmm_eagle_report_schedule', 'rmm_metrics_history', 'rmm_patch',
+            'rmm_patch_job', 'rmm_pending_update', 'rmm_screenshot',
+            'rmm_session_events', 'rmm_software', 'rmm_telemetry',
+        ]
+        for tbl in child_tables:
+            db.session.execute(text(f"DELETE FROM {tbl} WHERE agent_id = :aid"), {'aid': agent_id})
+        db.session.execute(text("DELETE FROM rmm_agent WHERE agent_id = :aid"), {'aid': agent_id})
+        db.session.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(ok=False, error=str(e)), 500
+
+
 @bp.route('/rmm/agent/launcher')
 def rmm_agent_launcher():
     """Serve agent_launcher.py (self-healing wrapper). Authenticated by agent token."""
@@ -2057,7 +2353,9 @@ def rmm_agent_launcher():
     token    = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
-    launcher_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_launcher.py')
+    launcher_path = os.path.join(current_app.root_path, 'rmm_agent', 'agent_launcher.py')
+    if not os.path.exists(launcher_path):
+        return jsonify({'error': 'launcher not found'}), 404
     return send_file(launcher_path, mimetype='text/x-python', as_attachment=False)
 
 

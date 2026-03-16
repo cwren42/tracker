@@ -225,6 +225,12 @@ class SupportTicket(db.Model):
         return self._SLA_HOURS.get(self.priority, 72)
 
     @property
+    def sla_elapsed_hours(self):
+        if not self.created_at:
+            return 0.0
+        return (datetime.utcnow() - self.created_at).total_seconds() / 3600
+
+    @property
     def sla_hours_remaining(self):
         if not self.created_at:
             return self.sla_target_hours

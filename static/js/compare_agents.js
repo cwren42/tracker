@@ -30,37 +30,64 @@ function prodScore(summary) {
 function prodColor(score) { return score>=70?'#51cf66':score>=45?'#fcc419':'#ff6b6b'; }
 function prodLabel(score) { return score>=70?'High':score>=45?'Medium':'Low'; }
 
+function cmpSelCount() {
+  const n = document.querySelectorAll('.cmp-agent-cb:checked').length;
+  const badge = document.getElementById('cmp-sel-count');
+  if (badge) badge.textContent = n + ' selected';
+}
+
 function cmpSelectAll(state) {
-  document.querySelectorAll('.cmp-agent-cb').forEach(cb=>cb.checked=state);
+  document.querySelectorAll('.cmp-agent-row').forEach(row => {
+    if (row.style.display === 'none') return;
+    const cb = row.querySelector('.cmp-agent-cb');
+    if (cb) cb.checked = state;
+  });
+  cmpSelCount();
   cmpLoad();
+}
+
+function cmpFilterAgents(q) {
+  const term = q.toLowerCase();
+  document.querySelectorAll('.cmp-agent-row').forEach(row => {
+    const match = (row.dataset.hostname || '').includes(term);
+    row.style.display = match ? '' : 'none';
+  });
 }
 
 async function cmpLoad() {
   const selected = [...document.querySelectorAll('.cmp-agent-cb:checked')].map(cb=>cb.value);
-  const days = parseInt(document.getElementById('cmp-days').value);
+  const daysEl = document.getElementById('cmp-days');
+  const days = daysEl ? parseInt(daysEl.value) || 7 : 7;
   const grid = document.getElementById('cmp-grid');
   const spin = document.getElementById('cmp-spinner');
   const empty = document.getElementById('cmp-empty');
 
   if (!selected.length) {
-    grid.style.display='none'; spin.style.display='none'; empty.style.display='';
+    if (grid)  grid.style.display='none';
+    if (spin)  spin.style.display='none';
+    if (empty) empty.style.display='';
     return;
   }
-  grid.style.display='none'; spin.style.display='block'; empty.style.display='none';
+  if (grid)  grid.style.display='none';
+  if (spin)  spin.style.display='block';
+  if (empty) empty.style.display='none';
 
   for (const id in _cmpCharts) { try { _cmpCharts[id].destroy(); } catch(_){} delete _cmpCharts[id]; }
 
   let data;
   try {
     const res = await fetch(`/api/rmm/eagle-eyes/compare-data?agents=${encodeURIComponent(selected.join(','))}&days=${days}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     data = await res.json();
   } catch(e) {
-    spin.style.display='none';
-    grid.innerHTML=`<div class="col-12"><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i>Error: ${e}</div></div>`;
-    grid.style.display=''; return;
+    console.error('[compare] fetch failed:', e);
+    if (spin) spin.style.display='none';
+    if (grid) { grid.innerHTML=`<div class="col-12"><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i>Error loading data: ${e.message||e}</div></div>`; grid.style.display=''; }
+    return;
   }
-  spin.style.display='none';
-  if (!data.ok) { empty.style.display=''; return; }
+
+  if (spin)  spin.style.display='none';
+  if (!data || !data.ok) { if (empty) empty.style.display=''; return; }
 
   const n = selected.length;
   const colClass = n===1 ? 'col-xl-6 col-lg-8 col-md-10 mx-auto'
@@ -124,7 +151,12 @@ async function cmpLoad() {
     </div>`;
   }).join('');
 
-  grid.style.display = '';
+  if (grid) grid.style.display = '';
+
+  if (typeof Chart === 'undefined') {
+    console.error('[compare] Chart.js not loaded — charts skipped');
+    return;
+  }
 
   for (let i=0; i<selected.length; i++) {
     const aid    = selected[i];
@@ -137,53 +169,57 @@ async function cmpLoad() {
     const lineId = `line-${aid.replace(/[^a-z0-9]/gi,'_')}`;
     const lineEl = document.getElementById(lineId);
     if (lineEl && daily.length) {
-      _cmpCharts[lineId] = new Chart(lineEl.getContext('2d'), {
-        type:'bar',
-        data:{
-          labels: daily.map(d=>{ const p=d.day.split('-'); return `${parseInt(p[1])}/${parseInt(p[2])}`; }),
-          datasets:[{
-            data: daily.map(d=>+((d.total_s||0)/3600).toFixed(2)),
-            backgroundColor: col+'55', borderColor: col,
-            borderWidth:2, borderRadius:4, hoverBackgroundColor:col+'aa',
-          }]
-        },
-        options:{
-          responsive:true, maintainAspectRatio:false, animation:{duration:400},
-          plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>' '+fmtDur(Math.round(c.parsed.y*3600))}}},
-          scales:{
-            x:{grid:{display:false}, ticks:{color:'#4a5a6a',font:{size:9},maxTicksLimit:days<=7?7:12}},
-            y:{grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#4a5a6a',font:{size:9},callback:v=>v+'h'}, min:0}
+      try {
+        _cmpCharts[lineId] = new Chart(lineEl.getContext('2d'), {
+          type:'bar',
+          data:{
+            labels: daily.map(d=>{ const p=d.day.split('-'); return `${parseInt(p[1])}/${parseInt(p[2])}`; }),
+            datasets:[{
+              data: daily.map(d=>+((d.total_s||0)/3600).toFixed(2)),
+              backgroundColor: col+'55', borderColor: col,
+              borderWidth:2, borderRadius:4, hoverBackgroundColor:col+'aa',
+            }]
+          },
+          options:{
+            responsive:true, maintainAspectRatio:false, animation:{duration:400},
+            plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>' '+fmtDur(Math.round(c.parsed.y*3600))}}},
+            scales:{
+              x:{grid:{display:false}, ticks:{color:'#4a5a6a',font:{size:9},maxTicksLimit:days<=7?7:12}},
+              y:{grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#4a5a6a',font:{size:9},callback:v=>v+'h'}, min:0}
+            }
           }
-        }
-      });
+        });
+      } catch(ce) { console.error('[compare] line chart error:', ce); }
     }
 
     // Horizontal bar – top apps
     const barId = `bar-${aid.replace(/[^a-z0-9]/gi,'_')}`;
     const barEl = document.getElementById(barId);
     if (barEl && topApps.length) {
-      _cmpCharts[barId] = new Chart(barEl.getContext('2d'), {
-        type:'bar',
-        data:{
-          labels: topApps.map(a=>a.process_name),
-          datasets:[{
-            data: topApps.map(a=>+((a.total_s||0)/3600).toFixed(2)),
-            backgroundColor: APP_COLORS.slice(0,topApps.length).map(c=>c+'cc'),
-            borderColor:     APP_COLORS.slice(0,topApps.length),
-            borderWidth:1, borderRadius:4,
-          }]
-        },
-        options:{
-          indexAxis:'y', responsive:true, maintainAspectRatio:false, animation:{duration:400},
-          plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>' '+fmtDur(Math.round(c.parsed.x*3600))}}},
-          scales:{
-            x:{grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#4a5a6a',font:{size:9},callback:v=>v+'h'}, min:0},
-            y:{grid:{display:false}, ticks:{color:'#8899aa',font:{size:10}}}
+      try {
+        _cmpCharts[barId] = new Chart(barEl.getContext('2d'), {
+          type:'bar',
+          data:{
+            labels: topApps.map(a=>a.process_name),
+            datasets:[{
+              data: topApps.map(a=>+((a.total_s||0)/3600).toFixed(2)),
+              backgroundColor: APP_COLORS.slice(0,topApps.length).map(c=>c+'cc'),
+              borderColor:     APP_COLORS.slice(0,topApps.length),
+              borderWidth:1, borderRadius:4,
+            }]
+          },
+          options:{
+            indexAxis:'y', responsive:true, maintainAspectRatio:false, animation:{duration:400},
+            plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>' '+fmtDur(Math.round(c.parsed.x*3600))}}},
+            scales:{
+              x:{grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#4a5a6a',font:{size:9},callback:v=>v+'h'}, min:0},
+              y:{grid:{display:false}, ticks:{color:'#8899aa',font:{size:10}}}
+            }
           }
-        }
-      });
+        });
+      } catch(ce) { console.error('[compare] bar chart error:', ce); }
     }
   }
 }
 
-document.addEventListener('DOMContentLoaded', cmpLoad);
+document.addEventListener('DOMContentLoaded', () => { cmpSelCount(); cmpLoad(); });

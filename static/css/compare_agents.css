@@ -1,14 +1,8 @@
-.cmp-agent-pill input { display:none; }
-  .cmp-agent-pill label {
-    display:inline-flex; align-items:center; gap:6px; padding:4px 12px;
-    border:1px solid #2e3a4a; border-radius:20px; cursor:pointer;
-    font-size:.78rem; color:#8899aa; background:#13181f; transition:all .15s;
-    user-select:none;
-  }
-  .cmp-agent-pill input:checked + label {
-    background:#0d2137; border-color:#4dabf7; color:#e0f0ff;
-  }
-  .cmp-agent-pill label:hover { border-color:#4dabf7; color:#c0d8f0; }
+/* checklist rows */
+.cmp-agent-row { color:#8899aa; user-select:none; }
+.cmp-agent-row:hover { background:#0d1e2f; border-color:#2e3a4a !important; color:#c0d8f0; }
+.cmp-agent-row input[type=checkbox] { accent-color:#4dabf7; width:14px; height:14px; flex-shrink:0; cursor:pointer; }
+.cmp-agent-row:has(input:checked) { background:#0a1a2e; border-color:#4dabf7 !important; color:#e0f0ff; }
   .stat-pill {
     background:#0a1420; border:1px solid #1a2d3d; border-radius:10px;
     padding:10px 8px; text-align:center;

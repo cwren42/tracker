@@ -151,20 +151,30 @@ function spinSet(prefix, state) {
   vis(prefix+'-empty', state === 'empty');
 }
 /* ── Productivity score ──────────────────────────────────────────── */
-function renderProductivity(events) {
+function renderProductivity(summary) {
   const el = document.getElementById('stat-prod-score');
   const sub = document.getElementById('stat-prod-sub');
-  if (!events.length) { el.textContent='—'; sub.textContent=''; return; }
-  let focusedS=0, deepS=0, idleS=0;
-  for (const e of events) {
-    const d = e.duration_s||0;
-    if (d<=1800) focusedS+=d; else if(d<=7200) deepS+=d; else idleS+=d;
+  if (!summary.length) { el.textContent='—'; sub.textContent='No data'; return; }
+  let productiveS=0, unproductiveS=0, neutralS=0;
+  for (const r of summary) {
+    const s = r.total_s||0;
+    if (r.productivity === 'productive') productiveS += s;
+    else if (r.productivity === 'unproductive') unproductiveS += s;
+    else neutralS += s;
   }
-  const total = focusedS+deepS+idleS;
-  const score = total>0 ? Math.round((focusedS+deepS*0.7)/total*100) : 0;
+  const total = productiveS + unproductiveS + neutralS;
+  if (total === 0) { el.textContent='—'; sub.textContent='No data'; return; }
+  const classified = productiveS + unproductiveS;
+  if (classified === 0) {
+    el.textContent='—';
+    el.style.color='#adb5bd';
+    sub.textContent='No apps classified yet';
+    return;
+  }
+  const score = Math.round(productiveS / classified * 100);
   el.textContent = score+'%';
   el.style.color = score>=75?'#51cf66':score>=50?'#fcc419':'#ff6b6b';
-  sub.textContent = `${fmtDuration(focusedS)} focused · ${fmtDuration(idleS)} idle`;
+  sub.textContent = `${fmtDuration(productiveS)} productive · ${fmtDuration(unproductiveS)} unproductive`;
 }
 /* ── Stat cards ───────────────────────────────────────────────────────── */
 function renderStats(summary, daily, hourly) {
@@ -405,7 +415,7 @@ window.eeLoad = async function() {
   const filteredEvt = workHoursFilter(lastEvents);
 
   renderStats(lastSummary, daily, hourly);
-  renderProductivity(filteredEvt);
+  renderProductivity(lastSummary);
   renderUsage(lastSummary);
   renderCategories(lastSummary);
   renderTopSites(lastSites);
@@ -580,15 +590,29 @@ async function loadFocusSessions() {
 }
 
 /* ── App Classifications ───────────────────────────────────────────── */
+function clsTab(tab) {
+  const isApp = tab === 'app';
+  document.getElementById('cls-panel-app').style.display  = isApp ? '' : 'none';
+  document.getElementById('cls-panel-site').style.display = isApp ? 'none' : '';
+  document.getElementById('cls-tab-app').classList.toggle('active', isApp);
+  document.getElementById('cls-tab-site').classList.toggle('active', !isApp);
+  if (!isApp) clsLoadTopSites();
+}
 async function loadClassifications() {
   const res  = await fetch('/api/rmm/eagle-eyes/app-classifications');
   const data = await res.json();
   if (!data.ok) return;
   const PROD_BADGE = {productive:'<span class="badge bg-success">✅ Productive</span>', unproductive:'<span class="badge bg-danger">❌ Unproductive</span>', neutral:'<span class="badge bg-secondary">⚪ Neutral</span>'};
-  document.getElementById('cls-tbody').innerHTML = data.classifications.map(c =>
-    `<tr><td><code>${c.process_pattern}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
+  const appRows  = data.classifications.filter(c => !c.window_title_pattern);
+  const siteRows = data.classifications.filter(c =>  c.window_title_pattern);
+  document.getElementById('cls-tbody').innerHTML = appRows.map(c =>
+    `<tr><td><code>${c.process_pattern||'—'}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
      <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})">✕</button></td></tr>`
-  ).join('');
+  ).join('') || '<tr><td colspan="4" class="text-muted text-center small">No app rules yet</td></tr>';
+  document.getElementById('cls-site-tbody').innerHTML = siteRows.map(c =>
+    `<tr><td><code>${c.window_title_pattern}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
+     <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})">✕</button></td></tr>`
+  ).join('') || '<tr><td colspan="4" class="text-muted text-center small">No site rules yet</td></tr>';
 }
 async function clsSave() {
   const pattern = document.getElementById('cls-pattern').value.trim().toLowerCase();
@@ -599,6 +623,42 @@ async function clsSave() {
   document.getElementById('cls-pattern').value = '';
   document.getElementById('cls-label').value = '';
   loadClassifications();
+}
+async function clsSiteSave() {
+  const sitePat = document.getElementById('cls-site-pat').value.trim().toLowerCase();
+  const label   = document.getElementById('cls-site-label').value.trim();
+  const prod    = document.getElementById('cls-site-prod').value;
+  if (!sitePat) return;
+  await fetch('/api/rmm/eagle-eyes/app-classifications', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({window_title_pattern:sitePat, label:label||sitePat, productivity:prod})});
+  document.getElementById('cls-site-pat').value = '';
+  document.getElementById('cls-site-label').value = '';
+  loadClassifications();
+}
+async function clsLoadTopSites() {
+  try {
+    const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?days=30`);
+    const data = await res.json();
+    if (!data.ok || !data.sites.length) return;
+    // Fetch existing classifications to show which sites already have rules
+    const clsRes  = await fetch('/api/rmm/eagle-eyes/app-classifications');
+    const clsData = await clsRes.json();
+    const classified = new Set((clsData.classifications||[]).filter(c=>c.window_title_pattern).map(c=>c.window_title_pattern.toLowerCase()));
+    const chips = data.sites.map(s => {
+      const key = s.site.toLowerCase();
+      const done = classified.has(key);
+      const safesite = s.site.replace(/'/g, "\\'");
+      return `<button class="btn btn-xs ${done?'btn-outline-success':'btn-outline-secondary'} py-0 px-2" style="font-size:.75rem;"
+        onclick="clsSiteChip('${safesite}')" ${done?'disabled title="Already classified"':''}>
+        ${done?'✓ ':''}${s.site} <span class="text-muted">${Math.round(s.total_s/60)}m</span></button>`;
+    }).join('');
+    document.getElementById('cls-top-sites-chips').innerHTML = chips;
+    document.getElementById('cls-top-sites-wrap').style.display = '';
+  } catch(_) {}
+}
+function clsSiteChip(site) {
+  document.getElementById('cls-site-pat').value   = site.toLowerCase();
+  document.getElementById('cls-site-label').value = site;
+  document.getElementById('cls-site-prod').value  = 'unproductive';
 }
 async function clsDelete(id) {
   await fetch(`/api/rmm/eagle-eyes/app-classifications/${id}`, {method:'DELETE'});

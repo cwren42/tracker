@@ -317,39 +317,89 @@
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header py-2">
-        <h6 class="modal-title mb-0"><i class="bi bi-tags me-2"></i>App Productivity Classifications</h6>
+        <h6 class="modal-title mb-0"><i class="bi bi-tags me-2"></i>App &amp; Site Productivity Classifications</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body p-0">
-        <div class="p-3 border-bottom">
-          <div class="row g-2 align-items-end">
-            <div class="col">
-              <label class="form-label small mb-1">Process name (e.g. <code>chrome</code>)</label>
-              <input type="text" id="cls-pattern" class="form-control form-control-sm" placeholder="process_name (lowercase)">
-            </div>
-            <div class="col">
-              <label class="form-label small mb-1">Label</label>
-              <input type="text" id="cls-label" class="form-control form-control-sm" placeholder="Google Chrome">
-            </div>
-            <div class="col-auto">
-              <label class="form-label small mb-1">Productivity</label>
-              <select id="cls-prod" class="form-select form-select-sm">
-                <option value="productive">&#x2705; Productive</option>
-                <option value="neutral" selected>&#x26AA;&#xFE0F; Neutral</option>
-                <option value="unproductive">&#x274C; Unproductive</option>
-              </select>
-            </div>
-            <div class="col-auto">
-              <button class="btn btn-sm btn-primary" onclick="clsSave()">Add / Update</button>
+
+        <!-- Nav tabs -->
+        <ul class="nav nav-tabs nav-fill border-bottom-0 px-3 pt-2" style="font-size:.82rem;">
+          <li class="nav-item"><a class="nav-link active" href="#" onclick="clsTab('app');return false;" id="cls-tab-app"><i class="bi bi-window me-1"></i>Apps</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" onclick="clsTab('site');return false;" id="cls-tab-site"><i class="bi bi-globe me-1"></i>Browser Sites</a></li>
+        </ul>
+
+        <!-- App rule panel -->
+        <div id="cls-panel-app">
+          <div class="p-3 border-bottom">
+            <div class="row g-2 align-items-end">
+              <div class="col">
+                <label class="form-label small mb-1">Process name (e.g. <code>chrome</code>)</label>
+                <input type="text" id="cls-pattern" class="form-control form-control-sm" placeholder="process_name (lowercase)">
+              </div>
+              <div class="col">
+                <label class="form-label small mb-1">Label</label>
+                <input type="text" id="cls-label" class="form-control form-control-sm" placeholder="Google Chrome">
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">Productivity</label>
+                <select id="cls-prod" class="form-select form-select-sm">
+                  <option value="productive">✅ Productive</option>
+                  <option value="neutral" selected>⚪ Neutral</option>
+                  <option value="unproductive">❌ Unproductive</option>
+                </select>
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-sm btn-primary" onclick="clsSave()">Add / Update</button>
+              </div>
             </div>
           </div>
+          <div style="max-height:340px;overflow-y:auto;">
+            <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
+              <thead class="sticky-top table-dark"><tr><th>Process</th><th>Label</th><th>Productivity</th><th></th></tr></thead>
+              <tbody id="cls-tbody"></tbody>
+            </table>
+          </div>
         </div>
-        <div style="max-height:380px;overflow-y:auto;">
-          <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
-            <thead class="sticky-top table-dark"><tr><th>Process</th><th>Label</th><th>Productivity</th><th></th></tr></thead>
-            <tbody id="cls-tbody"></tbody>
-          </table>
+
+        <!-- Browser site rule panel -->
+        <div id="cls-panel-site" style="display:none;">
+          <div class="p-3 border-bottom">
+            <p class="text-muted small mb-2">Classify time spent on specific browser sites. The title bar text is matched — e.g. entering <code>youtube</code> matches any Chrome/Edge/Firefox window titled "YouTube – …".</p>
+            <div class="row g-2 align-items-end">
+              <div class="col">
+                <label class="form-label small mb-1">Site name / title contains</label>
+                <input type="text" id="cls-site-pat" class="form-control form-control-sm" placeholder="e.g. youtube">
+              </div>
+              <div class="col">
+                <label class="form-label small mb-1">Label</label>
+                <input type="text" id="cls-site-label" class="form-control form-control-sm" placeholder="YouTube">
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">Productivity</label>
+                <select id="cls-site-prod" class="form-select form-select-sm">
+                  <option value="productive">✅ Productive</option>
+                  <option value="neutral">⚪ Neutral</option>
+                  <option value="unproductive" selected>❌ Unproductive</option>
+                </select>
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-sm btn-primary" onclick="clsSiteSave()">Add / Update</button>
+              </div>
+            </div>
+          </div>
+          <!-- Top sites quick-chips -->
+          <div class="p-3 border-bottom" id="cls-top-sites-wrap" style="display:none;">
+            <div class="small text-muted mb-2">Top browser sites from this agent (click to pre-fill):</div>
+            <div id="cls-top-sites-chips" class="d-flex flex-wrap gap-1"></div>
+          </div>
+          <div style="max-height:280px;overflow-y:auto;">
+            <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
+              <thead class="sticky-top table-dark"><tr><th>Site pattern</th><th>Label</th><th>Productivity</th><th></th></tr></thead>
+              <tbody id="cls-site-tbody"></tbody>
+            </table>
+          </div>
         </div>
+
       </div>
     </div>
   </div>
@@ -469,7 +519,7 @@
 const agentId      = {{ agent_id | tojson }};
 let agentTzOffsetH = {{ tz_offset_h }};  // only used to pick the right calendar day for the gantt
 </script>
-<script src="/static/js/eagle_eyes.js"></script>
+<script src="/static/js/eagle_eyes.js?v=4"></script>
 
 <style>
 .ee-thumb { transition: transform .15s; }

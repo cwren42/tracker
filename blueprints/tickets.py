@@ -58,7 +58,11 @@ def tickets():
         return render_template('tickets.html', tickets=tickets,
                                total_closed=sum(1 for t in tickets if t.status == 'Closed'),
                                total_open=sum(1 for t in tickets if t.status in ('Open', 'In Progress')),
+                               open_count=sum(1 for t in tickets if t.status == 'Open'),
+                               inprog_count=sum(1 for t in tickets if t.status == 'In Progress'),
+                               urgent_count=0, unassigned_count=0, closed_today=0,
                                chart_labels=[], chart_data=[], tech_loads=[],
+                               avg_hours=None, resolution_by_priority=[],
                                base_user_mode=True, now=datetime.utcnow())
     tickets = SupportTicket.query.order_by(SupportTicket.created_at.desc()).all()
     total_closed = SupportTicket.query.filter_by(status='Closed').count()
@@ -110,8 +114,45 @@ def tickets():
         ))
     tech_loads.sort(key=lambda x: -(x.open + x.in_progress))
 
+    # Summary counts for the stat cards
+    open_count       = sum(1 for t in tickets if t.status == 'Open')
+    inprog_count     = sum(1 for t in tickets if t.status == 'In Progress')
+    urgent_count     = sum(1 for t in tickets if t.status not in ('Closed', 'Merged') and t.priority == 'Urgent')
+    unassigned_count = sum(1 for t in tickets if t.status not in ('Closed', 'Merged') and not t.assigned_to_user_id)
+
+    # Closed today
+    today_date   = datetime.utcnow().date()
+    closed_today = sum(1 for t in tickets if t.status in ('Closed', 'Merged') and t.updated_at
+                       and (t.updated_at.date() if hasattr(t.updated_at, 'date') else t.updated_at) == today_date)
+
+    # Overall average resolution hours (all closed tickets)
+    all_res_hours = []
+    res_by_priority = defaultdict(lambda: {'count': 0, 'hours': []})
+    for t in tickets:
+        if t.status in ('Closed', 'Merged') and t.created_at and t.updated_at:
+            h = (t.updated_at - t.created_at).total_seconds() / 3600
+            if h >= 0:
+                all_res_hours.append(h)
+                res_by_priority[t.priority or 'Normal']['count'] += 1
+                res_by_priority[t.priority or 'Normal']['hours'].append(h)
+    avg_hours = round(sum(all_res_hours) / len(all_res_hours), 1) if all_res_hours else None
+
+    priority_order = ['Urgent', 'High', 'Normal', 'Low']
+    resolution_by_priority = [
+        SimpleNamespace(
+            priority=p,
+            count=res_by_priority[p]['count'],
+            avg_hours=round(sum(res_by_priority[p]['hours']) / len(res_by_priority[p]['hours']), 1)
+                      if res_by_priority[p]['hours'] else 0
+        )
+        for p in priority_order if p in res_by_priority
+    ]
+
     return render_template('tickets.html', tickets=tickets, total_closed=total_closed, total_open=total_open,
                            chart_labels=chart_labels, chart_data=chart_data, tech_loads=tech_loads,
+                           avg_hours=avg_hours, open_count=open_count, inprog_count=inprog_count,
+                           urgent_count=urgent_count, unassigned_count=unassigned_count,
+                           closed_today=closed_today, resolution_by_priority=resolution_by_priority,
                            now=datetime.utcnow())
 
 
@@ -182,7 +223,7 @@ def view_ticket(ticket_id):
     if current_user.role == 'base_user' and ticket.created_by_user_id != current_user.id:
         flash('You can only view your own tickets.', 'danger')
         return redirect(url_for('tickets.tickets'))
-    techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(User.display_name).all()
+    techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(db.func.coalesce(User.full_name, User.username)).all()
     # Build timeline: merge notes + activity sorted by created_at
     notes = [{'type': 'note', 'obj': n, 'ts': n.created_at} for n in ticket.notes.order_by(TicketNote.created_at).all()]
     acts = [{'type': 'activity', 'obj': a, 'ts': a.created_at} for a in ticket.activity.order_by(TicketActivity.created_at).all()]

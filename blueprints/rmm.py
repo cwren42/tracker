@@ -1106,20 +1106,48 @@ def api_rmm_eagle_app_summary(agent_id):
     """Return total time per process for the requested day range."""
     date_clause, date_params = _eagle_date_params(default_days=7)
     wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
+    # Use LATERAL joins so that for browser events, a window_title_pattern match
+    # overrides the process-level classification (e.g. YouTube → unproductive
+    # even though chrome → neutral).
+    BROWSERS = "('msedge','chrome','firefox','brave','opera','iexplore','safari')"
     rows = db.session.execute(
-        text(f"""SELECT process_name,
-                       COUNT(*) as events,
-                       SUM(duration_s) as total_s
-                FROM rmm_eagle_event
-                WHERE agent_id = :aid AND {date_clause}
+        text(f"""WITH classified AS (
+                SELECT
+                    e.process_name,
+                    e.duration_s,
+                    COALESCE(site_cls.label, e.process_name) AS display_name,
+                    COALESCE(site_cls.productivity, proc_cls.productivity) AS productivity
+                FROM rmm_eagle_event e
+                LEFT JOIN LATERAL (
+                    SELECT sc.label, sc.productivity
+                    FROM rmm_eagle_app_class sc
+                    WHERE sc.window_title_pattern IS NOT NULL
+                      AND LOWER(e.process_name) IN {BROWSERS}
+                      AND LOWER(COALESCE(e.window_title,'')) LIKE '%' || LOWER(sc.window_title_pattern) || '%'
+                    LIMIT 1
+                ) site_cls ON true
+                LEFT JOIN LATERAL (
+                    SELECT pc.productivity
+                    FROM rmm_eagle_app_class pc
+                    WHERE pc.window_title_pattern IS NULL
+                      AND LOWER(e.process_name) LIKE LOWER(pc.process_pattern)
+                    LIMIT 1
+                ) proc_cls ON true
+                WHERE e.agent_id = :aid AND {date_clause}
                 {_EAGLE_SYSTEM_EXCL}
                 {wh_clause}
-                GROUP BY process_name
-                ORDER BY total_s DESC
-                LIMIT 30"""),
+            )
+            SELECT display_name AS process_name,
+                   COUNT(*) AS events,
+                   SUM(duration_s) AS total_s,
+                   productivity
+            FROM classified
+            GROUP BY display_name, productivity
+            ORDER BY total_s DESC
+            LIMIT 30"""),
         {'aid': agent_id, **date_params}
     ).fetchall()
-    summary = [{'process_name': r[0], 'events': r[1], 'total_s': int(r[2] or 0)} for r in rows]
+    summary = [{'process_name': r[0], 'events': r[1], 'total_s': int(r[2] or 0), 'productivity': r[3]} for r in rows]
     return jsonify({'ok': True, 'summary': summary})
 
 
@@ -1364,26 +1392,37 @@ def api_eagle_app_classifications():
     if request.method == 'GET':
         try:
             rows = db.session.execute(
-                text("SELECT id, process_pattern, label, productivity, created_at FROM rmm_eagle_app_class ORDER BY process_pattern")
+                text("SELECT id, process_pattern, label, productivity, created_at, window_title_pattern FROM rmm_eagle_app_class ORDER BY COALESCE(window_title_pattern, process_pattern)")
             ).mappings().fetchall()
             return jsonify(ok=True, classifications=[dict(r) for r in rows])
         except Exception as e:
             return jsonify(ok=False, error=str(e))
     # POST — add or update
     data = request.get_json() or {}
-    pattern = (data.get('process_pattern') or '').strip().lower()
-    label   = (data.get('label') or '').strip()
-    prod    = (data.get('productivity') or 'neutral').strip()
-    if not pattern:
-        return jsonify(ok=False, error='process_pattern required')
-    if prod not in ('productive','unproductive','neutral'):
+    pattern    = (data.get('process_pattern') or '').strip().lower() or None
+    label      = (data.get('label') or '').strip()
+    prod       = (data.get('productivity') or 'neutral').strip()
+    window_pat = (data.get('window_title_pattern') or '').strip().lower() or None
+    if not pattern and not window_pat:
+        return jsonify(ok=False, error='process_pattern or window_title_pattern required')
+    if prod not in ('productive', 'unproductive', 'neutral'):
         return jsonify(ok=False, error='Invalid productivity value')
     try:
-        db.session.execute(text("""
-            INSERT INTO rmm_eagle_app_class (process_pattern, label, productivity, created_at)
-            VALUES (:p, :l, :pr, :ca)
-            ON CONFLICT(process_pattern) DO UPDATE SET label=excluded.label, productivity=excluded.productivity
-        """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat()})
+        if window_pat:
+            # Site rule — unique key is window_title_pattern
+            db.session.execute(text("""
+                INSERT INTO rmm_eagle_app_class (process_pattern, label, productivity, created_at, window_title_pattern)
+                VALUES (:p, :l, :pr, :ca, :wp)
+                ON CONFLICT(window_title_pattern) WHERE window_title_pattern IS NOT NULL
+                DO UPDATE SET label=excluded.label, productivity=excluded.productivity, process_pattern=excluded.process_pattern
+            """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat(), 'wp': window_pat})
+        else:
+            # Process rule — unique key is process_pattern
+            db.session.execute(text("""
+                INSERT INTO rmm_eagle_app_class (process_pattern, label, productivity, created_at, window_title_pattern)
+                VALUES (:p, :l, :pr, :ca, NULL)
+                ON CONFLICT(process_pattern) DO UPDATE SET label=excluded.label, productivity=excluded.productivity
+            """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat()})
         db.session.commit()
         return jsonify(ok=True)
     except Exception as e:
@@ -1599,11 +1638,11 @@ def api_eagle_fleet():
 def rmm_eagle_compare():
     agents = db.session.execute(
         text("""
-            SELECT a.agent_id, COALESCE(t.hostname, a.agent_id) as hostname
-            FROM rmm_agent a
-            LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
-            WHERE a.enabled = true
-            ORDER BY hostname
+            SELECT ec.agent_id, COALESCE(NULLIF(t.hostname,''), ec.agent_id) as hostname
+            FROM rmm_eagle_config ec
+            LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
+            WHERE ec.enabled = true
+            ORDER BY LOWER(COALESCE(NULLIF(t.hostname,''), ec.agent_id))
         """)
     ).mappings().fetchall()
     return render_template('compare_agents.html', agents=[dict(a) for a in agents])
@@ -1636,7 +1675,8 @@ def api_eagle_compare_data():
             """), {'aid': aid}).mappings().fetchall()
             hostname = db.session.execute(
                 text("SELECT hostname FROM rmm_telemetry WHERE agent_id = :aid LIMIT 1"), {'aid': aid}
-            ).scalar() or aid
+            ).scalar()
+            hostname = hostname if hostname else aid  # NULLIF-style: empty string falls through
             results[aid] = {
                 'hostname': hostname,
                 'summary':  [{'process_name': r['process_name'], 'total_s': int(r['total_s'] or 0), 'events': r['events']} for r in summary],

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.5.6"
+AGENT_VERSION = "2.5.7"
 
 import asyncio
 import base64
@@ -75,7 +75,7 @@ def _ps_json(script: str, timeout: int = 15):
     return None
 
 
-# Internal LAN hostnames — only resolvable via corporate internal DNS.
+# Internal LAN hostnames -- only resolvable via corporate internal DNS.
 # External DNS has no record for these, so a successful TCP connect proves we're on LAN.
 _LAN_GATEWAY_HOST = "rmm.corp.cirque.com"
 _LAN_TRACKER_URL  = "https://tracker.corp.cirque.com"
@@ -112,9 +112,9 @@ def _resolve_urls(fallback_tracker: str, fallback_gateway: str) -> tuple:
     matches rmm.corp.cirque.com.
     """
     if _can_reach(_LAN_GATEWAY_HOST):
-        print(f"[agent] LAN reachable ({_LAN_GATEWAY_HOST}) — using internal endpoints", flush=True)
+        print(f"[agent] LAN reachable ({_LAN_GATEWAY_HOST}) -- using internal endpoints", flush=True)
         return _LAN_TRACKER_URL, _LAN_GATEWAY_URL
-    print(f"[agent] LAN unreachable — falling back to Cloudflare endpoints", flush=True)
+    print(f"[agent] LAN unreachable -- falling back to Cloudflare endpoints", flush=True)
     return fallback_tracker, fallback_gateway
 
 
@@ -227,7 +227,7 @@ _RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo'
 _RUSTDESK_PASS_FILE    = r'C:\CirqueRMM\rustdesk_pass.txt'
 _RUSTDESK_PEER_ID_FILE = r'C:\CirqueRMM\rustdesk_peer_id.txt'  # cached so --get-id only runs once
 
-# Tray app API key (create_tickets scope) — baked in at build time
+# Tray app API key (create_tickets scope) -- baked in at build time
 _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
 _tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
@@ -243,7 +243,7 @@ _TRAY_CFG_PATH = r'C:\CirqueRMM\tray_config.json'
 def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
     """Download tray.py, write tray_config.json, install pip deps, and create
     a per-user Startup shortcut so the tray runs at login.
-    Safe to call repeatedly — skips steps already done."""
+    Safe to call repeatedly -- skips steps already done."""
     import subprocess as _sp, glob as _glob
     try:
         agent_dir = os.path.dirname(os.path.abspath(__file__))
@@ -325,7 +325,7 @@ def _create_startup_shortcut_task():
     then launch the tray immediately in the current interactive user's session."""
     import subprocess as _sp, glob as _glob
 
-    # ── 1. Find pythonw.exe ──────────────────────────────────────────────────
+    # -- 1. Find pythonw.exe --------------------------------------------------
     pythonw_path = ''
     _candidate = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
     if os.path.isfile(_candidate):
@@ -347,10 +347,10 @@ def _create_startup_shortcut_task():
         except Exception:
             pass
     if not pythonw_path:
-        print('[tray] No pythonw.exe found — cannot launch tray', flush=True)
+        print('[tray] No pythonw.exe found -- cannot launch tray', flush=True)
         return
 
-    # ── 2. Write VBScript to startup folders (SYSTEM can write directly) ────
+    # -- 2. Write VBScript to startup folders (SYSTEM can write directly) ----
     # VBS runs pythonw.exe silently so no console window appears
     _vbs = (
         'Set oShell = CreateObject("WScript.Shell")\r\n'
@@ -383,7 +383,7 @@ def _create_startup_shortcut_task():
         except Exception as _e:
             print(f'[tray] User startup write failed ({_uname}): {_e}', flush=True)
 
-    # ── 3. Kill any existing tray.py process ────────────────────────────────
+    # -- 3. Kill any existing tray.py process --------------------------------
     try:
         _sp.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command',
@@ -397,8 +397,8 @@ def _create_startup_shortcut_task():
     import time as _time
     _time.sleep(2)
 
-    # ── 4. Immediate launch in the active interactive user's session ─────────
-    # Use New-ScheduledTaskPrincipal with the actual logged-in username —
+    # -- 4. Immediate launch in the active interactive user's session ---------
+    # Use New-ScheduledTaskPrincipal with the actual logged-in username --
     # more reliable than generic InteractiveToken when called from session 0.
     _py_escaped = pythonw_path.replace("'", "''")
     ps_launch = (
@@ -462,7 +462,7 @@ def _ensure_rustdesk_password() -> str:
                 fh.write(pw)
             print(f'[rustdesk] Generated new access password', flush=True)
 
-        # 3. Set the password in RustDesk (idempotent — safe to call every time)
+        # 3. Set the password in RustDesk (idempotent -- safe to call every time)
         exe = _rustdesk_exe()
         if exe and os.path.isfile(exe):
             _sp.run([exe, '--password', pw], capture_output=True, timeout=10)
@@ -496,16 +496,16 @@ def _fix_rustdesk_identity() -> bool:
                 confirmed = m.group(1).strip()
                 if not confirmed:
                     # Empty = service just started, hasn't confirmed any server yet
-                    # Don't delete — just wait for it to confirm
+                    # Don't delete -- just wait for it to confirm
                     return False
                 # Has our server confirmed? First segment of rust.corp.cirque.com = 'rust'
                 our_name = _RUSTDESK_SERVER.split('.')[0].lower()
                 if our_name in confirmed.lower():
                     return False  # already confirmed against our server
                 # Has a FOREIGN server (e.g. rs-ny from public RustDesk)
-                print(f'[rustdesk] Foreign server in identity at {path}: {confirmed.strip()} — resetting', flush=True)
+                print(f'[rustdesk] Foreign server in identity at {path}: {confirmed.strip()} -- resetting', flush=True)
             else:
-                # No [keys_confirmed] section at all — new file, leave it alone
+                # No [keys_confirmed] section at all -- new file, leave it alone
                 return False
             os.remove(path)
             # Restart the service so it regenerates identity against our server
@@ -513,7 +513,7 @@ def _fix_rustdesk_identity() -> bool:
             _time.sleep(3)
             _sp.run(['sc.exe', 'start', 'RustDesk'], capture_output=True, timeout=10)
             _time.sleep(10)
-            print('[rustdesk] Identity reset — service restarted', flush=True)
+            print('[rustdesk] Identity reset -- service restarted', flush=True)
             return True
         except Exception as e:
             print(f'[rustdesk] identity check error: {e}', flush=True)
@@ -546,7 +546,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
     try:
         if _rustdesk_exe():
             if _rustdesk_setup_done:
-                # Already fully set up — only sync ID (fast, idempotent)
+                # Already fully set up -- only sync ID (fast, idempotent)
                 sync_rustdesk_id(tracker_url, agent_id, token)
                 return
             # First run: do full config check
@@ -557,12 +557,12 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
             _rustdesk_setup_done = True
             return  # tray_watchdog handles tray setup separately
 
-        print('[rustdesk] Not installed — installing...', flush=True)
+        print('[rustdesk] Not installed -- installing...', flush=True)
 
         # Try 1: winget with --scope machine (works from SYSTEM on most Win10/11)
         _rustdesk_winget_install()
 
-        # Always verify exe exists after winget — it can exit 0 as SYSTEM
+        # Always verify exe exists after winget -- it can exit 0 as SYSTEM
         # without actually installing (stub/redirect issue)
         if not _rustdesk_exe():
             _rustdesk_direct_install()
@@ -582,7 +582,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
             sync_rustdesk_id(tracker_url, agent_id, token)
             print('[rustdesk] Install complete.', flush=True)
         else:
-            print('[rustdesk] Install failed — exe not found after attempts.', flush=True)
+            print('[rustdesk] Install failed -- exe not found after attempts.', flush=True)
     except Exception as e:
         print(f'[rustdesk] ensure_rustdesk error: {e}', flush=True)
 
@@ -590,7 +590,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
 def _rustdesk_winget_install() -> bool:
     """Try to install RustDesk via winget. Returns True on success."""
     import subprocess as _sp, glob as _glob
-    # winget may not be on SYSTEM's PATH — find it explicitly
+    # winget may not be on SYSTEM's PATH -- find it explicitly
     winget = 'winget'
     patterns = [
         r'C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe',
@@ -636,7 +636,7 @@ def _rustdesk_direct_install() -> None:
         size_mb = _os.path.getsize(tmp_path) / 1024 / 1024
         print(f'[rustdesk] Downloaded {size_mb:.1f} MB', flush=True)
         if size_mb < 5:
-            print('[rustdesk] Download too small — aborting', flush=True)
+            print('[rustdesk] Download too small -- aborting', flush=True)
             _os.unlink(tmp_path)
             return
 
@@ -700,14 +700,14 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
             print(f"[update] Up to date ({AGENT_VERSION})", flush=True)
             return False
 
-        print(f"[update] New version {data.get('version')} available — downloading...", flush=True)
+        print(f"[update] New version {data.get('version')} available -- downloading...", flush=True)
         file_url = f"{tracker_url}/rmm/agent/file?agent_id={agent_id}&token={token}"
         req2 = urllib.request.Request(file_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
         with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
             new_code = r.read()
 
         if server_checksum and hashlib.sha256(new_code).hexdigest() != server_checksum:
-            print("[update] Checksum mismatch — aborting", flush=True)
+            print("[update] Checksum mismatch -- aborting", flush=True)
             return False
 
         tmp = current_path + ".new"
@@ -721,7 +721,7 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
         except Exception:
             pass
         os.rename(tmp, current_path)
-        print("[update] Updated — restarting", flush=True)
+        print("[update] Updated -- restarting", flush=True)
         return True
     except Exception as e:
         print(f"[update] Check failed: {e}", flush=True)
@@ -793,13 +793,13 @@ def _get_windows_username() -> str:
 
 
 def _get_domain() -> str:
-    # Use GetComputerNameExW(2) = ComputerNameDnsDomain — returns just the domain suffix
+    # Use GetComputerNameExW(2) = ComputerNameDnsDomain -- returns just the domain suffix
     try:
         import ctypes
         buf  = ctypes.create_unicode_buffer(256)
         size = ctypes.c_ulong(256)
         if ctypes.windll.kernel32.GetComputerNameExW(2, buf, ctypes.byref(size)):
-            return buf.value  # e.g. "corp.cirque.com" — no stripping needed
+            return buf.value  # e.g. "corp.cirque.com" -- no stripping needed
     except Exception:
         pass
     return os.environ.get("USERDNSDOMAIN", "")
@@ -938,7 +938,7 @@ def _collect_extended() -> dict:
     """
     result = {}
 
-    # ── Computer system (vendor, model; user+domain handled separately below) ─
+    # -- Computer system (vendor, model; user+domain handled separately below) -
     cs = _ps_json(
         "Get-CimInstance Win32_ComputerSystem | "
         "Select-Object Manufacturer,Model,UserName,Domain | "
@@ -948,7 +948,7 @@ def _collect_extended() -> dict:
         result["vendor"]     = cs.get("Manufacturer") or ""
         result["model_name"] = cs.get("Model") or ""
 
-    # ── Logged-in user via query user (Python-parsed, reliable from SYSTEM) ────
+    # -- Logged-in user via query user (Python-parsed, reliable from SYSTEM) ----
     _qu_user, _qu_logon = _query_user_info()
     if _qu_user:
         result["logged_in_user"] = _qu_user
@@ -973,7 +973,7 @@ def _collect_extended() -> dict:
     elif cs and cs.get("UserName") and not (cs.get("UserName") or "").endswith("$"):
         result["logged_in_user"] = cs["UserName"].split("\\")[-1]
 
-    # ── Domain: resolve from the logged-in user's NETBIOS prefix ────────────
+    # -- Domain: resolve from the logged-in user's NETBIOS prefix ------------
     # Win32_ComputerSystem.Domain gives the computer's root domain (e.g. cirque.com)
     # but the user may be in a child domain (e.g. corp.cirque.com).
     # Win32_ComputerSystem.UserName format is "NETBIOS_DOMAIN\username"; we use
@@ -992,7 +992,7 @@ def _collect_extended() -> dict:
             user_domain = nd["DnsDomainName"]
     result["domain"] = user_domain
 
-    # ── BIOS ───────────────────────────────────────────────────────────────
+    # -- BIOS ---------------------------------------------------------------
     bios = _ps_json(
         "Get-CimInstance Win32_BIOS | "
         "Select-Object Manufacturer,SMBIOSBIOSVersion,SerialNumber,"
@@ -1005,7 +1005,7 @@ def _collect_extended() -> dict:
         result["bios_date"]         = bios.get("ReleaseDate") or ""
         result["serial_number"]     = bios.get("SerialNumber") or ""
 
-    # ── Motherboard ────────────────────────────────────────────────────────
+    # -- Motherboard --------------------------------------------------------
     mb = _ps_json(
         "Get-CimInstance Win32_BaseBoard | "
         "Select-Object Manufacturer,Product | ConvertTo-Json -Compress"
@@ -1014,7 +1014,7 @@ def _collect_extended() -> dict:
         mb_str = " ".join(filter(None, [mb.get("Manufacturer"), mb.get("Product")])).strip()
         result["motherboard"] = mb_str
 
-    # ── OS edition ─────────────────────────────────────────────────────────
+    # -- OS edition ---------------------------------------------------------
     os_info = _ps_json(
         "Get-CimInstance Win32_OperatingSystem | "
         "Select-Object Caption | ConvertTo-Json -Compress"
@@ -1022,7 +1022,7 @@ def _collect_extended() -> dict:
     if os_info:
         result["os_edition"] = os_info.get("Caption") or ""
 
-    # ── GPU ────────────────────────────────────────────────────────────────
+    # -- GPU ----------------------------------------------------------------
     raw_gpu = _ps_json(
         "Get-CimInstance Win32_VideoController | "
         "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"
@@ -1038,7 +1038,7 @@ def _collect_extended() -> dict:
     if gpus:
         result["gpu"] = gpus
 
-    # ── Sound ──────────────────────────────────────────────────────────────
+    # -- Sound --------------------------------------------------------------
     raw_snd = _ps_json(
         "Get-CimInstance Win32_SoundDevice | "
         "Select-Object Name | ConvertTo-Json -Compress"
@@ -1047,12 +1047,12 @@ def _collect_extended() -> dict:
     if sounds:
         result["sound_card"] = ", ".join(sounds)
 
-    # ── Timezone ───────────────────────────────────────────────────────────
+    # -- Timezone -----------------------------------------------------------
     tz = _ps_json("Get-TimeZone | Select-Object Id,DisplayName | ConvertTo-Json -Compress")
     if tz:
         result["timezone"] = tz.get("DisplayName") or tz.get("Id") or ""
 
-    # ── Security products ──────────────────────────────────────────────────
+    # -- Security products --------------------------------------------------
     security = {}
     for key, cls in [("av", "AntiVirusProduct"), ("fw", "FirewallProduct"), ("as", "AntiSpywareProduct")]:
         raw = _ps_json(
@@ -1071,7 +1071,7 @@ def _collect_extended() -> dict:
             security[key] = products
 
     # Firewall fallback: Windows Defender Firewall doesn't register in
-    # SecurityCenter2 FirewallProduct — query Get-NetFirewallProfile directly.
+    # SecurityCenter2 FirewallProduct -- query Get-NetFirewallProfile directly.
     if not security.get("fw"):
         try:
             raw_fw = _ps_json(
@@ -1129,7 +1129,7 @@ def _collect_extended() -> dict:
             pass
         result["security"] = security
 
-    # ── BitLocker ──────────────────────────────────────────────────────────
+    # -- BitLocker ----------------------------------------------------------
     try:
         raw_bl = _ps_json(
             "Get-BitLockerVolume -EA SilentlyContinue | "
@@ -1159,7 +1159,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── TPM ────────────────────────────────────────────────────────────────
+    # -- TPM ----------------------------------------------------------------
     try:
         tpm = _ps_json(
             "Get-Tpm -EA SilentlyContinue | "
@@ -1178,7 +1178,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Windows Activation ─────────────────────────────────────────────────
+    # -- Windows Activation -------------------------------------------------
     try:
         lic_ps = _ps_json(
             "$l=Get-CimInstance SoftwareLicensingProduct "
@@ -1191,7 +1191,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Local Administrators ───────────────────────────────────────────────
+    # -- Local Administrators -----------------------------------------------
     try:
         raw_adm = _ps_json(
             "Get-LocalGroupMember -Group 'Administrators' -EA SilentlyContinue "
@@ -1207,7 +1207,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Printers ───────────────────────────────────────────────────────────
+    # -- Printers -----------------------------------------------------------
     try:
         raw_prn = _ps_json(
             "Get-Printer -EA SilentlyContinue "
@@ -1227,7 +1227,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── USB / External Devices ─────────────────────────────────────────────
+    # -- USB / External Devices ---------------------------------------------
     try:
         raw_usb = _ps_json(
             "Get-PnpDevice -Status 'OK' -EA SilentlyContinue "
@@ -1250,7 +1250,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Mapped Network Drives ──────────────────────────────────────────────
+    # -- Mapped Network Drives ----------------------------------------------
     try:
         raw_drv = _ps_json(
             "Get-PSDrive -PSProvider FileSystem -EA SilentlyContinue "
@@ -1266,7 +1266,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Startup Programs ───────────────────────────────────────────────────
+    # -- Startup Programs ---------------------------------------------------
     try:
         raw_su = _ps_json(
             "Get-CimInstance Win32_StartupCommand "
@@ -1289,7 +1289,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Power Plan ─────────────────────────────────────────────────────────
+    # -- Power Plan ---------------------------------------------------------
     try:
         raw_pp = _ps_json(
             "Get-CimInstance -Namespace root/cimv2/power -ClassName Win32_PowerPlan "
@@ -1302,7 +1302,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Last Successful Windows Update ────────────────────────────────────
+    # -- Last Successful Windows Update ------------------------------------
     try:
         raw_wu = _ps_json(
             "$s=New-Object -ComObject Microsoft.Update.Session;"
@@ -1322,7 +1322,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── RDP Enabled ────────────────────────────────────────────────────────
+    # -- RDP Enabled --------------------------------------------------------
     try:
         rdp_ps = _ps_json(
             "@{enabled=((Get-ItemProperty "
@@ -1335,7 +1335,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Pending Reboot ─────────────────────────────────────────────────────
+    # -- Pending Reboot -----------------------------------------------------
     try:
         reboot_ps = _ps_json(
             "$r=@{};"
@@ -1352,7 +1352,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Default Browser ──────────────────────────────────────────────────────
+    # -- Default Browser ------------------------------------------------------
     try:
         brw_ps = _ps_json(
             # Agent runs as SYSTEM so HKCU is wrong; resolve the logged-in user SID
@@ -1378,7 +1378,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── DNS Servers ────────────────────────────────────────────────────────
+    # -- DNS Servers --------------------------------------------------------
     try:
         dns_ps = _ps_json(
             "Get-DnsClientServerAddress -AddressFamily IPv4 -EA SilentlyContinue "
@@ -1400,7 +1400,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Group Policy Last Refresh ──────────────────────────────────────────
+    # -- Group Policy Last Refresh ------------------------------------------
     try:
         gp_ps = _ps_json(
             "$k='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{00000000-0000-0000-0000-000000000000}';"
@@ -1417,7 +1417,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Disk SMART Health ──────────────────────────────────────────────────
+    # -- Disk SMART Health --------------------------------------------------
     try:
         smart_ps = _ps_json(
             "Get-PhysicalDisk -EA SilentlyContinue "
@@ -1440,7 +1440,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Last BSOD / System Crash ───────────────────────────────────────────
+    # -- Last BSOD / System Crash -------------------------------------------
     try:
         bsod_ps = _ps_json(
             "$e=Get-WinEvent -FilterHashtable @{LogName='System';Id=@(41,1001,6008);StartTime=(Get-Date).AddDays(-30)} "
@@ -1462,7 +1462,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Monitor Info ───────────────────────────────────────────────────────
+    # -- Monitor Info -------------------------------------------------------
     try:
         mon_ps = _ps_json(
             "Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorID -EA SilentlyContinue "
@@ -1486,7 +1486,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Windows Update Channel ─────────────────────────────────────────────
+    # -- Windows Update Channel ---------------------------------------------
     try:
         wu_ch = _ps_json(
             "$b=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\WindowsSelfHost\\Applicability' "
@@ -1502,7 +1502,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Screen Lock Timeout ──────────────────────────────────────────────────
+    # -- Screen Lock Timeout --------------------------------------------------
     try:
         lock_ps = _ps_json(
             # Display timeout from power policy (system-wide, no user context needed)
@@ -1528,7 +1528,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Listening Ports ────────────────────────────────────────────────────
+    # -- Listening Ports ----------------------------------------------------
     try:
         port_ps = _ps_json(
             "Get-NetTCPConnection -State Listen -EA SilentlyContinue "
@@ -1555,7 +1555,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # ── Security Event Telemetry (servers + all Windows machines) ─────────────
+    # -- Security Event Telemetry (servers + all Windows machines) -------------
     # These values feed the Windows Server monitoring profile checks.
     try:
         sec_events_ps = _ps_json(
@@ -1593,7 +1593,7 @@ def _collect_extended() -> dict:
     except Exception:
         pass
 
-    # Pack IT-detail fields into a single sysinfo subdict → stored as sysinfo_json
+    # Pack IT-detail fields into a single sysinfo subdict -> stored as sysinfo_json
     _si_keys = (
         "bitlocker", "tpm", "windows_licensed", "local_admins",
         "printers", "usb_devices", "mapped_drives", "startup",
@@ -1855,7 +1855,7 @@ def collect_telemetry(agent_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Patch management — available updates + remote-triggered install
+# Patch management -- available updates + remote-triggered install
 # ---------------------------------------------------------------------------
 
 def _collect_pending_updates() -> list:
@@ -2015,7 +2015,7 @@ def _run_dialog_in_user_session(ps_code: str, timeout_ms: int = 36 * 60 * 1000) 
         si.dwFlags   = 0x00000001  # STARTF_USESHOWWINDOW
         si.wShowWindow = 1         # SW_SHOWNORMAL
         pi = PROCESS_INFORMATION()
-        # CREATE_UNICODE_ENVIRONMENT — visible window
+        # CREATE_UNICODE_ENVIRONMENT -- visible window
         ok = advapi32.CreateProcessAsUserW(
             h_token, None, cmd, None, None, False,
             0x00000400, h_env, None, ctypes.byref(si), ctypes.byref(pi),
@@ -2165,7 +2165,7 @@ try {{
 async def _do_reboot_sequence():
     """Show reboot countdown dialog in user's session, then reboot when it closes."""
     loop = asyncio.get_event_loop()
-    print("[agent] Showing reboot notification to logged-in user…", flush=True)
+    print("[agent] Showing reboot notification to logged-in user...", flush=True)
     try:
         await loop.run_in_executor(
             None,
@@ -2174,8 +2174,8 @@ async def _do_reboot_sequence():
             36 * 60 * 1000,  # 36-min timeout (15 base + 15 defer + 6 buffer)
         )
     except Exception as e:
-        print(f"[agent] Reboot dialog error: {e} — rebooting anyway", flush=True)
-    print("[agent] Executing system restart for Windows Updates…", flush=True)
+        print(f"[agent] Reboot dialog error: {e} -- rebooting anyway", flush=True)
+    print("[agent] Executing system restart for Windows Updates...", flush=True)
     subprocess.run(
         ["shutdown", "/r", "/t", "0", "/c", "Restart for Windows Updates (Cirque IT)"],
         creationflags=0x08000000,
@@ -2334,7 +2334,7 @@ def _capture_in_user_session() -> Optional[dict]:
         h_env = ctypes.c_void_p()
         userenv.CreateEnvironmentBlock(ctypes.byref(h_env), h_token, False)
 
-        # Use Public folder — writable by both SYSTEM (writer) and user (reader)
+        # Use Public folder -- writable by both SYSTEM (writer) and user (reader)
         pub = os.environ.get("PUBLIC", r"C:\Users\Public")
         py_path  = os.path.join(pub, "_rmm_cap_helper.py")
         out_path = os.path.join(pub, "_rmm_cap_result.json")
@@ -2390,7 +2390,7 @@ def _capture_in_user_session() -> Optional[dict]:
             None, None,
             False,
             flags,
-            h_env,   # user environment block — critical for display access
+            h_env,   # user environment block -- critical for display access
             None,
             ctypes.byref(si),
             ctypes.byref(pi),
@@ -2552,9 +2552,9 @@ _EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\ee_helper.exe"
 # csc.exe ships with every .NET 4.x install (present on all modern Windows)
 _EE_CSC          = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
-# C# source for ee_helper.exe — compiled once via csc.exe on the Windows host.
+# C# source for ee_helper.exe -- compiled once via csc.exe on the Windows host.
 # Runs as the interactive user (CreateProcessAsUserW), loops every 10 s.
-# Uses GetForegroundWindow() — the correct Win32 API for active window detection.
+# Uses GetForegroundWindow() -- the correct Win32 API for active window detection.
 #
 # Why C# instead of PowerShell:
 #   PowerShell .ps1 scripts are scanned by AMSI before any line executes.
@@ -2564,7 +2564,7 @@ _EE_CSC          = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 #   so there are no AMSI script-content rules to trigger.
 #
 # Diagnostic output:
-#   ee_diag.txt — written on start + each iteration so we can see exactly
+#   ee_diag.txt -- written on start + each iteration so we can see exactly
 #                 where execution stops if something goes wrong.
 _EE_HELPER_CS_SRC = r"""
 using System;
@@ -2760,7 +2760,7 @@ def _ee_ensure_helper() -> bool:
 
     # Write C# source and compile to exe (one-time; reused on subsequent calls).
     # Compilation runs as SYSTEM (no AMSI restriction on subprocess calls).
-    # The resulting EXE is a normal PE — EDR evaluates it differently from
+    # The resulting EXE is a normal PE -- EDR evaluates it differently from
     # PS1 scripts, bypassing the AMSI script-content rules that blocked us.
     import subprocess as _sp
     try:
@@ -2906,7 +2906,8 @@ def _get_idle_seconds() -> int:
 
 
 async def main() -> None:
-    # Cloudflare fallback endpoints — used when LAN (rmm.corp.cirque.com) is unreachable
+    global _disable_rustdesk, _disable_tray
+    # Cloudflare fallback endpoints -- used when LAN (rmm.corp.cirque.com) is unreachable
     fallback_gateway = os.environ.get("RMM_GATEWAY_URL_PUBLIC", "wss://rmm.cirquetools.com").rstrip("/")
     fallback_tracker = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
 
@@ -2915,7 +2916,7 @@ async def main() -> None:
     screenshot_enabled = os.environ.get("RMM_SCREENSHOT", "0") == "1"
 
     # Probe _LAN_GATEWAY_HOST (internal DNS only) to decide which endpoints to use.
-    # Never probes Cloudflare hostnames — their TCP port 443 is always reachable
+    # Never probes Cloudflare hostnames -- their TCP port 443 is always reachable
     # even when the tunnel backend is down.
     tracker_url, gateway = _resolve_urls(fallback_tracker, fallback_gateway)
 
@@ -2940,7 +2941,7 @@ async def main() -> None:
 
                 loop = asyncio.get_event_loop()
 
-                # Ensure RustDesk is installed — runs in background after connect
+                # Ensure RustDesk is installed -- runs in background after connect
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
                 if not _disable_rustdesk:
@@ -2951,13 +2952,13 @@ async def main() -> None:
 
                 # Initial telemetry on connect
                 telemetry = collect_telemetry(agent_id)
-                # Merge extended — WMI values override the simpler ctypes ones
+                # Merge extended -- WMI values override the simpler ctypes ones
                 for k, v in extended.items():
                     if v:
                         telemetry[k] = v
                 await ws.send(json.dumps({**telemetry, "type": "agent_info"}))
 
-                # Send patch report (can be slow — run in executor)
+                # Send patch report (can be slow -- run in executor)
                 try:
                     patches = await loop.run_in_executor(None, _collect_patches)
                     await ws.send(json.dumps({"type": "patch_report", "patches": patches}))
@@ -2973,7 +2974,7 @@ async def main() -> None:
                 except Exception as e:
                     print(f"[agent] Pending updates failed: {e}", flush=True)
 
-                # Send session events (logon/logoff/lock/unlock/sleep/wake — last 7 days)
+                # Send session events (logon/logoff/lock/unlock/sleep/wake -- last 7 days)
                 try:
                     sev = await loop.run_in_executor(None, _collect_session_events)
                     await ws.send(json.dumps({"type": "session_events", "events": sev}))
@@ -3001,7 +3002,7 @@ async def main() -> None:
 
                 telem_task = asyncio.create_task(telemetry_loop())
 
-                # RustDesk watchdog — reinstalls if user uninstalls it (check hourly)
+                # RustDesk watchdog -- reinstalls if user uninstalls it (check hourly)
                 # Disabled entirely for server-mode agents.
                 async def rustdesk_watchdog():
                     while True:
@@ -3016,7 +3017,7 @@ async def main() -> None:
 
                 rustdesk_task = asyncio.create_task(rustdesk_watchdog())
 
-                # Software inventory — post on connect then refresh every 24h
+                # Software inventory -- post on connect then refresh every 24h
                 async def software_inventory_loop():
                     # Run immediately on first connect
                     try:
@@ -3036,7 +3037,7 @@ async def main() -> None:
 
                 asyncio.create_task(software_inventory_loop())
 
-                # Tray setup — runs once per agent process lifetime, then refreshes every 24h
+                # Tray setup -- runs once per agent process lifetime, then refreshes every 24h
                 # Disabled entirely for server-mode agents where disable_tray flag is set.
                 global _tray_setup_done
                 if not _tray_setup_done and not _disable_tray:
@@ -3054,7 +3055,7 @@ async def main() -> None:
 
                     asyncio.create_task(tray_watchdog())
 
-                # Periodic self-update check — every 4 hours while running
+                # Periodic self-update check -- every 4 hours while running
                 async def periodic_update_check():
                     while True:
                         await asyncio.sleep(4 * 3600)
@@ -3156,7 +3157,7 @@ async def main() -> None:
                         elif first_poll:
                             first_poll = False
 
-                        # Live ping every LIVE_PING_S — updates 'right now' panel without a DB write
+                        # Live ping every LIVE_PING_S -- updates 'right now' panel without a DB write
                         if (now - last_ping_at).total_seconds() >= LIVE_PING_S:
                             last_ping_at = now
                             try:
@@ -3204,7 +3205,6 @@ async def main() -> None:
 
                         # --- Agent config (server pushes flags on connect) ---
                         if msg_type == "agent_config":
-                            global _disable_rustdesk, _disable_tray
                             _disable_rustdesk = bool(payload.get("disable_rustdesk", False))
                             _disable_tray     = bool(payload.get("disable_tray", False))
                             print(f"[agent] agent_config applied: disable_rustdesk={_disable_rustdesk} disable_tray={_disable_tray}", flush=True)
@@ -3230,7 +3230,7 @@ async def main() -> None:
 
                         # --- Remote update trigger ---
                         if msg_type == "update_now":
-                            print("[agent] Received update_now — checking for new version...", flush=True)
+                            print("[agent] Received update_now -- checking for new version...", flush=True)
                             if check_for_update(tracker_url, agent_id, token):
                                 sys.exit(7)   # non-zero so NSSM always restarts; new version will run
                             await ws.send(json.dumps({"type": "update_result", "updated": False, "version": AGENT_VERSION}))
@@ -3244,7 +3244,7 @@ async def main() -> None:
 
                         # --- Restart agent ---
                         if msg_type == "restart_agent":
-                            print("[agent] Received restart_agent command — restarting via NSSM", flush=True)
+                            print("[agent] Received restart_agent command -- restarting via NSSM", flush=True)
                             await ws.send(json.dumps({"type": "restart_agent_ack", "ok": True}))
                             await asyncio.sleep(0.5)
                             sys.exit(0)  # NSSM will restart the agent automatically
@@ -3525,7 +3525,7 @@ async def main() -> None:
                                             "size":     size,
                                             "modified": item.get("m", ""),
                                         })
-                                    # dirs first, then files, both α-sorted
+                                    # dirs first, then files, both ?-sorted
                                     entries.sort(key=lambda x: (0 if x["is_dir"] else 1, x["name"].lower()))
                                     resp_path = dir_path
                                 await ws.send(json.dumps({
@@ -3784,7 +3784,7 @@ async def main() -> None:
                                         await ws.send(json.dumps({
                                             "type": "winget_search_result", "session_id": session_id,
                                             "results": [], "term": term,
-                                            "error": "winget timed out — sources may not be cached yet. Run: winget source update",
+                                            "error": "winget timed out -- sources may not be cached yet. Run: winget source update",
                                         }))
                                         continue
                                     stdout_text = raw_out.decode("utf-8", errors="replace")
@@ -3839,7 +3839,7 @@ async def main() -> None:
                                 name = payload.get("name", "")
                                 wg_action = f'uninstall --name "{name}" --silent --accept-source-agreements --purge'
                                 label = f"uninstall {name}"
-                            print(f"[winget] {label} — exe={winget_exe}", flush=True)
+                            print(f"[winget] {label} -- exe={winget_exe}", flush=True)
                             out_path = r"C:\Windows\Temp\rmm_winget_out.txt"
                             ps_cmd = (
                                 f'& "{winget_exe}" {wg_action} 2>&1 '
@@ -3905,7 +3905,7 @@ async def main() -> None:
                                         await ws.send(json.dumps({
                                             "type": "install_chunk",
                                             "session_id": session_id,
-                                            "text": f"Working ({tick}s)…",
+                                            "text": f"Working ({tick}s)...",
                                         }))
                                 result = await fut
                                 # Flush remaining lines
@@ -4033,10 +4033,10 @@ async def main() -> None:
                             loop.run_in_executor(None, _run_av_scan)
                             await ws.send(json.dumps({
                                 "type": "scan_chunk", "session_id": session_id,
-                                "text": f"{ps_type} initiated — polling status every 5 s…\n",
+                                "text": f"{ps_type} initiated -- polling status every 5 s...\n",
                             }))
 
-                            # PowerShell poll command — format DateTime fields as strings
+                            # PowerShell poll command -- format DateTime fields as strings
                             # so ConvertTo-Json produces readable values instead of /Date(ms)/
                             _mp_cmd = (
                                 f"Get-MpComputerStatus | Select-Object {ps_in_prog},"
@@ -4072,7 +4072,7 @@ async def main() -> None:
 
                             exit_code = scan_result.get("exit_code", -1)
                             output    = scan_result.get("output", "")
-                            # "already in progress" can race past our pre-check — treat as info
+                            # "already in progress" can race past our pre-check -- treat as info
                             if exit_code != 0 and "already in progress" in output.lower():
                                 await ws.send(json.dumps({
                                     "type": "scan_done", "session_id": session_id,
@@ -4113,7 +4113,7 @@ async def main() -> None:
                         eagle_task.cancel()
 
         except Exception as e:
-            print(f"[agent] Disconnected: {e} — retrying in 5s", flush=True)
+            print(f"[agent] Disconnected: {e} -- retrying in 5s", flush=True)
             for sid, s in list(shells.items()):
                 await s.stop()
             shells.clear()
@@ -4126,11 +4126,11 @@ async def main() -> None:
             await asyncio.sleep(5)
             # SSL cert mismatch means the LAN host is TCP-reachable but the TLS cert
             # doesn't cover its hostname (machine is off-LAN with corp DNS still routing
-            # the hostname to the internal server's IP). Force Cloudflare — don't re-probe,
+            # the hostname to the internal server's IP). Force Cloudflare -- don't re-probe,
             # because the TCP probe would keep succeeding and we'd loop forever.
             err_str = str(e)
             if 'CERTIFICATE_VERIFY_FAILED' in err_str or 'Hostname mismatch' in err_str:
-                print("[agent] SSL cert error on LAN endpoint — forcing Cloudflare fallback", flush=True)
+                print("[agent] SSL cert error on LAN endpoint -- forcing Cloudflare fallback", flush=True)
                 tracker_url, gateway = fallback_tracker, fallback_gateway
             else:
                 # Re-resolve endpoints every reconnect: if LAN came back up, prefer it;

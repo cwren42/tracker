@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.5.7"
+AGENT_VERSION = "3.1.1"
 
 import asyncio
 import base64
@@ -35,6 +35,15 @@ from typing import Dict, Optional
 
 import psutil
 import websockets
+
+# Force UTF-8 stdout/stderr so non-ASCII chars (software names, winget output, etc.)
+# don't crash the service with a 'charmap' UnicodeEncodeError when running on Windows.
+if sys.platform == "win32":
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +72,16 @@ def _ps_json(script: str, timeout: int = 15):
     """Run a PowerShell one-liner and return parsed JSON, or None on failure."""
     try:
         r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
             capture_output=True, text=True, timeout=timeout,
             creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
         out = r.stdout.strip()
+        if r.returncode != 0 and not out:
+            err = r.stderr.strip()
+            if err:
+                print(f'[ps_json] stderr: {err[:300]}', flush=True)
         if out and out != "null":
             return json.loads(out)
     except Exception:
@@ -221,7 +235,7 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
 
 
 _RUSTDESK_SERVER = 'rust.corp.cirque.com'
-_RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo'
+_RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo='
 
 # File on disk where we persist the plaintext password so it survives restarts.
 _RUSTDESK_PASS_FILE    = r'C:\CirqueRMM\rustdesk_pass.txt'
@@ -368,6 +382,8 @@ def _create_startup_shortcut_task():
     # Per-user startup folders
     _skip = {'All Users', 'Default', 'Default User', 'Public'}
     for _profile in _glob.glob(r'C:\Users\*'):
+        if not os.path.isdir(_profile):  # skip files like desktop.ini
+            continue
         _uname = os.path.basename(_profile)
         if _uname in _skip:
             continue
@@ -721,6 +737,13 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
         except Exception:
             pass
         os.rename(tmp, current_path)
+        # Keep version.txt in sync so the launcher sees the correct local version on restart
+        ver_file = os.path.join(os.path.dirname(current_path), "version.txt")
+        try:
+            with open(ver_file, "w") as _vf:
+                _vf.write(data.get("version", ""))
+        except Exception:
+            pass
         print("[update] Updated -- restarting", flush=True)
         return True
     except Exception as e:
@@ -729,8 +752,11 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
 
 
 def _restart_after_update() -> None:
-    """Exit with a non-zero code so NSSM restarts the service after an update."""
-    sys.exit(7)  # arbitrary non-zero so NSSM always restarts
+    """Exit with a non-zero code so NSSM restarts the service after an update.
+    Uses os._exit() instead of sys.exit() to bypass asyncio's 300-second
+    executor thread join timeout, which would otherwise stall the restart.
+    """
+    os._exit(7)  # bypass asyncio executor shutdown (avoids 300s wait)
 
 
 # ---------------------------------------------------------------------------
@@ -1864,7 +1890,9 @@ def _collect_pending_updates() -> list:
 try {
     $Session  = New-Object -ComObject Microsoft.Update.Session
     $Searcher = $Session.CreateUpdateSearcher()
-    $Results  = $Searcher.Search("IsInstalled=0 and IsHidden=0 and BrowseOnly=0")
+    # Trigger an online search first to ensure WU catalog is fresh
+    try { $Searcher.Online = $true } catch {}
+    $Results  = $Searcher.Search("IsInstalled=0 and IsHidden=0")
     $out = @()
     foreach ($u in $Results.Updates) {
         $kbs = @($u.KBArticleIDs | ForEach-Object {"KB$_"})
@@ -1882,7 +1910,7 @@ try {
     if ($out.Count -eq 0) { "[]" } else { $out | ConvertTo-Json -Compress -Depth 3 }
 } catch { "[]" }
 """.strip()
-    raw = _ps_json(script, timeout=60)
+    raw = _ps_json(script, timeout=180)  # online search can take a while
     if not raw:
         return []
     items = raw if isinstance(raw, list) else [raw]
@@ -2090,15 +2118,308 @@ try {{
     }
 
 
-def _find_and_install_cve_patches(cve_ids: list) -> dict:
+# Map device_vulnerability.product_name → winget package ID
+_WINGET_PRODUCT_MAP: dict[str, str] = {
+    # Browsers
+    'chrome':                    'Google.Chrome',
+    'google_chrome':             'Google.Chrome',
+    'firefox':                   'Mozilla.Firefox',
+    'mozilla_firefox':           'Mozilla.Firefox',
+    'edge_chromium-based':       'Microsoft.Edge',
+    'edge':                      'Microsoft.Edge',
+    # Developer tools
+    'python':                    'Python.Python.3',
+    'openssl':                   'ShiningLight.OpenSSL',
+    'git':                       'Git.Git',
+    'nodejs':                    'OpenJS.NodeJS',
+    'node.js':                   'OpenJS.NodeJS',
+    # Productivity / collaboration
+    'zoom':                      'Zoom.Zoom',
+    'teams':                     'Microsoft.Teams',
+    'microsoft_teams':           'Microsoft.Teams',
+    'slack':                     'SlackTechnologies.Slack',
+    'office':                    'Microsoft.Office',
+    # Media / creative
+    'vlc':                       'VideoLAN.VLC',
+    'vlc_media_player':          'VideoLAN.VLC',
+    'gimp':                      'GIMP.GIMP',
+    # Utilities
+    '7-zip':                     '7zip.7zip',
+    'notepad++':                 'Notepad++.Notepad++',
+    'wireshark':                 'WiresharkTeam.Wireshark',
+    '7zip':                      '7zip.7zip',
+    'putty':                     'PuTTY.PuTTY',
+    'winscp':                    'WinSCP.WinSCP',
+    # Java runtimes
+    'jre':                       'Oracle.JavaRuntimeEnvironment',
+    'java':                      'Oracle.JavaRuntimeEnvironment',
+    'java_runtime':              'Oracle.JavaRuntimeEnvironment',
+    # PDF / Adobe Reader
+    'adobe_acrobat':             'Adobe.Acrobat.Reader.64-bit',
+    'acrobat':                   'Adobe.Acrobat.Reader.64-bit',
+    'adobe_reader':              'Adobe.Acrobat.Reader.64-bit',
+    'reader':                    'Adobe.Acrobat.Reader.64-bit',
+    'acrobat_reader_dc':         'Adobe.Acrobat.Reader.64-bit',
+    # Databases
+    'mariadb':                   'MariaDB.Server',
+    # NVIDIA
+    'geforce_experience':        'Nvidia.GeForceExperience',
+    'geforce':                   'Nvidia.GeForceExperience',
+    # Microsoft .NET
+    '.net':                      'Microsoft.DotNet.Runtime.9',
+    'dotnet':                    'Microsoft.DotNet.Runtime.9',
+    'asp.net_core':              'Microsoft.DotNet.AspHostingBundle',
+    'aspnetcore':                'Microsoft.DotNet.AspHostingBundle',
+    # Meetings / conferencing
+    'meetings':                  'Cisco.CiscoWebexMeetings',
+    'webex':                     'Cisco.CiscoWebexMeetings',
+    'webex_meetings':            'Cisco.CiscoWebexMeetings',
+    # Visual Studio (EOL 2017 → upgrade to 2022; 2022 stays current)
+    'visual_studio_2022':        'Microsoft.VisualStudio.2022.Community',
+    'visual_studio_2019':        'Microsoft.VisualStudio.2019.Community',
+    'visual_studio_2017':        'Microsoft.VisualStudio.2022.Community',  # upgrade path
+    # Utilities
+    'winrar':                    'RARLab.WinRAR',
+    'openoffice':                'Apache.OpenOffice',
+    'everything':                'voidtools.Everything',
+    # Remote access / VPN
+    'netextender':               'SonicWall.NetExtender',
+    'global_vpn_client':         'SonicWall.GlobalVPNClient',
+    # Dell
+    'supportassist':             'Dell.SupportAssist',
+    # .NET Core / runtime
+    '.net_core':                 'Microsoft.DotNet.Runtime.8',
+    'dotnet_core':               'Microsoft.DotNet.Runtime.8',
+    # JDK (Temurin is free/open, vs Oracle which needs license)
+    'jdk':                       'EclipseAdoptium.Temurin.21.JDK',
+    'java_development_kit':      'EclipseAdoptium.Temurin.21.JDK',
+    # Vim (Windows)
+    'vim':                       'vim.vim',
+    # Code editors
+    'visual_studio_code':        'Microsoft.VisualStudioCode',
+    'vscode':                    'Microsoft.VisualStudioCode',
+}
+
+
+def _install_via_winget(package_id: str) -> dict:
+    """Install/upgrade a package via winget.
+    Uses Windows Task Scheduler to run winget in the logged-in user's interactive
+    session.  Task Scheduler resolves the active user session automatically, avoiding
+    all the WTS token-handle and session-ID mismatch problems that affect direct
+    CreateProcessAsUserW calls from SYSTEM.
+    Falls back to SYSTEM-context winget when no user is found.
+    Returns a patch-result-compatible dict."""
+    import subprocess as _sp
+    pub       = os.environ.get("PUBLIC", r"C:\Users\Public")
+    inner_ps  = os.path.join(pub, "_rmm_wi.ps1")   # runs AS USER via task scheduler
+    outer_ps  = os.path.join(pub, "_rmm_wo.ps1")   # runs AS SYSTEM, creates the task
+    out_path  = os.path.join(pub, "_rmm_wr.json")  # result JSON written by inner_ps
+
+    # ── Inner script: executed in the user's own session by Task Scheduler ──────
+    # Tries winget upgrade then winget install; writes a compact JSON result.
+    inner_script = (
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        f"$out = '{out_path}'\n"
+        f"$pkg = '{package_id}'\n"
+        "$skipCodes = @(-1978335189,-1978334956,-1978335215,-1978335147,-1978334764,-1978335230)\n"
+        "if (Test-Path $out) { Remove-Item $out -Force }\n"
+        # Sync WinHTTP proxy from WinInet (IE/browser settings) so winget can reach CDNs
+        # through corporate proxies. WinHTTP is separate from WinInet and winget uses WinHTTP.
+        "try { netsh winhttp import proxy source=ie 2>&1 | Out-Null } catch {}\n"
+        "try {\n"
+        "  $r1 = winget upgrade --id $pkg --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-String\n"
+        "  $e1 = $LASTEXITCODE\n"
+        "  if ($e1 -eq 0 -or $r1 -match 'Successfully (installed|upgraded)') {\n"
+        "    [pscustomobject]@{installed=1;updates_found=1;reboot_required=$false;error=''} | ConvertTo-Json -Compress | Out-File $out -Encoding utf8; exit\n"
+        "  }\n"
+        "  $r2 = winget install --id $pkg --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-String\n"
+        "  $e2 = $LASTEXITCODE\n"
+        "  $all = ($r1 + [char]10 + $r2).Trim()\n"
+        "  if ($e2 -eq 0 -or $r2 -match 'Successfully (installed|upgraded)') {\n"
+        "    [pscustomobject]@{installed=1;updates_found=1;reboot_required=$false;error=''} | ConvertTo-Json -Compress | Out-File $out -Encoding utf8\n"
+        "  } elseif (($skipCodes -contains $e1 -or $r1 -match 'No applicable update|already installed|No newer|No available upgrade') -and\n"
+        "            ($skipCodes -contains $e2 -or $r2 -match 'No applicable update|already installed|No newer|No available upgrade')) {\n"
+        "    [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error='Already up to date'} | ConvertTo-Json -Compress | Out-File $out -Encoding utf8\n"
+        "  } else {\n"
+        "    $snip = ($all -replace [char]13+[char]10,' ').Trim()\n"
+        "    if ($snip.Length -gt 500) { $snip = $snip.Substring(0,500) }\n"
+        '    [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error="upgrade=$e1 install=$e2: $snip"} | ConvertTo-Json -Compress | Out-File $out -Encoding utf8\n'
+        "  }\n"
+        "} catch {\n"
+        "  [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error=$_.Exception.Message} | ConvertTo-Json -Compress | Out-File $out -Encoding utf8\n"
+        "}\n"
+    )
+
+    # ── Outer script: runs as SYSTEM, schedules the inner PS as the logged-in user ─
+    # Uses Task Scheduler LogonType=Interactive so no password is required —
+    # Windows uses the user's existing interactive logon token.
+    outer_script = (
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        f"$innerPs = '{inner_ps}'\n"
+        f"$outPath = '{out_path}'\n"
+        "$tn = '_RMM_WingetInstall'\n"
+        "Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\n"
+        "if (Test-Path $outPath) { Remove-Item $outPath -Force }\n"
+        "\n"
+        "# Find the logged-in user (try WMI first, then explorer.exe owner)\n"
+        "$user = $null\n"
+        "try { $user = (Get-WmiObject Win32_ComputerSystem).UserName } catch {}\n"
+        "if (-not $user) {\n"
+        "  try {\n"
+        "    $exp = Get-WmiObject -Query \"SELECT * FROM Win32_Process WHERE Name='explorer.exe'\" | Select-Object -First 1\n"
+        "    if ($exp) { $o = $exp.GetOwner(); if ($o.User) { $user = if ($o.Domain) { \"$($o.Domain)\\$($o.User)\" } else { $o.User } } }\n"
+        "  } catch {}\n"
+        "}\n"
+        "Write-Host \"[winget-task] user=$user\"\n"
+        "\n"
+        "if ($user) {\n"
+        "  $action = New-ScheduledTaskAction -Execute 'powershell.exe' `\n"
+        "    -Argument \"-NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `\"$innerPs`\"\"\n"
+        "  $trigger  = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(3))\n"
+        "  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest\n"
+        "  $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -StartWhenAvailable $true\n"
+        "  Register-ScheduledTask -TaskName $tn -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null\n"
+        "  Start-ScheduledTask -TaskName $tn\n"
+        "  # Poll until the result file appears (inner PS writes it when done)\n"
+        "  $deadline = (Get-Date).AddMinutes(9)\n"
+        "  while (-not (Test-Path $outPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }\n"
+        "  Start-Sleep -Seconds 1  # let the file flush\n"
+        "  Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\n"
+        "  if (-not (Test-Path $outPath)) {\n"
+        "    [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error='Timeout: no result from user-session winget'} | ConvertTo-Json -Compress | Out-File $outPath -Encoding utf8\n"
+        "  }\n"
+        "} else {\n"
+        "  # No logged-in user -- attempt SYSTEM winget (may fail for user-scoped packages)\n"
+        "  Write-Host '[winget-task] no user found; running as SYSTEM'\n"
+        "  try { netsh winhttp import proxy source=ie 2>&1 | Out-Null } catch {}\n"
+        "  $r1 = winget upgrade --id '{package_id}' --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-String; $e1 = $LASTEXITCODE\n"
+        "  $r2 = winget install --id '{package_id}' --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-String; $e2 = $LASTEXITCODE\n"
+        "  $all = ($r1 + [char]10 + $r2).Trim()\n"
+        "  if ($e1 -eq 0 -or $e2 -eq 0 -or $all -match 'Successfully (installed|upgraded)') {\n"
+        "    [pscustomobject]@{installed=1;updates_found=1;reboot_required=$false;error=''} | ConvertTo-Json -Compress | Out-File $outPath -Encoding utf8\n"
+        "  } elseif ($all -match 'already installed|No applicable update|No newer|No available upgrade') {\n"
+        "    [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error='Already up to date'} | ConvertTo-Json -Compress | Out-File $outPath -Encoding utf8\n"
+        "  } else {\n"
+        "    $snip = ($all -replace [char]13+[char]10,' ').Trim(); if ($snip.Length -gt 400) {$snip=$snip.Substring(0,400)}\n"
+        '    [pscustomobject]@{installed=0;updates_found=0;reboot_required=$false;error="SYSTEM winget upgrade=$e1 install=$e2: $snip"} | ConvertTo-Json -Compress | Out-File $outPath -Encoding utf8\n'
+        "  }\n"
+        "}\n"
+    )
+
+    # Write both scripts
+    try:
+        if os.path.exists(out_path): os.remove(out_path)
+        with open(inner_ps, 'w', encoding='utf-8') as f: f.write(inner_script)
+        with open(outer_ps, 'w', encoding='utf-8') as f: f.write(outer_script)
+    except Exception as e:
+        return {"installed": 0, "updates_found": 0, "reboot_required": False,
+                "titles": [], "kb_ids": [], "error": f"script write error: {e}"}
+
+    # Run the outer script as SYSTEM (it schedules inner as the user and waits)
+    try:
+        _sp.run(
+            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+             '-NonInteractive', '-File', outer_ps],
+            timeout=620,   # outer script waits up to 9 min; give it 10+
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+    except Exception as run_err:
+        return {"installed": 0, "updates_found": 0, "reboot_required": False,
+                "titles": [], "kb_ids": [], "error": f"outer script run error: {run_err}"}
+
+    # Read the JSON result written by the inner script via outer script
+    try:
+        with open(out_path, 'r', encoding='utf-8-sig') as f:
+            result = json.loads(f.read().strip())
+        os.remove(out_path)
+    except Exception as read_err:
+        return {"installed": 0, "updates_found": 0, "reboot_required": False,
+                "titles": [], "kb_ids": [], "error": f"no result from winget script: {read_err}"}
+
+    _err_str = (result.get("error") or "").encode("ascii", "replace").decode()
+    print(f'[winget] {package_id}: installed={result.get("installed")} error={_err_str!r}', flush=True)
+    return {
+        "installed":       int(result.get("installed") or 0),
+        "updates_found":   int(result.get("updates_found") or 0),
+        "reboot_required": bool(result.get("reboot_required")),
+        "result_code":     None,
+        "titles":          [package_id],
+        "kb_ids":          [],
+        "error":           result.get("error") or "",
+    }
+
+
+def _find_and_install_cve_patches(cve_ids: list, product_name: str = '') -> dict:
     """Search Windows Update Agent for uninstalled patches that cover the given
-    CVE IDs, download, and install them.  Returns a summary dict compatible with
-    the patch_install_result message schema."""
+    CVE IDs, download and install them.  For products not serviced by Windows
+    Update (Edge, OpenSSL, etc.) falls back to winget.  Returns a summary dict
+    compatible with the patch_install_result message schema.
+
+    For Windows OS CVEs (windows_10/windows_11), the WUA COM API rarely
+    populates $u.CVEIDs on cumulative updates even when the update does address
+    those CVEs.  In that case we install ALL pending Security/Critical updates
+    which is the correct behaviour (equivalent to 'Install all Windows Updates'
+    under Windows Update settings)."""
     if not cve_ids:
         return {"installed": 0, "reboot_required": False, "error": "No CVE IDs provided",
                 "updates_found": 0, "titles": [], "kb_ids": []}
+
+    # OS-level products: CVE ID matching via WUA COM is unreliable.
+    # Install all pending Security/Critical updates instead.
+    _OS_PRODUCTS = {'windows_10', 'windows_11', 'windows_server_2019',
+                    'windows_server_2022', 'windows_server_2016', 'windows_server'}
+    _pname_lower = (product_name or '').lower().strip()
+    _is_os_product = any(op in _pname_lower for op in _OS_PRODUCTS)
+
     cves_ps = ", ".join(f"'{c}'" for c in cve_ids)
-    script = f"""
+
+    if _is_os_product:
+        # Broad scan: install all pending Security + Critical updates.
+        # These cumulative updates address the CVEs but don't expose CVEIDs via COM.
+        script = f"""
+try {{
+    $Sess   = New-Object -ComObject Microsoft.Update.Session
+    $Search = $Sess.CreateUpdateSearcher()
+    $Found  = $Search.Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
+    $coll   = New-Object -ComObject Microsoft.Update.UpdateColl
+    $titles = @(); $kbids = @()
+    foreach ($u in $Found.Updates) {{
+        # MsrcSeverity: Critical, Important, Moderate, Low  (null = non-security)
+        $sev = $u.MsrcSeverity
+        if ($sev -eq 'Critical' -or $sev -eq 'Important') {{
+            [void]$coll.Add($u)
+            $titles += $u.Title
+            foreach ($kb in $u.KBArticleIDs) {{ $kbids += $kb }}
+        }}
+    }}
+    if ($coll.Count -eq 0) {{
+        @{{installed=0;reboot_required=$false;updates_found=0;
+           titles=@();kb_ids=@();error="No pending Security/Critical updates found"}} | ConvertTo-Json -Compress
+        exit
+    }}
+    $dl = $Sess.CreateUpdateDownloader()
+    $dl.Updates = $coll
+    [void]$dl.Download()
+    $inst = $Sess.CreateUpdateInstaller()
+    $inst.Updates = $coll
+    $res  = $inst.Install()
+    @{{
+        installed       = $coll.Count
+        updates_found   = $coll.Count
+        reboot_required = $res.RebootRequired
+        result_code     = $res.ResultCode
+        titles          = $titles
+        kb_ids          = $kbids
+        error           = ""
+    }} | ConvertTo-Json -Compress
+}} catch {{
+    @{{installed=0;reboot_required=$false;updates_found=0;titles=@();kb_ids=@();
+       error=$_.Exception.Message}} | ConvertTo-Json -Compress
+}}
+""".strip()
+    else:
+        # Non-OS product: match by CVE ID as before
+        script = f"""
 $targetCVEs = @({cves_ps})
 try {{
     $Sess   = New-Object -ComObject Microsoft.Update.Session
@@ -2144,22 +2465,41 @@ try {{
 """.strip()
     result = _ps_json(script, timeout=30 * 60)
     if result is None:
-        return {"installed": 0, "reboot_required": False, "updates_found": 0,
-                "titles": [], "kb_ids": [], "error": "No output from WUA"}
-    # Normalise list fields that PowerShell may return as a single string
-    def _to_list(v):
-        if isinstance(v, list): return v
-        if v: return [v]
-        return []
-    return {
-        "installed":       int(result.get("installed") or 0),
-        "updates_found":   int(result.get("updates_found") or 0),
-        "reboot_required": bool(result.get("reboot_required")),
-        "result_code":     result.get("result_code"),
-        "titles":          _to_list(result.get("titles")),
-        "kb_ids":          _to_list(result.get("kb_ids")),
-        "error":           result.get("error") or "",
-    }
+        wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
+                      "titles": [], "kb_ids": [], "error": "No output from WUA"}
+    else:
+        def _to_list(v):
+            if isinstance(v, list): return v
+            if v: return [v]
+            return []
+        wua_result = {
+            "installed":       int(result.get("installed") or 0),
+            "updates_found":   int(result.get("updates_found") or 0),
+            "reboot_required": bool(result.get("reboot_required")),
+            "result_code":     result.get("result_code"),
+            "titles":          _to_list(result.get("titles")),
+            "kb_ids":          _to_list(result.get("kb_ids")),
+            "error":           result.get("error") or "",
+        }
+
+    # If WUA found nothing, try product-specific winget upgrade.
+    # Skip for OS products — Windows Update is the only valid pathway.
+    if wua_result["updates_found"] == 0 and wua_result["installed"] == 0 and not _is_os_product:
+        pname_lower = (product_name or '').lower().strip()
+        winget_id = None
+        for key, pkg in _WINGET_PRODUCT_MAP.items():
+            if key in pname_lower or pname_lower in key:
+                winget_id = pkg
+                break
+        if winget_id:
+            print(f"[agent] WUA found no patches; trying winget for {winget_id}", flush=True)
+            wg = _install_via_winget(winget_id)
+            if wg["installed"] > 0 or not wg["error"] or wg["error"] == "Already up to date":
+                return wg
+            # winget also failed — return winget error (more informative)
+            wua_result["error"] = f"WUA: no patch; winget ({winget_id}): {wg['error']}"
+
+    return wua_result
 
 
 async def _do_reboot_sequence():
@@ -2905,6 +3245,775 @@ def _get_idle_seconds() -> int:
     return 0
 
 
+# ═══════════════════════════════════════════════════════ Windows Backup ════════
+
+_BACKUP_DIR       = r"C:\CirqueRMM\backup"
+_BACKUP_STATE     = r"C:\CirqueRMM\backup\state.json"
+_BACKUP_RUNNING   = False   # single-instance guard
+
+
+def _backup_api(tracker_url: str, method: str, path: str,
+                agent_id: str, token: str, body: dict = None):
+    """HTTP call to tracker backup API. Returns parsed JSON or raises."""
+    url = f"{tracker_url}{path}?agent_id={agent_id}&token={token}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json",
+                 "User-Agent": f"CirqueRMM/{AGENT_VERSION}"},
+        method=method,
+    )
+    with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=30) as r:
+        return json.loads(r.read())
+
+
+def _backup_load_state() -> dict:
+    try:
+        with open(_BACKUP_STATE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {"last_full": None, "last_incr": None}
+
+
+def _backup_save_state(state: dict) -> None:
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    with open(_BACKUP_STATE, 'w', encoding='utf-8') as f:
+        json.dump(state, f)
+
+
+def _backup_should_skip(fpath: str, ext_excludes: set, folder_excludes: set,
+                        max_size_bytes: int, since_ts: float = None) -> bool:
+    """Return True if this file should be excluded from the backup."""
+    try:
+        if os.path.getsize(fpath) > max_size_bytes:
+            return True
+        _, ext = os.path.splitext(fpath)
+        if ext.lower().lstrip('.') in ext_excludes:
+            return True
+        # Check every path component against folder exclude list
+        parts = set(os.path.normpath(fpath).split(os.sep))
+        if parts & folder_excludes:
+            return True
+        if since_ts is not None and os.path.getmtime(fpath) <= since_ts:
+            return True
+    except Exception:
+        return True   # skip unreadable files
+    return False
+
+
+def _backup_smb_connect(unc_path: str, username: str, password: str) -> None:
+    """
+    Authenticate to a non-domain SMB share from Windows SYSTEM context.
+
+    Error 1244 (ERROR_NOT_AUTHENTICATED) occurs because SYSTEM's logon session
+    has a cached null/anonymous SMB session to the NAS.  'net use /delete' and
+    WNetCancelConnection2 only remove explicit connections — the implicit null
+    session in SYSTEM's LSA session persists and blocks new credential attempts.
+
+    Fix: LogonUserW(LOGON32_LOGON_NEW_CREDENTIALS) creates a NEW logon session
+    whose network credentials are the supplied username/password (not SYSTEM).
+    ImpersonateLoggedOnUser applies it to this thread so WNetAddConnection2W
+    negotiates SMB using the NAS account instead of the cached SYSTEM token.
+    The connection is registered globally in MPR and persists after RevertToSelf.
+    """
+    import subprocess, time as _time, ctypes, ctypes.wintypes as _wt
+
+    parts = unc_path.replace('/', '\\').lstrip('\\').split('\\')
+    share_path = f"\\\\{parts[0]}\\{parts[1]}" if len(parts) >= 2 else unc_path
+    nas_host   = parts[0] if parts else 'NAS'
+    # Strip any host prefix — LogonUserW wants the bare username; the domain/
+    # machine is passed as a separate arg.  We use nas_host as the "domain" so
+    # Windows knows this is a local account on the NAS, not a domain account.
+    bare_user      = username.split('\\')[-1] if '\\' in username else username
+    qualified_user = f"{nas_host}\\{bare_user}"
+
+    # Clear all explicit net-use connections first (clears what IS visible)
+    subprocess.run(['net', 'use', '*', '/delete', '/y'], capture_output=True, text=True)
+    _time.sleep(0.5)
+
+    class NETRESOURCEW(ctypes.Structure):
+        _fields_ = [
+            ('dwScope',       _wt.DWORD),
+            ('dwType',        _wt.DWORD),
+            ('dwDisplayType', _wt.DWORD),
+            ('dwUsage',       _wt.DWORD),
+            ('lpLocalName',   _wt.LPWSTR),
+            ('lpRemoteName',  _wt.LPWSTR),
+            ('lpComment',     _wt.LPWSTR),
+            ('lpProvider',    _wt.LPWSTR),
+        ]
+
+    advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
+    kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
+    mpr      = ctypes.WinDLL('mpr')
+
+    # LOGON32_LOGON_NEW_CREDENTIALS (9): local identity stays SYSTEM but ALL
+    # outbound network auth uses the supplied credentials — identical to
+    # 'runas /netonly'.  This creates a fresh SMB session, not shared with
+    # SYSTEM's cached null session.
+    LOGON32_LOGON_NEW_CREDENTIALS = 9
+    LOGON32_PROVIDER_DEFAULT      = 0
+
+    token = _wt.HANDLE()
+    logon_ok = advapi32.LogonUserW(
+        bare_user, nas_host, password,
+        LOGON32_LOGON_NEW_CREDENTIALS,
+        LOGON32_PROVIDER_DEFAULT,
+        ctypes.byref(token)
+    )
+    if logon_ok:
+        advapi32.ImpersonateLoggedOnUser(token)
+        print(f"[backup] Impersonating new logon session for {qualified_user}", flush=True)
+    else:
+        print(f"[backup] LogonUserW failed (err {ctypes.get_last_error()}), "
+              f"attempting WNet without impersonation", flush=True)
+
+    try:
+        # Force-cancel any implicit IPC$ / share sessions under the new token
+        mpr.WNetCancelConnection2W(f"\\\\{nas_host}\\IPC$", 0, True)
+        mpr.WNetCancelConnection2W(share_path, 0, True)
+        _time.sleep(0.3)
+
+        nr = NETRESOURCEW()
+        nr.dwType    = 1   # RESOURCETYPE_DISK
+        nr.lpRemoteName = share_path
+        wnet_err = mpr.WNetAddConnection2W(ctypes.byref(nr), password, qualified_user, 0)
+    finally:
+        if logon_ok:
+            advapi32.RevertToSelf()
+            kernel32.CloseHandle(token)
+
+    if wnet_err != 0:
+        raise RuntimeError(
+            f"SMB connect failed for {share_path} as {qualified_user}: "
+            f"WNetAddConnection2 error {wnet_err}"
+        )
+    print(f"[backup] Authenticated to {share_path} as {qualified_user}", flush=True)
+
+
+def _backup_smb_disconnect(unc_path: str) -> None:
+    """Cleanly disconnect the SMB session after backup completes."""
+    import subprocess
+    parts = unc_path.replace('/', '\\').lstrip('\\').split('\\')
+    if len(parts) >= 2:
+        share_path = f"\\\\{parts[0]}\\{parts[1]}"
+    else:
+        share_path = unc_path
+    subprocess.run(['net', 'use', share_path, '/delete', '/yes'],
+                   capture_output=True)
+
+
+def _get_human_profile_paths() -> list:
+    """Return all non-system user profile paths from the Windows registry ProfileList.
+
+    Uses HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList which
+    is always readable by SYSTEM and contains every profile with its exact path —
+    independent of C:\\Users\\ filesystem permissions.
+    """
+    SYSTEM_PROFILE_PREFIXES = (
+        'C:\\Windows', 'C:\\WINDOWS', 'C:\\windows',
+        '%systemroot%', '%windir%',
+    )
+    profiles = []
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList',
+        )
+        i = 0
+        while True:
+            try:
+                sid = winreg.EnumKey(key, i)
+                i += 1
+                try:
+                    sub = winreg.OpenKey(key, sid)
+                    profile_path, _ = winreg.QueryValueEx(sub, 'ProfileImagePath')
+                    winreg.CloseKey(sub)
+                    # expand any remaining env-var tokens
+                    profile_path = os.path.expandvars(profile_path)
+                    # skip service/system accounts
+                    skip = False
+                    for prefix in SYSTEM_PROFILE_PREFIXES:
+                        if profile_path.upper().startswith(prefix.upper()):
+                            skip = True
+                            break
+                    if not skip and os.path.isdir(profile_path):
+                        profiles.append(profile_path)
+                except OSError:
+                    pass
+            except OSError:
+                break
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+    return profiles
+
+
+def _expand_include_paths(paths: list) -> list:
+    """Expand include paths, replacing %USERPROFILE% with all real user profiles.
+
+    When the agent runs as SYSTEM, %USERPROFILE% resolves to the SYSTEM profile
+    (C:\\Windows\\system32\\config\\systemprofile), not the human users' profiles.
+    This helper reads the registry ProfileList so it always works regardless of
+    C:\\Users\\ filesystem permissions.
+    """
+    def _expand_one(path: str) -> list:
+        upper = path.upper()
+        if '%USERPROFILE%' not in upper:
+            return [os.path.expandvars(path)]
+        human_profiles = _get_human_profile_paths()
+        if not human_profiles:
+            # last resort: plain expandvars (will be SYSTEM profile, probably wrong)
+            return [os.path.expandvars(path)]
+        idx = upper.find('%USERPROFILE%')
+        suffix = path[idx + len('%USERPROFILE%'):]
+        return [p + suffix for p in human_profiles]
+
+    result = []
+    for p in paths:
+        result.extend(_expand_one(p))
+    return result
+
+
+def _backup_smb_direct_upload(nas_host: str, share_name: str,
+                              username: str, password: str,
+                              hostname: str, snap_name: str,
+                              include_paths: list, ext_excludes: set, folder_excludes: set,
+                              max_size_bytes: int, since_ts,
+                              progress_cb, job_id: str,
+                              tracker_url: str, agent_id: str, token: str) -> dict:
+    """
+    Stream a compressed ZIP directly to the NAS using pure-Python SMB2 (smbprotocol).
+    No local staging required — zipfile writes into the smbclient file handle.
+    smbprotocol is auto-installed on first use.
+    """
+    import sys as _sys, subprocess as _sp, time as _time, zipfile as _zf, io as _io
+
+    try:
+        import smbclient
+    except ImportError:
+        print("[backup] smbprotocol not found — installing via pip...", flush=True)
+        _sp.run([_sys.executable, '-m', 'pip', 'install', 'smbprotocol'],
+                check=True, capture_output=True)
+        import smbclient
+        print("[backup] smbprotocol installed", flush=True)
+
+    # Register a pure-Python SMB2 session — no Windows redirector involved
+    smbclient.register_session(nas_host, username=username, password=password)
+    print(f"[backup] smbprotocol session: {nas_host} as {username}", flush=True)
+
+    share_root = f"\\\\{nas_host}\\{share_name}"
+    host_dir   = f"{share_root}\\{hostname}"
+    zip_name   = f"{snap_name}.zip"
+    snap_dest  = f"{host_dir}\\{zip_name}"
+
+    errors = []
+
+    # Ensure \\nas\share\hostname\ exists
+    try:
+        smbclient.makedirs(host_dir, exist_ok=True)
+    except Exception as e:
+        errors.append(f"makedirs({host_dir}): {str(e)[:120]}")
+
+    files_copied = files_skipped = files_failed = 0
+    bytes_transferred = 0
+    last_progress = _time.time()
+
+    expanded = _expand_include_paths(include_paths)
+
+    # Stream ZIP directly into the SMB file — no local temp file needed
+    with smbclient.open_file(snap_dest, mode='wb') as smb_fh:
+        with _zf.ZipFile(smb_fh, mode='w', compression=_zf.ZIP_DEFLATED, compresslevel=6) as zf:
+            for src_root in expanded:
+                if not os.path.isdir(src_root):
+                    files_skipped += 1
+                    continue
+                for dirpath, dirnames, filenames in os.walk(src_root):
+                    dirnames[:] = [d for d in dirnames if d not in folder_excludes]
+                    for fname in filenames:
+                        fpath = os.path.join(dirpath, fname)
+                        if _backup_should_skip(fpath, ext_excludes, folder_excludes,
+                                               max_size_bytes, since_ts):
+                            files_skipped += 1
+                            continue
+                        _, tail = os.path.splitdrive(fpath)
+                        arc_name = tail.lstrip(os.sep)  # path inside the zip
+                        try:
+                            fsize = os.path.getsize(fpath)
+                            zf.write(fpath, arc_name)
+                            files_copied += 1
+                            bytes_transferred += fsize
+                        except Exception as e:
+                            files_failed += 1
+                            errors.append(f"{arc_name[-80:]}: {str(e)[:120]}")
+                            if len(errors) > 20:
+                                errors = errors[-20:]
+
+                        now = _time.time()
+                        if now - last_progress >= 30:
+                            last_progress = now
+                            prog = {'job_id': job_id, 'files_copied': files_copied,
+                                    'files_skipped': files_skipped, 'files_failed': files_failed,
+                                    'bytes_transferred': bytes_transferred}
+                            progress_cb(prog)
+                            try:
+                                _backup_api(tracker_url, 'PATCH',
+                                            f'/api/rmm/backup-job/{job_id}', agent_id, token, prog)
+                            except Exception:
+                                pass
+
+    smbclient.reset_connection_cache()
+    return {
+        'snap_dest': snap_dest,
+        'files_copied': files_copied, 'files_skipped': files_skipped,
+        'files_failed': files_failed, 'bytes_transferred': bytes_transferred,
+        'errors': errors,
+    }
+
+
+def _backup_sftp_upload(sftp_host: str, sftp_port: int, username: str, password: str,
+                        remote_base: str, hostname: str, snap_name: str,
+                        include_paths: list, ext_excludes: set, folder_excludes: set,
+                        max_size_bytes: int, since_ts, progress_cb, job_id: str,
+                        tracker_url: str, agent_id: str, token: str) -> dict:
+    """
+    Upload backup files via SFTP using local NAS credentials (no domain auth).
+    Returns stats dict matching the shutil-based approach.
+    """
+    import paramiko, time as _time
+
+    transport = paramiko.Transport((sftp_host, sftp_port))
+    transport.connect(username=username, password=password)
+    sftp = paramiko.SFTPClient.from_transport(transport)
+
+    zip_name  = f"{snap_name}.zip"
+    host_dir  = f"{remote_base.rstrip('/')}/{hostname}"
+    snap_dest = f"{host_dir}/{zip_name}"
+
+    def _sftp_makedirs(path):
+        parts = path.replace('\\', '/').split('/')
+        current = ''
+        for part in parts:
+            if not part:
+                continue
+            current = f"{current}/{part}"
+            try:
+                sftp.stat(current)
+            except FileNotFoundError:
+                sftp.mkdir(current)
+
+    try:
+        _sftp_makedirs(host_dir)
+    except Exception as e:
+        sftp.close(); transport.close()
+        raise RuntimeError(f"Cannot create remote directory {host_dir}: {e}")
+
+    files_copied = files_skipped = files_failed = 0
+    bytes_transferred = 0
+    errors = []
+    last_progress = _time.time()
+
+    import zipfile as _zf, io as _io
+
+    # Stream ZIP directly into the SFTP file — no local staging
+    with sftp.open(snap_dest, 'wb') as sftp_fh:
+        sftp_fh.set_pipelined(True)
+        with _zf.ZipFile(sftp_fh, mode='w', compression=_zf.ZIP_DEFLATED, compresslevel=6) as zf:
+            for src_root in _expand_include_paths(include_paths):
+                if not os.path.isdir(src_root):
+                    files_skipped += 1
+                    continue
+                for dirpath, dirnames, filenames in os.walk(src_root):
+                    dirnames[:] = [d for d in dirnames if d not in folder_excludes]
+                    for fname in filenames:
+                        fpath = os.path.join(dirpath, fname)
+                        if _backup_should_skip(fpath, ext_excludes, folder_excludes,
+                                               max_size_bytes, since_ts):
+                            files_skipped += 1
+                            continue
+                        _, tail = os.path.splitdrive(fpath)
+                        arc_name = tail.lstrip(os.sep).replace('\\', '/')
+                        try:
+                            fsize = os.path.getsize(fpath)
+                            zf.write(fpath, arc_name)
+                            files_copied += 1
+                            bytes_transferred += fsize
+                        except Exception as e:
+                            files_failed += 1
+                            errors.append(str(e)[:200])
+                            if len(errors) > 50:
+                                errors = errors[-50:]
+
+                        now = _time.time()
+                        if now - last_progress >= 30:
+                            last_progress = now
+                            prog = {'job_id': job_id, 'files_copied': files_copied,
+                                    'files_skipped': files_skipped, 'files_failed': files_failed,
+                                    'bytes_transferred': bytes_transferred}
+                            progress_cb(prog)
+                            try:
+                                _backup_api(tracker_url, 'PATCH',
+                                            f'/api/rmm/backup-job/{job_id}', agent_id, token, prog)
+                            except Exception:
+                                pass
+
+    sftp.close()
+    transport.close()
+    return {
+        'snap_dest': snap_dest,
+        'files_copied': files_copied, 'files_skipped': files_skipped,
+        'files_failed': files_failed, 'bytes_transferred': bytes_transferred,
+        'errors': errors,
+    }
+
+
+def _backup_prune_retention(nas_path: str, hostname: str, retention_days: int,
+                             nas_creds: dict = None) -> None:
+    """Remove snapshot folders older than retention_days from the NAS.
+    Handles both SMB (os.listdir) and SFTP (paramiko) based on nas_creds.
+    """
+    import time as _time
+    cutoff = _time.time() - retention_days * 86400
+
+    auth_method = (nas_creds or {}).get('auth_method', 'smb_local')
+
+    if auth_method == 'sftp' and nas_creds:
+        try:
+            import paramiko
+            host = nas_creds.get('sftp_host', '')
+            port = int(nas_creds.get('sftp_port') or 22)
+            remote_base = nas_creds.get('sftp_remote_path', '').rstrip('/')
+            transport = paramiko.Transport((host, port))
+            transport.connect(username=nas_creds['username'], password=nas_creds['password'])
+            sftp = paramiko.SFTPClient.from_transport(transport)
+            host_dir = f"{remote_base}/{hostname}"
+            try:
+                entries = sftp.listdir_attr(host_dir)
+            except FileNotFoundError:
+                sftp.close(); transport.close(); return
+            for attr in entries:
+                if attr.st_mtime and attr.st_mtime < cutoff:
+                    snap = f"{host_dir}/{attr.filename}"
+                    try:
+                        # Recursively delete via exec channel
+                        chan = transport.open_session()
+                        chan.exec_command(f'rm -rf "{snap}"')
+                        chan.close()
+                        print(f"[backup] Pruned old SFTP snapshot: {snap}", flush=True)
+                    except Exception:
+                        pass
+            sftp.close(); transport.close()
+        except Exception as e:
+            print(f"[backup] SFTP prune error: {e}", flush=True)
+    else:
+        # SMB / local path
+        import shutil as _sh
+        host_dir = os.path.join(nas_path, hostname)
+        if not os.path.isdir(host_dir):
+            return
+        for entry in os.listdir(host_dir):
+            snap = os.path.join(host_dir, entry)
+            if os.path.isdir(snap):
+                try:
+                    if os.path.getmtime(snap) < cutoff:
+                        _sh.rmtree(snap, ignore_errors=True)
+                        print(f"[backup] Pruned old snapshot: {snap}", flush=True)
+                except Exception:
+                    pass
+
+
+def _do_backup(tracker_url: str, agent_id: str, token: str,
+               job_type: str, triggered_by: str, progress_cb) -> dict:
+    """
+    Blocking backup — runs in executor thread.
+    Fetches policy from tracker, copies files to NAS using isolated local credentials
+    (smb_local or sftp — never uses domain/Kerberos auth).
+    Returns a stats dict.
+    """
+    import shutil, time as _time
+
+    # ── Fetch policy ──────────────────────────────────────────────────────────
+    try:
+        resp = _backup_api(tracker_url, 'GET',
+                           f'/api/rmm/backup-policy/{agent_id}', agent_id, token)
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch backup policy: {e}")
+
+    if not resp.get('ok') or not resp.get('enabled'):
+        raise RuntimeError("No backup policy assigned or policy is disabled")
+
+    policy = resp['policy']
+    nas_path        = policy['nas_unc_path'].rstrip('/\\')
+    nas_creds       = policy.get('nas_creds') or {}
+    auth_method     = nas_creds.get('auth_method', 'smb_local')
+    include_paths   = policy.get('include_paths') or []
+    ext_excludes    = set(e.lower().lstrip('.') for e in (policy.get('exclude_extensions') or []))
+    folder_excludes = set(policy.get('exclude_folders') or [])
+    max_size_bytes  = (policy.get('max_file_size_mb') or 500) * 1024 * 1024
+    full_interval   = policy.get('full_backup_interval_days') or 7
+    retention_days  = policy.get('retention_days') or 30
+
+    # ── Load state & decide job type ──────────────────────────────────────────
+    state = _backup_load_state()
+    def _ts(key):
+        try:
+            return datetime.fromisoformat(state[key]).timestamp() if state.get(key) else None
+        except Exception:
+            return None
+    last_full_ts = _ts('last_full')
+    last_incr_ts = _ts('last_incr')
+
+    if job_type == 'auto':
+        job_type = 'full' if (
+            last_full_ts is None or
+            (_time.time() - last_full_ts) > full_interval * 86400
+        ) else 'incremental'
+
+    since_ts = None
+    if job_type == 'incremental':
+        since_ts = last_incr_ts or last_full_ts
+
+    hostname  = socket.gethostname()
+    _snap_ts  = datetime.now(timezone.utc).strftime('%Y-%m-%d_%H%M%S')
+    _snap_pfx = 'FULL' if job_type == 'full' else 'INC'
+    snap_name = f"{_snap_pfx}-{_snap_ts}"
+
+    # ── Parse NAS host / share from UNC path (needed for smb_direct) ─────────
+    _nas_parts    = nas_path.lstrip('\\').split('\\')
+    _nas_host     = _nas_parts[0] if _nas_parts else ''
+    _nas_share    = _nas_parts[1] if len(_nas_parts) >= 2 else ''
+
+    # ── Authenticate to NAS using isolated local credentials ─────────────────
+    smb_connected = False
+    if auth_method == 'smb_local':
+        username = nas_creds.get('username') or ''
+        password = nas_creds.get('password') or ''
+        if username and password:
+            _backup_smb_connect(nas_path, username, password)
+            smb_connected = True
+        elif username or password:
+            raise RuntimeError("NAS credentials incomplete — both username and password required")
+    # smb_direct and sftp establish their own connections inside the upload function
+
+    # ── Check NAS reachable (SMB) — sftp/smb_direct test connectivity inside ─
+    if auth_method not in ('sftp', 'smb_direct'):
+        if not os.path.exists(nas_path):
+            if smb_connected:
+                _backup_smb_disconnect(nas_path)
+            raise RuntimeError(f"NAS path not reachable: {nas_path}")
+
+    # ── Display path for job record ───────────────────────────────────────────
+    sftp_host = ''
+    if auth_method == 'sftp':
+        # Derive SFTP host from UNC path \\HOSTNAME\... if not stored separately
+        parts = nas_path.lstrip('\\').split('\\')
+        sftp_host = parts[0] if parts else nas_path
+        sftp_remote = nas_creds.get('sftp_remote_path') or '/backups'
+        snap_dest_display = f"sftp://{sftp_host}/{sftp_remote.lstrip('/')}/{hostname}/{snap_name}.zip"
+    elif auth_method == 'smb_direct':
+        snap_dest_display = f"\\\\{_nas_host}\\{_nas_share}\\{hostname}\\{snap_name}.zip"
+    else:
+        snap_dest_display = os.path.join(nas_path, hostname, snap_name)
+
+    # ── Register job with tracker ─────────────────────────────────────────────
+    start_resp = _backup_api(tracker_url, 'POST',
+                             f'/api/rmm/backup-start/{agent_id}', agent_id, token, {
+                                 'job_type': job_type,
+                                 'snapshot_path': snap_dest_display,
+                                 'triggered_by': triggered_by,
+                             })
+    if not start_resp.get('ok'):
+        raise RuntimeError(f"Failed to register job: {start_resp.get('error')}")
+    job_id = start_resp['job_id']
+
+    # ── Copy files ────────────────────────────────────────────────────────────
+    files_copied = files_skipped = files_failed = 0
+    bytes_transferred = 0
+    errors = []
+    snap_dest = snap_dest_display
+
+    try:
+        if auth_method == 'sftp':
+            # ── SFTP — paramiko, no domain auth at all ────────────────────────
+            sftp_port = int(nas_creds.get('sftp_port') or 22)
+            sftp_remote = nas_creds.get('sftp_remote_path') or '/backups'
+            username = nas_creds.get('username') or ''
+            password = nas_creds.get('password') or ''
+            if not sftp_host or not username:
+                raise RuntimeError("SFTP auth requires a NAS hostname and username")
+            result = _backup_sftp_upload(
+                sftp_host, sftp_port, username, password,
+                sftp_remote, hostname, snap_name,
+                include_paths, ext_excludes, folder_excludes,
+                max_size_bytes, since_ts, progress_cb, job_id,
+                tracker_url, agent_id, token,
+            )
+            snap_dest         = result['snap_dest']
+            files_copied      = result['files_copied']
+            files_skipped     = result['files_skipped']
+            files_failed      = result['files_failed']
+            bytes_transferred = result['bytes_transferred']
+            errors            = result['errors']
+
+        elif auth_method == 'smb_direct':
+            # ── Pure-Python SMB2 — smbprotocol, bypasses Windows redirector ───
+            username = nas_creds.get('username') or ''
+            password = nas_creds.get('password') or ''
+            if not _nas_host or not username:
+                raise RuntimeError("smb_direct requires NAS host and username")
+            result = _backup_smb_direct_upload(
+                _nas_host, _nas_share,
+                username, password,
+                hostname, snap_name,
+                include_paths, ext_excludes, folder_excludes,
+                max_size_bytes, since_ts, progress_cb, job_id,
+                tracker_url, agent_id, token,
+            )
+            snap_dest         = result['snap_dest']
+            files_copied      = result['files_copied']
+            files_skipped     = result['files_skipped']
+            files_failed      = result['files_failed']
+            bytes_transferred = result['bytes_transferred']
+            errors            = result['errors']
+
+        else:
+            # ── SMB — shutil (net use session established above) ──────────────
+            snap_dest = os.path.join(nas_path, hostname, snap_name)
+            try:
+                os.makedirs(snap_dest, exist_ok=True)
+            except Exception as e:
+                raise RuntimeError(f"Cannot create destination {snap_dest}: {e}")
+
+            last_progress = _time.time()
+            for src_root in include_paths:
+                src_root = os.path.expandvars(src_root)
+                if not os.path.isdir(src_root):
+                    files_skipped += 1
+                    continue
+
+                for dirpath, dirnames, filenames in os.walk(src_root):
+                    dirnames[:] = [d for d in dirnames if d not in folder_excludes]
+                    for fname in filenames:
+                        fpath = os.path.join(dirpath, fname)
+                        if _backup_should_skip(fpath, ext_excludes, folder_excludes,
+                                               max_size_bytes, since_ts):
+                            files_skipped += 1
+                            continue
+                        _, tail = os.path.splitdrive(fpath)
+                        rel    = tail.lstrip(os.sep)
+                        dst    = os.path.join(snap_dest, rel)
+                        try:
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            shutil.copy2(fpath, dst)
+                            files_copied   += 1
+                            bytes_transferred += os.path.getsize(fpath)
+                        except Exception as e:
+                            files_failed += 1
+                            errors.append(str(e)[:200])
+                            if len(errors) > 50:
+                                errors = errors[-50:]
+
+                        now = _time.time()
+                        if now - last_progress >= 30:
+                            last_progress = now
+                            prog = {'job_id': job_id, 'files_copied': files_copied,
+                                    'files_skipped': files_skipped, 'files_failed': files_failed,
+                                    'bytes_transferred': bytes_transferred}
+                            progress_cb(prog)
+                            try:
+                                _backup_api(tracker_url, 'PATCH',
+                                            f'/api/rmm/backup-job/{job_id}', agent_id, token, prog)
+                            except Exception:
+                                pass
+
+    finally:
+        # Always disconnect the SMB session regardless of success/failure
+        if smb_connected:
+            try:
+                _backup_smb_disconnect(nas_path)
+            except Exception:
+                pass
+
+    # ── Determine final status ────────────────────────────────────────────────
+    if files_failed > 0 and files_copied == 0:
+        status = 'failed'
+    elif files_failed > 0:
+        status = 'partial'
+    else:
+        status = 'success'
+
+    # ── Report completion ─────────────────────────────────────────────────────
+    final = {
+        'status': status, 'files_copied': files_copied,
+        'files_skipped': files_skipped, 'files_failed': files_failed,
+        'bytes_transferred': bytes_transferred, 'snapshot_path': snap_dest,
+        'errors': errors[:20] if errors else None,
+    }
+    try:
+        _backup_api(tracker_url, 'POST',
+                    f'/api/rmm/backup-complete/{job_id}', agent_id, token, final)
+    except Exception as e:
+        print(f"[backup] Failed to complete job {job_id}: {e}", flush=True)
+
+    # ── Update local state ────────────────────────────────────────────────────
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if job_type == 'full':
+        state['last_full'] = now_iso
+    state['last_incr'] = now_iso
+    try:
+        _backup_save_state(state)
+    except Exception:
+        pass
+
+    # ── Retention pruning ─────────────────────────────────────────────────────
+    try:
+        _backup_prune_retention(nas_path, hostname, retention_days, nas_creds={
+            **nas_creds, 'sftp_host': sftp_host
+        })
+    except Exception as e:
+        print(f"[backup] Retention prune error: {e}", flush=True)
+
+    print(f"[backup] {status}: {files_copied} copied, {files_failed} failed,"
+          f" {bytes_transferred/1024/1024:.1f} MB → {snap_dest}", flush=True)
+    return {**final, 'job_id': job_id, 'job_type': job_type}
+
+
+
+
+async def _backup_task(ws, tracker_url: str, agent_id: str, token: str,
+                       job_type: str, triggered_by: str) -> None:
+    """Async wrapper: runs _do_backup in executor, sends progress/result via WebSocket."""
+    global _BACKUP_RUNNING
+    if _BACKUP_RUNNING:
+        await ws.send(json.dumps({
+            "type": "backup_result", "ok": False,
+            "error": "A backup is already in progress on this agent",
+        }))
+        return
+
+    _BACKUP_RUNNING = True
+    loop = asyncio.get_event_loop()
+
+    def progress_cb(data: dict):
+        asyncio.run_coroutine_threadsafe(
+            ws.send(json.dumps({"type": "backup_progress", **data})),
+            loop
+        )
+
+    try:
+        result = await loop.run_in_executor(
+            None, _do_backup, tracker_url, agent_id, token,
+            job_type, triggered_by, progress_cb
+        )
+        await ws.send(json.dumps({"type": "backup_result", "ok": True, **result}))
+    except Exception as e:
+        print(f"[backup] Error: {e}", flush=True)
+        await ws.send(json.dumps({"type": "backup_result", "ok": False, "error": str(e)}))
+    finally:
+        _BACKUP_RUNNING = False
+
+
 async def main() -> None:
     global _disable_rustdesk, _disable_tray
     # Cloudflare fallback endpoints -- used when LAN (rmm.corp.cirque.com) is unreachable
@@ -2922,7 +4031,7 @@ async def main() -> None:
 
     # Self-update check on startup
     if check_for_update(tracker_url, agent_id, token):
-        sys.exit(7)  # non-zero so NSSM always restarts after update
+        os._exit(7)  # bypass asyncio executor shutdown (avoids 300s wait)
 
     # Sync RustDesk peer ID on startup (fast, non-blocking)
     sync_rustdesk_id(tracker_url, agent_id, token)
@@ -3064,7 +4173,7 @@ async def main() -> None:
                                 None, check_for_update, tracker_url, agent_id, token
                             )
                             if updated:
-                                sys.exit(7)
+                                os._exit(7)  # bypass 300s executor shutdown wait
                         except Exception:
                             pass
 
@@ -3232,7 +4341,7 @@ async def main() -> None:
                         if msg_type == "update_now":
                             print("[agent] Received update_now -- checking for new version...", flush=True)
                             if check_for_update(tracker_url, agent_id, token):
-                                sys.exit(7)   # non-zero so NSSM always restarts; new version will run
+                                os._exit(7)  # bypass 300s executor shutdown wait; NSSM restarts
                             await ws.send(json.dumps({"type": "update_result", "updated": False, "version": AGENT_VERSION}))
                             continue
 
@@ -3309,6 +4418,18 @@ async def main() -> None:
                             await ws.send(json.dumps({"type": "shell_exited", "session_id": session_id}))
                             continue
 
+                        # --- On-demand patch scan ---
+                        if msg_type == "request_patch_scan":
+                            print("[agent] request_patch_scan received -- scanning WUA", flush=True)
+                            loop2 = asyncio.get_event_loop()
+                            try:
+                                pending = await loop2.run_in_executor(None, _collect_pending_updates)
+                                await ws.send(json.dumps({"type": "pending_updates", "updates": pending}))
+                                print(f"[agent] Sent {len(pending)} pending update(s) (on-demand)", flush=True)
+                            except Exception as _e:
+                                print(f"[agent] request_patch_scan failed: {_e}", flush=True)
+                            continue
+
                         # --- Install approved patches ---
                         if msg_type == "install_patches":
                             job_id     = payload.get("job_id")
@@ -3327,12 +4448,13 @@ async def main() -> None:
 
                         # --- Deploy patches by CVE ID (WUA searches locally) ---
                         if msg_type == "install_cve_patches":
-                            job_id  = payload.get("job_id")
-                            cve_ids = payload.get("cve_ids") or []
-                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids}", flush=True)
+                            job_id       = payload.get("job_id")
+                            cve_ids      = payload.get("cve_ids") or []
+                            product_name = payload.get("product_name") or ''
+                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids} product={product_name}", flush=True)
                             loop2 = asyncio.get_event_loop()
                             result = await loop2.run_in_executor(
-                                None, _find_and_install_cve_patches, cve_ids
+                                None, _find_and_install_cve_patches, cve_ids, product_name
                             )
                             await ws.send(json.dumps({
                                 "type":   "cve_patch_result",
@@ -3354,6 +4476,32 @@ async def main() -> None:
                             await ws.send(json.dumps({"type": "exec_result", "session_id": session_id, "exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr}))
                             continue
 
+
+                        # --- On-demand software rescan (non-blocking) ---
+                        if msg_type == "request_software_scan":
+                            print(f"[agent] Software rescan requested (session={session_id})", flush=True)
+                            _scan_session_id = session_id
+                            async def _do_software_scan():
+                                try:
+                                    await loop.run_in_executor(
+                                        None, post_software_inventory, tracker_url, agent_id, token
+                                    )
+                                    print("[agent] Software rescan complete", flush=True)
+                                    await ws.send(json.dumps({
+                                        "type": "software_scan_done",
+                                        "session_id": _scan_session_id,
+                                        "success": True,
+                                    }))
+                                except Exception as e:
+                                    print(f"[agent] Software rescan error: {e}", flush=True)
+                                    await ws.send(json.dumps({
+                                        "type": "software_scan_done",
+                                        "session_id": _scan_session_id,
+                                        "success": False,
+                                        "error": str(e),
+                                    }))
+                            asyncio.create_task(_do_software_scan())
+                            continue
 
                         # --- Run Script (PowerShell or CMD) ---
                         if msg_type == "run_script":
@@ -3857,6 +5005,8 @@ async def main() -> None:
                                 """Strip ANSI codes, box-drawing chars, spinner frames from a winget output line."""
                                 s = _ansi_re.sub('', line)
                                 s = _junk_chars.sub('', s)
+                                # Strip leading winget spinner char (- / \ |) so "- Waiting..." becomes "Waiting..."
+                                s = _re.sub(r'^[-/\\|]\s*', '', s)
                                 s = s.strip()
                                 if not s or _spinner_re.match(s):
                                     return ''
@@ -3865,85 +5015,266 @@ async def main() -> None:
                                     return ''
                                 return s
 
-                            try:
-                                def _run_winget_ps():
-                                    return subprocess.run(
-                                        ["powershell.exe", "-NonInteractive", "-Command", ps_cmd],
-                                        capture_output=True,
-                                        env=env,
-                                        timeout=300,
-                                        creationflags=cf,
-                                    )
-                                # Remove stale output file
-                                if os.path.exists(out_path):
-                                    os.remove(out_path)
-                                fut = loop.run_in_executor(None, _run_winget_ps)
-                                sent_bytes = 0
-                                tick = 0
-                                while not fut.done():
-                                    await asyncio.sleep(2)
-                                    tick += 2
-                                    # Stream new lines from output file
-                                    if os.path.exists(out_path):
-                                        try:
-                                            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
-                                                f.seek(sent_bytes)
-                                                chunk = f.read()
-                                            if chunk:
-                                                for ln in chunk.splitlines():
-                                                    clean = _clean_winget(ln)
-                                                    if clean:
-                                                        await ws.send(json.dumps({
-                                                            "type": "install_chunk",
-                                                            "session_id": session_id,
-                                                            "text": clean,
-                                                        }))
-                                                sent_bytes += len(chunk.encode("utf-8"))
-                                        except Exception:
-                                            pass
-                                    else:
+                            # Capture closure variables before create_task
+                            _wg_label      = label
+                            _wg_ps_cmd     = ps_cmd
+                            _wg_out_path   = out_path
+                            _wg_session_id = session_id
+                            _wg_env        = env
+                            _wg_cf         = cf
+                            _wg_is_uninstall = (msg_type == "sw_uninstall")
+                            _wg_name       = payload.get("name", "") if _wg_is_uninstall else ""
+
+                            async def _do_winget():
+                                try:
+                                    final_rc = 0
+                                    # Windows Driver Packages always hang/fail in winget — skip it entirely.
+                                    _skip_winget = _wg_is_uninstall and _wg_name.lower().startswith("windows driver package")
+
+                                    if _skip_winget:
                                         await ws.send(json.dumps({
-                                            "type": "install_chunk",
-                                            "session_id": session_id,
-                                            "text": f"Working ({tick}s)...",
+                                            "type": "install_chunk", "session_id": _wg_session_id,
+                                            "text": "Windows Driver Package detected — skipping winget, using pnputil directly...",
                                         }))
-                                result = await fut
-                                # Flush remaining lines
-                                if os.path.exists(out_path):
-                                    try:
-                                        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
-                                            f.seek(sent_bytes)
-                                            remainder = f.read()
-                                        for ln in remainder.splitlines():
-                                            clean = _clean_winget(ln)
-                                            if clean:
+                                        final_rc = 1  # trigger fallback
+                                    else:
+                                        def _run_winget_ps():
+                                            return subprocess.run(
+                                                ["powershell.exe", "-NonInteractive", "-Command", _wg_ps_cmd],
+                                                capture_output=True,
+                                                env=_wg_env,
+                                                timeout=300,
+                                                creationflags=_wg_cf,
+                                            )
+                                        # Remove stale output file
+                                        if os.path.exists(_wg_out_path):
+                                            os.remove(_wg_out_path)
+                                        fut = loop.run_in_executor(None, _run_winget_ps)
+                                        sent_bytes = 0
+                                        tick = 0
+                                        _last_chunk = ''  # for deduplication of repeated lines
+                                        while not fut.done():
+                                            await asyncio.sleep(2)
+                                            tick += 2
+                                            # Stream new lines from output file
+                                            if os.path.exists(_wg_out_path):
+                                                try:
+                                                    # Use binary mode so seek/tell are always in real bytes
+                                                    with open(_wg_out_path, "rb") as f:
+                                                        f.seek(sent_bytes)
+                                                        raw = f.read()
+                                                        sent_bytes = f.tell()
+                                                    chunk = raw.decode("utf-8", errors="replace")
+                                                    if chunk:
+                                                        for ln in chunk.splitlines():
+                                                            clean = _clean_winget(ln)
+                                                            if clean and clean != _last_chunk:
+                                                                await ws.send(json.dumps({
+                                                                    "type": "install_chunk",
+                                                                    "session_id": _wg_session_id,
+                                                                    "text": clean,
+                                                                }))
+                                                                _last_chunk = clean
+                                                except Exception:
+                                                    pass
+                                            else:
                                                 await ws.send(json.dumps({
                                                     "type": "install_chunk",
-                                                    "session_id": session_id,
-                                                    "text": clean,
+                                                    "session_id": _wg_session_id,
+                                                    "text": f"Working ({tick}s)...",
                                                 }))
-                                        os.remove(out_path)
-                                    except Exception:
-                                        pass
-                                # Also capture any stderr from PowerShell itself
-                                ps_err = result.stderr.decode("utf-8", errors="replace").strip()
-                                if ps_err:
+                                        result = await fut
+                                        # Flush remaining lines
+                                        if os.path.exists(_wg_out_path):
+                                            try:
+                                                with open(_wg_out_path, "rb") as f:
+                                                    f.seek(sent_bytes)
+                                                    remainder = f.read()
+                                                for ln in remainder.decode("utf-8", errors="replace").splitlines():
+                                                    clean = _clean_winget(ln)
+                                                    if clean and clean != _last_chunk:
+                                                        await ws.send(json.dumps({
+                                                            "type": "install_chunk",
+                                                            "session_id": _wg_session_id,
+                                                            "text": clean,
+                                                        }))
+                                                        _last_chunk = clean
+                                                os.remove(_wg_out_path)
+                                            except Exception:
+                                                pass
+                                        # Also capture any stderr from PowerShell itself
+                                        ps_err = result.stderr.decode("utf-8", errors="replace").strip()
+                                        if ps_err:
+                                            await ws.send(json.dumps({
+                                                "type": "install_chunk", "session_id": _wg_session_id,
+                                                "text": f"[ps stderr] {ps_err[:500]}",
+                                            }))
+                                        print(f"[winget] {_wg_label} exit={result.returncode}", flush=True)
+                                        final_rc = result.returncode
+
+                                    # --- Fallback: registry UninstallString for Windows Driver Packages and general apps ---
+                                    # Winget exits 1 for driver packages and some MSI-less apps.
+                                    if final_rc != 0 and _wg_is_uninstall and _wg_name:
+                                        if not _skip_winget:
+                                            await ws.send(json.dumps({
+                                                "type": "install_chunk", "session_id": _wg_session_id,
+                                                "text": f"winget exit={final_rc} — trying alternative uninstall...",
+                                            }))
+
+                                        is_driver_pkg = _wg_name.lower().startswith("windows driver package")
+
+                                        if is_driver_pkg:
+                                            # Strategy: find the exact registry entry for this name (has the real UninstallString —
+                                            # e.g. dpinst.exe /u <full INF path>), run it directly.
+                                            # Then find sibling driver packages from same publisher and run them too.
+                                            # Finally run the main app uninstaller (same publisher, not a driver package).
+                                            # Use -RedirectStandardOutput to temp files to avoid pipe-handle inheritance blocking.
+                                            await ws.send(json.dumps({
+                                                "type": "install_chunk", "session_id": _wg_session_id,
+                                                "text": f"Windows Driver Package — looking up registry UninstallString...",
+                                            }))
+                                            fb_ps = (
+                                                f'$pkgName = {json.dumps(_wg_name)};'
+                                                r'$regKeys = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*");'
+                                                r'$allApps = Get-ItemProperty $regKeys -EA SilentlyContinue | Where-Object { $_.DisplayName };'
+                                                r'$thisApp = $allApps | Where-Object { $_.DisplayName -eq $pkgName } | Select-Object -First 1;'
+                                                r'if ($thisApp) { $pub = $thisApp.Publisher } else { $pub = "" };'
+                                                # All driver packages with the same publisher (including this one)
+                                                r'$driverPkgs = $allApps | Where-Object { $_.DisplayName -like "Windows Driver Package*" -and $_.Publisher -eq $pub -and $_.UninstallString };'
+                                                # Main app(s): same publisher OR DisplayName starts with the brand prefix (e.g. "KEIL" catches "Keil uVision4")
+                                                r'$brand = ($pub -split "[\s\-]+")[0];'
+                                                r'$mainApps = $allApps | Where-Object { $_.DisplayName -notlike "Windows Driver Package*" -and ($_.Publisher -eq $pub -or $_.DisplayName -like "*$brand*") -and $_.UninstallString };'
+                                                r'function Remove-ARPKey($dn) {'
+                                                r'  $roots = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall");'
+                                                r'  foreach ($root in $roots) { if (Test-Path $root) { Get-ChildItem $root -EA SilentlyContinue | ForEach-Object { $pr = Get-ItemProperty $_.PSPath -EA SilentlyContinue; if ($pr.DisplayName -eq $dn) { Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue; Write-Host "  Removed ARP key: $($_.Name)" } } } }'
+                                                r'};'
+                                                r'function Invoke-US($us) {'
+                                                r'  $us = $us.Trim();'
+                                                r'  $tmp1 = [IO.Path]::GetTempFileName(); $tmp2 = [IO.Path]::GetTempFileName();'
+                                                # dpinst.exe — add /q (quiet) /sw (suppress wizard)
+                                                r'  if ($us -match "dpinst") {'
+                                                r'    $parts = $us -split " +"; $exe = $parts[0]; $args = $parts[1..999];'
+                                                r'    $p = Start-Process $exe -ArgumentList ($args + "/q" + "/sw") -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'    [void]$p.WaitForExit(60000); if (!$p.HasExited) { $p.Kill() };'
+                                                # Msiexec
+                                                r'  } elseif ($us -match "MsiExec|msiexec") {'
+                                                r'    $pm = [regex]::Match($us,"[{(][0-9A-Fa-f\-]{36}[})]");'
+                                                r'    if (!$pm.Success) { Write-Host "No MSI code in: $us"; Remove-Item $tmp1,$tmp2 -EA 0; return 1 };'
+                                                r'    $p = Start-Process msiexec -ArgumentList "/x $($pm.Value) /qn /norestart" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'    [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill() };'
+                                                # General exe (e.g. Uninstall.exe)
+                                                r'  } else {'
+                                                r'    $exeM = [regex]::Match($us, "^(""([^""]+\.exe)""|([^\s]+\.exe))", "IgnoreCase");'
+                                                r'    if (!$exeM.Success) { Write-Host "Cannot parse exe from: $us"; Remove-Item $tmp1,$tmp2 -EA 0; return 1 };'
+                                                r'    $exePath = if ($exeM.Groups[2].Value) { $exeM.Groups[2].Value } else { $exeM.Groups[3].Value };'
+                                                r'    $exeArgs = $us.Substring($exeM.Length).Trim();'
+                                                r'    $runArgs = if ($exeArgs) { "$exeArgs /S" } else { "/S" };'
+                                                r'    $p = Start-Process $exePath -ArgumentList $runArgs -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'    [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill() };'
+                                                r'  };'
+                                                r'  $ec = if ($p.HasExited) { $p.ExitCode } else { 1 };'
+                                                r'  $out = (Get-Content $tmp1 -EA SilentlyContinue) -join "`n";'
+                                                r'  $err = (Get-Content $tmp2 -EA SilentlyContinue) -join "`n";'
+                                                r'  Remove-Item $tmp1,$tmp2 -EA 0;'
+                                                r'  if ($out) { Write-Host $out }; if ($err) { Write-Host "[err] $err" };'
+                                                r'  return $ec'
+                                                r'};'
+                                                r'$rc = 0;'
+                                                r'foreach ($app in $driverPkgs) {'
+                                                r'  Write-Host "Uninstalling driver: $($app.DisplayName)";'
+                                                r'  Write-Host "  cmd: $($app.UninstallString)";'
+                                                r'  $r = Invoke-US $app.UninstallString;'
+                                                r'  Write-Host "  exit: $r";'
+                                                r'  Remove-ARPKey $app.DisplayName;'
+                                                r'  if ($r -ne 0) { $rc = $r }'
+                                                r'};'
+                                                r'foreach ($app in $mainApps) {'
+                                                r'  Write-Host "Uninstalling main app: $($app.DisplayName)";'
+                                                r'  Write-Host "  cmd: $($app.UninstallString)";'
+                                                r'  $r = Invoke-US $app.UninstallString;'
+                                                r'  Write-Host "  exit: $r";'
+                                                r'  Remove-ARPKey $app.DisplayName;'
+                                                r'  if ($r -ne 0) { $rc = $r }'
+                                                r'};'
+                                                r'if ($driverPkgs.Count -eq 0 -and $mainApps.Count -eq 0) {'
+                                                r'  Write-Host "No uninstall entries found for: $pkgName (publisher=$pub)"; exit 4'
+                                                r'};'
+                                                r'Write-Host "Done (rc=$rc)"; exit $rc'
+                                            )
+                                        else:
+                                            # General fallback: run registry UninstallString.
+                                            # Uses WaitForExit(ms) so we can kill if it hangs.
+                                            fb_ps = (
+                                                f'$name = {json.dumps(_wg_name)};'
+                                                r'$k = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",'
+                                                r'"HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",'
+                                                r'"HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*");'
+                                                r'$app = Get-ItemProperty $k -EA SilentlyContinue | Where-Object { $_.DisplayName -eq $name } | Select-Object -First 1;'
+                                                r'if (-not $app) { Write-Host "Not found in registry"; exit 2 };'
+                                                r'$us = $app.UninstallString;'
+                                                r'if (-not $us) { Write-Host "No UninstallString"; exit 3 };'
+                                                r'Write-Host "Running: $us";'
+                                                r'$tmp1 = [IO.Path]::GetTempFileName(); $tmp2 = [IO.Path]::GetTempFileName();'
+                                                r'if ($us -match "MsiExec|msiexec") {'
+                                                r'  $m = [regex]::Match($us, "[{(][0-9A-Fa-f\-]{36}[})]");'
+                                                r'  if (-not $m.Success) { Write-Host "Cannot parse MSI product code"; Remove-Item $tmp1,$tmp2 -EA 0; exit 5 };'
+                                                r'  $prod = $m.Value;'
+                                                r'  $p = Start-Process msiexec -ArgumentList "/x $prod /qn /norestart" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'  [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill(); Write-Host "msiexec timed out, killed" };'
+                                                r'} else {'
+                                                r'  $exeM = [regex]::Match($us, "^(""([^""]+\.exe)""|([^\s]+\.exe))", "IgnoreCase");'
+                                                r'  if ($exeM.Success) {'
+                                                r'    $exePath = if ($exeM.Groups[2].Value) { $exeM.Groups[2].Value } else { $exeM.Groups[3].Value };'
+                                                r'    $exeArgs = $us.Substring($exeM.Length).Trim();'
+                                                r'    $runArgs = if ($exeArgs) { "$exeArgs /S" } else { "/S" };'
+                                                r'    $p = Start-Process $exePath -ArgumentList $runArgs -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'  } else {'
+                                                r'    $p = Start-Process cmd -ArgumentList "/c `"$us`"" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
+                                                r'  };'
+                                                r'  [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill(); Write-Host "Uninstaller timed out, killed" };'
+                                                r'};'
+                                                r'$ec = if ($p.HasExited) { $p.ExitCode } else { 1 };'
+                                                r'$out = (Get-Content $tmp1 -EA SilentlyContinue) -join "`n"; $err = (Get-Content $tmp2 -EA SilentlyContinue) -join "`n";'
+                                                r'Remove-Item $tmp1,$tmp2 -EA 0;'
+                                                r'if ($out) { Write-Host $out }; if ($err) { Write-Host "[err] $err" };'
+                                                r'$aroots = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall");'
+                                                r'foreach ($ar in $aroots) { if (Test-Path $ar) { Get-ChildItem $ar -EA SilentlyContinue | ForEach-Object { $pr2 = Get-ItemProperty $_.PSPath -EA SilentlyContinue; if ($pr2.DisplayName -eq $name) { Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue; Write-Host "Removed ARP key: $($_.Name)" } } } };'
+                                                r'exit $ec'
+                                                r'}'
+                                            )
+
+                                        def _run_fallback():
+                                            return subprocess.run(
+                                                ["powershell.exe", "-NonInteractive", "-Command", fb_ps],
+                                                capture_output=True, env=_wg_env,
+                                                timeout=150, creationflags=_wg_cf,
+                                            )
+                                        try:
+                                            fb_result = await loop.run_in_executor(None, _run_fallback)
+                                            fb_out = fb_result.stdout.decode("utf-8", errors="replace").strip()
+                                            fb_err = fb_result.stderr.decode("utf-8", errors="replace").strip()
+                                            if fb_out:
+                                                await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": fb_out[:500]}))
+                                            if fb_err:
+                                                await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": f"[stderr] {fb_err[:300]}"}))
+                                            final_rc = fb_result.returncode
+                                            print(f"[winget] fallback exit={final_rc}", flush=True)
+                                        except Exception as fb_e:
+                                            await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": f"Fallback error: {fb_e}"}))
+
                                     await ws.send(json.dumps({
-                                        "type": "install_chunk", "session_id": session_id,
-                                        "text": f"[ps stderr] {ps_err[:500]}",
+                                        "type": "install_done", "session_id": _wg_session_id,
+                                        "exit_code": final_rc,
+                                        "success": final_rc == 0,
                                     }))
-                                print(f"[winget] {label} exit={result.returncode}", flush=True)
-                                await ws.send(json.dumps({
-                                    "type": "install_done", "session_id": session_id,
-                                    "exit_code": result.returncode,
-                                    "success": result.returncode == 0,
-                                }))
-                            except Exception as e:
-                                print(f"[winget] {label} error: {e}", flush=True)
-                                await ws.send(json.dumps({
-                                    "type": "install_done", "session_id": session_id,
-                                    "exit_code": -1, "success": False, "output": str(e),
-                                }))
+                                except Exception as e:
+                                    print(f"[winget] {_wg_label} error: {e}", flush=True)
+                                    await ws.send(json.dumps({
+                                        "type": "install_done", "session_id": _wg_session_id,
+                                        "exit_code": -1, "success": False, "output": str(e),
+                                    }))
+
+                            asyncio.create_task(_do_winget())
                             continue
 
                         if msg_type == "msi_install":
@@ -4102,6 +5433,21 @@ async def main() -> None:
                                     "scan_end_time": scan_end_time,
                                     "scan_type": scan_type,
                                 }))
+                            continue
+
+                        # --- Windows Backup ---
+                        if msg_type == "backup_run":
+                            if platform.system() != "Windows":
+                                await ws.send(json.dumps({
+                                    "type": "backup_result", "ok": False,
+                                    "error": "Windows backup only supported on Windows agents",
+                                }))
+                            else:
+                                asyncio.create_task(_backup_task(
+                                    ws, tracker_url, agent_id, token,
+                                    payload.get("job_type", "incremental"),
+                                    payload.get("triggered_by", "manual"),
+                                ))
                             continue
 
                         await ws.send(json.dumps({"type": "error", "session_id": session_id, "error": f"Unknown: {msg_type}"}))

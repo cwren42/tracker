@@ -159,6 +159,22 @@ def api_ai_triage_ticket(ticket_id):
         return jsonify({'error': str(e)}), 500
 
 
+@bp.route('/api/ai/asset-health/<int:asset_id>', methods=['POST'])
+@login_required
+def api_ai_asset_health(asset_id):
+    """Run an AI health analysis for a single asset."""
+    if not _ai_engine:
+        return jsonify({'error': 'AI engine unavailable'}), 503
+    try:
+        result = _ai_engine.analyze_asset_health(asset_id)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        current_app.logger.error(f'AI asset-health error for {asset_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @bp.route('/workflows')
 @login_required
 def workflows():

@@ -6,11 +6,15 @@ Provides web-based SSH access to managed assets
 
 import json
 import logging
+import re
 import paramiko
 import threading
 import time
 from datetime import datetime
 from io import StringIO
+
+# Strip ANSI/VT100 escape sequences
+_ANSI_ESCAPE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,13 +24,14 @@ logger = logging.getLogger(__name__)
 class SSHSession:
     """Manages an SSH session to a remote host"""
     
-    def __init__(self, session_id, hostname, username, password=None, key=None, port=22):
+    def __init__(self, session_id, hostname, username, password=None, key=None, port=22, shell='auto'):
         self.session_id = session_id
         self.hostname = hostname
         self.username = username
         self.password = password
         self.key = key
         self.port = port
+        self.shell = shell  # 'auto', 'powershell', 'cmd', 'bash'
         
         self.client = None
         self.channel = None
@@ -53,7 +58,9 @@ class SSHSession:
                     port=self.port,
                     username=self.username,
                     pkey=pkey,
-                    timeout=10
+                    timeout=10,
+                    banner_timeout=10,
+                    auth_timeout=10
                 )
             else:
                 # Use password authentication
@@ -62,15 +69,22 @@ class SSHSession:
                     port=self.port,
                     username=self.username,
                     password=self.password,
-                    timeout=10
+                    timeout=10,
+                    banner_timeout=10,
+                    auth_timeout=10
                 )
             
             # Open shell channel
-            self.channel = self.client.invoke_shell(term='xterm', width=80, height=24)
+            self.channel = self.client.invoke_shell(term='xterm', width=220, height=50)
             self.channel.setblocking(0)
             
             self.connected = True
             logger.info(f"SSH session {self.session_id} connected to {self.hostname}")
+            
+            # Launch PowerShell if requested
+            if self.shell == 'powershell':
+                time.sleep(0.5)  # Wait for shell banner
+                self.channel.send('powershell.exe\r\n')
             
             # Start output reader thread
             self.reader_thread = threading.Thread(target=self._read_output)
@@ -89,7 +103,9 @@ class SSHSession:
         while self.connected and self.channel:
             try:
                 if self.channel.recv_ready():
-                    data = self.channel.recv(4096).decode('utf-8', errors='replace')
+                    raw = self.channel.recv(4096).decode('utf-8', errors='replace')
+                    # Normalise Windows CRLF → LF, strip ANSI escape codes
+                    data = _ANSI_ESCAPE.sub('', raw.replace('\r\n', '\n').replace('\r', '\n'))
                     
                     with self.lock:
                         self.output_buffer.append({
@@ -180,7 +196,7 @@ class SSHManager:
         self.cleanup_thread.daemon = True
         self.cleanup_thread.start()
     
-    def create_session(self, session_id, hostname, username, password=None, key=None, port=22):
+    def create_session(self, session_id, hostname, username, password=None, key=None, port=22, shell='auto'):
         """Create a new SSH session"""
         with self.lock:
             # Close existing session if any
@@ -188,7 +204,7 @@ class SSHManager:
                 self.sessions[session_id].disconnect()
             
             # Create new session
-            session = SSHSession(session_id, hostname, username, password, key, port)
+            session = SSHSession(session_id, hostname, username, password, key, port, shell)
             self.sessions[session_id] = session
             
             # Connect

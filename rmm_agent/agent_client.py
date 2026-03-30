@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "3.1.1"
+AGENT_VERSION = "2.9.5"
 
 import asyncio
 import base64
@@ -752,11 +752,8 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
 
 
 def _restart_after_update() -> None:
-    """Exit with a non-zero code so NSSM restarts the service after an update.
-    Uses os._exit() instead of sys.exit() to bypass asyncio's 300-second
-    executor thread join timeout, which would otherwise stall the restart.
-    """
-    os._exit(7)  # bypass asyncio executor shutdown (avoids 300s wait)
+    """Exit with a non-zero code so NSSM restarts the service after an update."""
+    sys.exit(7)  # arbitrary non-zero so NSSM always restarts
 
 
 # ---------------------------------------------------------------------------
@@ -2803,16 +2800,260 @@ def capture_screenshot() -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Shell session
+# Shell session — ConPTY (Windows 10 1903+) with raw-pipe fallback
 # ---------------------------------------------------------------------------
 
+if sys.platform == "win32":
+    import ctypes
+    import ctypes.wintypes as _wt
+    import threading as _threading
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class _COORD(ctypes.Structure):
+        _fields_ = [("X", _wt.SHORT), ("Y", _wt.SHORT)]
+
+    class _STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb",              _wt.DWORD),
+            ("lpReserved",      _wt.LPWSTR),
+            ("lpDesktop",       _wt.LPWSTR),
+            ("lpTitle",         _wt.LPWSTR),
+            ("dwX",             _wt.DWORD),
+            ("dwY",             _wt.DWORD),
+            ("dwXSize",         _wt.DWORD),
+            ("dwYSize",         _wt.DWORD),
+            ("dwXCountChars",   _wt.DWORD),
+            ("dwYCountChars",   _wt.DWORD),
+            ("dwFillAttribute", _wt.DWORD),
+            ("dwFlags",         _wt.DWORD),
+            ("wShowWindow",     _wt.WORD),
+            ("cbReserved2",     _wt.WORD),
+            ("lpReserved2",     ctypes.POINTER(_wt.BYTE)),
+            ("hStdInput",       _wt.HANDLE),
+            ("hStdOutput",      _wt.HANDLE),
+            ("hStdError",       _wt.HANDLE),
+        ]
+
+    class _STARTUPINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("StartupInfo",    _STARTUPINFOW),
+            ("lpAttributeList", ctypes.c_void_p),
+        ]
+
+    class _PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess",    _wt.HANDLE),
+            ("hThread",     _wt.HANDLE),
+            ("dwProcessId", _wt.DWORD),
+            ("dwThreadId",  _wt.DWORD),
+        ]
+
+    _PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
+    _EXTENDED_STARTUPINFO_PRESENT        = 0x00080000
+    _CREATE_UNICODE_ENVIRONMENT          = 0x00000400
+    _INVALID_HANDLE_VALUE                = _wt.HANDLE(-1).value
+    _STILL_ACTIVE                        = 259
+
+    # Resolve CreatePseudoConsole — only present on Win10 1903+
+    try:
+        _CreatePseudoConsole = _k32.CreatePseudoConsole
+        _CreatePseudoConsole.restype  = _wt.HRESULT
+        _CreatePseudoConsole.argtypes = [
+            _COORD, _wt.HANDLE, _wt.HANDLE, _wt.DWORD,
+            ctypes.POINTER(_wt.HANDLE),
+        ]
+        _ResizePseudoConsole = _k32.ResizePseudoConsole
+        _ResizePseudoConsole.restype  = _wt.HRESULT
+        _ResizePseudoConsole.argtypes = [_wt.HANDLE, _COORD]
+
+        _ClosePseudoConsole = _k32.ClosePseudoConsole
+        _ClosePseudoConsole.restype  = None
+        _ClosePseudoConsole.argtypes = [_wt.HANDLE]
+
+        _CONPTY_AVAILABLE = True
+    except AttributeError:
+        _CONPTY_AVAILABLE = False
+
+    _k32.InitializeProcThreadAttributeList.restype  = _wt.BOOL
+    _k32.InitializeProcThreadAttributeList.argtypes = [
+        ctypes.c_void_p, _wt.DWORD, _wt.DWORD, ctypes.POINTER(ctypes.c_size_t)
+    ]
+    _k32.UpdateProcThreadAttribute.restype  = _wt.BOOL
+    _k32.UpdateProcThreadAttribute.argtypes = [
+        ctypes.c_void_p, _wt.DWORD, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    _k32.DeleteProcThreadAttributeList.restype  = None
+    _k32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+
+    _k32.CreateProcessW.restype  = _wt.BOOL
+    _k32.CreateProcessW.argtypes = [
+        _wt.LPCWSTR, _wt.LPWSTR,
+        ctypes.c_void_p, ctypes.c_void_p,
+        _wt.BOOL, _wt.DWORD, _wt.LPVOID, _wt.LPCWSTR,
+        ctypes.POINTER(_STARTUPINFOEXW),
+        ctypes.POINTER(_PROCESS_INFORMATION),
+    ]
+    _k32.CreatePipe.restype  = _wt.BOOL
+    _k32.CreatePipe.argtypes = [
+        ctypes.POINTER(_wt.HANDLE), ctypes.POINTER(_wt.HANDLE),
+        ctypes.c_void_p, _wt.DWORD,
+    ]
+    _k32.ReadFile.restype  = _wt.BOOL
+    _k32.ReadFile.argtypes = [
+        _wt.HANDLE, ctypes.c_void_p, _wt.DWORD,
+        ctypes.POINTER(_wt.DWORD), ctypes.c_void_p,
+    ]
+    _k32.WriteFile.restype  = _wt.BOOL
+    _k32.WriteFile.argtypes = [
+        _wt.HANDLE, ctypes.c_void_p, _wt.DWORD,
+        ctypes.POINTER(_wt.DWORD), ctypes.c_void_p,
+    ]
+    _k32.CloseHandle.restype  = _wt.BOOL
+    _k32.CloseHandle.argtypes = [_wt.HANDLE]
+    _k32.TerminateProcess.restype  = _wt.BOOL
+    _k32.TerminateProcess.argtypes = [_wt.HANDLE, _wt.UINT]
+    _k32.GetExitCodeProcess.restype  = _wt.BOOL
+    _k32.GetExitCodeProcess.argtypes = [_wt.HANDLE, ctypes.POINTER(_wt.DWORD)]
+
+    def _win32_close(h):
+        if h and h != _INVALID_HANDLE_VALUE:
+            _k32.CloseHandle(h)
+
+    def _conpty_create(shell: str, cols: int, rows: int):
+        """Spawn a shell in a Windows ConPTY. Returns (hpc, hIn, hOut, hProc, hThread)."""
+        hPTYin_r  = _wt.HANDLE(_INVALID_HANDLE_VALUE)
+        hPTYin_w  = _wt.HANDLE(_INVALID_HANDLE_VALUE)
+        hPTYout_r = _wt.HANDLE(_INVALID_HANDLE_VALUE)
+        hPTYout_w = _wt.HANDLE(_INVALID_HANDLE_VALUE)
+
+        if not _k32.CreatePipe(ctypes.byref(hPTYin_r),  ctypes.byref(hPTYin_w),  None, 0):
+            raise OSError(f"CreatePipe(in) failed: {ctypes.get_last_error()}")
+        if not _k32.CreatePipe(ctypes.byref(hPTYout_r), ctypes.byref(hPTYout_w), None, 0):
+            _win32_close(hPTYin_r); _win32_close(hPTYin_w)
+            raise OSError(f"CreatePipe(out) failed: {ctypes.get_last_error()}")
+
+        hpc = _wt.HANDLE(_INVALID_HANDLE_VALUE)
+        hr  = _CreatePseudoConsole(_COORD(X=cols, Y=rows), hPTYin_r, hPTYout_w, 0, ctypes.byref(hpc))
+        # ConPTY owns these ends now — close our copies
+        _win32_close(hPTYin_r); _win32_close(hPTYout_w)
+        if hr != 0:
+            _win32_close(hPTYin_w); _win32_close(hPTYout_r)
+            raise OSError(f"CreatePseudoConsole failed: HRESULT={hr:#010x}")
+
+        # Build STARTUPINFOEX with the pseudo console attribute
+        attr_sz = ctypes.c_size_t(0)
+        _k32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(attr_sz))
+        attr_buf = (ctypes.c_byte * attr_sz.value)()
+        if not _k32.InitializeProcThreadAttributeList(attr_buf, 1, 0, ctypes.byref(attr_sz)):
+            _ClosePseudoConsole(hpc); _win32_close(hPTYin_w); _win32_close(hPTYout_r)
+            raise OSError(f"InitializeProcThreadAttributeList failed: {ctypes.get_last_error()}")
+        if not _k32.UpdateProcThreadAttribute(
+            attr_buf, 0, _PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+            ctypes.addressof(hpc), ctypes.sizeof(hpc), None, None,
+        ):
+            _k32.DeleteProcThreadAttributeList(attr_buf)
+            _ClosePseudoConsole(hpc); _win32_close(hPTYin_w); _win32_close(hPTYout_r)
+            raise OSError(f"UpdateProcThreadAttribute failed: {ctypes.get_last_error()}")
+
+        si_ex = _STARTUPINFOEXW()
+        si_ex.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
+        si_ex.lpAttributeList = ctypes.cast(attr_buf, ctypes.c_void_p)
+        pi  = _PROCESS_INFORMATION()
+        exe = "cmd.exe" if shell == "cmd" else "powershell.exe -NoLogo -NoProfile"
+        cmd_buf = ctypes.create_unicode_buffer(exe)
+        if not _k32.CreateProcessW(
+            None, cmd_buf, None, None, False,
+            _EXTENDED_STARTUPINFO_PRESENT | _CREATE_UNICODE_ENVIRONMENT,
+            None, None, ctypes.byref(si_ex), ctypes.byref(pi),
+        ):
+            err = ctypes.get_last_error()
+            _k32.DeleteProcThreadAttributeList(attr_buf)
+            _ClosePseudoConsole(hpc); _win32_close(hPTYin_w); _win32_close(hPTYout_r)
+            raise OSError(f"CreateProcessW failed: {err}")
+
+        _k32.DeleteProcThreadAttributeList(attr_buf)
+        return hpc, hPTYin_w, hPTYout_r, pi.hProcess, pi.hThread
+
+    def _pipe_read_sync(h, size=4096) -> Optional[bytes]:
+        """Blocking read from a Win32 pipe handle. Returns None on EOF/error."""
+        buf      = (ctypes.c_byte * size)()
+        nread    = _wt.DWORD(0)
+        ok = _k32.ReadFile(h, buf, size, ctypes.byref(nread), None)
+        if not ok or nread.value == 0:
+            return None
+        return bytes(buf[:nread.value])
+
+    def _pipe_write_sync(h, data: bytes):
+        if not data:
+            return
+        buf      = (ctypes.c_byte * len(data))(*data)
+        nwritten = _wt.DWORD(0)
+        _k32.WriteFile(h, buf, len(data), ctypes.byref(nwritten), None)
+
+
 class ShellSession:
-    def __init__(self, session_id: int, shell: str = "powershell"):
+    """ConPTY-backed shell on Windows; raw-pipe fallback elsewhere."""
+
+    def __init__(self, session_id: int, shell: str = "powershell",
+                 cols: int = 220, rows: int = 50):
         self.session_id = session_id
-        self.shell = shell
+        self.shell      = shell
+        self.cols       = cols
+        self.rows       = rows
+        # ConPTY handles
+        self._hpc      = None
+        self._hProc    = None
+        self._hThread  = None
+        self._hIn      = None
+        self._hOut     = None
+        # Fallback
         self.proc: Optional[asyncio.subprocess.Process] = None
+        # Output queue fed by background reader thread
+        self._q: Optional[asyncio.Queue] = None
+        self._reader: Optional["_threading.Thread"] = None
+        self._alive    = False
+        self._use_conpty = False
+        self._loop     = None
+
+    def _reader_fn(self):
+        """Background thread: drain ConPTY output into asyncio queue."""
+        while self._alive:
+            chunk = _pipe_read_sync(self._hOut)
+            if chunk is None:
+                self._alive = False
+                asyncio.run_coroutine_threadsafe(self._q.put(None), self._loop)
+                break
+            asyncio.run_coroutine_threadsafe(
+                self._q.put(chunk.decode("utf-8", errors="replace")), self._loop
+            )
 
     async def start(self) -> bool:
+        self._loop = asyncio.get_event_loop()
+        # Try ConPTY on Windows
+        if sys.platform == "win32" and _CONPTY_AVAILABLE:
+            try:
+                hpc, hIn, hOut, hProc, hThread = await self._loop.run_in_executor(
+                    None, _conpty_create, self.shell, self.cols, self.rows
+                )
+                self._hpc     = hpc
+                self._hIn     = hIn
+                self._hOut    = hOut
+                self._hProc   = hProc
+                self._hThread = hThread
+                self._alive   = True
+                self._use_conpty = True
+                self._q = asyncio.Queue()
+                self._reader = _threading.Thread(target=self._reader_fn, daemon=True)
+                self._reader.start()
+                print(f"[shell] ConPTY session {self.session_id} started ({self.shell})", flush=True)
+                return True
+            except Exception as e:
+                print(f"[shell] ConPTY unavailable, falling back to raw pipes: {e}", flush=True)
+
+        # Fallback: raw pipes (no PSReadLine, but functional)
         cmd = ["cmd.exe"] if self.shell == "cmd" else ["powershell.exe", "-NoLogo", "-NoProfile"]
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -2821,32 +3062,74 @@ class ShellSession:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
+            self._alive = True
+            print(f"[shell] raw-pipe session {self.session_id} started ({self.shell})", flush=True)
             return True
         except Exception as e:
             print(f"[shell] start error: {e}", flush=True)
             return False
 
     async def send_input(self, text: str):
-        if self.proc and self.proc.stdin:
+        if not self._alive:
+            return
+        if self._use_conpty:
+            data = text.encode("utf-8", errors="replace")
+            await self._loop.run_in_executor(None, _pipe_write_sync, self._hIn, data)
+        elif self.proc and self.proc.stdin:
             self.proc.stdin.write(text.encode("utf-8", errors="replace"))
             await self.proc.stdin.drain()
 
     async def read_output(self) -> Optional[str]:
-        if not self.proc or not self.proc.stdout:
+        if not self._alive:
             return None
-        try:
-            chunk = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=0.1)
-            if chunk:
-                return chunk.decode("utf-8", errors="replace")
-        except asyncio.TimeoutError:
-            pass
-        return None
+        if self._use_conpty:
+            try:
+                return await asyncio.wait_for(self._q.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                return None
+        else:
+            if not self.proc or not self.proc.stdout:
+                return None
+            try:
+                chunk = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=0.1)
+                return chunk.decode("utf-8", errors="replace") if chunk else None
+            except asyncio.TimeoutError:
+                return None
+
+    async def resize(self, cols: int, rows: int):
+        self.cols = cols
+        self.rows = rows
+        if self._use_conpty and self._hpc:
+            try:
+                _ResizePseudoConsole(self._hpc, _COORD(X=cols, Y=rows))
+            except Exception as e:
+                print(f"[shell] resize error: {e}", flush=True)
 
     def is_alive(self) -> bool:
-        return self.proc is not None and self.proc.returncode is None
+        if not self._alive:
+            return False
+        if self._use_conpty and self._hProc:
+            ec = _wt.DWORD(0)
+            _k32.GetExitCodeProcess(self._hProc, ctypes.byref(ec))
+            if ec.value != _STILL_ACTIVE:
+                self._alive = False
+                return False
+        elif self.proc is not None:
+            return self.proc.returncode is None
+        return self._alive
 
     async def stop(self):
-        if self.proc:
+        self._alive = False
+        if self._use_conpty:
+            if self._hProc:
+                _k32.TerminateProcess(self._hProc, 1)
+                _win32_close(self._hProc);  self._hProc  = None
+                _win32_close(self._hThread); self._hThread = None
+            _win32_close(self._hIn);  self._hIn  = None
+            _win32_close(self._hOut); self._hOut = None
+            if self._hpc:
+                _ClosePseudoConsole(self._hpc); self._hpc = None
+        elif self.proc:
             try:
                 self.proc.kill()
             except Exception:
@@ -4031,7 +4314,7 @@ async def main() -> None:
 
     # Self-update check on startup
     if check_for_update(tracker_url, agent_id, token):
-        os._exit(7)  # bypass asyncio executor shutdown (avoids 300s wait)
+        sys.exit(7)  # non-zero so NSSM always restarts after update
 
     # Sync RustDesk peer ID on startup (fast, non-blocking)
     sync_rustdesk_id(tracker_url, agent_id, token)
@@ -4173,7 +4456,7 @@ async def main() -> None:
                                 None, check_for_update, tracker_url, agent_id, token
                             )
                             if updated:
-                                os._exit(7)  # bypass 300s executor shutdown wait
+                                sys.exit(7)
                         except Exception:
                             pass
 
@@ -4341,7 +4624,7 @@ async def main() -> None:
                         if msg_type == "update_now":
                             print("[agent] Received update_now -- checking for new version...", flush=True)
                             if check_for_update(tracker_url, agent_id, token):
-                                os._exit(7)  # bypass 300s executor shutdown wait; NSSM restarts
+                                sys.exit(7)   # non-zero so NSSM always restarts; new version will run
                             await ws.send(json.dumps({"type": "update_result", "updated": False, "version": AGENT_VERSION}))
                             continue
 
@@ -4383,7 +4666,9 @@ async def main() -> None:
                                     stop_ev.set()
 
                             shell_type = payload.get("shell", "powershell")
-                            session = ShellSession(sid, shell=shell_type)
+                            cols = int(payload.get("cols", 220))
+                            rows = int(payload.get("rows", 50))
+                            session = ShellSession(sid, shell=shell_type, cols=cols, rows=rows)
                             ok = await session.start()
                             if not ok:
                                 await ws.send(json.dumps({"type": "error", "session_id": sid, "error": "Failed to start shell"}))
@@ -4401,6 +4686,15 @@ async def main() -> None:
                             sid = int(session_id)
                             if sid in shells and shells[sid].is_alive():
                                 await shells[sid].send_input(payload.get("data", ""))
+                            continue
+
+                        # --- Shell resize ---
+                        if msg_type == "shell_resize":
+                            sid = int(session_id)
+                            if sid in shells:
+                                cols = int(payload.get("cols", 220))
+                                rows = int(payload.get("rows", 50))
+                                await shells[sid].resize(cols, rows)
                             continue
 
                         # --- Shell stop ---
@@ -4476,32 +4770,6 @@ async def main() -> None:
                             await ws.send(json.dumps({"type": "exec_result", "session_id": session_id, "exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr}))
                             continue
 
-
-                        # --- On-demand software rescan (non-blocking) ---
-                        if msg_type == "request_software_scan":
-                            print(f"[agent] Software rescan requested (session={session_id})", flush=True)
-                            _scan_session_id = session_id
-                            async def _do_software_scan():
-                                try:
-                                    await loop.run_in_executor(
-                                        None, post_software_inventory, tracker_url, agent_id, token
-                                    )
-                                    print("[agent] Software rescan complete", flush=True)
-                                    await ws.send(json.dumps({
-                                        "type": "software_scan_done",
-                                        "session_id": _scan_session_id,
-                                        "success": True,
-                                    }))
-                                except Exception as e:
-                                    print(f"[agent] Software rescan error: {e}", flush=True)
-                                    await ws.send(json.dumps({
-                                        "type": "software_scan_done",
-                                        "session_id": _scan_session_id,
-                                        "success": False,
-                                        "error": str(e),
-                                    }))
-                            asyncio.create_task(_do_software_scan())
-                            continue
 
                         # --- Run Script (PowerShell or CMD) ---
                         if msg_type == "run_script":
@@ -5005,8 +5273,6 @@ async def main() -> None:
                                 """Strip ANSI codes, box-drawing chars, spinner frames from a winget output line."""
                                 s = _ansi_re.sub('', line)
                                 s = _junk_chars.sub('', s)
-                                # Strip leading winget spinner char (- / \ |) so "- Waiting..." becomes "Waiting..."
-                                s = _re.sub(r'^[-/\\|]\s*', '', s)
                                 s = s.strip()
                                 if not s or _spinner_re.match(s):
                                     return ''
@@ -5015,266 +5281,85 @@ async def main() -> None:
                                     return ''
                                 return s
 
-                            # Capture closure variables before create_task
-                            _wg_label      = label
-                            _wg_ps_cmd     = ps_cmd
-                            _wg_out_path   = out_path
-                            _wg_session_id = session_id
-                            _wg_env        = env
-                            _wg_cf         = cf
-                            _wg_is_uninstall = (msg_type == "sw_uninstall")
-                            _wg_name       = payload.get("name", "") if _wg_is_uninstall else ""
-
-                            async def _do_winget():
-                                try:
-                                    final_rc = 0
-                                    # Windows Driver Packages always hang/fail in winget — skip it entirely.
-                                    _skip_winget = _wg_is_uninstall and _wg_name.lower().startswith("windows driver package")
-
-                                    if _skip_winget:
-                                        await ws.send(json.dumps({
-                                            "type": "install_chunk", "session_id": _wg_session_id,
-                                            "text": "Windows Driver Package detected — skipping winget, using pnputil directly...",
-                                        }))
-                                        final_rc = 1  # trigger fallback
-                                    else:
-                                        def _run_winget_ps():
-                                            return subprocess.run(
-                                                ["powershell.exe", "-NonInteractive", "-Command", _wg_ps_cmd],
-                                                capture_output=True,
-                                                env=_wg_env,
-                                                timeout=300,
-                                                creationflags=_wg_cf,
-                                            )
-                                        # Remove stale output file
-                                        if os.path.exists(_wg_out_path):
-                                            os.remove(_wg_out_path)
-                                        fut = loop.run_in_executor(None, _run_winget_ps)
-                                        sent_bytes = 0
-                                        tick = 0
-                                        _last_chunk = ''  # for deduplication of repeated lines
-                                        while not fut.done():
-                                            await asyncio.sleep(2)
-                                            tick += 2
-                                            # Stream new lines from output file
-                                            if os.path.exists(_wg_out_path):
-                                                try:
-                                                    # Use binary mode so seek/tell are always in real bytes
-                                                    with open(_wg_out_path, "rb") as f:
-                                                        f.seek(sent_bytes)
-                                                        raw = f.read()
-                                                        sent_bytes = f.tell()
-                                                    chunk = raw.decode("utf-8", errors="replace")
-                                                    if chunk:
-                                                        for ln in chunk.splitlines():
-                                                            clean = _clean_winget(ln)
-                                                            if clean and clean != _last_chunk:
-                                                                await ws.send(json.dumps({
-                                                                    "type": "install_chunk",
-                                                                    "session_id": _wg_session_id,
-                                                                    "text": clean,
-                                                                }))
-                                                                _last_chunk = clean
-                                                except Exception:
-                                                    pass
-                                            else:
-                                                await ws.send(json.dumps({
-                                                    "type": "install_chunk",
-                                                    "session_id": _wg_session_id,
-                                                    "text": f"Working ({tick}s)...",
-                                                }))
-                                        result = await fut
-                                        # Flush remaining lines
-                                        if os.path.exists(_wg_out_path):
-                                            try:
-                                                with open(_wg_out_path, "rb") as f:
-                                                    f.seek(sent_bytes)
-                                                    remainder = f.read()
-                                                for ln in remainder.decode("utf-8", errors="replace").splitlines():
+                            try:
+                                def _run_winget_ps():
+                                    return subprocess.run(
+                                        ["powershell.exe", "-NonInteractive", "-Command", ps_cmd],
+                                        capture_output=True,
+                                        env=env,
+                                        timeout=300,
+                                        creationflags=cf,
+                                    )
+                                # Remove stale output file
+                                if os.path.exists(out_path):
+                                    os.remove(out_path)
+                                fut = loop.run_in_executor(None, _run_winget_ps)
+                                sent_bytes = 0
+                                tick = 0
+                                while not fut.done():
+                                    await asyncio.sleep(2)
+                                    tick += 2
+                                    # Stream new lines from output file
+                                    if os.path.exists(out_path):
+                                        try:
+                                            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                                                f.seek(sent_bytes)
+                                                chunk = f.read()
+                                            if chunk:
+                                                for ln in chunk.splitlines():
                                                     clean = _clean_winget(ln)
-                                                    if clean and clean != _last_chunk:
+                                                    if clean:
                                                         await ws.send(json.dumps({
                                                             "type": "install_chunk",
-                                                            "session_id": _wg_session_id,
+                                                            "session_id": session_id,
                                                             "text": clean,
                                                         }))
-                                                        _last_chunk = clean
-                                                os.remove(_wg_out_path)
-                                            except Exception:
-                                                pass
-                                        # Also capture any stderr from PowerShell itself
-                                        ps_err = result.stderr.decode("utf-8", errors="replace").strip()
-                                        if ps_err:
-                                            await ws.send(json.dumps({
-                                                "type": "install_chunk", "session_id": _wg_session_id,
-                                                "text": f"[ps stderr] {ps_err[:500]}",
-                                            }))
-                                        print(f"[winget] {_wg_label} exit={result.returncode}", flush=True)
-                                        final_rc = result.returncode
-
-                                    # --- Fallback: registry UninstallString for Windows Driver Packages and general apps ---
-                                    # Winget exits 1 for driver packages and some MSI-less apps.
-                                    if final_rc != 0 and _wg_is_uninstall and _wg_name:
-                                        if not _skip_winget:
-                                            await ws.send(json.dumps({
-                                                "type": "install_chunk", "session_id": _wg_session_id,
-                                                "text": f"winget exit={final_rc} — trying alternative uninstall...",
-                                            }))
-
-                                        is_driver_pkg = _wg_name.lower().startswith("windows driver package")
-
-                                        if is_driver_pkg:
-                                            # Strategy: find the exact registry entry for this name (has the real UninstallString —
-                                            # e.g. dpinst.exe /u <full INF path>), run it directly.
-                                            # Then find sibling driver packages from same publisher and run them too.
-                                            # Finally run the main app uninstaller (same publisher, not a driver package).
-                                            # Use -RedirectStandardOutput to temp files to avoid pipe-handle inheritance blocking.
-                                            await ws.send(json.dumps({
-                                                "type": "install_chunk", "session_id": _wg_session_id,
-                                                "text": f"Windows Driver Package — looking up registry UninstallString...",
-                                            }))
-                                            fb_ps = (
-                                                f'$pkgName = {json.dumps(_wg_name)};'
-                                                r'$regKeys = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*");'
-                                                r'$allApps = Get-ItemProperty $regKeys -EA SilentlyContinue | Where-Object { $_.DisplayName };'
-                                                r'$thisApp = $allApps | Where-Object { $_.DisplayName -eq $pkgName } | Select-Object -First 1;'
-                                                r'if ($thisApp) { $pub = $thisApp.Publisher } else { $pub = "" };'
-                                                # All driver packages with the same publisher (including this one)
-                                                r'$driverPkgs = $allApps | Where-Object { $_.DisplayName -like "Windows Driver Package*" -and $_.Publisher -eq $pub -and $_.UninstallString };'
-                                                # Main app(s): same publisher OR DisplayName starts with the brand prefix (e.g. "KEIL" catches "Keil uVision4")
-                                                r'$brand = ($pub -split "[\s\-]+")[0];'
-                                                r'$mainApps = $allApps | Where-Object { $_.DisplayName -notlike "Windows Driver Package*" -and ($_.Publisher -eq $pub -or $_.DisplayName -like "*$brand*") -and $_.UninstallString };'
-                                                r'function Remove-ARPKey($dn) {'
-                                                r'  $roots = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall");'
-                                                r'  foreach ($root in $roots) { if (Test-Path $root) { Get-ChildItem $root -EA SilentlyContinue | ForEach-Object { $pr = Get-ItemProperty $_.PSPath -EA SilentlyContinue; if ($pr.DisplayName -eq $dn) { Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue; Write-Host "  Removed ARP key: $($_.Name)" } } } }'
-                                                r'};'
-                                                r'function Invoke-US($us) {'
-                                                r'  $us = $us.Trim();'
-                                                r'  $tmp1 = [IO.Path]::GetTempFileName(); $tmp2 = [IO.Path]::GetTempFileName();'
-                                                # dpinst.exe — add /q (quiet) /sw (suppress wizard)
-                                                r'  if ($us -match "dpinst") {'
-                                                r'    $parts = $us -split " +"; $exe = $parts[0]; $args = $parts[1..999];'
-                                                r'    $p = Start-Process $exe -ArgumentList ($args + "/q" + "/sw") -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'    [void]$p.WaitForExit(60000); if (!$p.HasExited) { $p.Kill() };'
-                                                # Msiexec
-                                                r'  } elseif ($us -match "MsiExec|msiexec") {'
-                                                r'    $pm = [regex]::Match($us,"[{(][0-9A-Fa-f\-]{36}[})]");'
-                                                r'    if (!$pm.Success) { Write-Host "No MSI code in: $us"; Remove-Item $tmp1,$tmp2 -EA 0; return 1 };'
-                                                r'    $p = Start-Process msiexec -ArgumentList "/x $($pm.Value) /qn /norestart" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'    [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill() };'
-                                                # General exe (e.g. Uninstall.exe)
-                                                r'  } else {'
-                                                r'    $exeM = [regex]::Match($us, "^(""([^""]+\.exe)""|([^\s]+\.exe))", "IgnoreCase");'
-                                                r'    if (!$exeM.Success) { Write-Host "Cannot parse exe from: $us"; Remove-Item $tmp1,$tmp2 -EA 0; return 1 };'
-                                                r'    $exePath = if ($exeM.Groups[2].Value) { $exeM.Groups[2].Value } else { $exeM.Groups[3].Value };'
-                                                r'    $exeArgs = $us.Substring($exeM.Length).Trim();'
-                                                r'    $runArgs = if ($exeArgs) { "$exeArgs /S" } else { "/S" };'
-                                                r'    $p = Start-Process $exePath -ArgumentList $runArgs -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'    [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill() };'
-                                                r'  };'
-                                                r'  $ec = if ($p.HasExited) { $p.ExitCode } else { 1 };'
-                                                r'  $out = (Get-Content $tmp1 -EA SilentlyContinue) -join "`n";'
-                                                r'  $err = (Get-Content $tmp2 -EA SilentlyContinue) -join "`n";'
-                                                r'  Remove-Item $tmp1,$tmp2 -EA 0;'
-                                                r'  if ($out) { Write-Host $out }; if ($err) { Write-Host "[err] $err" };'
-                                                r'  return $ec'
-                                                r'};'
-                                                r'$rc = 0;'
-                                                r'foreach ($app in $driverPkgs) {'
-                                                r'  Write-Host "Uninstalling driver: $($app.DisplayName)";'
-                                                r'  Write-Host "  cmd: $($app.UninstallString)";'
-                                                r'  $r = Invoke-US $app.UninstallString;'
-                                                r'  Write-Host "  exit: $r";'
-                                                r'  Remove-ARPKey $app.DisplayName;'
-                                                r'  if ($r -ne 0) { $rc = $r }'
-                                                r'};'
-                                                r'foreach ($app in $mainApps) {'
-                                                r'  Write-Host "Uninstalling main app: $($app.DisplayName)";'
-                                                r'  Write-Host "  cmd: $($app.UninstallString)";'
-                                                r'  $r = Invoke-US $app.UninstallString;'
-                                                r'  Write-Host "  exit: $r";'
-                                                r'  Remove-ARPKey $app.DisplayName;'
-                                                r'  if ($r -ne 0) { $rc = $r }'
-                                                r'};'
-                                                r'if ($driverPkgs.Count -eq 0 -and $mainApps.Count -eq 0) {'
-                                                r'  Write-Host "No uninstall entries found for: $pkgName (publisher=$pub)"; exit 4'
-                                                r'};'
-                                                r'Write-Host "Done (rc=$rc)"; exit $rc'
-                                            )
-                                        else:
-                                            # General fallback: run registry UninstallString.
-                                            # Uses WaitForExit(ms) so we can kill if it hangs.
-                                            fb_ps = (
-                                                f'$name = {json.dumps(_wg_name)};'
-                                                r'$k = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",'
-                                                r'"HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",'
-                                                r'"HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*");'
-                                                r'$app = Get-ItemProperty $k -EA SilentlyContinue | Where-Object { $_.DisplayName -eq $name } | Select-Object -First 1;'
-                                                r'if (-not $app) { Write-Host "Not found in registry"; exit 2 };'
-                                                r'$us = $app.UninstallString;'
-                                                r'if (-not $us) { Write-Host "No UninstallString"; exit 3 };'
-                                                r'Write-Host "Running: $us";'
-                                                r'$tmp1 = [IO.Path]::GetTempFileName(); $tmp2 = [IO.Path]::GetTempFileName();'
-                                                r'if ($us -match "MsiExec|msiexec") {'
-                                                r'  $m = [regex]::Match($us, "[{(][0-9A-Fa-f\-]{36}[})]");'
-                                                r'  if (-not $m.Success) { Write-Host "Cannot parse MSI product code"; Remove-Item $tmp1,$tmp2 -EA 0; exit 5 };'
-                                                r'  $prod = $m.Value;'
-                                                r'  $p = Start-Process msiexec -ArgumentList "/x $prod /qn /norestart" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'  [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill(); Write-Host "msiexec timed out, killed" };'
-                                                r'} else {'
-                                                r'  $exeM = [regex]::Match($us, "^(""([^""]+\.exe)""|([^\s]+\.exe))", "IgnoreCase");'
-                                                r'  if ($exeM.Success) {'
-                                                r'    $exePath = if ($exeM.Groups[2].Value) { $exeM.Groups[2].Value } else { $exeM.Groups[3].Value };'
-                                                r'    $exeArgs = $us.Substring($exeM.Length).Trim();'
-                                                r'    $runArgs = if ($exeArgs) { "$exeArgs /S" } else { "/S" };'
-                                                r'    $p = Start-Process $exePath -ArgumentList $runArgs -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'  } else {'
-                                                r'    $p = Start-Process cmd -ArgumentList "/c `"$us`"" -RedirectStandardOutput $tmp1 -RedirectStandardError $tmp2 -NoNewWindow -PassThru;'
-                                                r'  };'
-                                                r'  [void]$p.WaitForExit(90000); if (!$p.HasExited) { $p.Kill(); Write-Host "Uninstaller timed out, killed" };'
-                                                r'};'
-                                                r'$ec = if ($p.HasExited) { $p.ExitCode } else { 1 };'
-                                                r'$out = (Get-Content $tmp1 -EA SilentlyContinue) -join "`n"; $err = (Get-Content $tmp2 -EA SilentlyContinue) -join "`n";'
-                                                r'Remove-Item $tmp1,$tmp2 -EA 0;'
-                                                r'if ($out) { Write-Host $out }; if ($err) { Write-Host "[err] $err" };'
-                                                r'$aroots = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall");'
-                                                r'foreach ($ar in $aroots) { if (Test-Path $ar) { Get-ChildItem $ar -EA SilentlyContinue | ForEach-Object { $pr2 = Get-ItemProperty $_.PSPath -EA SilentlyContinue; if ($pr2.DisplayName -eq $name) { Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue; Write-Host "Removed ARP key: $($_.Name)" } } } };'
-                                                r'exit $ec'
-                                                r'}'
-                                            )
-
-                                        def _run_fallback():
-                                            return subprocess.run(
-                                                ["powershell.exe", "-NonInteractive", "-Command", fb_ps],
-                                                capture_output=True, env=_wg_env,
-                                                timeout=150, creationflags=_wg_cf,
-                                            )
-                                        try:
-                                            fb_result = await loop.run_in_executor(None, _run_fallback)
-                                            fb_out = fb_result.stdout.decode("utf-8", errors="replace").strip()
-                                            fb_err = fb_result.stderr.decode("utf-8", errors="replace").strip()
-                                            if fb_out:
-                                                await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": fb_out[:500]}))
-                                            if fb_err:
-                                                await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": f"[stderr] {fb_err[:300]}"}))
-                                            final_rc = fb_result.returncode
-                                            print(f"[winget] fallback exit={final_rc}", flush=True)
-                                        except Exception as fb_e:
-                                            await ws.send(json.dumps({"type": "install_chunk", "session_id": _wg_session_id, "text": f"Fallback error: {fb_e}"}))
-
+                                                sent_bytes += len(chunk.encode("utf-8"))
+                                        except Exception:
+                                            pass
+                                    else:
+                                        await ws.send(json.dumps({
+                                            "type": "install_chunk",
+                                            "session_id": session_id,
+                                            "text": f"Working ({tick}s)...",
+                                        }))
+                                result = await fut
+                                # Flush remaining lines
+                                if os.path.exists(out_path):
+                                    try:
+                                        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                                            f.seek(sent_bytes)
+                                            remainder = f.read()
+                                        for ln in remainder.splitlines():
+                                            clean = _clean_winget(ln)
+                                            if clean:
+                                                await ws.send(json.dumps({
+                                                    "type": "install_chunk",
+                                                    "session_id": session_id,
+                                                    "text": clean,
+                                                }))
+                                        os.remove(out_path)
+                                    except Exception:
+                                        pass
+                                # Also capture any stderr from PowerShell itself
+                                ps_err = result.stderr.decode("utf-8", errors="replace").strip()
+                                if ps_err:
                                     await ws.send(json.dumps({
-                                        "type": "install_done", "session_id": _wg_session_id,
-                                        "exit_code": final_rc,
-                                        "success": final_rc == 0,
+                                        "type": "install_chunk", "session_id": session_id,
+                                        "text": f"[ps stderr] {ps_err[:500]}",
                                     }))
-                                except Exception as e:
-                                    print(f"[winget] {_wg_label} error: {e}", flush=True)
-                                    await ws.send(json.dumps({
-                                        "type": "install_done", "session_id": _wg_session_id,
-                                        "exit_code": -1, "success": False, "output": str(e),
-                                    }))
-
-                            asyncio.create_task(_do_winget())
+                                print(f"[winget] {label} exit={result.returncode}", flush=True)
+                                await ws.send(json.dumps({
+                                    "type": "install_done", "session_id": session_id,
+                                    "exit_code": result.returncode,
+                                    "success": result.returncode == 0,
+                                }))
+                            except Exception as e:
+                                print(f"[winget] {label} error: {e}", flush=True)
+                                await ws.send(json.dumps({
+                                    "type": "install_done", "session_id": session_id,
+                                    "exit_code": -1, "success": False, "output": str(e),
+                                }))
                             continue
 
                         if msg_type == "msi_install":

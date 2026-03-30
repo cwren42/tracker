@@ -37,6 +37,7 @@ _AGENT_BAK  = _AGENT_PY + ".bak"
 _VER_FILE   = os.path.join(_AGENT_DIR, "version.txt")
 _CRASH_LOG  = os.path.join(_AGENT_DIR, "logs", "agent.log")
 _FORCE_FLAG = os.path.join(_AGENT_DIR, "force_update")
+_TRAY_PY    = r'C:\CirqueRMM\tray.py'
 # Crash loop: threshold + window (seconds)
 _CRASH_MAX  = 3
 _CRASH_WIN  = 600  # 10 minutes
@@ -134,6 +135,111 @@ def _check_for_update() -> bool:
     except Exception as e:
         print(f"[launcher] Version check failed: {e}", flush=True)
         return False
+
+
+def _restart_tray() -> None:
+    """Kill any running tray.py process and relaunch it in the active user's session."""
+    ps = (
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        "Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'pythonw.exe' "
+        "-and $_.CommandLine -like '*tray.py*' } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n"
+        "Start-Sleep -Milliseconds 800\n"
+        "$wmiUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
+        "if (-not $wmiUser) { exit 0 }\n"
+        "$py = Get-ChildItem 'C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python*\\pythonw.exe' "
+        "-ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName\n"
+        "if (-not $py) { $py = 'pythonw.exe' }\n"
+        "$action = New-ScheduledTaskAction -Execute $py "
+        "-Argument 'C:\\CirqueRMM\\tray.py' -WorkingDirectory 'C:\\CirqueRMM'\n"
+        "$prin = New-ScheduledTaskPrincipal -UserId $wmiUser -LogonType Interactive -RunLevel Limited\n"
+        "Register-ScheduledTask -TaskName 'CirqueTrayRestart' -Action $action "
+        "-Principal $prin -Force | Out-Null\n"
+        "Start-ScheduledTask -TaskName 'CirqueTrayRestart'\n"
+        "Start-Sleep -Seconds 3\n"
+        "Unregister-ScheduledTask -TaskName 'CirqueTrayRestart' "
+        "-Confirm:$false -ErrorAction SilentlyContinue\n"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, timeout=30,
+        )
+        print("[launcher] Tray restarted", flush=True)
+    except Exception as e:
+        print(f"[launcher] Tray restart failed: {e}", flush=True)
+
+
+def _check_tray_update(base_url: str, agent_id: str, token: str) -> bool:
+    """Compare local tray.py SHA-256 with server's; download and hot-swap if different.
+
+    Returns True if tray.py was updated, False otherwise.
+    """
+    # 1. Fetch server SHA (cheap -- no full download needed if unchanged)
+    try:
+        sha_url = f"{base_url}/rmm/agent/tray-sha?agent_id={agent_id}&token={token}"
+        req = urllib.request.Request(sha_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=10) as r:
+            data = json.loads(r.read())
+        server_sha = data.get("sha256", "")
+    except Exception as e:
+        print(f"[launcher] tray SHA check failed: {e}", flush=True)
+        return False
+
+    if not server_sha:
+        return False
+
+    # 2. Compare with local
+    local_sha = ""
+    if os.path.isfile(_TRAY_PY):
+        with open(_TRAY_PY, "rb") as f:
+            local_sha = hashlib.sha256(f.read()).hexdigest()
+
+    if local_sha == server_sha:
+        return False
+
+    print("[launcher] tray.py changed on server -- downloading update...", flush=True)
+
+    # 3. Download new tray.py
+    try:
+        tray_url = f"{base_url}/rmm/agent/tray?agent_id={agent_id}&token={token}"
+        req2 = urllib.request.Request(tray_url, headers={"User-Agent": "CirqueLauncher/1.0"})
+        with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
+            new_code = r.read()
+    except Exception as e:
+        print(f"[launcher] tray.py download failed: {e}", flush=True)
+        return False
+
+    # 4. Verify checksum of download
+    if hashlib.sha256(new_code).hexdigest() != server_sha:
+        print("[launcher] tray.py checksum mismatch after download -- skipping", flush=True)
+        return False
+
+    # 5. Validate Python syntax before overwriting
+    tmp = _TRAY_PY + ".update"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(new_code)
+        if not _is_valid(tmp):
+            print("[launcher] tray.py update has syntax errors -- skipping", flush=True)
+            os.remove(tmp)
+            return False
+
+        # 6. Backup + atomically replace
+        if os.path.isfile(_TRAY_PY):
+            shutil.copy2(_TRAY_PY, _TRAY_PY + ".old")
+        shutil.move(tmp, _TRAY_PY)
+    except Exception as e:
+        print(f"[launcher] tray.py write failed: {e}", flush=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+    print("[launcher] tray.py updated -- restarting tray process", flush=True)
+    _restart_tray()
+    return True
 
 
 def _try_download_fresh() -> bool:
@@ -284,15 +390,15 @@ def _heartbeat_loop():
                     # Write force flag and restart this process so the update runs through main()
                     with open(_FORCE_FLAG, "w") as ff:
                         ff.write("server_requested")
-                    sys.exit(0)  # NSSM will restart the launcher, which will pick up the flag
+                    os._exit(0)  # os._exit() terminates the whole process from any thread; sys.exit() only kills the calling thread
 
                 elif action == "restart":
                     print("[launcher] Server requested restart -- exiting for NSSM restart", flush=True)
-                    sys.exit(0)
+                    os._exit(0)
 
                 elif action == "reinstall":
                     print("[launcher] Server requested reinstall -- exiting for NSSM restart (full reinstall needed)", flush=True)
-                    sys.exit(0)
+                    os._exit(0)
 
                 for cmd in commands:
                     cmd_id       = cmd.get("id")
@@ -313,6 +419,9 @@ def _heartbeat_loop():
                     except Exception as ex:
                         result, exit_code = str(ex), 1
                     _post_result(base, cmd_id, result, exit_code)
+
+                # Check for tray.py updates on every heartbeat (cheap SHA probe)
+                _check_tray_update(base, agent_id, token)
 
                 break  # success on this URL, no need to try fallback
             except Exception as e:

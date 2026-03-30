@@ -15,6 +15,7 @@ Setting keys used:
 """
 
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -33,7 +34,9 @@ class ADConfig:
     base_dn: str
     bind_username: str
     bind_password: str
-    user_ou_dn: str
+    user_ou_dn: str          # search base for user sync (also creation OU)
+    computer_ou_dn: str = '' # OU for computer/asset sync
+    ou_as_department: bool = True  # infer dept from OU path when AD dept attr is blank
 
 
 def _setting_bool(value: Optional[str]) -> bool:
@@ -54,6 +57,8 @@ def load_ad_config(Setting):
     bind_username = (get('ad_bind_username') or '').strip()
     bind_password = get('ad_bind_password') or ''
     user_ou_dn = (get('ad_user_ou_dn') or base_dn).strip()
+    computer_ou_dn = (get('ad_computer_ou_dn') or '').strip()
+    ou_as_department = _setting_bool(get('ad_ou_as_department') or 'true')
 
     return ADConfig(
         enabled=enabled,
@@ -64,6 +69,8 @@ def load_ad_config(Setting):
         bind_username=bind_username,
         bind_password=bind_password,
         user_ou_dn=user_ou_dn,
+        computer_ou_dn=computer_ou_dn,
+        ou_as_department=ou_as_department,
     )
 
 
@@ -301,3 +308,207 @@ class LDAPService:
             return {'success': False, 'error': str(e)}
         finally:
             self.disconnect()
+
+    # ------------------------------------------------------------------
+    # Bulk user enumeration — used for employee sync (AD is master)
+    # ------------------------------------------------------------------
+
+    def get_all_users(self) -> list:
+        """Return all user objects from AD as a list of plain dicts.
+
+        Pulls every objectClass=user / objectCategory=person entry (both
+        enabled and disabled) so the caller can decide what to do with
+        disabled accounts.
+
+        Uses ldap3's paged_search so it works on directories with > 1000
+        entries (AD's default page size limit).
+
+        When config.ou_as_department is True (default), the OU hierarchy in
+        the user's DN is used to fill in department and/or location when the
+        AD department attribute is blank.  The logic mirrors this structure:
+
+            OU=Engineering,OU=CirqueUS,OU=CirqueUsers,...
+                → department="Engineering", location="US"
+
+            OU=China,OU=CirqueTaiwan,OU=CirqueUsers,...
+                → department=(from AD attr or "China"), location="Taiwan"
+
+            OU=CirqueTaiwan,OU=CirqueUsers,...
+                → location="Taiwan"
+        """
+        self._ensure()
+
+        # Use the user_ou_dn as the search base when configured (narrows to
+        # just the CirqueUsers subtree instead of the whole domain)
+        search_base = self.config.user_ou_dn or self.config.base_dn
+
+        AD_ATTRS = [
+            'objectGUID',
+            'sAMAccountName',
+            'distinguishedName',
+            'displayName',
+            'mail',
+            'userPrincipalName',
+            'givenName',
+            'sn',
+            'department',
+            'title',
+            'telephoneNumber',
+            'mobile',
+            'userAccountControl',
+            'thumbnailPhoto',
+        ]
+
+        # Exclude disabled accounts at the query level (UAC bit 2 = ACCOUNTDISABLE)
+        search_filter = "(&(objectClass=user)(objectCategory=person)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+
+        raw_entries = self.connection.extend.standard.paged_search(
+            search_base=search_base,
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=AD_ATTRS,
+            paged_size=250,
+            generator=False,
+        )
+
+        results = []
+        for entry in (raw_entries or []):
+            # paged_search returns dicts with 'dn' and 'attributes' keys
+            if not isinstance(entry, dict):
+                continue
+            dn = entry.get('dn', '')
+            if not dn:
+                continue
+            attrs = entry.get('attributes', {})
+
+            # --- objectGUID ---
+            raw_guid = attrs.get('objectGUID')
+            if not raw_guid:
+                continue
+            try:
+                if isinstance(raw_guid, bytes):
+                    guid_str = str(uuid.UUID(bytes_le=raw_guid))
+                elif isinstance(raw_guid, list) and raw_guid:
+                    g = raw_guid[0]
+                    guid_str = str(uuid.UUID(bytes_le=g)) if isinstance(g, bytes) else str(g).strip('{}')
+                else:
+                    guid_str = str(raw_guid).strip('{}')
+            except Exception:
+                continue
+
+            # --- userAccountControl → enabled? ---
+            uac = attrs.get('userAccountControl', 0)
+            if isinstance(uac, list):
+                uac = uac[0] if uac else 0
+            try:
+                enabled = not bool(int(uac) & 2)
+            except (ValueError, TypeError):
+                enabled = True
+
+            def _str(v):
+                if v is None:
+                    return ''
+                if isinstance(v, list):
+                    v = v[0] if v else ''
+                if isinstance(v, bytes):
+                    return ''
+                return str(v).strip()
+
+            # thumbnail (bytes)
+            thumb = attrs.get('thumbnailPhoto')
+            if isinstance(thumb, list):
+                thumb = thumb[0] if thumb else None
+            thumb = thumb if isinstance(thumb, bytes) else None
+
+            mail = _str(attrs.get('mail'))
+            upn = _str(attrs.get('userPrincipalName'))
+            email = mail or upn   # mail is preferred; fall back to UPN
+
+            phone = _str(attrs.get('telephoneNumber')) or _str(attrs.get('mobile'))
+            ad_dept  = _str(attrs.get('department')) or None
+            ad_title = _str(attrs.get('title')) or None
+
+            # --- OU-based department / location inference ---
+            ou_dept, ou_location = self._parse_ou_dept_location(dn)
+            department = ad_dept or (ou_dept if self.config.ou_as_department else None)
+            location   = ou_location or None
+
+            results.append({
+                'ad_guid':           guid_str,
+                'sam_account_name':  _str(attrs.get('sAMAccountName')),
+                'distinguished_name': dn,
+                'display_name':      _str(attrs.get('displayName')),
+                'email':             email,
+                'upn':               upn,
+                'given_name':        _str(attrs.get('givenName')),
+                'surname':           _str(attrs.get('sn')),
+                'department':        department,
+                'title':             ad_title,
+                'phone':             phone or None,
+                'ad_enabled':        enabled,
+                'thumbnail_photo':   thumb,
+                'ou_location':       location,   # inferred region from OU path
+            })
+
+        return results
+
+    @staticmethod
+    def _parse_ou_dept_location(dn: str):
+        """Extract (department, location) from a Distinguished Name.
+
+        Parses the OU components out of the DN left-to-right (most-specific
+        first) and applies a simple set of conventions:
+
+        Known "region" OU prefixes (case-insensitive):
+            CirqueUS     → location = 'US'
+            CirqueTaiwan → location = 'Taiwan'
+            CirqueChina / Cirque-China → location = 'China'
+
+        The first OU inside a region OU is treated as the department.
+        OUs named after the whole company tree (CirqueUsers, CirqueComputers,
+        Builtin, etc.) are ignored.
+
+        Returns (department: str|None, location: str|None).
+        """
+        # Pull just the OU= components, most-specific first
+        ous = []
+        for part in dn.split(','):
+            part = part.strip()
+            if part.upper().startswith('OU='):
+                ous.append(part[3:])   # strip 'OU='
+
+        # Normalise / skip structural OUs
+        SKIP = {'cirqueusers', 'cirquecomputers', 'cirquecomputersazure',
+                'cirquegroups', 'cirquegroupsazure', 'cirqueservers',
+                'cirquecompany', 'builtin', 'users', 'computers',
+                'cirque-domain-users', 'cirqueadmins', 'domain controllers'}
+
+        REGION_MAP = {
+            'cirqueus': 'US',
+            'cirquetaiwan': 'Taiwan',
+            'cirquechina': 'China',
+            'cirque-china': 'China',
+            'china': 'China',
+        }
+
+        department = None
+        location   = None
+
+        # Walk from innermost (most specific) to outermost
+        for i, ou in enumerate(ous):
+            ou_lower = ou.lower()
+            if ou_lower in SKIP:
+                continue
+            region = REGION_MAP.get(ou_lower)
+            if region:
+                location = region
+                # The OU immediately inside the region is the dept (if we
+                # haven't found one yet and it's more specific than the region)
+                if department is None and i > 0:
+                    inner = ous[i - 1].lower()
+                    if inner not in SKIP and inner not in REGION_MAP:
+                        department = ous[i - 1]
+            elif department is None:
+                department = ou   # first non-structural, non-region OU
+
+        return department, location

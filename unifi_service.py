@@ -31,10 +31,11 @@ UNIFI_TYPE_MAP = {
     'ubb':    ('Network Device', 'Building Bridge'),
     'uck':    ('Network Device', 'Cloud Key'),
     'usp':    ('Network Device', 'SmartPower'),
-    # Protect
+    # Protect / Storage
     'uvc':    ('Camera', 'UniFi Camera'),
     'unvr':   ('Storage Device', 'UniFi NVR'),
     'udr':    ('Storage Device', 'UniFi NVR'),
+    'unas':   ('Network Device', 'UniFi NAS'),
     # Access
     'uas':    ('Network Device', 'Access Controller'),
     'uar':    ('Network Device', 'Door Reader'),
@@ -46,7 +47,7 @@ UNIFI_TYPE_MAP = {
 CAMERA_PREFIXES = ('UVC', 'G3', 'G4', 'G5', 'AI', 'UP-')
 
 # UniFi storage model prefixes
-STORAGE_PREFIXES = ('UNVR', 'UDR')
+STORAGE_PREFIXES = ('UNVR', 'UDR', 'UNAS')
 
 # UniFi Access device model prefixes
 ACCESS_PREFIXES = ('UA-', 'UAS', 'UAH', 'UAR')
@@ -58,8 +59,13 @@ def _classify_device(dev: dict) -> tuple[str, str]:
     utype: str = (dev.get('type') or '').lower()
     source: str = dev.get('_source', '')
 
-    # Source hints from Protect / Access take priority
+    # Source hints from Protect / Access / UNAS take priority
+    if source == 'unas':
+        return ('Network Device', 'UniFi NAS')
     if source == 'protect':
+        # The Protect bootstrap NVR is often the UDM/UDM Pro itself — classify as Gateway not Camera
+        if utype in ('udm', 'udmpro', 'udm-pro', 'udmse') or model.startswith('UDM'):
+            return UNIFI_TYPE_MAP.get('udm', ('Network Device', 'Gateway'))
         if utype in ('unvr', 'udr') or any(model.startswith(p) for p in STORAGE_PREFIXES):
             return ('Storage Device', 'UniFi NVR')
         return ('Camera', 'UniFi Camera')
@@ -74,7 +80,8 @@ def _classify_device(dev: dict) -> tuple[str, str]:
 
     for prefix in STORAGE_PREFIXES:
         if model.startswith(prefix):
-            return ('Storage Device', 'UniFi NVR')
+            label = 'UniFi NAS' if prefix == 'UNAS' else 'UniFi NVR'
+            return ('Storage Device', label)
 
     for prefix in ACCESS_PREFIXES:
         if model.startswith(prefix):
@@ -85,17 +92,22 @@ def _classify_device(dev: dict) -> tuple[str, str]:
 
 def _online_state(dev: dict) -> str:
     """Map UniFi device state to 'Online'/'Offline'."""
-    # Network app: state integer — 0=disconnected, 1=connected, 4=upgrading, 5=provisioning
+    # Network app: state integer — 0=disconnected, 1=connected, 4=upgrading, 5=provisioning, 6=heartbeat missed
     state = dev.get('state')
     if isinstance(state, int):
-        return 'Online' if state in (1, 4, 5) else 'Offline'
+        return 'Online' if state in (1, 4, 5, 6) else 'Offline'
     # Protect app: state string — 'CONNECTED', 'DISCONNECTED', etc.
     if isinstance(state, str):
         return 'Online' if state.upper() in ('CONNECTED', 'ONLINE') else 'Offline'
     # Protect also uses 'isConnected' boolean
     if dev.get('isConnected') is not None:
         return 'Online' if dev.get('isConnected') else 'Offline'
-    return 'Offline'
+    # UniFi Access API uses 'connection_state'
+    conn_state = dev.get('connection_state') or dev.get('connectionState') or ''
+    if conn_state:
+        return 'Online' if conn_state.upper() in ('CONNECTED', 'ONLINE') else 'Offline'
+    # If the device appeared in the API at all it's adopted — assume Online
+    return 'Online'
 
 
 class UnifiService:
@@ -263,10 +275,23 @@ class UnifiService:
                 body = resp.json()
                 nvr = body.get('nvr')
                 if nvr and isinstance(nvr, dict) and nvr.get('mac'):
-                    nvr.setdefault('type', 'unvr')
-                    nvr.setdefault('_source', 'protect')
-                    devices.append(nvr)
-                    logger.info('UniFi Protect NVR: %s (model=%s)', nvr.get('name'), nvr.get('modelKey'))
+                    nvr_mac = nvr['mac'].lower()
+                    nvr_model = (nvr.get('modelKey') or nvr.get('model') or '').upper()
+                    # If the NVR is actually the UDM (runs Protect built-in), it's already
+                    # in the network device list — skip adding it as a separate Protect entry
+                    already_network = any(
+                        (d.get('mac') or '').lower() == nvr_mac
+                        for d in devices
+                        if d.get('_source', 'network') == 'network'
+                    )
+                    if already_network or nvr_model.startswith('UDM'):
+                        logger.info('UniFi Protect NVR (%s / %s) is UDM — skipping duplicate',
+                                    nvr.get('name'), nvr_model)
+                    else:
+                        nvr.setdefault('type', 'unvr')
+                        nvr.setdefault('_source', 'protect')
+                        devices.append(nvr)
+                        logger.info('UniFi Protect NVR: %s (model=%s)', nvr.get('name'), nvr.get('modelKey'))
                 # Also pick up cameras from bootstrap if /cameras path failed
                 if not any(d.get('_source') == 'protect' and d.get('type') == 'uvc' for d in devices):
                     for cam in body.get('cameras', []):
@@ -277,6 +302,74 @@ class UnifiService:
                 logger.debug('UniFi Protect bootstrap → HTTP %s', resp.status_code)
         except Exception as exc:
             logger.debug('UniFi Protect bootstrap error: %s', exc)
+
+        return devices
+
+    def get_unas_devices(self) -> list[dict]:
+        """Fetch UniFi NAS (UNAS / UNAS Pro) devices.
+
+        The UNAS is not adopted as a managed network device — it appears as a
+        wired client in stat/sta.  We filter by hostname prefix 'UNAS', deduplicate
+        by canonical hostname (strip trailing 'b'/'c' port suffixes), and prefer the
+        interface that has an IP address.
+        """
+        from urllib.parse import quote
+        site_encoded = quote(self.site, safe='')
+        devices = []
+        try:
+            resp = self._session.get(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/stat/sta',
+                timeout=15,
+            )
+            logger.debug('UniFi UNAS (sta) → HTTP %s', resp.status_code)
+            if resp.status_code != 200:
+                return []
+            clients = resp.json().get('data', [])
+        except Exception as exc:
+            logger.debug('UniFi UNAS sta error: %s', exc)
+            return []
+
+        # Group UNAS interfaces by canonical name (strip trailing 'b', 'c', etc.)
+        groups: dict[str, list[dict]] = {}
+        for c in clients:
+            hostname = (c.get('hostname') or c.get('name') or '').strip()
+            if not hostname.upper().startswith('UNAS'):
+                continue
+            # Canonical key: strip single trailing letter suffix (port B/C)
+            import re
+            canonical = re.sub(r'[a-zA-Z]$', '', hostname).rstrip('-').strip()
+            groups.setdefault(canonical, []).append(c)
+
+        for canonical, interfaces in groups.items():
+            # Prefer interface with an IP; fall back to first
+            primary = next((i for i in interfaces if i.get('ip')), interfaces[0])
+            # Use the shortest hostname as the display name (avoids 'b' suffixes)
+            name = min((i.get('hostname') or canonical for i in interfaces), key=len)
+            # Use first MAC (management interface)
+            mac = primary.get('mac') or interfaces[0].get('mac', '')
+            ip = primary.get('ip') or ''
+            uptime = primary.get('uptime') or 0
+            last_seen = primary.get('last_seen') or 0
+
+            # Device is online if last_seen is within the last 10 minutes
+            import time
+            online = (time.time() - last_seen) < 600 if last_seen else bool(uptime)
+
+            dev = {
+                'name': name,
+                'mac': mac,
+                'ip': ip,
+                'model': 'UNAS-Pro',
+                'type': 'unas',
+                '_source': 'unas',
+                'uptime': uptime,
+                # Synthesise a state integer so _online_state works correctly
+                'state': 1 if online else 0,
+                # Keep all MACs for reference
+                '_all_macs': [i.get('mac') for i in interfaces if i.get('mac')],
+            }
+            devices.append(dev)
+            logger.info('UniFi UNAS: found %s mac=%s ip=%s online=%s', name, mac, ip, online)
 
         return devices
 
@@ -324,7 +417,8 @@ class UnifiService:
             devices = self.get_devices()
             protect = self.get_protect_cameras()
             access = self.get_access_devices()
-            total = len(devices) + len(protect) + len(access)
+            unas = self.get_unas_devices()
+            total = len(devices) + len(protect) + len(access) + len(unas)
 
             if not devices:
                 self.logout()
@@ -342,6 +436,8 @@ class UnifiService:
                 parts.append(f'{len(protect)} camera/NVR')
             if access:
                 parts.append(f'{len(access)} access control')
+            if unas:
+                parts.append(f'{len(unas)} NAS')
             return {
                 'success': True,
                 'device_count': total,
@@ -392,12 +488,13 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
             devices = svc.get_devices()
             protect_devices = svc.get_protect_cameras()
             access_devices = svc.get_access_devices()
+            unas_devices = svc.get_unas_devices()
             svc.logout()
 
-            all_devices = devices + protect_devices + access_devices
+            all_devices = devices + protect_devices + access_devices + unas_devices
             logger.info(
-                'UniFi sync: fetched %d network + %d protect + %d access = %d total',
-                len(devices), len(protect_devices), len(access_devices), len(all_devices),
+                'UniFi sync: fetched %d network + %d protect + %d access + %d UNAS = %d total',
+                len(devices), len(protect_devices), len(access_devices), len(unas_devices), len(all_devices),
             )
             devices = all_devices
 

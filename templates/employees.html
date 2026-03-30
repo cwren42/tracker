@@ -15,14 +15,22 @@
         <a href="{{ url_for('employees.import_employees') }}" class="btn btn-info btn-sm">
             <i class="bi bi-upload"></i> <span class="d-none d-md-inline">Import</span>
         </a>
-        <form method="POST" action="{{ url_for('employees.sync_employees_from_m365') }}" class="d-inline">
-            <button type="submit" class="btn btn-outline-primary btn-sm">
+        <form method="POST" action="{{ url_for('employees.sync_employees_from_ad') }}" class="d-inline" onsubmit="syncStart(this, 'AD')">
+            <button type="submit" class="btn btn-outline-secondary btn-sm" title="Sync from local Active Directory (AD is master)">
+                <i class="bi bi-server"></i> <span class="d-none d-md-inline">Sync from AD</span>
+            </button>
+        </form>
+        <form method="POST" action="{{ url_for('employees.sync_employees_from_m365') }}" class="d-inline" onsubmit="syncStart(this, 'M365')">
+            <button type="submit" class="btn btn-outline-primary btn-sm" title="Sync / validate against Microsoft 365">
                 <i class="bi bi-microsoft"></i> <span class="d-none d-md-inline">Sync from M365</span>
             </button>
         </form>
         {% endif %}
         <a href="{{ url_for('employees.export_employees_csv') }}" class="btn btn-success btn-sm">
             <i class="bi bi-download"></i> <span class="d-none d-md-inline">Export</span>
+        </a>
+        <a href="{{ url_for('employees.id_card_designer') }}" class="btn btn-info btn-sm">
+            <i class="bi bi-credit-card-2-front"></i> <span class="d-none d-md-inline">ID Cards</span>
         </a>
         <a href="{{ url_for('employees.add_employee') }}" class="btn btn-primary btn-sm">
             <i class="bi bi-person-plus"></i> <span class="d-none d-md-inline">Add Employee</span>
@@ -141,7 +149,7 @@
             </div>
             
             <!-- Department Filter -->
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <select class="form-select" id="departmentFilter">
                     <option value="">All Departments</option>
                     {% for dept in departments %}
@@ -151,12 +159,25 @@
                     {% endfor %}
                 </select>
             </div>
+
+            <!-- Location Filter -->
+            <div class="col-md-2">
+                <select class="form-select" id="locationFilter">
+                    <option value="">All Locations</option>
+                    {% for loc in locations %}
+                    <option value="{{ loc }}" {% if location_filter == loc %}selected{% endif %}>
+                        {{ loc }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
             
             <!-- Sort Dropdown -->
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <select class="form-select" id="sortSelect">
                     <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort by Name</option>
                     <option value="department" {% if sort_by == 'department' %}selected{% endif %}>Sort by Department</option>
+                    <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Sort by Location</option>
                     <option value="email" {% if sort_by == 'email' %}selected{% endif %}>Sort by Email</option>
                     <option value="assets" {% if sort_by == 'assets' %}selected{% endif %}>Sort by Assets</option>
                     <option value="licenses" {% if sort_by == 'licenses' %}selected{% endif %}>Sort by Licenses</option>
@@ -181,7 +202,7 @@
         
         <!-- Active Filters -->
         <div class="mt-3" id="activeFilters">
-            {% if search or department_filter %}
+            {% if search or department_filter or location_filter or show_hidden %}
             <div class="d-flex gap-2 align-items-center flex-wrap">
                 <small class="text-muted">Active filters:</small>
                 {% if search %}
@@ -196,8 +217,26 @@
                     <a href="#" class="text-white ms-1" onclick="clearDepartment(); return false;">×</a>
                 </span>
                 {% endif %}
+                {% if location_filter %}
+                <span class="badge bg-secondary">
+                    Location: {{ location_filter }}
+                    <a href="#" class="text-white ms-1" onclick="clearLocation(); return false;">×</a>
+                </span>
+                {% endif %}
+                {% if show_hidden %}
+                <span class="badge bg-warning text-dark">
+                    Showing hidden employees
+                    <a href="{{ url_for('employees.employees') }}" class="text-dark ms-1">×</a>
+                </span>
+                {% endif %}
                 <a href="{{ url_for('employees.employees') }}" class="btn btn-sm btn-outline-secondary">
                     <i class="bi bi-x-circle"></i> Clear All
+                </a>
+            </div>
+            {% elif current_user.role == 'admin' %}
+            <div class="text-end">
+                <a href="{{ url_for('employees.employees', show_hidden=1) }}" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-eye-slash"></i> Show hidden employees
                 </a>
             </div>
             {% endif %}
@@ -220,8 +259,42 @@
 
 {% if employees %}
 
+<!-- Bulk Action Bar (shown when checkboxes selected) -->
+<div id="bulkActionBar" class="alert alert-primary py-2 mb-2 d-none" style="position:sticky;top:58px;z-index:100;">
+    <form id="bulkActionForm" method="POST" action="{{ url_for('employees.bulk_update_employees') }}">
+        <input type="hidden" name="action" id="bulkAction" value="location">
+        <div id="bulkEmployeeIds"></div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <span id="bulkCount" class="fw-bold text-dark">0 selected</span>
+            <select name="location" id="bulkLocation" class="form-select form-select-sm" style="width:auto;">
+                <option value="">-- Set Location --</option>
+                <option value="Cirque US">Cirque US</option>
+                <option value="Cirque Taiwan">Cirque Taiwan</option>
+                <option value="Cirque China">Cirque China</option>
+            </select>
+            <button type="button" onclick="submitBulkAction('location')" class="btn btn-sm btn-primary">
+                <i class="bi bi-geo-alt"></i> Apply Location
+            </button>
+            {% if current_user.role == 'admin' %}
+            {% if show_hidden %}
+            <button type="button" onclick="submitBulkAction('unhide')" class="btn btn-sm btn-success">
+                <i class="bi bi-eye"></i> Restore to Visible
+            </button>
+            {% else %}
+            <button type="button" onclick="submitBulkAction('hide')" class="btn btn-sm btn-warning">
+                <i class="bi bi-eye-slash"></i> Hide Selected
+            </button>
+            {% endif %}
+            {% endif %}
+            <button type="button" onclick="clearBulkSelection()" class="btn btn-sm btn-outline-secondary ms-auto">
+                <i class="bi bi-x"></i> Deselect All
+            </button>
+        </div>
+    </form>
+</div>
+
 <!-- Grid View -->
-<div id="gridViewContainer" class="row employee-grid">
+<div id="gridViewContainer" class="d-none row employee-grid">
     {% for employee in employees %}
     {% set activity = employee_activity.get(employee.id) %}
     <div class="col-md-4 col-lg-3 mb-3 employee-item">
@@ -230,12 +303,27 @@
                 <div class="d-flex justify-content-between align-items-start mb-2">
                     <h5 class="card-title mb-0">
                         {% if employee.photo %}
-                            <img class="employee-avatar" alt="{{ employee.name }}" src="{{ url_for('static', filename='uploads/' ~ employee.photo) }}">
+                            <img class="employee-avatar" alt="{{ employee.name }}" src="{{ photo_url(employee.photo) }}">
                         {% else %}
                             <i class="bi bi-person-circle text-primary"></i>
                         {% endif %}
                     </h5>
                     <div class="d-flex gap-1 flex-wrap justify-content-end">
+                        {# AD / M365 sync status badges #}
+                        {% if employee.ad_guid %}
+                            {% if employee.ad_enabled == false %}
+                                <span class="badge bg-danger" data-bs-toggle="tooltip" title="Account disabled in Active Directory"><i class="bi bi-server"></i> Disabled</span>
+                            {% else %}
+                                <span class="badge bg-secondary" data-bs-toggle="tooltip" title="Synced from Active Directory\nSAM: {{ employee.sam_account_name or '—' }}"><i class="bi bi-server"></i> AD</span>
+                            {% endif %}
+                        {% endif %}
+                        {% if employee.m365_validated_at %}
+                            {% if employee.m365_account_enabled == false %}
+                                <span class="badge bg-warning text-dark" data-bs-toggle="tooltip" title="M365 account disabled"><i class="bi bi-microsoft"></i></span>
+                            {% elif employee.m365_account_enabled %}
+                                <span class="badge bg-primary" data-bs-toggle="tooltip" title="M365 account active ({{ employee.m365_validated_at.strftime('%Y-%m-%d') }})"><i class="bi bi-microsoft"></i></span>
+                            {% endif %}
+                        {% endif %}
                         {% set rmm_asset = employee_rmm_online.get(employee.id) %}
                         {% if rmm_asset %}
                             <span class="badge bg-success" data-bs-toggle="tooltip" title="{{ rmm_asset.name }} — Agent Online">
@@ -296,13 +384,13 @@
 <div id="listViewContainer" class="d-none">
     {% for employee in employees %}
     {% set activity = employee_activity.get(employee.id) %}
-    <div class="card mb-2 employee-item employee-list-item">
-        <div class="card-body py-3">
+    <div class="card mb-1 employee-item employee-list-item">
+        <div class="card-body py-2" style="font-size:.8rem;">
             <div class="row align-items-center">
                 <div class="col-md-4">
                     <div class="d-flex align-items-center">
                         {% if employee.photo %}
-                            <img class="employee-avatar me-3" alt="{{ employee.name }}" src="{{ url_for('static', filename='uploads/' ~ employee.photo) }}">
+                            <img class="employee-avatar me-3" alt="{{ employee.name }}" src="{{ photo_url(employee.photo) }}">
                         {% else %}
                             <i class="bi bi-person-circle text-primary fs-3 me-3"></i>
                         {% endif %}
@@ -354,11 +442,12 @@
 </div>
 
 <!-- Table View -->
-<div id="tableViewContainer" class="d-none">
+<div id="tableViewContainer">
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover table-sm align-middle" style="font-size:.8rem;">
             <thead>
                 <tr>
+                    <th style="width:36px;"><input type="checkbox" id="selectAll" class="form-check-input" onchange="toggleSelectAll(this)" title="Select all"></th>
                     <th>
                         <a href="#" class="sort-link" onclick="sortBy('name'); return false;">
                             Name
@@ -407,11 +496,12 @@
             <tbody>
                 {% for employee in employees %}
                 {% set activity = employee_activity.get(employee.id) %}
-                <tr class="employee-item">
+                <tr class="employee-item{% if not employee.is_visible %} table-secondary{% endif %}">
+                    <td><input type="checkbox" class="form-check-input emp-check" value="{{ employee.id }}" onchange="updateBulkBar()"></td>
                     <td>
                         <div class="d-flex align-items-center gap-2">
                             {% if employee.photo %}
-                                <img class="employee-avatar" alt="{{ employee.name }}" src="{{ url_for('static', filename='uploads/' ~ employee.photo) }}">
+                                <img class="employee-avatar" alt="{{ employee.name }}" src="{{ photo_url(employee.photo) }}">
                             {% else %}
                                 <i class="bi bi-person-circle text-primary"></i>
                             {% endif %}
@@ -447,9 +537,18 @@
                         <span class="badge bg-success">{{ employee_license_counts.get(employee.id, 0) }}</span>
                     </td>
                     <td class="text-center">
-                        <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-eye"></i> View
-                        </a>
+                        <div class="d-flex gap-1 justify-content-center">
+                            <a href="{{ url_for('employees.view_employee', employee_id=employee.id) }}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-eye"></i> View
+                            </a>
+                            {% if show_hidden %}
+                            <form method="POST" action="{{ url_for('employees.bulk_update_employees') }}" class="d-inline">
+                                <input type="hidden" name="action" value="unhide">
+                                <input type="hidden" name="employee_ids" value="{{ employee.id }}">
+                                <button type="submit" class="btn btn-sm btn-outline-success" title="Restore to visible"><i class="bi bi-eye"></i> Restore</button>
+                            </form>
+                            {% endif %}
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -461,7 +560,7 @@
 {% else %}
 <div class="alert alert-info text-center">
     <i class="bi bi-info-circle"></i> 
-    {% if search or department_filter %}
+    {% if search or department_filter or location_filter %}
     No employees found matching your filters. <a href="{{ url_for('employees.employees') }}">Clear filters</a>
     {% else %}
     No employees yet. <a href="{{ url_for('employees.add_employee') }}">Add your first employee</a>
@@ -477,5 +576,59 @@ window.EMPLOYEES_CFG = {
 };
 </script>
 <script src="/static/js/employees.js"></script>
+<script>
+function updateBulkBar() {
+    const checks = document.querySelectorAll('.emp-check:checked');
+    const bar = document.getElementById('bulkActionBar');
+    document.getElementById('bulkCount').textContent = checks.length + ' selected';
+    if (checks.length > 0) bar.classList.remove('d-none');
+    else bar.classList.add('d-none');
+}
+function toggleSelectAll(cb) {
+    document.querySelectorAll('.emp-check').forEach(c => c.checked = cb.checked);
+    updateBulkBar();
+}
+function clearBulkSelection() {
+    document.querySelectorAll('.emp-check').forEach(c => c.checked = false);
+    const sa = document.getElementById('selectAll');
+    if (sa) sa.checked = false;
+    updateBulkBar();
+}
+function submitBulkAction(action) {
+    const checks = document.querySelectorAll('.emp-check:checked');
+    if (checks.length === 0) return;
+    document.getElementById('bulkAction').value = action;
+    const container = document.getElementById('bulkEmployeeIds');
+    container.innerHTML = '';
+    checks.forEach(c => {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'employee_ids'; inp.value = c.value;
+        container.appendChild(inp);
+    });
+    document.getElementById('bulkActionForm').submit();
+}
+</script>
+<script>
+function syncStart(form, label) {
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing ' + label + '…';
+
+    // Show a toast so the user knows it's running
+    const toast = document.createElement('div');
+    toast.className = 'position-fixed bottom-0 end-0 p-3';
+    toast.style.zIndex = 1100;
+    toast.innerHTML = `
+      <div class="toast show align-items-center text-bg-secondary border-0" role="status">
+        <div class="d-flex">
+          <div class="toast-body">
+            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+            Syncing from ${label} — please wait…
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(toast);
+}
+</script>
 
 {% endblock %}

@@ -5,14 +5,67 @@ from typing import Any, Dict, Optional
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 
-PG_DSN = "dbname=tracker user=tracker_user password=tracker_secure_2026 host=localhost"
+PG_DSN = "dbname=tracker user=tracker_user password=tracker_secure_2026 host=localhost sslmode=disable"
+
+# Shared connection pool — keeps 5 ready, allows up to 40 concurrent.
+# This prevents thundering-herd exhaustion when all agents reconnect at once.
+_pool: "psycopg2.pool.ThreadedConnectionPool | None" = None
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None or _pool.closed:
+        _pool = psycopg2.pool.ThreadedConnectionPool(2, 30, PG_DSN)
+    return _pool
 
 
-def get_conn() -> psycopg2.extensions.connection:
-    conn = psycopg2.connect(PG_DSN)
+class _PooledConn:
+    """Thin wrapper so callers can call conn.close() to return to the pool."""
+    __slots__ = ("_conn", "_pool")
+
+    def __init__(self, conn, pool):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_pool", pool)
+
+    # Delegate everything except close() to the real connection
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        if name in ("_conn", "_pool"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(object.__getattribute__(self, "_conn"), name, value)
+
+    def close(self):
+        conn = object.__getattribute__(self, "_conn")
+        pool = object.__getattribute__(self, "_pool")
+        try:
+            conn.rollback()   # ensure clean state before returning
+        except Exception:
+            pass
+        try:
+            pool.putconn(conn)
+        except Exception:
+            pass
+
+    def commit(self):
+        object.__getattribute__(self, "_conn").commit()
+
+    def rollback(self):
+        object.__getattribute__(self, "_conn").rollback()
+
+    def cursor(self, *args, **kwargs):
+        return object.__getattribute__(self, "_conn").cursor(*args, **kwargs)
+
+
+def get_conn() -> "_PooledConn":
+    """Get a connection from the pool.  Callers must call conn.close() when done."""
+    pool = _get_pool()
+    conn = pool.getconn()
     conn.autocommit = False
-    return conn
+    return _PooledConn(conn, pool)
 
 
 def get_cursor(conn):
@@ -136,7 +189,7 @@ def mark_agent_offline(agent_id: str) -> None:
         conn.close()
 
 
-def create_rmm_session(asset_id: int, started_by_user_id: Optional[int], reason: str) -> int:
+def create_rmm_session(asset_id: Optional[int], started_by_user_id: Optional[int], reason: str) -> int:
     conn = get_conn()
     cur = get_cursor(conn)
     try:
@@ -361,7 +414,13 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
         conn.close()
 
 
+# Eagle (periodic) screenshots kept for 3 days; manually triggered kept for 30 days
+SCREENSHOT_RETENTION_EAGLE_DAYS = 3
+SCREENSHOT_RETENTION_MANUAL_DAYS = 30
+SCREENSHOT_MAX_PER_AGENT = 200
+
 def store_screenshot(agent_id: str, user_id: Optional[int], b64: str, width: int, height: int, fmt: str, source: str = 'manual') -> int:
+    retention_days = SCREENSHOT_RETENTION_EAGLE_DAYS if source == 'eagle' else SCREENSHOT_RETENTION_MANUAL_DAYS
     conn = get_conn()
     cur = get_cursor(conn)
     try:
@@ -374,6 +433,21 @@ def store_screenshot(agent_id: str, user_id: Optional[int], b64: str, width: int
             (agent_id, user_id, b64, fmt, width, height, now_iso(), source),
         )
         row_id = cur.fetchone()["id"]
+        # Enforce per-source retention age and per-agent cap
+        cur.execute(
+            "DELETE FROM rmm_screenshot WHERE agent_id = %s AND source = %s AND captured_at < NOW() - (%s * INTERVAL '1 day')",
+            (agent_id, source, retention_days),
+        )
+        cur.execute(
+            """
+            DELETE FROM rmm_screenshot
+            WHERE agent_id = %s AND id NOT IN (
+                SELECT id FROM rmm_screenshot WHERE agent_id = %s
+                ORDER BY captured_at DESC LIMIT %s
+            )
+            """,
+            (agent_id, agent_id, SCREENSHOT_MAX_PER_AGENT),
+        )
         conn.commit()
         return int(row_id)
     finally:
@@ -386,13 +460,17 @@ def get_eagle_config(agent_id: str) -> dict:
     cur = get_cursor(conn)
     try:
         cur.execute(
-            "SELECT enabled, screenshot_interval_min FROM rmm_eagle_config WHERE agent_id = %s",
+            "SELECT enabled, screenshot_interval_min, screenshots_enabled FROM rmm_eagle_config WHERE agent_id = %s",
             (agent_id,)
         )
         row = cur.fetchone()
         if row:
-            return {"enabled": bool(row["enabled"]), "screenshot_interval_min": int(row["screenshot_interval_min"])}
-        return {"enabled": False, "screenshot_interval_min": 30}
+            return {
+                "enabled": bool(row["enabled"]),
+                "screenshot_interval_min": int(row["screenshot_interval_min"]),
+                "screenshots_enabled": bool(row["screenshots_enabled"]),
+            }
+        return {"enabled": False, "screenshot_interval_min": 30, "screenshots_enabled": True}
     finally:
         conn.close()
 

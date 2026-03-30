@@ -25,11 +25,11 @@ from extensions import db, limiter
 from models import (
     AuditTrail, Asset, AssetHistory, Control, CustomReport, DashboardWidget,
     Employee, License, LicenseAssignment, LicenseInfo, MaintenanceWindow,
-    MonitoringAlert, MonitoringCheck, MonitoringProfile, Policy, PolicySection,
+    MonitoringAlert, MonitoringCheck, MonitoringProfile, AssetMonitoringProfile, Policy, PolicySection,
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
-    AssetLoan, InstalledApp,
+    AssetLoan, InstalledApp, RmmBackupPolicy, RmmAgentBackupPolicy,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
@@ -47,7 +47,55 @@ from api_system import require_api_key
 bp = Blueprint('assets', __name__)
 
 
-# ==================== API ENDPOINTS ====================
+def _rmm_cascade_delete(agent_id):
+    """Delete all RMM data for an agent_id before removing the agent row."""
+    child_tables = [
+        'alert_log', 'cve_patch_job', 'device_vulnerability',
+        'eagle_eyes_exclusions', 'linux_agent_heartbeat',
+        'rmm_agent_flags', 'rmm_availability', 'rmm_commands',
+        'rmm_connect_token', 'rmm_eagle_alert_log', 'rmm_eagle_alert_rule',
+        'rmm_eagle_config', 'rmm_eagle_current', 'rmm_eagle_event',
+        'rmm_eagle_report_schedule', 'rmm_metrics_history', 'rmm_patch',
+        'rmm_patch_job', 'rmm_pending_update', 'rmm_screenshot',
+        'rmm_session_events', 'rmm_software', 'rmm_telemetry',
+    ]
+    for tbl in child_tables:
+        db.session.execute(text(f"DELETE FROM {tbl} WHERE agent_id = :aid"), {'aid': agent_id})
+    db.session.execute(text("DELETE FROM rmm_agent WHERE agent_id = :aid"), {'aid': agent_id})
+
+
+def _asset_cascade_delete(asset_id):
+    """Nullify or delete all FK references to asset.id before deleting the asset row.
+    Does NOT handle rmm_agent — call _rmm_cascade_delete first for that."""
+    # Tables where asset_id can safely be nulled (ticket/loan/session history should be kept)
+    nullable_tables = [
+        'support_ticket',
+        'asset_loan',
+        'remote_session',
+        'rmm_session',
+        'license_assignment',
+        'monitoring_alert',
+        'intune_device',
+        'rmm_enrollment_tokens',
+    ]
+    for tbl in nullable_tables:
+        db.session.execute(
+            text(f"UPDATE {tbl} SET asset_id = NULL WHERE asset_id = :aid"),
+            {'aid': asset_id}
+        )
+    # Tables where rows are meaningless without the asset — delete them
+    delete_tables = [
+        'asset_history',
+        'asset_maintenance_window',
+        'asset_monitoring_profile',
+        'installed_app',
+        'monitoring_check_history',
+    ]
+    for tbl in delete_tables:
+        db.session.execute(
+            text(f"DELETE FROM {tbl} WHERE asset_id = :aid"),
+            {'aid': asset_id}
+        )
 
 
 # ==================== BULK OPERATIONS ROUTES ====================
@@ -116,12 +164,15 @@ def api_asset_search():
 
 @bp.route('/assets')
 @login_required
+@manager_required
 @license_required
 def assets():
     search = request.args.get('search', '')
-    categories_list = request.args.getlist('categories')  # Multi-select categories
-    category = request.args.get('category', '')  # Single category (backward compatibility)
+    category = request.args.get('category', '')  # backward-compat only (links from other pages)
     status = request.args.get('status', '')
+    location_filter = request.args.get('location', '')
+    device_type_filter = request.args.get('device_type', '')
+    availability_filter = request.args.get('availability', '')
     lifecycle = request.args.get('lifecycle', '')
     purchase_from = request.args.get('purchase_from', '')
     purchase_to = request.args.get('purchase_to', '')
@@ -141,16 +192,22 @@ def assets():
             (Asset.manufacturer.ilike(f'%{search}%'))
         )
     
-    # Multi-select categories
-    if categories_list:
-        query = query.filter(Asset.category.in_(categories_list))
-    elif category:  # Backward compatibility
+    # Category (backward-compat for external links using ?category=)
+    if category:
         query = query.filter_by(category=category)
     
     # Status filter
     if status:
         query = query.filter_by(status=status)
-    
+
+    # Location filter
+    if location_filter:
+        query = query.filter(Asset.location == location_filter)
+
+    # Device type filter
+    if device_type_filter:
+        query = query.filter(Asset.device_type == device_type_filter)
+
     # Date range filters
     if purchase_from:
         try:
@@ -248,7 +305,7 @@ def assets():
                           )]
     
     assets = all_assets
-    categories = db.session.query(Asset.category).distinct().all()
+    # categories var removed — no longer passed to template
 
     # Build RMM online/offline sets based on last_seen_at (same 5-min logic as api_rmm_agent_status)
     # Also query gateway for live WebSocket-connected agents (covers Windows agents that don't POST telemetry)
@@ -324,10 +381,39 @@ def assets():
     except Exception:
         pass
 
-    return render_template('assets.html', assets=assets, categories=categories,
+    monitoring_profiles = MonitoringProfile.query.filter_by(enabled=True).order_by(MonitoringProfile.name).all()
+    backup_policies = RmmBackupPolicy.query.filter_by(enabled=True).order_by(RmmBackupPolicy.name).all()
+
+    # Availability filter (applied after rmm_online_ids is resolved)
+    if availability_filter:
+        if availability_filter == 'online':
+            assets = [a for a in assets if a.id in rmm_online_ids or a.online_state == 'Online']
+        elif availability_filter == 'offline':
+            assets = [a for a in assets if
+                      (a.id in rmm_asset_ids and a.id not in rmm_online_ids) or
+                      (a.unifi_device_id and a.online_state != 'Online')]
+
+    # Build per-asset logged-in user from rmm_telemetry
+    logged_in_users = {}  # asset_id -> username string
+    try:
+        user_rows = db.session.execute(
+            text("SELECT asset_id, logged_in_user FROM rmm_telemetry WHERE asset_id IS NOT NULL AND logged_in_user IS NOT NULL AND logged_in_user != ''")
+        ).fetchall()
+        for asset_id, username in user_rows:
+            logged_in_users[asset_id] = username
+    except Exception:
+        pass
+
+    return render_template('assets.html', assets=assets,
                            rmm_asset_ids=rmm_asset_ids, rmm_online_ids=rmm_online_ids,
                            patch_counts=patch_counts, reboot_flags=reboot_flags,
-                           vuln_counts=vuln_counts)
+                           vuln_counts=vuln_counts,
+                           monitoring_profiles=monitoring_profiles,
+                           backup_policies=backup_policies,
+                           location_filter=location_filter,
+                           device_type_filter=device_type_filter,
+                           logged_in_users=logged_in_users,
+                           asset_agent_ids={v: k for k, v in agent_id_to_asset_id.items()})
 
 
 @bp.route('/assets/add', methods=['GET', 'POST'])
@@ -399,39 +485,16 @@ def add_asset():
 
 @bp.route('/assets/<int:asset_id>')
 @login_required
+@manager_required
 @license_required
 def view_asset(asset_id):
     asset = Asset.query.get_or_404(asset_id)
     history = AssetHistory.query.filter_by(asset_id=asset_id).order_by(AssetHistory.timestamp.desc()).all()
     employees = Employee.query.all()
     
-    # Fetch Intune data for this device if serial number exists
-    intune_device = None
-    intune_error = None
-    if asset.serial_number:
-        try:
-            # Get M365 credentials
-            tenant_id_setting = Setting.query.filter_by(key='m365_tenant_id').first()
-            client_id_setting = Setting.query.filter_by(key='m365_client_id').first()
-            client_secret_setting = Setting.query.filter_by(key='m365_client_secret').first()
-            
-            if all([tenant_id_setting, client_id_setting, client_secret_setting]):
-                m365 = M365Service(
-                    tenant_id=tenant_id_setting.value,
-                    client_id=client_id_setting.value,
-                    client_secret=client_secret_setting.value
-                )
-                
-                # Get all devices and find the matching one
-                devices = m365.get_managed_devices()
-                for device in devices:
-                    if device.get('serialNumber') == asset.serial_number:
-                        intune_device = device
-                        break
-            else:
-                intune_error = "M365 credentials not configured"
-        except Exception as e:
-            intune_error = str(e)
+    # Checkout / loan data
+    active_loan = AssetLoan.query.filter_by(asset_id=asset_id, checked_in_at=None).first()
+    loan_history = AssetLoan.query.filter_by(asset_id=asset_id).order_by(AssetLoan.checked_out_at.desc()).all()
 
     # Look up RMM agent for this asset
     rmm_agent_id = None
@@ -453,9 +516,44 @@ def view_asset(asset_id):
     except Exception:
         pass
 
+    # Fetch current monitoring profile for this asset
+    monitoring_profile = None
+    try:
+        mp_row = db.session.execute(
+            text("""
+                SELECT mp.id, mp.name, mp.device_type, mp.description
+                FROM monitoring_profile mp
+                JOIN asset_monitoring_profile amp ON amp.profile_id = mp.id
+                WHERE amp.asset_id = :aid
+                LIMIT 1
+            """),
+            {'aid': asset_id}
+        ).fetchone()
+        if mp_row:
+            monitoring_profile = mp_row._mapping
+    except Exception:
+        pass
+
+    all_profiles = MonitoringProfile.query.filter_by(enabled=True).order_by(MonitoringProfile.name).all()
+
+    # Vulnerability badge count (open Critical + High + others)
+    vuln_count = 0
+    try:
+        row = db.session.execute(
+            text("SELECT COUNT(*) FROM device_vulnerability WHERE asset_id=:aid AND status='Open'"),
+            {'aid': asset_id}
+        ).fetchone()
+        if row:
+            vuln_count = row[0]
+    except Exception:
+        pass
+
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
-                         now=datetime.utcnow, intune_device=intune_device, intune_error=intune_error,
-                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele)
+                         now=datetime.utcnow,
+                         active_loan=active_loan, loan_history=loan_history,
+                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele,
+                         monitoring_profile=monitoring_profile, all_profiles=all_profiles,
+                         vuln_count=vuln_count)
 
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')
@@ -611,6 +709,7 @@ def start_rustdesk_remote_session(asset_id):
         'success': True,
         'session_id': session_row.id,
         'rustdesk_id': asset.rustdesk_id,
+        'rustdesk_password': asset.rustdesk_password,
     })
 
 
@@ -705,7 +804,17 @@ def delete_asset(asset_id):
     
     asset = Asset.query.get_or_404(asset_id)
     asset_tag = asset.asset_tag
-    
+
+    # Remove any RMM agent (and all child data) linked to this asset
+    agent_row = db.session.execute(
+        text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid"), {'aid': asset_id}
+    ).mappings().fetchone()
+    if agent_row:
+        _rmm_cascade_delete(agent_row['agent_id'])
+
+    # Nullify/delete all other FK references to this asset
+    _asset_cascade_delete(asset_id)
+
     db.session.delete(asset)
     db.session.commit()
     
@@ -874,6 +983,51 @@ def asset_qr(asset_id):
     return render_template('qr_code.html', asset=asset, qr_code=img_str)
 
 
+@bp.route('/assets/bulk/eagle-eyes', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def bulk_eagle_eyes():
+    """Bulk enable/disable Eagle Eyes for selected assets."""
+    data = request.get_json(force=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    enabled = bool(data.get('enabled', True))
+    if not asset_ids:
+        return jsonify({'success': False, 'message': 'No assets selected'}), 400
+    # Resolve asset_ids -> agent_ids via rmm_agent table
+    rows = db.session.execute(
+        text("SELECT asset_id, agent_id FROM rmm_agent WHERE asset_id = ANY(:ids) AND enabled = true"),
+        {'ids': [int(i) for i in asset_ids]}
+    ).fetchall()
+    if not rows:
+        return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
+    count = 0
+    for row in rows:
+        agent_id = row[1]
+        db.session.execute(
+            text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, updated_at)
+                    VALUES (:aid, :en, 30, NOW())
+                    ON CONFLICT(agent_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at"""),
+            {'aid': agent_id, 'en': enabled}
+        )
+        count += 1
+    db.session.commit()
+    # Push updated config to each connected agent via gateway (best-effort)
+    import urllib.request as _ur
+    payload = json.dumps({'enabled': enabled, 'screenshot_interval_min': 30}).encode()
+    for row in rows:
+        try:
+            req = _ur.Request(
+                f"{RMM_GATEWAY_INTERNAL}/eagle-eyes/{row[1]}/push",
+                data=payload, headers={'Content-Type': 'application/json'}, method='POST',
+            )
+            _ur.urlopen(req, timeout=4)
+        except Exception:
+            pass  # agent offline; config persists and applies on next connect
+    state = 'enabled' if enabled else 'disabled'
+    return jsonify({'success': True, 'count': count, 'message': f'Eagle Eyes {state} for {count} agent(s)'})
+
+
 @bp.route('/assets/bulk/status', methods=['POST'])
 @login_required
 @manager_required
@@ -962,6 +1116,109 @@ def bulk_assign_department():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/assets/bulk/edit', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def bulk_edit_assets():
+    """Bulk edit asset fields"""
+    try:
+        data = request.get_json()
+        asset_ids = data.get('asset_ids', [])
+
+        if not asset_ids:
+            return jsonify({'success': False, 'message': 'No assets selected'}), 400
+
+        editable = ['status', 'category', 'location', 'department', 'device_type', 'notes']
+        updates = {k: data[k] for k in editable if k in data and data[k] is not None}
+
+        monitoring_profile_id = data.get('monitoring_profile_id') or None
+        backup_policy_id = data.get('backup_policy_id') or None
+
+        if not updates and monitoring_profile_id is None and backup_policy_id is None:
+            return jsonify({'success': False, 'message': 'No fields provided'}), 400
+
+        notes_replace = data.get('notes_replace', False)
+
+        count = 0
+        for asset_id in asset_ids:
+            asset = Asset.query.get(asset_id)
+            if not asset:
+                continue
+            changes = []
+            for field, new_val in updates.items():
+                old_val = getattr(asset, field, None)
+                if field == 'notes' and not notes_replace:
+                    combined = (old_val + '\n' + new_val) if old_val else new_val
+                    setattr(asset, field, combined)
+                    changes.append('notes appended')
+                elif str(old_val) != str(new_val):
+                    setattr(asset, field, new_val)
+                    changes.append(f'{field}: {old_val} → {new_val}')
+
+            # Monitoring profile assignment
+            if monitoring_profile_id:
+                try:
+                    db.session.execute(
+                        AssetMonitoringProfile.delete().where(
+                            AssetMonitoringProfile.c.asset_id == asset_id
+                        )
+                    )
+                    db.session.execute(
+                        AssetMonitoringProfile.insert().values(
+                            asset_id=asset_id,
+                            profile_id=int(monitoring_profile_id),
+                            assigned_by=current_user.id
+                        )
+                    )
+                    changes.append(f'monitoring_profile → {monitoring_profile_id}')
+                except Exception:
+                    pass
+
+            # Backup policy assignment (via RMM agent)
+            if backup_policy_id:
+                try:
+                    agent_row = db.session.execute(
+                        text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
+                        {'aid': asset_id}
+                    ).fetchone()
+                    if agent_row:
+                        agent_id = agent_row[0]
+                        existing = db.session.execute(
+                            text("SELECT id FROM rmm_agent_backup_policy WHERE agent_id = :aid LIMIT 1"),
+                            {'aid': agent_id}
+                        ).fetchone()
+                        if existing:
+                            db.session.execute(
+                                text("UPDATE rmm_agent_backup_policy SET policy_id = :pid WHERE agent_id = :aid"),
+                                {'pid': int(backup_policy_id), 'aid': agent_id}
+                            )
+                        else:
+                            db.session.execute(
+                                text("INSERT INTO rmm_agent_backup_policy (agent_id, policy_id, enabled) VALUES (:aid, :pid, true)"),
+                                {'aid': agent_id, 'pid': int(backup_policy_id)}
+                            )
+                        changes.append(f'backup_policy → {backup_policy_id}')
+                except Exception:
+                    pass
+
+            if changes:
+                history = AssetHistory(
+                    asset_id=asset.id,
+                    action='Bulk edit: ' + '; '.join(changes),
+                    user_id=current_user.id
+                )
+                db.session.add(history)
+                count += 1
+
+        db.session.commit()
+        return jsonify({'success': True, 'count': count, 'message': f'Updated {count} assets'})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/assets/bulk/export', methods=['POST'])
 @login_required
 @license_required
@@ -1024,6 +1281,188 @@ def bulk_export_selected():
         return f"Error exporting assets: {str(e)}", 500
 
 
+@bp.route('/assets/bulk/update-agent', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def bulk_update_agent():
+    """Queue a force_update command for the RMM agents linked to selected assets."""
+    data = request.get_json(force=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    if not asset_ids:
+        return jsonify({'success': False, 'message': 'No assets selected'}), 400
+
+    rows = db.session.execute(
+        text("SELECT agent_id FROM rmm_agent WHERE asset_id = ANY(:ids) AND enabled = true"),
+        {'ids': [int(i) for i in asset_ids]}
+    ).fetchall()
+    if not rows:
+        return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
+
+    queued = 0
+    for row in rows:
+        agent_id = row[0]
+        # Skip if a pending force_update already exists
+        existing = db.session.execute(
+            text("SELECT 1 FROM rmm_commands WHERE agent_id = :aid AND command_type = 'control' AND status = 'pending' LIMIT 1"),
+            {'aid': agent_id}
+        ).fetchone()
+        if existing:
+            continue
+        db.session.execute(
+            text("INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at) VALUES (:aid, 'force_update', 'control', 'pending', NOW())"),
+            {'aid': agent_id}
+        )
+        queued += 1
+    db.session.commit()
+
+    skipped = len(rows) - queued
+    msg = f'Queued update for {queued} agent(s).'
+    if skipped:
+        msg += f' {skipped} already had a pending command.'
+    return jsonify({'success': True, 'count': queued, 'message': msg})
+
+
+@bp.route('/assets/bulk/scan-patches', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def bulk_scan_patches():
+    """Send request_patch_scan to RMM agents linked to selected assets via the gateway."""
+    import urllib.request as _ur
+    data = request.get_json(force=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    if not asset_ids:
+        return jsonify({'success': False, 'message': 'No assets selected'}), 400
+
+    rows = db.session.execute(
+        text("SELECT agent_id FROM rmm_agent WHERE asset_id = ANY(:ids) AND enabled = true"),
+        {'ids': [int(i) for i in asset_ids]}
+    ).fetchall()
+    if not rows:
+        return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
+
+    sent = 0
+    skipped = 0
+    for row in rows:
+        agent_id = row[0]
+        payload = json.dumps({"type": "request_patch_scan"}).encode()
+        try:
+            req = _ur.Request(
+                f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with _ur.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read())
+            if result.get('ok'):
+                sent += 1
+            else:
+                skipped += 1  # agent offline
+        except Exception:
+            skipped += 1
+
+    msg = f'Patch scan sent to {sent} online agent(s).'
+    if skipped:
+        msg += f' {skipped} agent(s) were offline or unreachable.'
+    return jsonify({'success': True, 'count': sent, 'message': msg})
+
+
+@bp.route('/assets/bulk/deploy-patches', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def bulk_deploy_patches():
+    """Create patch jobs for all pending Windows Updates on selected assets and deploy them."""
+    import urllib.request as _ur
+    data = request.get_json(force=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    if not asset_ids:
+        return jsonify({'success': False, 'message': 'No assets selected'}), 400
+
+    agents = db.session.execute(
+        text("SELECT agent_id FROM rmm_agent WHERE asset_id = ANY(:ids) AND enabled = true"),
+        {'ids': [int(i) for i in asset_ids]}
+    ).fetchall()
+    if not agents:
+        return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
+
+    deployed = 0
+    no_updates = 0
+    offline = 0
+
+    for row in agents:
+        agent_id = row[0]
+        # Fetch all pending updates for this agent
+        updates = db.session.execute(
+            text("SELECT update_id, title FROM rmm_pending_update WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        ).fetchall()
+        if not updates:
+            no_updates += 1
+            continue
+
+        update_ids = [u[0] for u in updates]
+        kb_ids     = []   # metadata only — not needed by WUA installer
+        titles     = [u[1] for u in updates]
+
+        # Create the patch job
+        res = db.session.execute(
+            text("""INSERT INTO rmm_patch_job
+                        (agent_id, update_ids, kb_ids, titles, status, approved_by, approved_at)
+                    VALUES (:aid, :uids, :kbids, :titles, 'queued', :uid, NOW())
+                    RETURNING id"""),
+            {
+                'aid':    agent_id,
+                'uids':   json.dumps(update_ids),
+                'kbids':  json.dumps(kb_ids),
+                'titles': json.dumps(titles),
+                'uid':    current_user.id if hasattr(current_user, 'id') else None,
+            }
+        )
+        db.session.commit()
+        job_id = res.scalar()
+
+        # Fire the deploy immediately
+        payload = json.dumps({
+            'type':       'install_patches',
+            'job_id':     job_id,
+            'update_ids': update_ids,
+            'kb_ids':     kb_ids,
+            'titles':     titles,
+        }).encode()
+        try:
+            req = _ur.Request(
+                f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with _ur.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read())
+            if result.get('ok'):
+                db.session.execute(
+                    text("UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW(), updated_at=NOW() WHERE id=:jid"),
+                    {'jid': job_id}
+                )
+                db.session.commit()
+                deployed += 1
+            else:
+                offline += 1
+        except Exception:
+            offline += 1
+
+    parts = []
+    if deployed:
+        parts.append(f'Deploying patches to {deployed} online agent(s).')
+    if no_updates:
+        parts.append(f'{no_updates} agent(s) had no pending updates.')
+    if offline:
+        parts.append(f'{offline} agent(s) were offline (job queued for next connect).')
+    return jsonify({'success': True, 'count': deployed, 'message': ' '.join(parts) or 'Done.'})
+
+
 @bp.route('/assets/bulk/delete', methods=['POST'])
 @login_required
 @manager_required
@@ -1047,7 +1486,17 @@ def bulk_delete_assets():
                     photo_path = os.path.join(current_app.config['UPLOAD_FOLDER'], asset.photo)
                     if os.path.exists(photo_path):
                         os.remove(photo_path)
-                
+
+                # Remove any linked RMM agent and its child data
+                agent_row = db.session.execute(
+                    text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid"), {'aid': asset_id}
+                ).mappings().fetchone()
+                if agent_row:
+                    _rmm_cascade_delete(agent_row['agent_id'])
+
+                # Nullify/delete all other FK references to this asset
+                _asset_cascade_delete(asset_id)
+
                 db.session.delete(asset)
                 deleted_count += 1
         

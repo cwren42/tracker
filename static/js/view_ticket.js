@@ -13,7 +13,7 @@ async function startRustDeskSession(assetId) {
     try { await navigator.clipboard.writeText(pw); showToast('Password copied to clipboard ✓'); }
     catch (_) { showToast('Password: ' + pw, 8000); }
   }
-  if (id) { setTimeout(() => { window.location.href = `rustdesk://${encodeURIComponent(id)}`; }, 600); }
+  if (id) { setTimeout(() => { window.location.href = pw ? `rustdesk://${encodeURIComponent(id)}?password=${encodeURIComponent(pw)}&fullscreen=1` : `rustdesk://${encodeURIComponent(id)}?fullscreen=1`; }, 600); }
 }
 function showToast(msg, ms=3500) {
   let t = document.getElementById('rdToast');

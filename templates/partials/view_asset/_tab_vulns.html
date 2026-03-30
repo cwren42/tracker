@@ -1,9 +1,18 @@
 <!-- ══ VULNERABILITIES TAB ══════════════════════════════════════ -->
 <div class="tab-pane fade" id="tab-vulns" role="tabpanel">
-  <div class="card section-card">
-    <div class="card-header d-flex align-items-center justify-content-between">
-      <span><i class="bi bi-shield-exclamation me-2 text-danger"></i>Vulnerability Exposure</span>
-      <span class="text-muted small" id="asset-vuln-last-sync"></span>
+
+  <!-- Open Vulnerabilities -->
+  <div class="card section-card mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <span><i class="bi bi-shield-exclamation me-2 text-danger"></i>Open Vulnerabilities</span>
+      <div class="d-flex gap-2 align-items-center">
+        <span class="text-muted small" id="asset-vuln-last-sync"></span>
+        <div class="d-flex gap-1" id="asset-vuln-bulk-bar" style="display:none!important;">
+          <span class="text-muted small me-1" id="asset-vuln-sel-count"></span>
+          <button class="btn btn-sm btn-outline-success py-0 px-2" style="font-size:.72rem;" onclick="bulkVulnStatus('Remediated')">Mark Remediated</button>
+          <button class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.72rem;" onclick="bulkVulnStatus('Accepted')">Accept Risk</button>
+        </div>
+      </div>
     </div>
     <div class="card-body p-0">
       <div id="asset-vuln-spinner" class="text-center py-4 text-muted">
@@ -12,23 +21,55 @@
       <div id="asset-vuln-empty" class="text-center py-5 text-success" style="display:none;">
         <i class="bi bi-shield-check fs-2 d-block mb-2"></i>No open vulnerabilities found for this device.
       </div>
+      <div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem;display:none;" id="asset-vuln-table">
-        <thead><tr class="text-muted small">
-          <th>CVE ID</th>
-          <th>Name</th>
-          <th style="width:80px;">Severity</th>
-          <th style="width:55px;">CVSS</th>
-          <th style="width:110px;">Product</th>
-          <th style="width:95px;">Status</th>
-          <th style="width:120px;">Change To</th>
-          <th style="width:115px;">Plan Date</th>
-          <th style="width:180px;">Note</th>
-          <th style="width:110px;">Updated By</th>
-          <th style="width:55px;"></th>
-          <th style="width:75px;">Deploy</th>
-        </tr></thead>
+        <thead>
+          <tr class="text-muted small">
+            <th style="width:28px;"><input type="checkbox" id="vuln-check-all" title="Select all" onchange="toggleAllVulns(this)"></th>
+            <th style="width:140px;">CVE ID</th>
+            <th>Description</th>
+            <th style="width:75px;">Severity</th>
+            <th style="width:48px;">CVSS</th>
+            <th style="width:100px;">Product</th>
+            <th style="width:90px;">Status</th>
+            <th style="width:95px;">Reviewed By</th>
+            <th style="width:55px;">Deploy</th>
+          </tr>
+        </thead>
         <tbody id="asset-vuln-tbody"></tbody>
       </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Patch Deployment History -->
+  <div class="card section-card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span><i class="bi bi-clock-history me-2 text-secondary"></i>Patch Deployment History</span>
+    </div>
+    <div class="card-body p-0">
+      <div id="asset-vuln-history-spinner" class="text-center py-3 text-muted" style="display:none;">
+        <span class="spinner-border spinner-border-sm me-2"></span>Loading history…
+      </div>
+      <div id="asset-vuln-history-empty" class="text-center py-4 text-muted" style="font-size:.85rem;">
+        <i class="bi bi-inbox d-block fs-4 mb-1"></i>No patch deployments recorded yet.
+      </div>
+      <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem;display:none;" id="asset-vuln-history-table">
+        <thead>
+          <tr class="text-muted small">
+            <th>CVE ID</th>
+            <th style="width:85px;">Status</th>
+            <th style="width:90px;">Deployed By</th>
+            <th style="width:130px;">Deployed At</th>
+            <th style="width:130px;">Completed At</th>
+            <th>Result</th>
+            <th style="width:80px;">Reboot?</th>
+          </tr>
+        </thead>
+        <tbody id="asset-vuln-history-tbody"></tbody>
+      </table>
+      </div>
     </div>
   </div>
 </div>

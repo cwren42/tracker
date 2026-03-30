@@ -69,7 +69,23 @@ class Employee(db.Model):
     phone = db.Column(db.String(20))
     position = db.Column(db.String(100))
     photo = db.Column(db.String(255))
+    card_number = db.Column(db.String(20))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Active Directory fields (AD is master)
+    sam_account_name = db.Column(db.String(100))
+    ad_guid = db.Column(db.String(38), unique=True, nullable=True)
+    ad_dn = db.Column(db.String(500))
+    ad_enabled = db.Column(db.Boolean, nullable=True)   # True=active, False=disabled in AD
+    ad_last_sync = db.Column(db.DateTime)
+    # Microsoft 365 validation fields
+    m365_id = db.Column(db.String(100))
+    m365_account_enabled = db.Column(db.Boolean, nullable=True)
+    m365_validated_at = db.Column(db.DateTime)
+    m365_licenses_json = db.Column(db.Text)        # JSON list of M365 license SKUs
+    m365_licenses_synced_at = db.Column(db.DateTime)
+    # Display / org fields
+    is_visible = db.Column(db.Boolean, default=True, nullable=False, server_default='true')
+    location = db.Column(db.String(100))            # Cirque US / Cirque Taiwan / Cirque China
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
 
 class Asset(db.Model):
@@ -164,6 +180,14 @@ class Asset(db.Model):
             return self.replacement_date <= today + timedelta(days=182)
         # Fall back to lifecycle status if no replacement_date set
         return self.get_lifecycle_status() in ('Replace Soon', 'End of Life')
+
+    @property
+    def computed_eol_date(self):
+        """Compute EOL date from purchase_date + expected_life_years."""
+        if self.purchase_date and self.expected_life_years:
+            from datetime import timedelta
+            return self.purchase_date + timedelta(days=int(self.expected_life_years * 365.25))
+        return None
 
 
 class RemoteSession(db.Model):
@@ -566,6 +590,71 @@ class ProxmoxBackupJob(db.Model):
     snapshot_count = db.Column(db.Integer, default=0)
     backup_status = db.Column(db.String(20))  # ok, stale, missing
     last_synced = db.Column(db.DateTime)
+
+# ─── Windows Backup Models ────────────────────────────────────────────────────
+
+class RmmBackupNas(db.Model):
+    __tablename__ = 'rmm_backup_nas'
+    id = db.Column(db.BigInteger, primary_key=True)
+    name = db.Column(db.Text, nullable=False, unique=True)   # "ioSafe NL Series", "UniFi UNAS Pro"
+    nas_type = db.Column(db.Text, nullable=False, default='smb')
+    unc_path = db.Column(db.Text, nullable=False)             # \\SERVER\Share (SMB) or \\HOST for SFTP
+    notes = db.Column(db.Text)
+    enabled = db.Column(db.Boolean, default=True)
+    # ── Isolated auth (non-domain credentials) ──────────────────────────────
+    auth_method = db.Column(db.Text, nullable=False, default='smb_local')  # smb_local | sftp
+    nas_username = db.Column(db.Text)          # local NAS account (not domain)
+    nas_password_enc = db.Column(db.Text)      # Fernet-encrypted password
+    sftp_port = db.Column(db.Integer, default=22)
+    sftp_remote_path = db.Column(db.Text)      # e.g. /volume1/Backups (SFTP mode)
+    # ────────────────────────────────────────────────────────────────────────
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RmmBackupPolicy(db.Model):
+    __tablename__ = 'rmm_backup_policy'
+    id = db.Column(db.BigInteger, primary_key=True)
+    name = db.Column(db.Text, nullable=False, unique=True)
+    description = db.Column(db.Text)
+    enabled = db.Column(db.Boolean, default=True)
+    nas_unc_path = db.Column(db.Text, nullable=False, default='')
+    nas_type = db.Column(db.Text, default='smb')
+    include_paths = db.Column(db.Text, default='[]')          # JSON array
+    exclude_extensions = db.Column(db.Text, default='[]')      # JSON array
+    exclude_folders = db.Column(db.Text, default='[]')         # JSON array
+    max_file_size_mb = db.Column(db.Integer, default=500)
+    full_backup_interval_days = db.Column(db.Integer, default=7)
+    retention_days = db.Column(db.Integer, default=30)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RmmAgentBackupPolicy(db.Model):
+    __tablename__ = 'rmm_agent_backup_policy'
+    id = db.Column(db.BigInteger, primary_key=True)
+    agent_id = db.Column(db.Text, nullable=False, unique=True)
+    policy_id = db.Column(db.BigInteger, db.ForeignKey('rmm_backup_policy.id', ondelete='SET NULL'))
+    enabled = db.Column(db.Boolean, default=True)
+    extra_paths = db.Column(db.Text, default='[]')             # JSON array
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    policy = db.relationship('RmmBackupPolicy', backref='agent_assignments')
+
+class RmmBackupJob(db.Model):
+    __tablename__ = 'rmm_backup_job'
+    id = db.Column(db.BigInteger, primary_key=True)
+    agent_id = db.Column(db.Text, nullable=False)
+    job_type = db.Column(db.Text, default='full')              # full | incremental
+    status = db.Column(db.Text, default='running')             # running | success | partial | failed
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+    files_copied = db.Column(db.Integer, default=0)
+    files_skipped = db.Column(db.Integer, default=0)
+    files_failed = db.Column(db.Integer, default=0)
+    bytes_transferred = db.Column(db.BigInteger, default=0)
+    snapshot_path = db.Column(db.Text)
+    errors_json = db.Column(db.Text)                           # JSON array of error strings
+    triggered_by = db.Column(db.Text, default='scheduled')    # scheduled | manual | lock | idle
+
 
 # Association tables for many-to-many relationships
 ProfileCheck = db.Table('profile_check',

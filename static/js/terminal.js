@@ -1,4 +1,8 @@
-const assetId = window.TERMINALCFG.asset_id;
+const assetId = window.TERMINAL_CFG.asset_id;
+const osVersion = (window.TERMINAL_CFG.os_version || '').toLowerCase();
+const isWindows = osVersion.indexOf('windows') !== -1;
+const defaultShell = isWindows ? 'powershell' : 'bash';
+
 let sessionId = null;
 let outputIndex = 0;
 let pollInterval = null;
@@ -57,7 +61,8 @@ $connectionForm.on('submit', function(e) {
         data: JSON.stringify({
             asset_id: assetId,
             username: username,
-            password: password
+            password: password,
+            shell: defaultShell
         }),
         success: function(response) {
             if (response.success) {
@@ -84,7 +89,8 @@ $connectionForm.on('submit', function(e) {
 $terminalInput.on('keypress', function(e) {
     if (e.which === 13) {  // Enter key
         const input = $(this).val();
-        sendInput(input + '\n');
+        const lineEnd = isWindows ? '\r\n' : '\n';
+        sendInput(input + lineEnd);
         $(this).val('');
     }
 });
@@ -150,7 +156,12 @@ function pollOutput() {
 }
 
 function appendOutput(text) {
-    $terminalOutput.append(text);
+    // Escape HTML, then append as preformatted text
+    const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    $terminalOutput.append(escaped);
     
     // Auto-scroll to bottom
     const container = document.getElementById('terminal-container');

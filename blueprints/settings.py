@@ -73,17 +73,17 @@ def settings(section):
         'unifi', 'proxmox', 'ai', 'cloudflare'
     }
     section_endpoints = {
-        'theme': 'settings_theme',
-        'license': 'settings_license',
-        'email': 'settings_email',
-        'directory': 'settings_directory',
-        'rmm': 'settings_rmm',
-        'scripts': 'settings_scripts',
-        'eagleeye': 'settings_eagleeye',
-        'unifi': 'settings_unifi',
-        'proxmox': 'settings_proxmox',
-        'ai': 'settings_ai',
-        'cloudflare': 'settings_cloudflare',
+        'theme': 'settings.settings_theme',
+        'license': 'settings.settings_license',
+        'email': 'settings.settings_email',
+        'directory': 'settings.settings_directory',
+        'rmm': 'settings.settings_rmm',
+        'scripts': 'settings.settings_scripts',
+        'eagleeye': 'settings.settings_eagleeye',
+        'unifi': 'settings.settings_unifi',
+        'proxmox': 'settings.settings_proxmox',
+        'ai': 'settings.settings_ai',
+        'cloudflare': 'settings.settings_cloudflare',
     }
     if section and section not in allowed_sections:
         flash('Unknown settings page.', 'warning')
@@ -217,6 +217,8 @@ def settings(section):
             ad_bind_username = request.form.get('ad_bind_username', '').strip()
             ad_bind_password = request.form.get('ad_bind_password', '')
             ad_user_ou_dn = request.form.get('ad_user_ou_dn', '').strip()
+            ad_computer_ou_dn = request.form.get('ad_computer_ou_dn', '').strip()
+            ad_ou_as_department = request.form.get('ad_ou_as_department') == 'on'
 
             try:
                 settings_to_update = {
@@ -227,6 +229,8 @@ def settings(section):
                     'ad_base_dn': ad_base_dn,
                     'ad_bind_username': ad_bind_username,
                     'ad_user_ou_dn': ad_user_ou_dn,
+                    'ad_computer_ou_dn': ad_computer_ou_dn,
+                    'ad_ou_as_department': 'true' if ad_ou_as_department else 'false',
                 }
                 for key, value in settings_to_update.items():
                     setting = Setting.query.filter_by(key=key).first()
@@ -365,6 +369,8 @@ def settings_directory():
         'ad_bind_username': get_setting_value('ad_bind_username', ''),
         'ad_bind_password': get_setting_value('ad_bind_password', ''),
         'ad_user_ou_dn': get_setting_value('ad_user_ou_dn', ''),
+        'ad_computer_ou_dn': get_setting_value('ad_computer_ou_dn', ''),
+        'ad_ou_as_department': get_setting_value('ad_ou_as_department', 'true') == 'true',
     }
     
     return render_template('settings_directory.html', ad_config=ad_config)

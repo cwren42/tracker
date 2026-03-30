@@ -9,10 +9,6 @@ try:
     import report_engine as _report_engine
 except ImportError:
     _report_engine = None
-try:
-    from ssh_manager import get_ssh_manager
-except ImportError:
-    get_ssh_manager = None
 import requests
 
 from flask import (Blueprint, abort, current_app, flash, g, jsonify,
@@ -227,104 +223,6 @@ def agent_service_file():
     """Serve the systemd service file"""
     service_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'cirque-rmm-agent.service')
     return send_file(service_path, mimetype='text/plain')
-
-
-@bp.route('/api/terminal/connect', methods=['POST'])
-@login_required
-def api_terminal_connect():
-    """Connect to an asset via SSH"""
-    data = request.get_json()
-    
-    asset_id = data.get('asset_id')
-    username = data.get('username', 'root')
-    password = data.get('password')
-    
-    asset = Asset.query.get_or_404(asset_id)
-    
-    # Generate session ID
-    import uuid
-    session_id = f"{current_user.id}:{asset_id}:{str(uuid.uuid4())[:8]}"
-    
-    # Create SSH session
-    ssh_manager = get_ssh_manager()
-    session = ssh_manager.create_session(
-        session_id=session_id,
-        hostname=asset.ip_address_1,
-        username=username,
-        password=password,
-        port=22
-    )
-    
-    if session:
-        return jsonify({
-            'success': True,
-            'session_id': session_id
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'error': 'Failed to connect'
-        }), 500
-
-
-@bp.route('/api/terminal/input', methods=['POST'])
-@login_required
-def api_terminal_input():
-    """Send input to SSH session"""
-    data = request.get_json()
-    
-    session_id = data.get('session_id')
-    input_data = data.get('data', '')
-    
-    ssh_manager = get_ssh_manager()
-    session = ssh_manager.get_session(session_id)
-    
-    if not session:
-        return jsonify({'success': False, 'error': 'Session not found'}), 404
-    
-    if session.send_input(input_data):
-        return jsonify({'success': True})
-    else:
-        return jsonify({'success': False, 'error': 'Failed to send input'}), 500
-
-
-@bp.route('/api/terminal/output', methods=['POST'])
-@login_required
-def api_terminal_output():
-    """Get output from SSH session"""
-    data = request.get_json()
-    
-    session_id = data.get('session_id')
-    since_index = data.get('since_index', 0)
-    
-    ssh_manager = get_ssh_manager()
-    session = ssh_manager.get_session(session_id)
-    
-    if not session:
-        return jsonify({'success': False, 'error': 'Session not found'}), 404
-    
-    output = session.get_output(since_index)
-    
-    return jsonify({
-        'success': True,
-        'output': output,
-        'index': since_index + len(output)
-    })
-
-
-@bp.route('/api/terminal/disconnect', methods=['POST'])
-@login_required
-def api_terminal_disconnect():
-    """Disconnect SSH session"""
-    data = request.get_json()
-    
-    session_id = data.get('session_id')
-    
-    ssh_manager = get_ssh_manager()
-    if ssh_manager.close_session(session_id):
-        return jsonify({'success': True})
-    else:
-        return jsonify({'success': False, 'error': 'Session not found'}), 404
 
 
 @bp.route('/api/linux-agent/heartbeat', methods=['POST'])
@@ -546,6 +444,41 @@ def download_agent_ps1():
                      mimetype='application/octet-stream')
 
 
+@bp.route('/download/deploy-ps1')
+@login_required
+@license_required
+def download_deploy_ps1():
+    """Serve the simple one-liner deploy script (off-LAN safe)."""
+    import os
+    path = os.path.join(current_app.root_path, 'rmm_agent', 'deploy_agent.ps1')
+    if not os.path.exists(path):
+        return 'Script not found on server.', 404
+    return send_file(path, as_attachment=True, download_name='deploy_agent.ps1',
+                     mimetype='application/octet-stream')
+
+
+@bp.route('/get/deploy-ps1')
+def download_deploy_ps1_public():
+    """Public (no login) endpoint so 'irm https://…/get/deploy-ps1 | iex' works."""
+    import os
+    path = os.path.join(current_app.root_path, 'rmm_agent', 'deploy_agent.ps1')
+    if not os.path.exists(path):
+        return 'Script not found on server.', 404
+    return send_file(path, as_attachment=False, download_name='deploy_agent.ps1',
+                     mimetype='text/plain')
+
+
+@bp.route('/get/agent-exe')
+def download_agent_exe_public():
+    """Public (no login) EXE download — used by deploy_agent.ps1 and irm|iex flows."""
+    import os
+    exe_path = os.path.join(current_app.root_path, 'rmm_agent', 'CirqueRMM.exe')
+    if not os.path.exists(exe_path):
+        return 'Installer not found on server.', 404
+    return send_file(exe_path, as_attachment=True, download_name='CirqueRMM.exe',
+                     mimetype='application/octet-stream')
+
+
 @bp.route('/download/agent-bat')
 @login_required
 @license_required
@@ -633,8 +566,17 @@ def download_site_install_ps1():
     if not os.path.exists(ps1_src):
         return 'install_agent.ps1 not found on server.', 404
 
-    tracker_url = RMM_TRACKER_URL.rstrip('/')
-    gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+    # ?public=1 bypasses the internal URL entirely — use for devices that
+    # can resolve but not reach the corporate network (e.g. China offices).
+    use_public = request.args.get('public', '').strip() in ('1', 'true', 'yes')
+    if use_public:
+        tracker_url = 'https://tracker.cirquetools.com'
+        gateway_url = 'wss://rmm.cirquetools.com'
+    else:
+        tracker_url = RMM_TRACKER_URL.rstrip('/')
+        gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+    tracker_url_fallback = 'https://tracker.cirquetools.com'
+    gateway_url_fallback = 'wss://rmm.cirquetools.com'
     site_token  = expected
 
     ps1 = open(ps1_src, encoding='utf-8-sig').read()
@@ -652,9 +594,11 @@ def download_site_install_ps1():
     header = (
         "# Cirque RMM Agent - auto-configured by tracker server\n"
         "# Run as Administrator. Logs: C:\\CirqueRMM\\logs\\setup.log\n"
-        f"$SiteToken   = '{site_token}'\n"
-        f"$TrackerUrl  = '{tracker_url}'\n"
-        f"$GatewayUrl  = '{gateway_url}'\n"
+        f"$SiteToken          = '{site_token}'\n"
+        f"$TrackerUrl         = '{tracker_url}'\n"
+        f"$TrackerUrlFallback = '{tracker_url_fallback}'\n"
+        f"$GatewayUrl         = '{gateway_url}'\n"
+        f"$GatewayUrlFallback = '{gateway_url_fallback}'\n"
         "$Token       = ''\n"
         "$InstallDir  = 'C:\\CirqueRMM'\n"
         "$NssmPath    = 'C:\\Program Files\\NSSM\\nssm.exe'\n"

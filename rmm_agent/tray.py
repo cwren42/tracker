@@ -61,6 +61,29 @@ def _load_config() -> dict:
         return {}
 
 
+_LAN_TRACKER = 'https://tracker.corp.cirque.com'
+_LAN_RMM     = 'rmm.corp.cirque.com'
+
+
+def _resolve_tracker_url(config: dict) -> str:
+    """Return the best available tracker URL.
+
+    Probes the LAN hostname on each call so laptops that move between the
+    office (or VPN) and external networks always hit the right endpoint,
+    regardless of what URL was in the config when the tray process started.
+    """
+    import socket as _sock, ssl as _ssl
+    try:
+        ctx = _ssl.create_default_context()
+        with _sock.create_connection((_LAN_RMM, 443), timeout=2.0) as raw:
+            with ctx.wrap_socket(raw, server_hostname=_LAN_RMM):
+                return _LAN_TRACKER
+    except Exception:
+        pass
+    # LAN unreachable — fall back to whatever is stored in the config
+    return config.get('tracker_url', '').rstrip('/') or _LAN_TRACKER
+
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def _get_icon_image():
@@ -168,8 +191,10 @@ def _show_ticket_form(config: dict) -> None:
     import tkinter as tk
     from tkinter import ttk, messagebox
 
-    cfg = config
-    tracker_url = cfg.get('tracker_url', '').rstrip('/')
+    # Re-read config on every open so the tray picks up URL changes written
+    # by the agent (e.g. after the user moves between office LAN and remote).
+    cfg = _load_config() or config
+    tracker_url = _resolve_tracker_url(cfg)
     api_key     = cfg.get('tray_api_key', '')
     asset_id    = cfg.get('asset_id', '')
     hostname    = _get_hostname()
@@ -300,7 +325,7 @@ def _show_info_dialog(config: dict) -> None:
     import tkinter as tk
     from tkinter import ttk
 
-    cfg = config
+    cfg = _load_config() or config
     hostname  = _get_hostname()
     username  = _get_username()
     asset_tag = cfg.get('asset_tag', 'Unknown')
@@ -405,7 +430,6 @@ def main():
             sys.exit(0)  # still missing, give up silently
 
     config = _load_config()
-    tracker_url = config.get('tracker_url', 'https://10.15.0.53').rstrip('/')
     reboot = _pending_reboot()
 
     # Build menu
@@ -416,7 +440,7 @@ def main():
                          lambda icon, item: _run_in_thread(_show_ticket_form, config),
                          default=True),
         pystray.MenuItem('Open IT Portal',
-                         lambda icon, item: webbrowser.open(tracker_url)),
+                         lambda icon, item: webbrowser.open(_resolve_tracker_url(_load_config()))),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem('Computer Info',
                          lambda icon, item: _run_in_thread(_show_info_dialog, config)),

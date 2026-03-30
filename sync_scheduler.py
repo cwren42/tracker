@@ -30,9 +30,27 @@ UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/trac
 UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '5'))
 DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tmp/tracker_defender_vuln_sync.lock')
+DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
+DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
 PROXMOX_SYNC_LOCK_PATH = os.environ.get('TRACKER_PROXMOX_SYNC_LOCK_PATH', '/tmp/tracker_proxmox_sync.lock')
 PROXMOX_SYNC_INTERVAL_MINUTES = int(os.environ.get('PROXMOX_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_PROXMOX_SYNC = os.environ.get('DISABLE_PROXMOX_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
+BACKUP_SCHEDULER_LOCK_PATH = os.environ.get('TRACKER_BACKUP_SCHEDULER_LOCK_PATH', '/tmp/tracker_backup_scheduler.lock')
+BACKUP_SCHEDULER_INTERVAL_MINUTES = int(os.environ.get('BACKUP_SCHEDULER_INTERVAL_MINUTES', '60'))
+BACKUP_INCREMENTAL_INTERVAL_HOURS = int(os.environ.get('BACKUP_INCREMENTAL_INTERVAL_HOURS', '24'))
+DISABLE_BACKUP_SCHEDULER = os.environ.get('DISABLE_BACKUP_SCHEDULER', '').strip() in ('1', 'true', 'yes', 'on')
+
+# Throttle: max new *initial* (never-backed-up) full jobs triggered per scheduler cycle.
+# Prevents a fresh bulk policy assignment from flooding the NAS.
+BACKUP_MAX_INITIAL_PER_CYCLE = int(os.environ.get('BACKUP_MAX_INITIAL_PER_CYCLE', '3'))
+# Throttle: max full backup jobs (initial OR scheduled) allowed to be in 'running'
+# state at any one time before the scheduler pauses new triggers.
+BACKUP_MAX_CONCURRENT_FULL = int(os.environ.get('BACKUP_MAX_CONCURRENT_FULL', '5'))
+# Seconds to wait between successive backup triggers within a single scheduler cycle.
+BACKUP_TRIGGER_STAGGER_SECONDS = int(os.environ.get('BACKUP_TRIGGER_STAGGER_SECONDS', '30'))
 
 _scheduler = None
 
@@ -109,6 +127,20 @@ def start_sync_scheduler(flask_app):
             misfire_grace_time=60,
         )
 
+    if not DISABLE_DEFENDER_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_defender_vuln_sync_job(flask_app),
+            trigger='cron',
+            hour=DEFENDER_SYNC_HOUR,
+            minute=0,
+            id='defender_vuln_sync',
+            name='Daily Defender vulnerability sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
+        )
+
     if not DISABLE_PROXMOX_SYNC:
         _scheduler.add_job(
             func=lambda: run_proxmox_sync_job(flask_app),
@@ -120,6 +152,19 @@ def start_sync_scheduler(flask_app):
             max_instances=1,
             coalesce=True,
             misfire_grace_time=120,
+        )
+
+    if not DISABLE_BACKUP_SCHEDULER:
+        _scheduler.add_job(
+            func=lambda: run_backup_scheduler_job(flask_app),
+            trigger='interval',
+            minutes=max(BACKUP_SCHEDULER_INTERVAL_MINUTES, 5),
+            id='backup_scheduler',
+            name='Periodic RMM backup scheduler',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
         )
 
     _scheduler.start()
@@ -358,3 +403,179 @@ def run_proxmox_sync_job(flask_app_instance):
                 db.session.remove()
             except Exception:
                 pass
+
+
+def run_backup_scheduler_job(flask_app):
+    """Check all enabled agent backup policies and trigger backups that are due.
+
+    Runs every BACKUP_SCHEDULER_INTERVAL_MINUTES (default 60 min).
+
+    Throttling rules to protect the NAS and network:
+      - At most BACKUP_MAX_CONCURRENT_FULL full jobs may be *running* system-wide;
+        if that ceiling is reached the cycle exits early.
+      - At most BACKUP_MAX_INITIAL_PER_CYCLE *never-backed-up* agents are triggered
+        per cycle.  The rest are deferred to the next cycle, naturally staggering
+        the initial load across hours rather than seconds.
+      - BACKUP_TRIGGER_STAGGER_SECONDS sleep between successive triggers prevents
+        a simultaneous queue burst even within one cycle.
+    """
+    import time
+    import urllib.request, json as _json
+    from datetime import timedelta
+
+    with _file_lock(BACKUP_SCHEDULER_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.info('Backup scheduler skipped (lock held by another process)')
+            return
+
+    with flask_app.app_context():
+        try:
+            from app import db
+            from sqlalchemy import text
+
+            gateway_url = os.environ.get('RMM_GATEWAY_URL', 'http://127.0.0.1:8765')
+            now = datetime.now(timezone.utc)
+            incr_threshold = now - timedelta(hours=BACKUP_INCREMENTAL_INTERVAL_HOURS)
+
+            # ── 1. Check global concurrent full-backup pressure ───────────────────
+            running_full_count = db.session.execute(text("""
+                SELECT COUNT(*) FROM rmm_backup_job
+                WHERE status = 'running'
+                  AND job_type IN ('full', 'auto')
+            """)).scalar() or 0
+
+            if running_full_count >= BACKUP_MAX_CONCURRENT_FULL:
+                logger.info(
+                    'Backup scheduler: %d full jobs already running (limit %d) — skipping cycle',
+                    running_full_count, BACKUP_MAX_CONCURRENT_FULL
+                )
+                return
+
+            # ── 2. Fetch all enabled assignments ──────────────────────────────────
+            rows = db.session.execute(text("""
+                SELECT abp.agent_id, p.full_backup_interval_days
+                FROM rmm_agent_backup_policy abp
+                JOIN rmm_backup_policy p ON p.id = abp.policy_id
+                WHERE abp.enabled = true AND p.enabled = true
+                ORDER BY abp.agent_id
+            """)).fetchall()
+
+            initial_triggered_this_cycle = 0
+
+            for agent_id, full_interval_days in rows:
+
+                # Re-check running count each iteration — another worker could
+                # have started jobs while we loop.
+                if running_full_count >= BACKUP_MAX_CONCURRENT_FULL:
+                    logger.info(
+                        'Backup scheduler: hit concurrent full-backup ceiling (%d/%d), '
+                        'deferring remaining agents to next cycle',
+                        running_full_count, BACKUP_MAX_CONCURRENT_FULL
+                    )
+                    break
+
+                # Last successful backup for this agent
+                last = db.session.execute(text("""
+                    SELECT job_type, started_at
+                    FROM rmm_backup_job
+                    WHERE agent_id = :agent_id AND status = 'success'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                """), {'agent_id': agent_id}).fetchone()
+
+                if last is None:
+                    # ── Never backed up (initial backup) ─────────────────────────
+                    # Enforce per-cycle initial cap to avoid NAS flooding when a
+                    # policy is bulk-assigned to many workstations at once.
+                    if initial_triggered_this_cycle >= BACKUP_MAX_INITIAL_PER_CYCLE:
+                        logger.debug(
+                            'Backup scheduler: initial cap (%d) reached — '
+                            'deferring %s to next cycle',
+                            BACKUP_MAX_INITIAL_PER_CYCLE, agent_id
+                        )
+                        continue
+
+                    # Also skip if agent already has a running job
+                    already_running = db.session.execute(text("""
+                        SELECT 1 FROM rmm_backup_job
+                        WHERE agent_id = :aid AND status = 'running'
+                        LIMIT 1
+                    """), {'aid': agent_id}).fetchone()
+                    if already_running:
+                        logger.debug('Backup scheduler: %s has a running job, skipping', agent_id)
+                        continue
+
+                    job_type = 'full'
+                    initial_triggered_this_cycle += 1
+                    running_full_count += 1  # optimistic increment
+                    logger.info('Backup scheduler: triggering INITIAL full for %s (%d/%d this cycle)',
+                                agent_id, initial_triggered_this_cycle, BACKUP_MAX_INITIAL_PER_CYCLE)
+
+                else:
+                    # ── Has prior backup — check if due ───────────────────────────
+                    last_ts = last.started_at
+                    if last_ts.tzinfo is None:
+                        last_ts = last_ts.replace(tzinfo=timezone.utc)
+                    if last_ts >= incr_threshold:
+                        logger.debug('Backup for %s is current (last: %s)', agent_id, last_ts)
+                        continue
+                    job_type = 'auto'  # agent decides full vs incremental
+
+                # ── 3. Send trigger via gateway ───────────────────────────────────
+                payload = _json.dumps({
+                    'type': 'backup_run',
+                    'job_type': job_type,
+                    'triggered_by': 'schedule',
+                }).encode()
+                try:
+                    req = urllib.request.Request(
+                        f"{gateway_url.rstrip('/')}/send-msg/{agent_id}",
+                        data=payload,
+                        headers={'Content-Type': 'application/json'},
+                        method='POST',
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        result = _json.loads(resp.read())
+                    logger.info('Backup triggered for %s (job_type=%s): %s', agent_id, job_type, result)
+                except Exception as e:
+                    logger.warning('Failed to trigger backup for %s: %s', agent_id, e)
+                    if job_type == 'full':
+                        running_full_count = max(0, running_full_count - 1)  # undo optimistic increment
+                    continue
+
+                # Stagger triggers within this cycle to avoid simultaneous NAS hits
+                if BACKUP_TRIGGER_STAGGER_SECONDS > 0:
+                    time.sleep(BACKUP_TRIGGER_STAGGER_SECONDS)
+
+        except Exception:
+            logger.exception('Backup scheduler job crashed')
+        finally:
+            try:
+                db.session.remove()
+            except Exception:
+                pass
+
+
+def run_defender_vuln_sync_job(flask_app):
+    """Run a Defender vulnerability sync once daily with a cross-process lock."""
+    with _file_lock(DEFENDER_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.info('Defender vuln sync skipped (lock held by another process)')
+            return
+
+        logger.info('Starting scheduled Defender vulnerability sync')
+        with flask_app.app_context():
+            try:
+                from alert_service import sync_defender_vulnerabilities
+                vc, dc, err = sync_defender_vulnerabilities()
+                if err:
+                    logger.error('Scheduled Defender vuln sync error: %s', err)
+                else:
+                    logger.info('Scheduled Defender vuln sync complete: %d CVEs, %d device exposures', vc, dc)
+            except Exception:
+                logger.exception('Scheduled Defender vuln sync crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass

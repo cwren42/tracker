@@ -237,6 +237,11 @@
     color: #79c0ff;
 }
 
+/* Prevent sidebar FOUC – applied by head script before first paint */
+html.sc-init #page-wrapper {
+    margin-left: var(--sidebar-collapsed-width);
+}
+
 body {
     min-height: 100vh;
     display: flex;
@@ -627,6 +632,7 @@ body {
     display: flex;
     flex-direction: row;
     min-height: 100vh;
+    overflow-x: hidden;
 }
 
 /* Sidebar */
@@ -806,6 +812,72 @@ body {
     padding: 10px 20px;
     font-size: 0.78rem;
     text-align: right;
+}
+
+/* Dark mode: offcanvas */
+.ai-issue-row {
+    background: #f8f9fa;
+}
+[data-theme="dark"] .ai-issue-row {
+    background: #21262d !important;
+    color: #c9d1d9 !important;
+}
+[data-theme="dark"] .ai-issue-row strong {
+    color: #e6edf3 !important;
+}
+[data-theme="dark"] .ai-issue-row .text-muted,
+[data-theme="dark"] .ai-issue-row div {
+    color: #8b949e !important;
+}
+[data-theme="dark"] .ai-issue-row strong {
+    color: #e6edf3 !important;
+}
+[data-theme="dark"] .offcanvas {
+    background-color: #1e2329;
+    color: #c9d1d9;
+    border-left: 1px solid #30363d;
+}
+[data-theme="dark"] .offcanvas-header {
+    background-color: #161b22;
+    border-bottom-color: #30363d;
+}
+[data-theme="dark"] .offcanvas-title {
+    color: #e6edf3;
+}
+[data-theme="dark"] .offcanvas .btn-close {
+    filter: invert(1) grayscale(1);
+}
+[data-theme="dark"] .offcanvas .border-bottom,
+[data-theme="dark"] .offcanvas .border-top {
+    border-color: #30363d !important;
+}
+[data-theme="dark"] .offcanvas small,
+[data-theme="dark"] .offcanvas .text-muted {
+    color: #8b949e !important;
+}
+[data-theme="dark"] .offcanvas .btn-outline-secondary {
+    color: #8b949e;
+    border-color: #30363d;
+}
+[data-theme="dark"] .offcanvas .btn-outline-secondary:hover {
+    background-color: #30363d;
+    color: #e6edf3;
+}
+[data-theme="dark"] .offcanvas .btn-outline-primary {
+    color: #58a6ff;
+    border-color: #58a6ff;
+}
+[data-theme="dark"] .offcanvas .btn-outline-primary:hover {
+    background-color: #58a6ff;
+    color: #0d1117;
+}
+[data-theme="dark"] .offcanvas .btn-outline-danger {
+    color: #f85149;
+    border-color: #f85149;
+}
+[data-theme="dark"] .offcanvas .btn-outline-danger:hover {
+    background-color: #f85149;
+    color: #fff;
 }
 
 /* Mobile: sidebar becomes overlay */

@@ -11,6 +11,11 @@ $AgentPy   = "$AgentDir\agent_client.py"
 $AgentOld  = "$AgentPy.old"
 $ServiceName = "CirqueRMM"
 
+# Find NSSM — bundled copy takes priority
+$NssmExe = if (Test-Path "$AgentDir\nssm.exe") { "$AgentDir\nssm.exe" }
+           elseif (Test-Path "C:\Program Files\NSSM\nssm.exe") { "C:\Program Files\NSSM\nssm.exe" }
+           else { "nssm" }
+
 Write-Host "[repair] Cirque RMM Agent Self-Repair" -ForegroundColor Cyan
 Write-Host "[repair] Agent dir: $AgentDir"
 
@@ -50,9 +55,10 @@ if ($currentOK) {
         # Read environment variables from NSSM service (they contain the credentials)
         $nssmEnv = @{}
         try {
-            $envBlock = & nssm get $ServiceName AppEnvironmentExtra 2>&1
-            $envBlock -split "`n" | ForEach-Object {
-                if ($_ -match "^(RMM_\w+)=(.+)$") { $nssmEnv[$Matches[1]] = $Matches[2] }
+            $envBlock = & $NssmExe get $ServiceName AppEnvironmentExtra 2>&1
+            ($envBlock -join "`n") -split "`n" | ForEach-Object {
+                $trimmed = $_.Trim()
+                if ($trimmed -match "^(RMM_\w+)=(.+)$") { $nssmEnv[$Matches[1]] = $Matches[2].Trim() }
             }
         } catch {}
 
@@ -62,21 +68,34 @@ if ($currentOK) {
 
         if ($agentId -and $token) {
             try {
-                $fileUrl = "$trackerUrl/rmm/agent/file?agent_id=$agentId&token=$token"
-                Write-Host "[repair] Downloading from $fileUrl" -ForegroundColor Cyan
                 $webClient = New-Object System.Net.WebClient
                 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+                $fileUrl = "$trackerUrl/rmm/agent/file?agent_id=$agentId&token=$token"
+                Write-Host "[repair] Downloading agent_client.py from $fileUrl" -ForegroundColor Cyan
                 $webClient.DownloadFile($fileUrl, "$AgentPy.dl")
 
                 $result = & python -c "import ast, sys; ast.parse(open(sys.argv[1],'rb').read()); print('OK')" "$AgentPy.dl" 2>&1
                 if ($result -eq "OK") {
                     Copy-Item -Path "$AgentPy.old" -Destination "$AgentPy.bak" -Force -ErrorAction SilentlyContinue
                     Copy-Item -Path "$AgentPy.dl"  -Destination $AgentPy -Force
-                    Write-Host "[repair] Fresh copy downloaded and installed" -ForegroundColor Green
+                    Write-Host "[repair] agent_client.py updated" -ForegroundColor Green
                 } else {
                     Write-Host "[repair] Downloaded file also invalid — cannot repair automatically" -ForegroundColor Red
                     Remove-Item "$AgentPy.dl" -ErrorAction SilentlyContinue
                     exit 1
+                }
+
+                # Also update agent_launcher.py
+                $LauncherPy  = "$AgentDir\agent_launcher.py"
+                $launcherUrl = "$trackerUrl/rmm/agent/launcher?agent_id=$agentId&token=$token"
+                Write-Host "[repair] Downloading agent_launcher.py from $launcherUrl" -ForegroundColor Cyan
+                try {
+                    $webClient.DownloadFile($launcherUrl, "$LauncherPy.dl")
+                    Move-Item -Path "$LauncherPy.dl" -Destination $LauncherPy -Force
+                    Write-Host "[repair] agent_launcher.py updated" -ForegroundColor Green
+                } catch {
+                    Write-Host "[repair] launcher update skipped: $_" -ForegroundColor Yellow
                 }
             } catch {
                 Write-Host "[repair] Download failed: $_" -ForegroundColor Red
@@ -95,11 +114,11 @@ if ($currentOK) {
 # ---- Step 4: Restart the NSSM service ----
 Write-Host "[repair] Restarting $ServiceName service..." -ForegroundColor Cyan
 try {
-    & nssm stop  $ServiceName
+    sc.exe stop $ServiceName 2>$null
     Start-Sleep -Seconds 3
-    & nssm start $ServiceName
+    & $NssmExe start $ServiceName
     Start-Sleep -Seconds 5
-    $status = & nssm status $ServiceName
+    $status = & $NssmExe status $ServiceName
     Write-Host "[repair] Service status: $status" -ForegroundColor $(if ($status -eq "SERVICE_RUNNING") { "Green" } else { "Yellow" })
 } catch {
     Write-Host "[repair] Service restart failed: $_" -ForegroundColor Red

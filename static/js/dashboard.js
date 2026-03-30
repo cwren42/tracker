@@ -282,9 +282,8 @@ function addWidgetToDashboard(widgetId, widgetType, widgetSize, widgetHeight) {
     input.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
 })();
 
-  // ── Live status SSE ──────────────────────────────────────────────────────
+  // ── Live status polling ───────────────────────────────────────────────────
   (function() {
-    if (!window.EventSource) return;
     const fields = {
       online:       '[data-live="online"]',
       offline:      '[data-live="offline"]',
@@ -292,18 +291,18 @@ function addWidgetToDashboard(widgetId, widgetType, widgetSize, widgetHeight) {
       open_alerts:  '[data-live="open_alerts"]',
       crit_cves:    '[data-live="crit_cves"]',
     };
-    function connect() {
-      const es = new EventSource('/api/dashboard/live-status');
-      es.onmessage = function(e) {
-        try {
-          const d = JSON.parse(e.data);
+    function poll() {
+      fetch('/api/dashboard/live-status')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!d) return;
           for (const [key, sel] of Object.entries(fields)) {
             const el = document.querySelector(sel);
             if (el && d[key] !== undefined) el.textContent = d[key];
           }
-        } catch(_) {}
-      };
-      es.onerror = function() { es.close(); setTimeout(connect, 30000); };
+        })
+        .catch(() => {});
     }
-    connect();
+    poll();
+    setInterval(poll, 15000);
   })();

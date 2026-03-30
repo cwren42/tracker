@@ -19,7 +19,8 @@ from models import (
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
-    ProfileCheck, AssetMonitoringProfile,
+    ProfileCheck, AssetMonitoringProfile, RmmBackupJob,
+    RmmBackupPolicy, RmmAgentBackupPolicy,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
@@ -179,11 +180,354 @@ def monitoring_profile_detail(profile_id):
     ).filter(
         AssetMonitoringProfile.c.profile_id == profile_id
     ).all()
-    
-    return render_template('monitoring_profile_detail.html',
-                         profile=profile,
-                         checks=checks,
-                         assets=assets)
+
+    # Get active alerts for assets in this profile
+    asset_ids = [a.id for a in assets]
+    active_alerts = []
+    if asset_ids:
+        active_alerts = MonitoringAlert.query.filter(
+            MonitoringAlert.asset_id.in_(asset_ids),
+            MonitoringAlert.status.in_(['active', 'open', 'acknowledged'])
+        ).order_by(MonitoringAlert.triggered_at.desc()).limit(100).all()
+
+    # For Windows profiles, get backup policy data
+    backup_policies = []
+    asset_backup_info = {}
+    if profile.os_family == 'Windows' and asset_ids:
+        backup_policies = RmmBackupPolicy.query.filter_by(enabled=True).order_by(RmmBackupPolicy.name).all()
+        try:
+            rows = db.session.execute(text("""
+                SELECT ra.asset_id, ra.agent_id,
+                       abp.policy_id, abp.enabled AS backup_enabled,
+                       p.name AS policy_name
+                FROM rmm_agent ra
+                LEFT JOIN rmm_agent_backup_policy abp ON abp.agent_id = ra.agent_id
+                LEFT JOIN rmm_backup_policy p ON p.id = abp.policy_id
+                WHERE ra.asset_id = ANY(:aids) AND ra.enabled = true
+            """), {'aids': asset_ids}).mappings().fetchall()
+            for row in rows:
+                asset_backup_info[row['asset_id']] = dict(row)
+        except Exception as ex:
+            logger.warning(f'Could not load backup data for profile {profile_id}: {ex}')
+
+    # Checks NOT yet in this profile, for the "Add Check" modal\n    existing_check_ids = [item['check'].id for item in checks]\n    available_checks = MonitoringCheck.query.filter(\n        MonitoringCheck.enabled == True,\n        ~MonitoringCheck.id.in_(existing_check_ids) if existing_check_ids else True\n    ).order_by(MonitoringCheck.name).all()\n\n    # Count assets matching this profile's device_type/os_family that are not yet assigned\n    unassigned_query = db.session.query(Asset).outerjoin(\n        AssetMonitoringProfile, Asset.id == AssetMonitoringProfile.c.asset_id\n    ).filter(AssetMonitoringProfile.c.profile_id == None)\n    if profile.device_type:\n        unassigned_query = unassigned_query.filter(Asset.category.ilike(f'%{profile.device_type}%'))\n    unassigned_count = unassigned_query.count()\n\n    return render_template('monitoring_profile_detail.html',\n                         profile=profile,\n                         checks=checks,\n                         assets=assets,\n                         active_alerts=active_alerts,\n                         backup_policies=backup_policies,\n                         asset_backup_info=asset_backup_info,\n                         available_checks=available_checks,\n                         unassigned_count=unassigned_count)
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/bulk-assign-assets', methods=['POST'])
+@login_required
+def monitoring_profile_bulk_assign_assets(profile_id):
+    """Bulk-assign all unassigned matching assets to this profile"""
+    profile = MonitoringProfile.query.get_or_404(profile_id)
+    overwrite = request.form.get('overwrite') == '1'
+
+    try:
+        # Build query: assets matching device_type, optionally already-assigned ones too
+        q = db.session.query(Asset)
+        if profile.device_type:
+            q = q.filter(Asset.category.ilike(f'%{profile.device_type}%'))
+
+        if not overwrite:
+            # Only unassigned assets
+            assigned_ids = db.session.query(AssetMonitoringProfile.c.asset_id).subquery()
+            q = q.filter(~Asset.id.in_(assigned_ids))
+
+        assets_to_assign = q.all()
+
+        assigned = 0
+        for asset in assets_to_assign:
+            if overwrite:
+                db.session.execute(
+                    AssetMonitoringProfile.delete().where(
+                        AssetMonitoringProfile.c.asset_id == asset.id
+                    )
+                )
+            db.session.execute(
+                AssetMonitoringProfile.insert().values(
+                    asset_id=asset.id,
+                    profile_id=profile_id,
+                    assigned_by=current_user.id,
+                )
+            )
+            assigned += 1
+
+        db.session.commit()
+        flash(f'Assigned {assigned} asset(s) to profile "{profile.name}"', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error bulk-assigning assets to profile {profile_id}: {e}')
+        flash('Error assigning assets', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/add-check', methods=['POST'])
+@login_required
+def monitoring_profile_add_check(profile_id):
+    """Add a monitoring check to a profile with optional custom thresholds"""
+    MonitoringProfile.query.get_or_404(profile_id)
+    check_id = request.form.get('check_id', type=int)
+    warning = request.form.get('warning_threshold', '').strip() or None
+    critical = request.form.get('critical_threshold', '').strip() or None
+    interval_override = request.form.get('interval_override', type=int) or None
+
+    if not check_id:
+        flash('Please select a check', 'warning')
+        return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+    MonitoringCheck.query.get_or_404(check_id)
+
+    try:
+        # Upsert: remove existing entry first, then insert fresh
+        db.session.execute(
+            ProfileCheck.delete().where(
+                (ProfileCheck.c.profile_id == profile_id) &
+                (ProfileCheck.c.check_id == check_id)
+            )
+        )
+        db.session.execute(
+            ProfileCheck.insert().values(
+                profile_id=profile_id,
+                check_id=check_id,
+                enabled=True,
+                warning_threshold=warning,
+                critical_threshold=critical,
+                check_interval_override=interval_override,
+            )
+        )
+        db.session.commit()
+        flash('Check added to profile', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error adding check to profile {profile_id}: {e}')
+        flash('Error adding check', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/remove-check/<int:check_id>', methods=['POST'])
+@login_required
+def monitoring_profile_remove_check(profile_id, check_id):
+    """Remove a monitoring check from a profile"""
+    MonitoringProfile.query.get_or_404(profile_id)
+    try:
+        db.session.execute(
+            ProfileCheck.delete().where(
+                (ProfileCheck.c.profile_id == profile_id) &
+                (ProfileCheck.c.check_id == check_id)
+            )
+        )
+        db.session.commit()
+        flash('Check removed from profile', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error removing check from profile {profile_id}: {e}')
+        flash('Error removing check', 'danger')
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/assign-existing-backup-policy', methods=['POST'])
+@login_required
+def monitoring_profile_bulk_assign_backup(profile_id):
+    """Bulk-assign an existing backup policy to all enrolled agents in this profile"""
+    MonitoringProfile.query.get_or_404(profile_id)
+    policy_id = request.form.get('policy_id', type=int)
+
+    if not policy_id:
+        flash('Please select a backup policy', 'warning')
+        return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+    policy = RmmBackupPolicy.query.get_or_404(policy_id)
+
+    try:
+        assets = db.session.query(Asset).join(
+            AssetMonitoringProfile, Asset.id == AssetMonitoringProfile.c.asset_id
+        ).filter(AssetMonitoringProfile.c.profile_id == profile_id).all()
+        asset_ids = [a.id for a in assets]
+
+        if not asset_ids:
+            flash('No assets in this profile', 'warning')
+            return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+        agent_rows = db.session.execute(
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = ANY(:aids) AND enabled = true"),
+            {'aids': asset_ids}
+        ).fetchall()
+
+        assigned = 0
+        for (agent_id,) in agent_rows:
+            existing = RmmAgentBackupPolicy.query.filter_by(agent_id=agent_id).first()
+            if existing:
+                existing.policy_id = policy_id
+                existing.enabled = True
+                existing.updated_at = datetime.utcnow()
+            else:
+                db.session.add(RmmAgentBackupPolicy(
+                    agent_id=agent_id,
+                    policy_id=policy_id,
+                    enabled=True,
+                ))
+            assigned += 1
+
+        db.session.commit()
+        flash(f'Policy "{policy.name}" assigned to {assigned} agent(s)', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error bulk-assigning backup policy for profile {profile_id}: {e}')
+        flash('Error assigning backup policy', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/create-backup-policy', methods=['POST'])
+@login_required
+def monitoring_profile_create_backup_policy(profile_id):
+    """Quick-create a backup policy and optionally assign to all Windows agents in this profile"""
+    MonitoringProfile.query.get_or_404(profile_id)
+    name = request.form.get('policy_name', '').strip()
+    nas_unc = request.form.get('nas_unc_path', '').strip()
+    retention = request.form.get('retention_days', type=int) or 30
+    full_interval = request.form.get('full_backup_interval_days', type=int) or 7
+    assign_all = request.form.get('assign_all') == '1'
+
+    if not name or not nas_unc:
+        flash('Policy name and NAS UNC path are required', 'warning')
+        return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+    try:
+        import json as _json
+        policy = RmmBackupPolicy(
+            name=name,
+            nas_unc_path=nas_unc,
+            retention_days=retention,
+            full_backup_interval_days=full_interval,
+            enabled=True,
+            include_paths=_json.dumps(['C:\\Users']),
+            exclude_extensions=_json.dumps(['.tmp', '.log', '.iso', '.vhd', '.vmdk', '.vhdx']),
+            exclude_folders=_json.dumps(['node_modules', '.git', '$RECYCLE.BIN', 'Windows',
+                                         'Program Files', 'Program Files (x86)']),
+        )
+        db.session.add(policy)
+        db.session.flush()  # get policy.id
+
+        if assign_all:
+            # Find all RMM agents for assets in this profile
+            assets = db.session.query(Asset).join(
+                AssetMonitoringProfile, Asset.id == AssetMonitoringProfile.c.asset_id
+            ).filter(AssetMonitoringProfile.c.profile_id == profile_id).all()
+            asset_ids = [a.id for a in assets]
+            if asset_ids:
+                agent_rows = db.session.execute(
+                    text("SELECT agent_id FROM rmm_agent WHERE asset_id = ANY(:aids) AND enabled = true"),
+                    {'aids': asset_ids}
+                ).fetchall()
+                for (agent_id,) in agent_rows:
+                    existing = RmmAgentBackupPolicy.query.filter_by(agent_id=agent_id).first()
+                    if existing:
+                        existing.policy_id = policy.id
+                        existing.enabled = True
+                    else:
+                        db.session.add(RmmAgentBackupPolicy(
+                            agent_id=agent_id,
+                            policy_id=policy.id,
+                            enabled=True,
+                        ))
+
+        db.session.commit()
+        flash(f'Backup policy "{name}" created' + (' and assigned to all agents in this profile' if assign_all else ''), 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error creating backup policy for profile {profile_id}: {e}')
+        flash('Error creating backup policy', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/add-alert', methods=['POST'])
+@login_required
+def monitoring_profile_add_alert(profile_id):
+    """Manually create a monitoring alert for an asset in this profile"""
+    profile = MonitoringProfile.query.get_or_404(profile_id)
+    asset_id = request.form.get('asset_id', type=int)
+    severity = request.form.get('severity', 'warning')
+    message = request.form.get('message', '').strip()
+
+    if not asset_id or not message:
+        flash('Asset and message are required', 'warning')
+        return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+    if severity not in ('info', 'warning', 'critical'):
+        severity = 'warning'
+
+    asset = Asset.query.get_or_404(asset_id)
+
+    try:
+        alert = MonitoringAlert(
+            asset_id=asset_id,
+            severity=severity,
+            status='active',
+            message=message,
+            triggered_at=datetime.utcnow(),
+        )
+        db.session.add(alert)
+        db.session.commit()
+        flash(f'Alert created for {asset.name}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error creating alert for profile {profile_id}: {e}')
+        flash('Error creating alert', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+
+@bp.route('/monitoring/profile/<int:profile_id>/assign-backup-policy', methods=['POST'])
+@login_required
+def monitoring_profile_assign_backup(profile_id):
+    """Assign a backup policy to an asset (via its RMM agent) from the profile detail page"""
+    profile = MonitoringProfile.query.get_or_404(profile_id)
+    asset_id = request.form.get('asset_id', type=int)
+    policy_id = request.form.get('policy_id', type=int) or None
+
+    if not asset_id:
+        flash('Asset is required', 'warning')
+        return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+    try:
+        row = db.session.execute(
+            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
+            {'aid': asset_id}
+        ).fetchone()
+
+        if not row:
+            flash('No RMM agent found for this asset. Make sure the agent is enrolled.', 'warning')
+            return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
+
+        agent_id = row[0]
+        existing = RmmAgentBackupPolicy.query.filter_by(agent_id=agent_id).first()
+        if existing:
+            existing.policy_id = policy_id
+            existing.enabled = True
+            existing.updated_at = datetime.utcnow()
+        else:
+            existing = RmmAgentBackupPolicy(
+                agent_id=agent_id,
+                policy_id=policy_id,
+                enabled=True,
+            )
+            db.session.add(existing)
+
+        db.session.commit()
+        asset = Asset.query.get(asset_id)
+        if policy_id:
+            policy_name = RmmBackupPolicy.query.get(policy_id).name if policy_id else 'None'
+            flash(f'Backup policy "{policy_name}" assigned to {asset.name}', 'success')
+        else:
+            flash(f'Backup policy removed from {asset.name}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error assigning backup policy for profile {profile_id}: {e}')
+        flash('Error assigning backup policy', 'danger')
+
+    return redirect(url_for('monitoring.monitoring_profile_detail', profile_id=profile_id))
 
 
 @bp.route('/agent/download')
@@ -403,6 +747,28 @@ def backups():
         'missing_vms': sum(1 for j in jobs if j.backup_status == 'missing'),
     }
 
+    # Windows agent backup jobs (last 100)
+    win_jobs_raw = db.session.execute(text("""
+        SELECT bj.id, bj.agent_id, bj.job_type, bj.status,
+               bj.started_at, bj.completed_at,
+               bj.files_copied, bj.files_skipped, bj.files_failed,
+               bj.bytes_transferred, bj.snapshot_path, bj.triggered_by,
+               COALESCE(a.name, bj.agent_id) AS asset_name, a.id AS asset_id
+        FROM rmm_backup_job bj
+        LEFT JOIN rmm_agent ra ON ra.agent_id = bj.agent_id
+        LEFT JOIN asset a ON a.id = ra.asset_id
+        ORDER BY bj.started_at DESC
+        LIMIT 100
+    """)).mappings().fetchall()
+    win_jobs = [dict(r) for r in win_jobs_raw]
+
+    win_summary = {
+        'total': len(win_jobs),
+        'success': sum(1 for j in win_jobs if j['status'] == 'success'),
+        'running': sum(1 for j in win_jobs if j['status'] == 'running'),
+        'failed': sum(1 for j in win_jobs if j['status'] == 'failed'),
+    }
+
     return render_template(
         'backups.html',
         pools=pools, jobs=jobs,
@@ -411,6 +777,8 @@ def backups():
         cluster_configured=cluster_configured,
         last_sync=last_sync,
         now=datetime.utcnow(),
+        win_jobs=win_jobs,
+        win_summary=win_summary,
     )
 
 

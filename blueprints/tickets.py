@@ -408,7 +408,6 @@ def reopen_ticket(ticket_id):
 
 
 @bp.route('/api/support-tickets', methods=['POST'])
-@license_required
 @require_api_key('create_tickets')
 def api_create_support_ticket():
     payload = request.get_json(silent=True) or {}

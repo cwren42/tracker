@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import secrets
 import subprocess
 import threading
 import time as _time
@@ -14,8 +15,8 @@ import requests
 from werkzeug.utils import secure_filename
 
 from flask import (Blueprint, abort, current_app, flash, g, jsonify,
-                   redirect, render_template, request, send_file, session,
-                   url_for)
+                   make_response, redirect, render_template, request,
+                   send_file, session, url_for)
 from flask_login import current_user, login_required
 from sqlalchemy import func, or_, text
 
@@ -57,8 +58,33 @@ from ssh_terminal_manager import get_ssh_manager
 
 
 RMM_GATEWAY_INTERNAL = os.environ.get('RMM_GATEWAY_INTERNAL', 'http://127.0.0.1:8765')
-RMM_GATEWAY_PUBLIC   = os.environ.get('RMM_GATEWAY_URL', 'wss://rmm.corp.cirque.com')
+# LAN URL uses the internal Cirque Corp CA cert (trusted by domain-joined machines).
+# Public URL uses Cloudflare (valid for all browsers, including off-network).
+RMM_GATEWAY_PUBLIC   = os.environ.get('RMM_GATEWAY_URL', 'wss://rmm.cirquetools.com')
+RMM_GATEWAY_LAN      = os.environ.get('RMM_GATEWAY_URL_LAN', 'wss://rmm.corp.cirque.com')
 RMM_TRACKER_URL      = os.environ.get('RMM_TRACKER_URL', 'https://tracker.corp.cirque.com')
+
+# RFC-1918 prefixes that indicate a LAN client
+_LAN_PREFIXES = ('10.', '172.16.', '172.17.', '172.18.', '172.19.',
+                 '172.20.', '172.21.', '172.22.', '172.23.', '172.24.',
+                 '172.25.', '172.26.', '172.27.', '172.28.', '172.29.',
+                 '172.30.', '172.31.', '192.168.', '127.')
+
+
+def _gateway_url_for_request():
+    """Return the WebSocket gateway URL for browser clients.
+    LAN clients (RFC-1918 source IPs) use rmm.corp.cirque.com — the cert is issued
+    by the Cirque Corp CA which domain-joined machines trust.
+    External / off-network clients fall back to the Cloudflare public URL.
+    """
+    client_ip = (
+        request.headers.get('X-Real-IP') or
+        request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
+        request.remote_addr or ''
+    )
+    if any(client_ip.startswith(p) for p in _LAN_PREFIXES):
+        return RMM_GATEWAY_LAN
+    return RMM_GATEWAY_PUBLIC
 
 
 # ── Eagle Eyes ────────────────────────────────────────────────────────────────
@@ -642,10 +668,14 @@ def rmm_agent_heartbeat():
 
     now_iso = datetime.utcnow().isoformat(timespec='seconds')
 
-    # Touch last_seen_at
+    # Touch last_seen_at on rmm_agent and last_seen on rmm_telemetry
     try:
         db.session.execute(
             text("UPDATE rmm_agent SET last_seen_at = NOW() WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        )
+        db.session.execute(
+            text("UPDATE rmm_telemetry SET last_seen = NOW() WHERE agent_id = :aid"),
             {'aid': agent_id}
         )
         db.session.commit()
@@ -775,11 +805,15 @@ def rmm_agent_command_result():
 @bp.route('/api/rmm/admin/send-command', methods=['POST'])
 @login_required
 def api_rmm_send_command():
-    """Queue a control or shell command for an agent.
+    """Send a control or shell command to an agent.
 
     Body: {agent_id, command, command_type}
     command_type = 'control'  -> action word: force_update | restart | reinstall
     command_type = 'shell'    -> arbitrary PowerShell/cmd string (agent executes + returns result)
+
+    Strategy: try the WebSocket gateway first (immediate delivery). If the agent
+    is not connected to the gateway, fall back to the rmm_commands queue (picked
+    up on the agent's next 5-min heartbeat).
     """
     if current_user.role != 'admin':
         return jsonify(ok=False, error='Admin required'), 403
@@ -797,6 +831,39 @@ def api_rmm_send_command():
     if command_type in ('shell', 'powershell') and len(command) > 2000:
         return jsonify(ok=False, error='Command too long'), 400
 
+    # --- Try WebSocket gateway first (immediate) ---
+    # Map shell commands and control actions to the appropriate gateway message type.
+    gateway_ok = False
+    try:
+        import urllib.request as _ur, json as _json, ssl as _ssl
+        gw_url = 'http://127.0.0.1:8765/send-msg/' + agent_id
+
+        if command_type in ('shell', 'powershell'):
+            gw_payload = {'type': 'run_script', 'shell': 'powershell', 'code': command, 'session_id': 0}
+        else:
+            # control: force_update / restart / reinstall -> power_action restart,
+            # or a dedicated control message understood by the launcher.
+            # Use power_action for restart; queue the rest (launcher handles on heartbeat).
+            if command == 'restart':
+                gw_payload = {'type': 'power_action', 'action': 'restart', 'session_id': 0}
+            else:
+                gw_payload = None  # force_update / reinstall still go via queue
+
+        if gw_payload:
+            body = _json.dumps(gw_payload).encode()
+            req = _ur.Request(gw_url, data=body,
+                              headers={'Content-Type': 'application/json'},
+                              method='POST')
+            with _ur.urlopen(req, timeout=3) as r:
+                resp = _json.loads(r.read())
+            gateway_ok = resp.get('ok', False)
+    except Exception:
+        gateway_ok = False
+
+    if gateway_ok:
+        return jsonify(ok=True, delivered='websocket')
+
+    # --- Fallback: queue in rmm_commands (picked up on next heartbeat) ---
     try:
         db.session.execute(
             text("""INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at)
@@ -808,7 +875,7 @@ def api_rmm_send_command():
         db.session.rollback()
         return jsonify(ok=False, error=str(e)), 500
 
-    return jsonify(ok=True)
+    return jsonify(ok=True, delivered='queue')
 
 
 @bp.route('/api/rmm/admin/agent-version', methods=['GET', 'POST'])
@@ -940,7 +1007,7 @@ def api_rmm_issue_token():
     return jsonify({
         'token': token,
         'agent_id': agent_id,
-        'gateway_url': RMM_GATEWAY_PUBLIC,
+        'gateway_url': _gateway_url_for_request(),
         'expires_at': expires_at,
     })
 
@@ -955,12 +1022,14 @@ def rmm_terminal(agent_id):
     ), {'aid': agent_id}).fetchone()
     asset_name = row[0] if row else agent_id
     asset_id   = row[1] if row else None
-    return render_template('rmm_terminal.html',
+    resp = make_response(render_template('rmm_terminal.html',
         agent_id=agent_id,
         asset_name=asset_name,
         asset_id=asset_id,
-        gateway_url=RMM_GATEWAY_PUBLIC,
-    )
+        gateway_url=_gateway_url_for_request(),
+    ))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
 
 
 @bp.route('/api/rmm/telemetry/<agent_id>')
@@ -1003,31 +1072,37 @@ def api_rmm_eagle_eyes(agent_id):
     import json as _json
     if request.method == 'GET':
         row = db.session.execute(
-            text("SELECT enabled, screenshot_interval_min FROM rmm_eagle_config WHERE agent_id = :aid"),
+            text("SELECT enabled, screenshot_interval_min, screenshots_enabled FROM rmm_eagle_config WHERE agent_id = :aid"),
             {'aid': agent_id}
         ).fetchone()
         if row:
-            return jsonify({'ok': True, 'enabled': bool(row[0]), 'screenshot_interval_min': row[1]})
-        return jsonify({'ok': True, 'enabled': False, 'screenshot_interval_min': 30})
+            return jsonify({'ok': True, 'enabled': bool(row[0]), 'screenshot_interval_min': row[1], 'screenshots_enabled': bool(row[2])})
+        return jsonify({'ok': True, 'enabled': False, 'screenshot_interval_min': 30, 'screenshots_enabled': True})
 
     # POST — update config and push to gateway
     data = request.get_json(force=True) or {}
-    enabled  = bool(data.get('enabled', False))
-    interval = int(data.get('screenshot_interval_min', 30))
+    enabled             = bool(data.get('enabled', False))
+    interval            = int(data.get('screenshot_interval_min', 30))
+    screenshots_enabled = bool(data.get('screenshots_enabled', True))
     db.session.execute(
-        text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, updated_at)
-                VALUES (:aid, :en, :iv, NOW() - INTERVAL '7 hours')
+        text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, screenshots_enabled, updated_at)
+                VALUES (:aid, :en, :iv, :se, NOW() - INTERVAL '7 hours')
                 ON CONFLICT(agent_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     screenshot_interval_min = excluded.screenshot_interval_min,
+                    screenshots_enabled = excluded.screenshots_enabled,
                     updated_at = excluded.updated_at"""),
-        {'aid': agent_id, 'en': enabled, 'iv': interval}
+        {'aid': agent_id, 'en': enabled, 'iv': interval, 'se': screenshots_enabled}
     )
     db.session.commit()
     # Push config to connected agent via gateway
     try:
         import urllib.request as _ur
-        payload = _json.dumps({'enabled': enabled, 'screenshot_interval_min': interval}).encode()
+        payload = _json.dumps({
+            'enabled': enabled,
+            'screenshot_interval_min': interval,
+            'screenshots_enabled': screenshots_enabled,
+        }).encode()
         req = _ur.Request(
             f"{RMM_GATEWAY_INTERNAL}/eagle-eyes/{agent_id}/push",
             data=payload, headers={'Content-Type': 'application/json'}, method='POST',
@@ -1036,7 +1111,7 @@ def api_rmm_eagle_eyes(agent_id):
             _json.loads(r.read())
     except Exception:
         pass  # agent may not be connected; config is persisted so it applies on next connect
-    return jsonify({'ok': True, 'enabled': enabled, 'screenshot_interval_min': interval})
+    return jsonify({'ok': True, 'enabled': enabled, 'screenshot_interval_min': interval, 'screenshots_enabled': screenshots_enabled})
 
 
 def _dt_iso(dt) -> str | None:
@@ -1105,7 +1180,7 @@ def api_rmm_eagle_events(agent_id):
 def api_rmm_eagle_app_summary(agent_id):
     """Return total time per process for the requested day range."""
     date_clause, date_params = _eagle_date_params(default_days=7)
-    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
     # Use LATERAL joins so that for browser events, a window_title_pattern match
     # overrides the process-level classification (e.g. YouTube → unproductive
     # even though chrome → neutral).
@@ -1122,8 +1197,10 @@ def api_rmm_eagle_app_summary(agent_id):
                     SELECT sc.label, sc.productivity
                     FROM rmm_eagle_app_class sc
                     WHERE sc.window_title_pattern IS NOT NULL
+                      AND (sc.agent_id IS NULL OR sc.agent_id = :aid)
                       AND LOWER(e.process_name) IN {BROWSERS}
                       AND LOWER(COALESCE(e.window_title,'')) LIKE '%' || LOWER(sc.window_title_pattern) || '%'
+                    ORDER BY sc.agent_id NULLS LAST
                     LIMIT 1
                 ) site_cls ON true
                 LEFT JOIN LATERAL (
@@ -1156,7 +1233,7 @@ def api_rmm_eagle_app_summary(agent_id):
 def api_rmm_eagle_hourly(agent_id):
     """Return total active seconds per hour-of-day (0-23) grouped in server local time."""
     date_clause, date_params = _eagle_date_params(default_days=7)
-    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT CAST(EXTRACT(HOUR FROM (captured_at AT TIME ZONE 'America/Denver')) AS INTEGER) as hr,
                        SUM(COALESCE(duration_s, 0)) as total_s
@@ -1175,9 +1252,27 @@ def api_rmm_eagle_hourly(agent_id):
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/daily')
 @login_required
 def api_rmm_eagle_daily(agent_id):
-    """Return total active seconds per calendar day grouped in server local time."""
+    """Return total active seconds per calendar day grouped in server local time.
+    Always returns the full date series for the requested period (zeros for empty days)."""
+    from_date_arg = request.args.get('from_date', '').strip()
+    to_date_arg   = request.args.get('to_date', '').strip()
     date_clause, date_params = _eagle_date_params(default_days=30)
-    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
+
+    # Determine the full calendar range (America/Denver, DST-aware)
+    import zoneinfo as _zi
+    today_mt = datetime.now(_zi.ZoneInfo('America/Denver')).date()
+    if from_date_arg and to_date_arg:
+        try:
+            range_start = datetime.strptime(from_date_arg, '%Y-%m-%d').date()
+            range_end   = datetime.strptime(to_date_arg,   '%Y-%m-%d').date()
+        except ValueError:
+            range_start = range_end = today_mt
+    else:
+        days = int(request.args.get('days', 30))
+        range_start = today_mt - timedelta(days=days - 1)
+        range_end   = today_mt
+
     rows = db.session.execute(
         text(f"""SELECT CAST(captured_at AT TIME ZONE 'America/Denver' AS DATE) as day,
                        SUM(COALESCE(duration_s, 0)) as total_s
@@ -1188,7 +1283,18 @@ def api_rmm_eagle_daily(agent_id):
                 GROUP BY day ORDER BY day"""),
         {'aid': agent_id, **date_params}
     ).fetchall()
-    result = [{'day': str(r[0]), 'total_s': int(r[1] or 0)} for r in rows]
+
+    # Build lookup from DB results
+    db_map = {str(r[0]): int(r[1] or 0) for r in rows}
+
+    # Generate full series so the frontend always gets every day in the period
+    result = []
+    cur_day = range_start
+    while cur_day <= range_end:
+        day_str = str(cur_day)
+        result.append({'day': day_str, 'total_s': db_map.get(day_str, 0)})
+        cur_day += timedelta(days=1)
+
     return jsonify({'ok': True, 'daily': result})
 
 
@@ -1198,7 +1304,7 @@ def api_rmm_eagle_top_sites(agent_id):
     """Return top browser sites derived from window titles."""
     import re as _re_site
     date_clause, date_params = _eagle_date_params(default_days=7)
-    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 17" if request.args.get('work_hours') == '1' else ''
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
         text(f"""SELECT window_title, SUM(COALESCE(duration_s,0)) as total_s
                 FROM rmm_eagle_event
@@ -1225,6 +1331,33 @@ def api_rmm_eagle_top_sites(agent_id):
         agg[site] = agg.get(site, 0) + int(total_s or 0)
     result = sorted([{'site': k, 'total_s': v} for k, v in agg.items()], key=lambda x: -x['total_s'])[:15]
     return jsonify({'ok': True, 'sites': result})
+
+
+@bp.route('/api/rmm/eagle-eyes/fleet-app-suggestions')
+@login_required
+def api_eagle_fleet_app_suggestions():
+    """Return top unclassified process names seen across all agents in the last 7 days."""
+    rows = db.session.execute(
+        text(f"""
+            SELECT LOWER(e.process_name) AS process_name,
+                   COUNT(DISTINCT e.agent_id) AS agent_count,
+                   SUM(e.duration_s) AS total_s
+            FROM rmm_eagle_event e
+            WHERE e.captured_at > NOW() - INTERVAL '7 days'
+              AND e.process_name IS NOT NULL AND e.process_name != ''
+              {_EAGLE_SYSTEM_EXCL}
+              AND LOWER(e.process_name) NOT IN (
+                  SELECT LOWER(process_pattern)
+                  FROM rmm_eagle_app_class
+                  WHERE process_pattern IS NOT NULL
+              )
+            GROUP BY LOWER(e.process_name)
+            ORDER BY agent_count DESC, total_s DESC
+            LIMIT 40
+        """)
+    ).fetchall()
+    result = [{'process_name': r[0], 'agent_count': int(r[1] or 0), 'total_s': int(r[2] or 0)} for r in rows]
+    return jsonify(ok=True, suggestions=result)
 
 
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/screenshots')
@@ -1292,6 +1425,7 @@ def api_rmm_eagle_screenshot_download(shot_id):
 
 @bp.route('/rmm/eagle-eyes/<agent_id>')
 @login_required
+@eagle_eyes_required
 def rmm_eagle_eyes_dashboard(agent_id):
     """Eagle Eyes dashboard page for a specific agent."""
     row = db.session.execute(
@@ -1391,9 +1525,25 @@ def api_eagle_focus_sessions(agent_id):
 def api_eagle_app_classifications():
     if request.method == 'GET':
         try:
-            rows = db.session.execute(
-                text("SELECT id, process_pattern, label, productivity, created_at, window_title_pattern FROM rmm_eagle_app_class ORDER BY COALESCE(window_title_pattern, process_pattern)")
-            ).mappings().fetchall()
+            agent_id_filter = (request.args.get('agent_id') or '').strip() or None
+            if agent_id_filter:
+                # Return global app rules + this agent's site rules + global site rules
+                rows = db.session.execute(
+                    text("""
+                        SELECT id, process_pattern, label, productivity, created_at,
+                               window_title_pattern, agent_id
+                        FROM rmm_eagle_app_class
+                        WHERE window_title_pattern IS NULL
+                           OR (window_title_pattern IS NOT NULL AND agent_id = :aid)
+                           OR (window_title_pattern IS NOT NULL AND agent_id IS NULL)
+                        ORDER BY COALESCE(window_title_pattern, process_pattern)
+                    """),
+                    {'aid': agent_id_filter}
+                ).mappings().fetchall()
+            else:
+                rows = db.session.execute(
+                    text("SELECT id, process_pattern, label, productivity, created_at, window_title_pattern, agent_id FROM rmm_eagle_app_class ORDER BY COALESCE(window_title_pattern, process_pattern)")
+                ).mappings().fetchall()
             return jsonify(ok=True, classifications=[dict(r) for r in rows])
         except Exception as e:
             return jsonify(ok=False, error=str(e))
@@ -1403,19 +1553,36 @@ def api_eagle_app_classifications():
     label      = (data.get('label') or '').strip()
     prod       = (data.get('productivity') or 'neutral').strip()
     window_pat = (data.get('window_title_pattern') or '').strip().lower() or None
+    agent_id   = (data.get('agent_id') or '').strip() or None
     if not pattern and not window_pat:
         return jsonify(ok=False, error='process_pattern or window_title_pattern required')
     if prod not in ('productive', 'unproductive', 'neutral'):
         return jsonify(ok=False, error='Invalid productivity value')
     try:
         if window_pat:
-            # Site rule — unique key is window_title_pattern
-            db.session.execute(text("""
-                INSERT INTO rmm_eagle_app_class (process_pattern, label, productivity, created_at, window_title_pattern)
-                VALUES (:p, :l, :pr, :ca, :wp)
-                ON CONFLICT(window_title_pattern) WHERE window_title_pattern IS NOT NULL
-                DO UPDATE SET label=excluded.label, productivity=excluded.productivity, process_pattern=excluded.process_pattern
-            """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat(), 'wp': window_pat})
+            if agent_id:
+                # Per-agent site rule: delete existing then insert
+                db.session.execute(text("""
+                    DELETE FROM rmm_eagle_app_class
+                    WHERE window_title_pattern = :wp AND agent_id = :aid
+                """), {'wp': window_pat, 'aid': agent_id})
+                db.session.execute(text("""
+                    INSERT INTO rmm_eagle_app_class
+                           (process_pattern, label, productivity, created_at, window_title_pattern, agent_id)
+                    VALUES (:p, :l, :pr, :ca, :wp, :aid)
+                """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat(),
+                       'wp': window_pat, 'aid': agent_id})
+            else:
+                # Global site rule — unique key is window_title_pattern where agent_id IS NULL
+                db.session.execute(text("""
+                    INSERT INTO rmm_eagle_app_class
+                           (process_pattern, label, productivity, created_at, window_title_pattern)
+                    VALUES (:p, :l, :pr, :ca, :wp)
+                    ON CONFLICT(window_title_pattern)
+                    WHERE window_title_pattern IS NOT NULL AND agent_id IS NULL
+                    DO UPDATE SET label=excluded.label, productivity=excluded.productivity,
+                                  process_pattern=excluded.process_pattern
+                """), {'p': pattern, 'l': label, 'pr': prod, 'ca': datetime.utcnow().isoformat(), 'wp': window_pat})
         else:
             # Process rule — unique key is process_pattern
             db.session.execute(text("""
@@ -1559,7 +1726,8 @@ def api_eagle_fleet():
                 COALESCE(t.logged_in_user, '')           AS logged_in_user,
                 cur.process_name                         AS current_app,
                 cur.captured_at                          AS last_event,
-                ra.last_seen_at
+                ra.last_seen_at,
+                ec.screenshots_enabled
             FROM rmm_eagle_config ec
             LEFT JOIN rmm_telemetry t   ON t.agent_id  = ec.agent_id
             LEFT JOIN rmm_eagle_current cur ON cur.agent_id = ec.agent_id
@@ -1620,9 +1788,10 @@ def api_eagle_fleet():
                 'current_app':  a['current_app'] or '',
                 'last_event':   _dt_iso(last_event),
                 'last_seen':    _dt_iso(last_seen),
-                'online':       online,
-                'today_s':      today_map.get(aid, 0),
-                'top_app':      top_map.get(aid, ''),
+                'online':              online,
+                'today_s':             today_map.get(aid, 0),
+                'top_app':             top_map.get(aid, ''),
+                'screenshots_enabled': bool(a['screenshots_enabled']),
             })
         total_today_s = sum(r['today_s'] for r in result)
         online_count  = sum(1 for r in result if r['online'])
@@ -1635,14 +1804,15 @@ def api_eagle_fleet():
 
 @bp.route('/rmm/eagle-eyes/compare')
 @login_required
+@eagle_eyes_required
 def rmm_eagle_compare():
     agents = db.session.execute(
         text("""
             SELECT ec.agent_id, COALESCE(NULLIF(t.hostname,''), ec.agent_id) as hostname
-            FROM rmm_eagle_config ec
+                  FROM rmm_eagle_config ec
             LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
             WHERE ec.enabled = true
-            ORDER BY LOWER(COALESCE(NULLIF(t.hostname,''), ec.agent_id))
+              AND ec.agent_id NOT IN (SELECT agent_id FROM eagle_eyes_exclusions)
         """)
     ).mappings().fetchall()
     return render_template('compare_agents.html', agents=[dict(a) for a in agents])
@@ -1650,10 +1820,16 @@ def rmm_eagle_compare():
 
 @bp.route('/api/rmm/eagle-eyes/compare-data')
 @login_required
+@eagle_eyes_required
 def api_eagle_compare_data():
     agent_ids = request.args.get('agents','').split(',')
     agent_ids = [a.strip() for a in agent_ids if a.strip()]
     days      = int(request.args.get('days', 7))
+    if not agent_ids:
+        return jsonify(ok=False, error='No agents specified')
+    # Strip out any excluded agents (defence-in-depth)
+    excluded = {r[0] for r in db.session.execute(text('SELECT agent_id FROM eagle_eyes_exclusions')).fetchall()}
+    agent_ids = [a for a in agent_ids if a not in excluded]
     if not agent_ids:
         return jsonify(ok=False, error='No agents specified')
     results = {}
@@ -1724,7 +1900,8 @@ def api_eagle_gantt(agent_id):
 def api_rmm_screenshot_request(agent_id):
     """Ask the gateway to request a screenshot from the agent.
     The gateway must have an agent session open.
-    We POST a JSON command to the gateway's internal HTTP endpoint."""
+    POSTs a JSON command to the gateway internal HTTP endpoint.
+    """
     gw_internal = RMM_GATEWAY_INTERNAL
     try:
         import urllib.request as _ur, json as _json
@@ -1926,16 +2103,17 @@ def receive_telemetry():
         db.session.execute(text("""
             INSERT INTO rmm_telemetry
                 (agent_id, asset_id, cpu_percent, ram_percent, ram_total_gb,
-                 ram_available_gb, disk_json, captured_at)
+                 ram_available_gb, disk_json, captured_at, last_seen)
             VALUES
-                (:aid, :asid, :cpu, :ram, :ramt, :rava, :dj, :ts)
+                (:aid, :asid, :cpu, :ram, :ramt, :rava, :dj, :ts, NOW())
             ON CONFLICT(agent_id) DO UPDATE SET
                 cpu_percent=excluded.cpu_percent,
                 ram_percent=excluded.ram_percent,
                 ram_total_gb=excluded.ram_total_gb,
                 ram_available_gb=excluded.ram_available_gb,
                 disk_json=excluded.disk_json,
-                captured_at=excluded.captured_at
+                captured_at=excluded.captured_at,
+                last_seen=NOW()
         """), {
             'aid': agent_id, 'asid': asset_id,
             'cpu': cpu_pct, 'ram': ram_pct,
@@ -2109,8 +2287,17 @@ def download_site_install_ps1():
     if not os.path.exists(ps1_src):
         return 'install_agent.ps1 not found on server.', 404
 
-    tracker_url = RMM_TRACKER_URL.rstrip('/')
-    gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+    # ?public=1 bypasses the internal URL entirely — use for devices that
+    # can resolve but not reach the corporate network (e.g. China offices).
+    use_public = request.args.get('public', '').strip() in ('1', 'true', 'yes')
+    if use_public:
+        tracker_url = 'https://tracker.cirquetools.com'
+        gateway_url = 'wss://rmm.cirquetools.com'
+    else:
+        tracker_url = RMM_TRACKER_URL.rstrip('/')
+        gateway_url = RMM_GATEWAY_PUBLIC.rstrip('/')
+    tracker_url_fallback = 'https://tracker.cirquetools.com'
+    gateway_url_fallback = 'wss://rmm.cirquetools.com'
     site_token  = expected
 
     ps1 = open(ps1_src, encoding='utf-8-sig').read()
@@ -2128,9 +2315,11 @@ def download_site_install_ps1():
     header = (
         "# Cirque RMM Agent - auto-configured by tracker server\n"
         "# Run as Administrator. Logs: C:\\CirqueRMM\\logs\\setup.log\n"
-        f"$SiteToken   = '{site_token}'\n"
-        f"$TrackerUrl  = '{tracker_url}'\n"
-        f"$GatewayUrl  = '{gateway_url}'\n"
+        f"$SiteToken          = '{site_token}'\n"
+        f"$TrackerUrl         = '{tracker_url}'\n"
+        f"$TrackerUrlFallback = '{tracker_url_fallback}'\n"
+        f"$GatewayUrl         = '{gateway_url}'\n"
+        f"$GatewayUrlFallback = '{gateway_url_fallback}'\n"
         "$Token       = ''\n"
         "$InstallDir  = 'C:\\CirqueRMM'\n"
         "$NssmPath    = 'C:\\Program Files\\NSSM\\nssm.exe'\n"
@@ -2406,7 +2595,7 @@ def rmm_agent_repair():
     token    = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
-    repair_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'agent_repair.ps1')
+    repair_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'agent_repair.ps1')
     return send_file(repair_path, mimetype='text/plain', as_attachment=False)
 
 
@@ -2417,10 +2606,26 @@ def rmm_agent_tray():
     token    = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
-    tray_path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'tray.py')
+    tray_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'tray.py')
     if not os.path.isfile(tray_path):
         return jsonify({'error': 'tray.py not found on server'}), 404
     return send_file(tray_path, mimetype='text/x-python', as_attachment=False)
+
+
+@bp.route('/rmm/agent/tray-sha')
+def rmm_agent_tray_sha():
+    """Return SHA-256 of tray.py so agents can detect updates without downloading the full file."""
+    import hashlib as _hl
+    agent_id = request.args.get('agent_id', '')
+    token    = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    tray_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'tray.py')
+    if not os.path.isfile(tray_path):
+        return jsonify({'error': 'tray.py not found'}), 404
+    with open(tray_path, 'rb') as f:
+        sha = _hl.sha256(f.read()).hexdigest()
+    return jsonify({'sha256': sha})
 
 
 @bp.route('/rmm/agent/tray-install')
@@ -2432,7 +2637,7 @@ def rmm_agent_tray_install():
     if not (current_user.is_authenticated or
             (agent_id and token and _verify_agent_token(agent_id, token))):
         return jsonify({'error': 'Unauthorized'}), 401
-    path = os.path.join(os.path.dirname(__file__), 'rmm_agent', 'tray_install.py')
+    path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'tray_install.py')
     if not os.path.isfile(path):
         return jsonify({'error': 'tray_install.py not found'}), 404
     return send_file(path, mimetype='text/x-python',
@@ -2744,7 +2949,7 @@ def api_rmm_deploy_rustdesk(agent_id):
         return jsonify({'ok': False, 'error': 'agent not found'}), 404
 
     server   = 'rust.corp.cirque.com'
-    key      = 's18RB+OV0ctX3SuOIcXy6EeYqA+Elx25RODTGYBnyV8='
+    key      = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo='
 
     # PowerShell: install RustDesk silently, then write server config
     ps = r"""
@@ -2860,6 +3065,7 @@ def api_rmm_patch_jobs_deploy(agent_id, job_id):
         return jsonify({'ok': False, 'error': f'Job is already {row[3]}'}), 400
 
     payload = _json.dumps({
+        'type':       'install_patches',
         'job_id':     job_id,
         'update_ids': _json.loads(row[0] or '[]'),
         'kb_ids':     _json.loads(row[1] or '[]'),
@@ -2869,7 +3075,7 @@ def api_rmm_patch_jobs_deploy(agent_id, job_id):
     gw = RMM_GATEWAY_INTERNAL
     try:
         req = _req.Request(
-            f"{gw}/deploy-patches/{agent_id}",
+            f"{gw}/send-msg/{agent_id}",
             data=payload,
             headers={'Content-Type': 'application/json'},
             method='POST',

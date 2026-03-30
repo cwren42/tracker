@@ -67,6 +67,19 @@ try { New-Item -ItemType Directory -Force -Path $LogDir -ErrorAction Stop | Out-
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 }
 $LogFile = "$LogDir\setup.log"
+# Kill any previous installer task/process that may be holding setup.log open via an
+# active transcript.  This runs BEFORE Start-Transcript so the file is not locked.
+try {
+    Stop-ScheduledTask  -TaskName 'CirqueRMM_Setup'  -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName 'CirqueRMM_Setup' -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+} catch { }
+# Also kill any other powershell processes running install_agent.ps1 (exclude self)
+Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and
+    ($_.CommandLine -like '*install_agent.ps1*' -or $_.CommandLine -like '*CirqueRMM_Setup*')
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
 # Stop any transcript from a previous run in this session before touching setup.log
 try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
 "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') === Cirque RMM Install starting (PID $PID) ===" | Out-File -FilePath $LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -200,11 +213,39 @@ if (-not $PythonExe) {
     $PythonUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe"
     Write-Host "    Downloading from $PythonUrl ..."
     Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonInstaller -UseBasicParsing -TimeoutSec 300
-    Write-Host "    Installing Python (silent, timeout 5 min)..."
-    $pyProc = Start-Process -FilePath $PythonInstaller -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -PassThru -NoNewWindow
-    if (-not $pyProc.WaitForExit(300000)) {
-        $pyProc.Kill()
-        Write-Error "Python installer timed out after 5 minutes."; exit 1
+
+    # Kill any leftover installer processes from a previous failed attempt.
+    # The Python stub spawns msiexec.exe as a child; if that child is still running it
+    # holds the Windows Installer mutex and will silently block any new install forever.
+    Write-Host "    Clearing installer mutex from any previous attempt..." -ForegroundColor DarkGray
+    Get-Process -Name "python_installer" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process msiexec -ErrorAction SilentlyContinue | Where-Object { -not $_.Responding } | Stop-Process -Force -ErrorAction SilentlyContinue
+    try { Restart-Service -Name msiserver -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 } catch { }
+
+    # Snapshot existing msiexec PIDs so we can identify our child process later.
+    $msiexecBefore = @( (Get-Process msiexec -ErrorAction SilentlyContinue).Id )
+
+    Write-Host "    Installing Python (silent, timeout 10 min)..."
+    $pyProc = Start-Process -FilePath $PythonInstaller `
+        -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" `
+        -PassThru -NoNewWindow
+    # WaitForExit only covers the stub; the real work is done by a msiexec child.
+    # Poll until BOTH the stub and any spawned msiexec are gone (up to 10 minutes).
+    $deadline = (Get-Date).AddMinutes(10)
+    while ((Get-Date) -lt $deadline) {
+        $pyProc.Refresh()
+        $ourMsiAlive = Get-Process msiexec -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -notin $msiexecBefore }
+        if ($pyProc.HasExited -and -not $ourMsiAlive) { break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $pyProc.HasExited) {
+        # Timed out -- kill stub and any msiexec children we spawned
+        $pyProc | Stop-Process -Force -ErrorAction SilentlyContinue
+        Get-Process msiexec -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -notin $msiexecBefore } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Error "Python installer timed out after 10 minutes."; exit 1
     }
     Remove-Item $PythonInstaller -Force -ErrorAction SilentlyContinue
 
@@ -276,6 +317,7 @@ Write-Host "[5/7] Installing Python dependencies..." -ForegroundColor Yellow
 # Stop any running instance first so pip can overwrite in-use files
 try { sc.exe stop CirqueRMM 2>$null | Out-Null } catch {}
 Start-Sleep -Seconds 2
+
 & $PythonExe -m pip install -q --upgrade pip --timeout 120
 & $PythonExe -m pip install -q -r "$InstallDir\requirements.txt" --timeout 120
 if ($LASTEXITCODE -ne 0) { Write-Error "pip install failed."; exit 1 }
@@ -350,7 +392,7 @@ Write-Host "[7/7] Setting up tray application..." -ForegroundColor Yellow
 $PythonwExe = Join-Path (Split-Path $PythonExe -Parent) "pythonw.exe"
 if (-not (Test-Path $PythonwExe)) { $PythonwExe = $PythonExe }
 
-# Install pystray + pillow
+# Install pystray + pillow (best-effort)
 try { & $PythonExe -m pip install --quiet pystray pillow | Out-Null } catch {}
 
 # Write a VBS launcher to All-Users Startup so tray runs on every future login

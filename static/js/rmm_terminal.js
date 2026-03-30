@@ -1,5 +1,5 @@
-const AGENT_ID    = window.RMMTERMINALCFG.agent_id;
-const GATEWAY_URL = window.RMMTERMINALCFG.gateway_url;
+const AGENT_ID    = window.RMMTERMINAL_CFG.agent_id;
+const GATEWAY_URL = window.RMMTERMINAL_CFG.gateway_url;
 
 const term = new Terminal({
     cursorBlink: true,
@@ -10,8 +10,9 @@ const term = new Terminal({
         foreground: '#f2f2f2',
         cursor: '#00ff00',
     },
-    convertEol: true,
+    convertEol: false,      // ConPTY sends its own CRLF — don't double-convert
     scrollback: 5000,
+    allowProposedApi: true, // needed for proposeDimensions()
 });
 const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
@@ -77,8 +78,8 @@ async function connect(shellType) {
 
         if (msg.type === 'shell_started') {
             shellActive = true;
-            // Trigger initial prompt render for shells that don't emit one until first input.
-            ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: '\n'}));
+            // ConPTY/PSReadLine shows the prompt automatically — no need to send \n.
+            // For raw-pipe fallback the user presses Enter once to get the first prompt.
             return;
         }
 
@@ -115,7 +116,14 @@ async function connect(shellType) {
 function startShell(shellType) {
     if (!ws || !sessionId) return;
     currentShell = shellType || 'powershell';
-    ws.send(JSON.stringify({type: 'shell_start', session_id: sessionId, shell: shellType}));
+    const dims = fitAddon.proposeDimensions() || {cols: term.cols, rows: term.rows};
+    ws.send(JSON.stringify({
+        type: 'shell_start',
+        session_id: sessionId,
+        shell: shellType,
+        cols: dims.cols,
+        rows: dims.rows,
+    }));
 }
 
 function restartShell(shellType) {
@@ -138,19 +146,16 @@ function disconnectAndClose() {
     }
 }
 
-// Send keystrokes to shell
+// Send keystrokes to shell.
+// xterm.js sends DEL (0x7f) for Backspace; Windows console/ConPTY expects BS (0x08).
 term.onData(data => {
     if (ws && ws.readyState === WebSocket.OPEN && sessionId && shellActive) {
-        // Windows shell line-editing expects BS and CRLF.
-        if (currentShell === 'powershell' || currentShell === 'cmd') {
-            data = data.replace(/\x7f/g, '\x08');
-            data = data.replace(/\r/g, '\r\n');
-        }
+        data = data.replace(/\x7f/g, '\x08');
         ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: data}));
     }
 });
 
-// Resize PTY when xterm resizes
+// Resize ConPTY when xterm resizes
 term.onResize(({cols, rows}) => {
     if (ws && ws.readyState === WebSocket.OPEN && sessionId) {
         ws.send(JSON.stringify({type: 'shell_resize', session_id: sessionId, cols, rows}));

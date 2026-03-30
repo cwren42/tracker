@@ -1,5 +1,6 @@
 let _eeAllAgents = window.SETTINGSEAGLEEYE_CFG.ee_all_agents;
 let _eeExcluded = new Set(window.SETTINGSEAGLEEYE_CFG.ee_excluded_agents);
+let _eeInitialExcluded = new Set(window.SETTINGSEAGLEEYE_CFG.ee_excluded_agents);
 let _eeActiveAgents = window.SETTINGSEAGLEEYE_CFG.ee_active_agents;
 let _eeFilterActive = '';
 let _eeFilterExcluded = '';
@@ -64,14 +65,30 @@ function eeMoveToActive() {
 async function eeSaveExclusions() {
     const st = document.getElementById('eeStatus');
     st.textContent = 'Saving...';
+
+    const toAdd    = [..._eeExcluded].filter(id => !_eeInitialExcluded.has(id));
+    const toRemove = [..._eeInitialExcluded].filter(id => !_eeExcluded.has(id));
+
     try {
-        const r = await fetch('/api/settings/eagle-eye-exclusions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ excluded_agents: Array.from(_eeExcluded) })
-        });
-        const d = await r.json();
-        st.textContent = d.ok ? '✓ Saved' : ('Error: ' + (d.error || 'Failed'));
+        for (const agent_id of toAdd) {
+            const r = await fetch('/api/settings/eagle-eye-exclusions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent_id })
+            });
+            const d = await r.json();
+            if (!d.ok) { st.textContent = 'Error: ' + (d.error || 'Failed adding ' + agent_id); return; }
+        }
+        for (const agent_id of toRemove) {
+            const r = await fetch('/api/settings/eagle-eye-exclusions/' + encodeURIComponent(agent_id), {
+                method: 'DELETE'
+            });
+            const d = await r.json();
+            if (!d.ok) { st.textContent = 'Error: ' + (d.error || 'Failed removing ' + agent_id); return; }
+        }
+        // Update baseline so subsequent saves work correctly
+        _eeInitialExcluded = new Set(_eeExcluded);
+        st.textContent = toAdd.length + toRemove.length === 0 ? 'No changes to save.' : '✓ Saved';
     } catch(e) { st.textContent = 'Error: ' + e.message; }
 }
 

@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', function(){
-    const s = 'window.RMMSECTIONCFG.section';
+    const s = (window.RMMSECTIONCFG || window.RMMSECTION_CFG || {}).section;
     const loaders = {
         avail:    () => typeof rmmLoadAvailability === 'function' && rmmLoadAvailability(),
         patches:  () => typeof rmmLoadPatches      === 'function' && rmmLoadPatches(),

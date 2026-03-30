@@ -18,7 +18,9 @@
     
     <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/vendor/bootstrap-icons/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/theme.css?v=4">
+    <script>/* Prevent sidebar flash-of-uncollapsed-content before JS runs */
+    if(typeof localStorage!=='undefined'&&localStorage.getItem('sidebarCollapsed')!=='0'){document.documentElement.classList.add('sc-init');}</script>
     {% block styles %}{% endblock %}
 </head>
 <body {% if current_user.is_authenticated and current_user.theme and current_user.theme != 'default' %}data-theme="{{ current_user.theme }}"{% endif %}>
@@ -149,7 +151,7 @@
         </ul>
 
         <div class="nav-section-label">Admin</div>
-        {% set admin_endpoints = ['auth.users','settings.settings','settings.settings_theme','settings.settings_license','settings.settings_email','settings.settings_directory','settings.settings_rmm','settings.settings_scripts','settings.settings_eagleeye','settings.settings_unifi','settings.settings_proxmox','settings.settings_ai','settings.settings_cloudflare'] %}
+        {% set admin_endpoints = ['auth.users','settings.settings_theme','settings.settings_license','settings.settings_email','settings.settings_directory','settings.settings_rmm','settings.settings_scripts','settings.settings_eagleeye','settings.settings_unifi','settings.settings_proxmox','settings.settings_ai','settings.settings_cloudflare'] %}
         <a class="sidebar-link sidebar-parent {% if request.endpoint in admin_endpoints %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-admin" role="button"
            aria-expanded="{% if request.endpoint in admin_endpoints %}true{% else %}false{% endif %}">
@@ -158,7 +160,6 @@
         </a>
         <ul class="sidebar-submenu collapse {% if request.endpoint in admin_endpoints %}show{% endif %}" id="sub-admin">
             <li><a class="sidebar-link {% if request.endpoint == 'auth.users' %}active{% endif %}" href="{{ url_for('auth.users') }}"><i class="bi bi-people-fill"></i><span class="link-label">Users</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings' %}active{% endif %}" href="{{ url_for('settings.settings') }}"><i class="bi bi-gear-fill"></i><span class="link-label">Settings</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_theme' %}active{% endif %}" href="{{ url_for('settings.settings_theme') }}"><i class="bi bi-palette-fill"></i><span class="link-label">Appearance</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_license' %}active{% endif %}" href="{{ url_for('settings.settings_license') }}"><i class="bi bi-key-fill"></i><span class="link-label">License</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_email' %}active{% endif %}" href="{{ url_for('settings.settings_email') }}"><i class="bi bi-envelope-fill"></i><span class="link-label">Email</span></a></li>

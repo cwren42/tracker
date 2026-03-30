@@ -17,6 +17,92 @@
                 <h5 class="mb-0">Employee Information</h5>
             </div>
             <div class="card-body">
+                <!-- ── Photo Crop Tool ── -->
+                <div class="mb-4">
+                    <label class="form-label fw-semibold">Profile Photo</label>
+
+                    <!-- Hidden file input -->
+                    <input type="file" id="photo-file-input" accept="image/jpeg,image/png,image/webp" style="display:none">
+
+                    <!-- State A: current photo -->
+                    <div id="photo-current" class="d-flex align-items-center gap-3">
+                        <div style="width:90px;height:90px;border-radius:50%;overflow:hidden;border:2px solid #dee2e6;flex-shrink:0;background:#e2e8f0;">
+                            {% if employee.photo %}
+                            <img src="{{ photo_url(employee.photo) }}"
+                                 alt="{{ employee.name }}"
+                                 style="width:100%;height:100%;object-fit:cover;object-position:top center;">
+                            {% else %}
+                            <div class="d-flex align-items-center justify-content-center h-100 text-secondary">
+                                <i class="bi bi-person" style="font-size:2rem;"></i>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button" class="btn btn-outline-secondary btn-sm"
+                                        onclick="document.getElementById('photo-file-input').click()">
+                                    <i class="bi bi-upload"></i> Change Photo
+                                </button>
+                                {% if employee.photo %}
+                                <button type="button" class="btn btn-outline-primary btn-sm"
+                                        onclick="photoCropLoadExisting('{{ photo_url(employee.photo) }}')">
+                                    <i class="bi bi-arrows-move"></i> Edit Position
+                                </button>
+                                {% endif %}
+                            </div>
+                            <div class="text-muted small mt-1">
+                                <i class="bi bi-info-circle"></i> M365/AD sync photos take priority on next sync.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- State B: crop tool -->
+                    <div id="photo-cropper" style="display:none;">
+                        <div class="d-flex flex-wrap gap-4 align-items-start">
+                            <!-- Rectangle viewport — same ratio as ID card photo box (23.4 × 29.3 mm) -->
+                            <div>
+                                <div id="crop-rect"
+                                     style="width:160px;height:200px;overflow:hidden;
+                                            border:3px solid #9b1b26;cursor:grab;background:#e2e8f0;
+                                            position:relative;user-select:none;touch-action:none;border-radius:4px;">
+                                    <img id="crop-img" alt="" draggable="false"
+                                         style="position:absolute;max-width:none;">
+                                </div>
+                                <p class="text-muted small text-center mt-1 mb-0">Drag to reposition &bull; Preview matches ID card</p>
+                            </div>
+                            <!-- Controls -->
+                            <div style="min-width:180px;">
+                                <label class="form-label small fw-semibold">Zoom</label>
+                                <input type="range" id="crop-zoom" min="0.5" max="3" step="0.01" value="1"
+                                       class="form-range" oninput="photoCropZoom(this.value)">
+                                <label class="form-label small fw-semibold mt-2">Nudge</label>
+                                <div class="d-grid" style="grid-template-columns:1fr 1fr 1fr;gap:4px;width:108px;">
+                                    <div></div>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm p-1" onclick="photoCropNudge(0,-10)"><i class="bi bi-arrow-up"></i></button>
+                                    <div></div>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm p-1" onclick="photoCropNudge(-10,0)"><i class="bi bi-arrow-left"></i></button>
+                                    <div></div>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm p-1" onclick="photoCropNudge(10,0)"><i class="bi bi-arrow-right"></i></button>
+                                    <div></div>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm p-1" onclick="photoCropNudge(0,10)"><i class="bi bi-arrow-down"></i></button>
+                                    <div></div>
+                                </div>
+                                <div class="d-flex gap-2 mt-3">
+                                    <button type="button" class="btn btn-danger btn-sm flex-fill" onclick="photoCropSave()">
+                                        <i class="bi bi-check-circle"></i> Save Photo
+                                    </button>
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="photoCropCancel()">
+                                        Cancel
+                                    </button>
+                                </div>
+                                <div id="crop-saving" class="text-muted small mt-2" style="display:none;">
+                                    <i class="bi bi-hourglass-split"></i> Saving&hellip;
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <form method="POST">
                     <div class="mb-3">
                         <label for="name" class="form-label">Name *</label>
@@ -46,10 +132,30 @@
                     
                     <div class="mb-3">
                         <label for="phone" class="form-label">Phone</label>
-                        <input type="tel" class="form-control" id="phone" name="phone" 
+                        <input type="tel" class="form-control" id="phone" name="phone"
                                value="{{ employee.phone or '' }}" 
                                placeholder="(123) 456-7890">
                     </div>
+
+                    <div class="mb-3">
+                        <label for="location" class="form-label">Location</label>
+                        <select class="form-select" id="location" name="location">
+                            <option value="">-- Select location --</option>
+                            <option value="Cirque US" {% if employee.location == 'Cirque US' %}selected{% endif %}>Cirque US</option>
+                            <option value="Cirque Taiwan" {% if employee.location == 'Cirque Taiwan' %}selected{% endif %}>Cirque Taiwan</option>
+                            <option value="Cirque China" {% if employee.location == 'Cirque China' %}selected{% endif %}>Cirque China</option>
+                        </select>
+                    </div>
+
+                    {% if current_user.role == 'admin' %}
+                    <div class="mb-3 form-check">
+                        <input type="hidden" name="is_visible" value="0">
+                        <input type="checkbox" class="form-check-input" id="is_visible" name="is_visible" value="1"
+                               {% if employee.is_visible != False %}checked{% endif %}>
+                        <label class="form-check-label" for="is_visible">Visible on employees page</label>
+                        <div class="form-text text-muted">Uncheck to hide this employee without deleting them.</div>
+                    </div>
+                    {% endif %}
                     
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-warning">
@@ -78,4 +184,169 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const CROP_W = 160;   // viewport width px  (matches ID card 23.4 mm)
+    const CROP_H = 200;   // viewport height px (matches ID card 29.3 mm)
+    const OUT_W  = 468;   // saved image width  (same ratio ×2.925)
+    const OUT_H  = 585;   // saved image height
+
+    let cropNatW = 0, cropNatH = 0;
+    let imgX = 0, imgY = 0, imgW = 0, imgH = 0, scale = 1;
+    let dragging = false, dragStartX, dragStartY, imgStartX, imgStartY;
+
+    const rect    = document.getElementById('crop-rect');
+    const cropImg = document.getElementById('crop-img');
+    const zoomEl  = document.getElementById('crop-zoom');
+
+    function initCrop() {
+        const fitScale = Math.max(CROP_W / cropNatW, CROP_H / cropNatH);
+        scale = fitScale;
+        imgW = cropNatW * scale;
+        imgH = cropNatH * scale;
+        imgX = (CROP_W - imgW) / 2;
+        imgY = 0;
+        zoomEl.min   = (fitScale * 0.5).toFixed(3);
+        zoomEl.max   = (fitScale * 4).toFixed(3);
+        zoomEl.value = scale;
+        applyTransform();
+        document.getElementById('photo-current').style.display = 'none';
+        document.getElementById('photo-cropper').style.display = '';
+    }
+
+    // ── Load existing photo into cropper ────────────────────────────────────
+    window.photoCropLoadExisting = function (url) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            cropNatW = img.naturalWidth;
+            cropNatH = img.naturalHeight;
+            cropImg.src = img.src;
+            initCrop();
+        };
+        // cache-bust so crossOrigin always works
+        img.src = url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+    };
+
+    // ── File selected ────────────────────────────────────────────────────────
+    document.getElementById('photo-file-input').addEventListener('change', function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        cropImg.onload = () => {
+            cropNatW = cropImg.naturalWidth;
+            cropNatH = cropImg.naturalHeight;
+            initCrop();
+        };
+        cropImg.src = url;
+    });
+
+    function applyTransform() {
+        cropImg.style.left   = imgX + 'px';
+        cropImg.style.top    = imgY + 'px';
+        cropImg.style.width  = imgW + 'px';
+        cropImg.style.height = imgH + 'px';
+    }
+
+    window.photoCropNudge = function (dx, dy) {
+        imgX += dx; imgY += dy;
+        applyTransform();
+    };
+
+    window.photoCropZoom = function (val) {
+        const newScale = parseFloat(val);
+        // Keep viewport center fixed while zooming
+        const cx = CROP_W / 2, cy = CROP_H / 2;
+        const imgCX = (cx - imgX) / scale;
+        const imgCY = (cy - imgY) / scale;
+        scale = newScale;
+        imgW  = cropNatW * scale;
+        imgH  = cropNatH * scale;
+        imgX  = cx - imgCX * scale;
+        imgY  = cy - imgCY * scale;
+        applyTransform();
+    };
+
+    // ── Mouse drag ───────────────────────────────────────────────────────────
+    rect.addEventListener('mousedown', e => {
+        dragging = true;
+        dragStartX = e.clientX; dragStartY = e.clientY;
+        imgStartX  = imgX;      imgStartY  = imgY;
+        rect.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        imgX = imgStartX + (e.clientX - dragStartX);
+        imgY = imgStartY + (e.clientY - dragStartY);
+        applyTransform();
+    });
+    window.addEventListener('mouseup', () => { dragging = false; rect.style.cursor = 'grab'; });
+
+    // ── Touch drag ───────────────────────────────────────────────────────────
+    rect.addEventListener('touchstart', e => {
+        const t = e.touches[0];
+        dragging = true;
+        dragStartX = t.clientX; dragStartY = t.clientY;
+        imgStartX  = imgX;      imgStartY  = imgY;
+        e.preventDefault();
+    }, { passive: false });
+    window.addEventListener('touchmove', e => {
+        if (!dragging) return;
+        const t = e.touches[0];
+        imgX = imgStartX + (t.clientX - dragStartX);
+        imgY = imgStartY + (t.clientY - dragStartY);
+        applyTransform();
+    }, { passive: false });
+    window.addEventListener('touchend', () => { dragging = false; });
+
+    // ── Cancel ───────────────────────────────────────────────────────────────
+    window.photoCropCancel = function () {
+        document.getElementById('photo-cropper').style.display = 'none';
+        document.getElementById('photo-current').style.display = '';
+        document.getElementById('photo-file-input').value = '';
+    };
+
+    // ── Save (canvas → blob → upload) ────────────────────────────────────────
+    window.photoCropSave = function () {
+        if (!cropNatW) return;
+        const saveBtn = document.querySelector('#photo-cropper .btn-danger');
+        const saving  = document.getElementById('crop-saving');
+        saveBtn.disabled = true;
+        saving.style.display = '';
+
+        const canvas = document.createElement('canvas');
+        canvas.width  = OUT_W;
+        canvas.height = OUT_H;
+        const ctx = canvas.getContext('2d');
+
+        // White background for any gaps outside the image
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, OUT_W, OUT_H);
+
+        // Map crop-rect coordinates → output canvas coordinates (no circular clip)
+        const rx = OUT_W / CROP_W;
+        const ry = OUT_H / CROP_H;
+        ctx.drawImage(cropImg, imgX * rx, imgY * ry, imgW * rx, imgH * ry);
+
+        canvas.toBlob(blob => {
+            const fd = new FormData();
+            fd.append('photo', blob, 'photo.jpg');
+            fetch('{{ url_for("employees.upload_employee_photo", employee_id=employee.id) }}', {
+                method: 'POST',
+                body: fd
+            }).then(() => {
+                window.location.reload();
+            }).catch(() => {
+                alert('Upload failed. Please try again.');
+                saveBtn.disabled = false;
+                saving.style.display = 'none';
+            });
+        }, 'image/jpeg', 0.92);
+    };
+})();
+</script>
 {% endblock %}

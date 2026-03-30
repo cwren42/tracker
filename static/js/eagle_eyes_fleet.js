@@ -39,6 +39,77 @@
 
   // ── state ──────────────────────────────────────────────────────────────────
   let _agents = [], _sortCol = 4, _sortAsc = false, _arHandle = null;
+  let _selected = new Set();
+
+  // ── selection helpers ──────────────────────────────────────────────────────
+  function updateBulkBar() {
+    const bar   = document.getElementById('fleet-bulk-bar');
+    const count = document.getElementById('fleet-bulk-count');
+    const allChk = document.getElementById('fleet-chk-all');
+    if (_selected.size > 0) {
+      bar.classList.remove('d-none');
+      bar.classList.add('d-flex');
+      count.textContent = _selected.size + ' selected';
+    } else {
+      bar.classList.add('d-none');
+      bar.classList.remove('d-flex');
+    }
+    if (allChk) {
+      const visibleIds = _lastRenderedIds || [];
+      allChk.indeterminate = _selected.size > 0 && _selected.size < visibleIds.length;
+      allChk.checked = visibleIds.length > 0 && visibleIds.every(id => _selected.has(id));
+    }
+  }
+
+  function selectAll(checked) {
+    (_lastRenderedIds || []).forEach(id => checked ? _selected.add(id) : _selected.delete(id));
+    // update all row checkboxes
+    document.querySelectorAll('.fleet-row-chk').forEach(chk => { chk.checked = checked; });
+    updateBulkBar();
+  }
+
+  function toggleRow(agentId, checked) {
+    checked ? _selected.add(agentId) : _selected.delete(agentId);
+    updateBulkBar();
+  }
+
+  function clearSelection() {
+    _selected.clear();
+    document.querySelectorAll('.fleet-row-chk').forEach(chk => { chk.checked = false; });
+    const allChk = document.getElementById('fleet-chk-all');
+    if (allChk) { allChk.checked = false; allChk.indeterminate = false; }
+    updateBulkBar();
+  }
+
+  async function bulkSetScreenshots(enable) {
+    if (_selected.size === 0) return;
+    const ids = [..._selected];
+    const bar = document.getElementById('fleet-bulk-bar');
+    bar.querySelectorAll('button').forEach(b => { b.disabled = true; });
+
+    let done = 0;
+    for (const agentId of ids) {
+      try {
+        const agent = _agents.find(a => a.agent_id === agentId);
+        await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            enabled: true,
+            screenshots_enabled: enable,
+            screenshot_interval_min: agent ? (agent.screenshot_interval_min || 30) : 30,
+          }),
+        });
+        // Update local state
+        if (agent) agent.screenshots_enabled = enable;
+        done++;
+      } catch(e) { /* best-effort */ }
+    }
+
+    bar.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    clearSelection();
+    renderTable();
+  }
 
   function fleetLoad() {
     fetch('/api/rmm/eagle-eyes/fleet')
@@ -66,6 +137,8 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   }
+
+  let _lastRenderedIds = [];
 
   // ── table render ───────────────────────────────────────────────────────────
   function renderTable() {
@@ -96,12 +169,16 @@
     document.getElementById('fleet-row-count').textContent =
       rows.length + ' device' + (rows.length !== 1 ? 's' : '');
 
+    _lastRenderedIds = rows.map(a => a.agent_id);
+
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No monitored devices found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No monitored devices found</td></tr>';
+      updateBulkBar();
       return;
     }
 
     tbody.innerHTML = rows.map(a => {
+      const checked = _selected.has(a.agent_id) ? 'checked' : '';
       const dot = a.online
         ? '<i class="bi bi-circle-fill text-success" style="font-size:.65rem;" title="Online"></i>'
         : '<i class="bi bi-circle text-muted" style="font-size:.65rem;" title="Offline"></i>';
@@ -111,20 +188,31 @@
       const topApp = a.top_app
         ? `${appIcon(a.top_app)}<span class="small">${escHtml(short(a.top_app))}</span>`
         : '<span class="text-muted small">—</span>';
+      const ssBadge = a.screenshots_enabled
+        ? '<span class="badge text-bg-success" style="font-size:.68rem;"><i class="bi bi-camera-fill me-1"></i>On</span>'
+        : '<span class="badge text-bg-secondary" style="font-size:.68rem;"><i class="bi bi-camera-video-off me-1"></i>Off</span>';
+      const agentIdEsc = escHtml(a.agent_id);
       return `<tr>
-        <td class="ps-3" style="width:30px;">${dot}</td>
+        <td class="ps-3" style="width:36px;">
+          <input type="checkbox" class="fleet-row-chk" ${checked}
+            onchange="toggleRow(${JSON.stringify(a.agent_id)}, this.checked)">
+        </td>
+        <td style="width:30px;">${dot}</td>
         <td><span class="fw-semibold">${escHtml(a.hostname)}</span>
-          <div class="text-muted x-small">${escHtml(a.agent_id)}</div></td>
+          <div class="text-muted x-small">${agentIdEsc}</div></td>
         <td>${a.user ? `<i class="bi bi-person-fill text-secondary me-1"></i>${escHtml(a.user)}` : '<span class="text-muted small">Unknown</span>'}</td>
         <td>${curApp}</td>
         <td>${fmtSec(a.today_s)}</td>
         <td>${topApp}</td>
         <td class="small">${timeAgo(a.last_event)}</td>
+        <td>${ssBadge}</td>
         <td class="pe-3"><a href="/rmm/eagle-eyes/${encodeURIComponent(a.agent_id)}" class="btn btn-sm btn-outline-warning py-0 px-2">
           <i class="bi bi-eye me-1"></i>View
         </a></td>
       </tr>`;
     }).join('');
+
+    updateBulkBar();
   }
 
   function short(name) {
@@ -176,5 +264,9 @@
   window.fleetLoad = fleetLoad;
   window.toggleAutoRefresh = toggleAutoRefresh;
   window.filterTable = filterTable;
+  window.selectAll = selectAll;
+  window.toggleRow = toggleRow;
+  window.clearSelection = clearSelection;
+  window.bulkSetScreenshots = bulkSetScreenshots;
   fleetLoad();
 })();

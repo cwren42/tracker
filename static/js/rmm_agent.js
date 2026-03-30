@@ -6,7 +6,8 @@
                     let _savedScripts = [];
                     let _fsCurrent = null, _fsHistory = [], _fsPending = null;
                     let _eagleEnabled = false;
-                    // All timesta// Format any timestamp string into browser local time
+                    let _eagleScreenshots = true;
+                    // Format any timestamp string into browser local time
                     function fmtLocal(ts){
                         if(!ts) return '—';
                         try {
@@ -198,6 +199,9 @@
                         if (document.getElementById('rmm-saved-script-select')) {
                             rmmLoadSavedScripts();
                         }
+
+                        // Eagle Eyes toggle — sync state on every page load
+                        rmmEagleLoad();
                     }
 
                     function rmmRefreshTelemetry(){ rmmLoad(); }
@@ -335,10 +339,10 @@ $out -join "\`n" `;
                         const biosStr = [d.bios_version, d.bios_date].filter(Boolean).join(' — ');
                         set('rmm-hw-bios',   biosStr||d.bios_version);
                         const gpus = d.gpu||[];
-                        set('rmm-hw-gpu', gpus.map(g=>g.name+(g.vram_gb?` (${g.vram_gb} GB)`:'')).join(', '));
+                        set('rmm-hw-gpu', gpus.map(g=>g.name+(g.vram_gb?` (${g.vram_gb} GB)`:'')).join('\n'));
                         set('rmm-hw-sound', d.sound_card);
                         const nets = (d.network_json||[]).filter(n=>n.mac&&n.mac!='00:00:00:00:00:00');
-                        set('rmm-hw-macs', nets.map(n=>`${n.interface||''}: ${n.mac}`).join(' | '));
+                        set('rmm-hw-macs', nets.map(n=>`${n.interface||''}: ${n.mac}`).join('\n'));
                     }
 
                     /* ── security tab ─────────────────────────── */
@@ -527,9 +531,9 @@ $out -join "\`n" `;
                                 110:'POP3',143:'IMAP',443:'HTTPS',445:'SMB',3306:'MySQL',3389:'RDP',
                                 5432:'PostgreSQL',5900:'VNC',8080:'HTTP-alt',8443:'HTTPS-alt'};
                             setH('rmm-si-ports', si.open_ports.map(p=>{
-                                const known = _wkPorts[p.port]?'<small class="text-muted ms-1">('+_wkPorts[p.port]+')</small>':'';
-                                const rdp = p.port===3389 ? ' <span class="badge bg-warning text-dark">RDP</span>' : '';
-                                return '<span class="me-2 font-monospace" style="font-size:.78rem;">'+p.port+rdp+known+'</span>';
+                                const known = _wkPorts[p.port] ? ' <small class="text-muted">('+_wkPorts[p.port]+')</small>' : '';
+                                const badge = p.port===3389 ? ' <span class="badge bg-warning text-dark" style="font-size:.65rem;">RDP</span>' : '';
+                                return '<span class="badge bg-secondary font-monospace fw-normal">'+p.port+badge+known+'</span>';
                             }).join(''));
                         }
                     }
@@ -622,8 +626,13 @@ $out -join "\`n" `;
                         const cfg = await fetch(`/api/rmm/eagle-eyes/${agentId}`).then(x=>x.json()).catch(()=>({ok:false}));
                         if(!cfg.ok) return;
                         _eagleEnabled = !!cfg.enabled;
+                        _eagleScreenshots = cfg.screenshots_enabled !== false;
                         const tog = el('rmm-eagle-toggle');
                         if(tog) tog.checked = _eagleEnabled;
+                        const ssRow = el('rmm-eagle-screenshots-row');
+                        if(ssRow) ssRow.style.display = _eagleEnabled ? '' : 'none';
+                        const ssTog = el('rmm-eagle-screenshots-toggle');
+                        if(ssTog){ ssTog.checked = _eagleScreenshots; ssTog.disabled = !_eagleEnabled; }
                         const dashBtn = el('rmm-eagle-dash-btn');
                         if(dashBtn){
                             dashBtn.style.display = _eagleEnabled?'':'none';
@@ -634,18 +643,46 @@ $out -join "\`n" `;
                         if(!agentId){ alert('No RMM agent linked to this asset.'); return; }
                         const r = await fetch(`/api/rmm/eagle-eyes/${agentId}`,{
                             method:'POST', headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({enabled})
+                            body:JSON.stringify({enabled, screenshots_enabled: _eagleScreenshots})
                         }).then(x=>x.json()).catch(()=>({ok:false}));
                         if(!r.ok){ alert('Failed to save Eagle Eyes setting.'); return; }
                         _eagleEnabled = enabled;
                         const tog = el('rmm-eagle-toggle');
                         if(tog) tog.checked = enabled;
+                        const ssRow = el('rmm-eagle-screenshots-row');
+                        if(ssRow) ssRow.style.display = enabled ? '' : 'none';
+                        const ssTog = el('rmm-eagle-screenshots-toggle');
+                        if(ssTog) ssTog.disabled = !enabled;
                         const dashBtn = el('rmm-eagle-dash-btn');
                         if(dashBtn) dashBtn.style.display = enabled?'':'none';
                     }
-                    document.querySelectorAll('[data-bs-target="#rmm-tab-avail"]').forEach(btn=>{
-                        btn.addEventListener('shown.bs.tab', ()=>rmmEagleLoad());
+                    async function rmmEagleScreenshotsToggle(enabled){
+                        if(!agentId){ alert('No RMM agent linked to this asset.'); return; }
+                        const r = await fetch(`/api/rmm/eagle-eyes/${agentId}`,{
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({enabled: _eagleEnabled, screenshots_enabled: enabled})
+                        }).then(x=>x.json()).catch(()=>({ok:false}));
+                        if(!r.ok){ alert('Failed to save screenshot setting.'); return; }
+                        _eagleScreenshots = enabled;
+                        const ssTog = el('rmm-eagle-screenshots-toggle');
+                        if(ssTog) ssTog.checked = enabled;
+                    }
+                    document.querySelectorAll('[data-bs-target="#tab-history"]').forEach(btn=>{
+                        btn.addEventListener('shown.bs.tab', ()=>rmmLoadAvailability());
                     });
+                    document.querySelectorAll('[data-bs-target="#tab-software"]').forEach(btn=>{
+                        btn.addEventListener('shown.bs.tab', ()=>rmmLoadSoftware());
+                    });
+                    document.querySelectorAll('[data-bs-target="#tab-scripts"]').forEach(btn=>{
+                        btn.addEventListener('shown.bs.tab', ()=>rmmLoadSavedScripts());
+                    });
+                    // Rotate Power chevron with collapse state
+                    const powerEl = document.getElementById('powerSubItems');
+                    if(powerEl){
+                        const chev = document.getElementById('powerChevron');
+                        powerEl.addEventListener('show.bs.collapse',()=>{ if(chev) chev.style.transform='rotate(90deg)'; });
+                        powerEl.addEventListener('hide.bs.collapse',()=>{ if(chev) chev.style.transform=''; });
+                    }
 
                     /* ── patches ──────────────────────────────── */
                     let _pendingUpdates = [];
@@ -708,6 +745,29 @@ $out -join "\`n" `;
                             body:JSON.stringify({update_ids:selected.map(u=>u.update_id),kb_ids:selected.flatMap(u=>u.kb_ids||[]),titles:selected.map(u=>u.title)})
                         }).then(x=>x.json()).catch(()=>({ok:false}));
                         if(r.ok){ rmmLoadPatches(); } else { alert('Failed: '+(r.error||'unknown')); }
+                    }
+                    async function rmmScanPatches(){
+                        const btn = el('rmm-scan-btn');
+                        if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>'; }
+                        try {
+                            const r = await fetch(`/api/rmm/cmd/${agentId}`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({type:'request_patch_scan'})
+                            }).then(x=>x.json()).catch(()=>({ok:false}));
+                            if(!r.ok){ alert('Scan failed: agent may be offline'); return; }
+                            // Online WUA search can take 1-3 min; poll every 30s up to 3 min
+                            el('rmm-pending-content').innerHTML='<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Scanning for updates (may take 1-2 min)…</span>';
+                            let prevCount = (await fetch(`/api/rmm/pending-updates/${agentId}`).then(x=>x.json()).catch(()=>({}))).updates?.length ?? -1;
+                            for (let i = 0; i < 6; i++) {
+                                await new Promise(res=>setTimeout(res, 30000));
+                                const check = await fetch(`/api/rmm/pending-updates/${agentId}`).then(x=>x.json()).catch(()=>({}));
+                                const nowCount = check.updates?.length ?? -1;
+                                if (nowCount !== prevCount) break; // results changed, stop waiting
+                            }
+                            await rmmLoadPatches();
+                        } finally {
+                            if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-arrow-clockwise me-1"></i>Scan'; }
+                        }
                     }
                     async function rmmDeployJob(jobId){
                         const r=await fetch(`/api/rmm/patch-jobs/${agentId}/${jobId}/deploy`,{
@@ -1160,11 +1220,27 @@ $out -join "\`n" `;
                         }
                     }
 
+                    async function rmmRemoveAgent() {
+                        const modal = bootstrap.Modal.getInstance(document.getElementById('rmmRemoveAgentModal'));
+                        if (modal) modal.hide();
+                        try {
+                            const r = await fetch(`/api/rmm/agent/${agentId}/remove`, {method: 'POST'});
+                            const j = await r.json();
+                            if (j.ok) {
+                                window.location.href = document.querySelector('.breadcrumb-item:nth-child(2) a')?.href || '/assets';
+                            } else {
+                                alert('Remove failed: ' + (j.error || 'Unknown error'));
+                            }
+                        } catch(e) {
+                            alert('Remove failed: ' + e.message);
+                        }
+                    }
+
                     // Expose to global scope for inline onclick handlers
                     Object.assign(window,{
                         rmmLoad, rmmRefreshTelemetry, rmmAvScan, rmmLoadMetrics,
-                        rmmLoadAvailability, rmmLoadSessionEvents, rmmEagleLoad, rmmEagleToggle,
-                        rmmLoadPatches, rmmApprovePatches, rmmChkAll, rmmChkChanged, rmmDeployJob,
+                        rmmLoadAvailability, rmmLoadSessionEvents, rmmEagleLoad, rmmEagleToggle, rmmEagleScreenshotsToggle,
+                        rmmLoadPatches, rmmApprovePatches, rmmScanPatches, rmmChkAll, rmmChkChanged, rmmDeployJob,
                         rmmLoadSoftware, rmmRefreshSoftware, rmmRescanSoftware, rmmFilterSoftware, rmmSwToggle,
                         rmmUninstallSw, rmmWingetSearch, rmmWingetInstall, rmmMsiInstall,
                         rmmRunScript, rmmLoadSavedScripts, rmmRunSavedScript,
@@ -1172,7 +1248,8 @@ $out -join "\`n" `;
                         rmmLoadEvents,
                         rmmFsTabClick, rmmFsNav, rmmFsSelect, rmmFsBack, rmmFsRefresh, rmmFsDownload, rmmFsUpload,
                         rmmPowerAction, rmmRequestScreenshot,
-                        rmmRestartAgent, rmmUpdateAgent, rmmInstallTray
+                        rmmRestartAgent, rmmUpdateAgent, rmmInstallTray,
+                        rmmRemoveAgent
                     });
 
                     rmmLoad().catch(err => {
@@ -1180,6 +1257,7 @@ $out -join "\`n" `;
                         if(b){ b.className='badge bg-danger'; b.textContent='JS Error: '+err.message; }
                         console.error('[RMM] rmmLoad failed:', err);
                     });
-                    // Pre-load patches so data is visible when the Patches tab is clicked
+                    // Pre-load patches and software so data is ready when those tabs are clicked
                     rmmLoadPatches().catch(() => {});
+                    rmmLoadSoftware().catch(() => {});
                 })();

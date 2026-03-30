@@ -33,8 +33,34 @@
             <i class="bi bi-display"></i> Install Tray</button>
         <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
             <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
+        <button id="rmm-logoff-btn" class="btn btn-sm btn-danger" onclick="rmmForceLogoff()" title="Force logoff all active user sessions on this machine">
+            <i class="bi bi-door-open-fill"></i> Force Logoff</button>
+        <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#rmmRemoveAgentModal">
+            <i class="bi bi-trash3"></i> Remove Agent</button>
     </div>
 </div>
+</div>
+
+<!-- Remove Agent Confirmation Modal -->
+<div class="modal fade" id="rmmRemoveAgentModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i>Remove RMM Agent</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-1">This will permanently remove <strong>{{ asset.name }}</strong> from the RMM system, including all telemetry, patches, software inventory, and Eagle Eyes data.</p>
+                <p class="text-danger small mb-0"><i class="bi bi-info-circle me-1"></i>The asset record will not be deleted — only RMM agent data is removed.</p>
+            </div>
+            <div class="modal-footer py-2">
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-danger" onclick="rmmRemoveAgent()">
+                    <i class="bi bi-trash3 me-1"></i>Remove Agent
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div class="nav nav-pills flex-wrap gap-1 mb-3">
@@ -187,6 +213,16 @@
             <a id="rmm-eagle-dash-btn" href="#" target="_blank" class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.72rem;display:none;">
                 <i class="bi bi-bar-chart-line me-1"></i>Dashboard
             </a>
+        </div>
+    </div>
+    <!-- Screenshots sub-toggle (shown only when Eagle Eyes is enabled) -->
+    <div id="rmm-eagle-screenshots-row" class="d-flex align-items-center justify-content-between mb-2 ps-3 pe-2 py-1 rounded" style="background:rgba(255,200,0,.04);border:1px solid rgba(255,200,0,.10);display:none!important;">
+        <div>
+            <i class="bi bi-camera me-1 text-secondary" style="font-size:.78rem;"></i>
+            <span style="font-size:.78rem;">Periodic screenshots</span>
+        </div>
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="rmm-eagle-screenshots-toggle" onchange="rmmEagleScreenshotsToggle(this.checked)" style="cursor:pointer;">
         </div>
     </div>
     <!-- Agent online/offline -->
@@ -481,8 +517,8 @@
 
 <script src="{{ url_for('static', filename='js/rmm_agent.js') }}"></script>
 <script>
-window.RMMSECTION_CFG = {
-  section: {{ section }}
+window.RMMSECTIONCFG = {
+  section: {{ section | tojson }}
 };
 </script>
 <script src="/static/js/rmm_section.js"></script>

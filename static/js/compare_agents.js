@@ -90,23 +90,30 @@ async function cmpLoad() {
   if (!data || !data.ok) { if (empty) empty.style.display=''; return; }
 
   const n = selected.length;
-  const colClass = n===1 ? 'col-xl-6 col-lg-8 col-md-10 mx-auto'
-                 : n===2 ? 'col-md-6'
-                 : n===3 ? 'col-lg-4 col-md-6'
-                 : 'col-xl-3 col-md-6';
+  const colClass = n === 1 ? 'col-12 col-lg-8 col-xl-6 mx-auto'
+                 : n === 2 ? 'col-12 col-md-6'
+                 : n === 3 ? 'col-12 col-md-6 col-xl-4'
+                 : n <= 8  ? 'col-12 col-sm-6 col-xl-3'
+                 :            'col-12 col-sm-6 col-md-4';
 
   grid.innerHTML = selected.map((aid, idx) => {
-    const r       = data.results[aid] || {hostname:aid, summary:[], daily:[], total_s:0};
-    const score   = prodScore(r.summary);
-    const topApps = (r.summary||[]).slice(0,6);
-    const topApp  = topApps[0] || null;
-    const lineId  = `line-${aid.replace(/[^a-z0-9]/gi,'_')}`;
-    const barId   = `bar-${aid.replace(/[^a-z0-9]/gi,'_')}`;
-    const col     = AGENT_COLORS[idx % AGENT_COLORS.length];
-    const active  = (r.daily||[]).filter(d=>d.total_s>0).length;
+    const r            = data.results[aid] || {hostname:aid, summary:[], daily:[], total_s:0};
+    const score        = prodScore(r.summary);
+    const topApps      = (r.summary||[]).slice(0, 6);
+    const topApp       = topApps[0] || null;
+    const lineId       = `line-${aid.replace(/[^a-z0-9]/gi,'_')}`;
+    const barId        = `bar-${aid.replace(/[^a-z0-9]/gi,'_')}`;
+    const col          = AGENT_COLORS[idx % AGENT_COLORS.length];
+    const active       = (r.daily||[]).filter(d => d.total_s > 0).length;
+    const avgDaily     = active ? Math.round(r.total_s / active) : 0;
+    const busiestDay   = (r.daily||[]).reduce((best, d) => (!best || d.total_s > best.total_s) ? d : best, null);
+    const totalEvents  = (r.summary||[]).reduce((sum, a) => sum + (a.events || 0), 0);
+    const avgSession   = totalEvents ? Math.round(r.total_s / totalEvents) : 0;
+    const busiestLabel = busiestDay ? (p => `${parseInt(p[1])}/${parseInt(p[2])}`)(busiestDay.day.split('-')) : '';
+    const topPct       = r.total_s && topApp ? Math.round(topApp.total_s / r.total_s * 100) : 0;
 
     return `<div class="${colClass}">
-      <div class="card border-0 shadow h-100" style="background:#0f1923;border-radius:12px;overflow:hidden;">
+      <div class="card border-0 shadow h-100 cmp-card" style="background:#0f1923;border-radius:12px;overflow:hidden;">
         <div class="cmp-card-header px-3 py-2 d-flex align-items-center justify-content-between" style="border-bottom:1px solid #1a3050;">
           <div class="d-flex align-items-center gap-2 overflow-hidden">
             <div style="width:9px;height:9px;border-radius:50%;background:${col};box-shadow:0 0 6px ${col};flex-shrink:0;"></div>
@@ -117,34 +124,47 @@ async function cmpLoad() {
           </a>
         </div>
         <div class="card-body p-3">
-          <!-- Stats -->
-          <div class="row g-2 mb-3">
-            <div class="col-4"><div class="stat-pill">
+          <!-- Stats 2×2 -->
+          <div class="row g-2 mb-2">
+            <div class="col-6"><div class="stat-pill">
               <div class="sp-label">Total Time</div>
               <div class="sp-value text-info">${fmtDur(r.total_s)}</div>
             </div></div>
-            <div class="col-4"><div class="stat-pill">
-              <div class="sp-label">Productivity</div>
-              <div class="sp-value" style="color:${prodColor(score)};">${score}%</div>
-              <div style="font-size:.62rem;color:${prodColor(score)};opacity:.8;">${prodLabel(score)}</div>
+            <div class="col-6"><div class="stat-pill">
+              <div class="sp-label">Avg / Day</div>
+              <div class="sp-value text-white">${avgDaily ? fmtDur(avgDaily) : '—'}</div>
             </div></div>
-            <div class="col-4"><div class="stat-pill">
+            <div class="col-6"><div class="stat-pill">
+              <div class="sp-label">Productivity</div>
+              <div class="sp-value" style="color:${prodColor(score)};">${score}%
+                <span style="font-size:.58rem;opacity:.75;margin-left:3px;">${prodLabel(score)}</span>
+              </div>
+              <div class="prod-bar mt-1"><div style="width:${score}%;background:${prodColor(score)};"></div></div>
+            </div></div>
+            <div class="col-6"><div class="stat-pill">
               <div class="sp-label">Active Days</div>
               <div class="sp-value text-white">${active}<span style="font-size:.65rem;color:#566779;font-weight:400;">/${days}</span></div>
             </div></div>
           </div>
+          <!-- Info strip -->
+          <div class="cmp-info-strip mb-2">
+            ${busiestDay ? `<span class="cmp-chip" title="Busiest day"><i class="bi bi-bar-chart-fill" style="color:#4dabf7;"></i>${busiestLabel} · ${fmtDur(busiestDay.total_s)}</span>` : ''}
+            ${r.summary.length ? `<span class="cmp-chip"><i class="bi bi-grid-3x3-gap" style="color:#8899aa;"></i>${r.summary.length} apps</span>` : ''}
+            ${avgSession >= 30 ? `<span class="cmp-chip" title="Avg time per window"><i class="bi bi-stopwatch" style="color:#8899aa;"></i>${fmtDur(avgSession)}/window</span>` : ''}
+          </div>
           ${topApp ? `
-          <div class="d-flex align-items-center gap-2 mb-3 px-1 py-1" style="background:#0a1a28;border-radius:8px;">
-            <i class="bi bi-star-fill text-warning ms-2" style="font-size:.75rem;flex-shrink:0;"></i>
+          <div class="d-flex align-items-center gap-2 mb-3 px-2 py-1" style="background:#0a1a28;border-radius:8px;">
+            <i class="bi bi-star-fill text-warning" style="font-size:.75rem;flex-shrink:0;"></i>
             <span class="text-muted" style="font-size:.72rem;white-space:nowrap;">Top app:</span>
             <span class="fw-semibold text-warning text-truncate" style="font-size:.8rem;" title="${topApp.process_name}">${topApp.process_name}</span>
-            <span class="ms-auto text-muted flex-shrink-0 me-2" style="font-size:.72rem;">${fmtDur(topApp.total_s)}</span>
+            <span class="ms-auto text-muted flex-shrink-0" style="font-size:.72rem;">${fmtDur(topApp.total_s)}</span>
+            ${topPct ? `<span class="cmp-chip ms-1" style="font-size:.62rem;">${topPct}%</span>` : ''}
           </div>` : ''}
           <!-- Daily chart -->
-          <div class="mb-1" style="font-size:.62rem;text-transform:uppercase;letter-spacing:.07em;color:#4a5a6a;">Daily Activity</div>
-          <div style="position:relative;height:120px;margin-bottom:18px;"><canvas id="${lineId}"></canvas></div>
+          <div class="mb-1 chart-label">Daily Activity</div>
+          <div style="position:relative;height:110px;margin-bottom:14px;"><canvas id="${lineId}"></canvas></div>
           <!-- App breakdown -->
-          <div class="mb-1" style="font-size:.62rem;text-transform:uppercase;letter-spacing:.07em;color:#4a5a6a;">App Breakdown</div>
+          <div class="mb-1 chart-label">App Breakdown</div>
           <div style="position:relative;height:${Math.max(topApps.length,3)*26}px;"><canvas id="${barId}"></canvas></div>
         </div>
       </div>

@@ -63,6 +63,10 @@
             <div class="card">
                 <div class="card-header bg-light d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-check2-square"></i> Monitoring Checks ({{ checks|length }})</h5>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            data-bs-toggle="modal" data-bs-target="#addCheckModal">
+                        <i class="bi bi-plus-circle"></i> Add Check
+                    </button>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
@@ -73,6 +77,7 @@
                                     <th>Type</th>
                                     <th>Thresholds</th>
                                     <th>Status</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -113,6 +118,14 @@
                                         </span>
                                         {% endif %}
                                     </td>
+                                    <td class="text-end">
+                                        <form method="POST" action="{{ url_for('monitoring.monitoring_profile_remove_check', profile_id=profile.id, check_id=item.check.id) }}"
+                                              onsubmit="return confirm('Remove this check from the profile?')">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm" title="Remove check">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </form>
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -125,8 +138,15 @@
         <div class="col-md-4">
             <!-- Assets Using This Profile -->
             <div class="card sticky-top" style="top: 20px;">
-                <div class="card-header bg-light">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Assets ({{ assets|length }})</h5>
+                    {% if unassigned_count > 0 %}
+                    <button type="button" class="btn btn-sm btn-outline-success"
+                            data-bs-toggle="modal" data-bs-target="#bulkAssignAssetsModal">
+                        <i class="bi bi-plus-circle"></i> Assign Assets
+                        <span class="badge bg-secondary ms-1">{{ unassigned_count }}</span>
+                    </button>
+                    {% endif %}
                 </div>
                 <div class="card-body">
                     {% if assets %}
@@ -146,6 +166,14 @@
                     <div class="text-center text-muted py-3">
                         <i class="bi bi-inbox fs-1 d-block mb-2"></i>
                         No assets using this profile yet
+                        {% if unassigned_count > 0 %}
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-sm btn-success"
+                                    data-bs-toggle="modal" data-bs-target="#bulkAssignAssetsModal">
+                                <i class="bi bi-plus-circle"></i> Assign {{ unassigned_count }} Matching Assets
+                            </button>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endif %}
                 </div>
@@ -159,5 +187,426 @@
             </div>
         </div>
     </div>
+
+    <!-- Active Alerts Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-exclamation-triangle text-warning"></i>
+                        Active Alerts
+                        {% if active_alerts %}
+                        <span class="badge bg-danger ms-1">{{ active_alerts|length }}</span>
+                        {% endif %}
+                    </h5>
+                    {% if assets %}
+                    <button type="button" class="btn btn-sm btn-outline-danger"
+                            data-bs-toggle="modal" data-bs-target="#addAlertModal">
+                        <i class="bi bi-plus-circle"></i> Add Alert
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="card-body p-0">
+                    {% if active_alerts %}
+                    <div class="list-group list-group-flush">
+                        {% for alert in active_alerts %}
+                        <div class="list-group-item">
+                            <div class="row align-items-center">
+                                <div class="col-auto">
+                                    {% if alert.severity == 'critical' %}
+                                    <i class="bi bi-x-circle-fill text-danger fs-4"></i>
+                                    {% elif alert.severity == 'warning' %}
+                                    <i class="bi bi-exclamation-triangle-fill text-warning fs-4"></i>
+                                    {% else %}
+                                    <i class="bi bi-info-circle-fill text-info fs-4"></i>
+                                    {% endif %}
+                                </div>
+                                <div class="col">
+                                    <div class="fw-semibold">{{ alert.message }}</div>
+                                    <small class="text-muted">
+                                        <i class="bi bi-hdd-rack"></i>
+                                        <a href="{{ url_for('assets.view_asset', asset_id=alert.asset_id) }}">{{ alert.asset.name }}</a>
+                                        &bull;
+                                        <i class="bi bi-clock"></i>
+                                        {{ alert.triggered_at.strftime('%Y-%m-%d %H:%M') if alert.triggered_at else 'Unknown' }}
+                                    </small>
+                                </div>
+                                <div class="col-auto">
+                                    <span class="badge bg-{{ 'danger' if alert.severity == 'critical' else 'warning text-dark' if alert.severity == 'warning' else 'info' }} me-1">
+                                        {{ alert.severity|upper }}
+                                    </span>
+                                    <span class="badge bg-{{ 'secondary' if alert.status in ('active','open') else 'warning text-dark' }}">
+                                        {{ alert.status|upper }}
+                                    </span>
+                                </div>
+                                <div class="col-auto">
+                                    {% if alert.status in ('active', 'open') %}
+                                    <form method="POST" action="{{ url_for('monitoring.monitoring_acknowledge_alert', alert_id=alert.id) }}" class="d-inline">
+                                        <button type="submit" class="btn btn-outline-warning btn-sm" title="Acknowledge">
+                                            <i class="bi bi-check"></i>
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-check-circle fs-2 d-block mb-2 text-success"></i>
+                        No active alerts for assets in this profile
+                    </div>
+                    {% endif %}
+                </div>
+                {% if active_alerts %}
+                <div class="card-footer bg-transparent">
+                    <a href="{{ url_for('monitoring.monitoring_alerts') }}" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-list"></i> View All Alerts
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if profile.os_family == 'Windows' %}
+    <!-- Backup Policy Section (Windows only) -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-shield-check text-primary"></i> Backup Policy Assignments
+                        <small class="text-muted fw-normal ms-2">Windows agents in this profile</small>
+                    </h5>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            data-bs-toggle="modal" data-bs-target="#createPolicyModal">
+                        <i class="bi bi-plus-circle"></i> Create Policy
+                    </button>
+                    {% if backup_policies %}
+                    <button type="button" class="btn btn-sm btn-outline-success ms-2"
+                            data-bs-toggle="modal" data-bs-target="#assignExistingPolicyModal">
+                        <i class="bi bi-shield-check"></i> Assign Existing Policy
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="card-body p-0">
+                    {% if assets %}
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Asset</th>
+                                    <th>Current Backup Policy</th>
+                                    <th>Agent Status</th>
+                                    <th>Assign Policy</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for asset in assets %}
+                                {% set binfo = asset_backup_info.get(asset.id) %}
+                                <tr>
+                                    <td>
+                                        <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="fw-semibold text-decoration-none">
+                                            {{ asset.name }}
+                                        </a>
+                                        <small class="d-block text-muted">{{ asset.asset_tag }}</small>
+                                    </td>
+                                    <td>
+                                        {% if binfo and binfo.policy_name %}
+                                        <span class="badge bg-success">
+                                            <i class="bi bi-shield-check"></i> {{ binfo.policy_name }}
+                                        </span>
+                                        {% elif binfo %}
+                                        <span class="badge bg-secondary">No policy assigned</span>
+                                        {% else %}
+                                        <span class="badge bg-light text-muted border">No agent enrolled</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if binfo %}
+                                        <span class="badge bg-success">
+                                            <i class="bi bi-circle-fill"></i> Agent enrolled
+                                        </span>
+                                        {% else %}
+                                        <span class="badge bg-secondary">Not enrolled</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if binfo and backup_policies %}
+                                        <form method="POST" action="{{ url_for('monitoring.monitoring_profile_assign_backup', profile_id=profile.id) }}"
+                                              class="d-flex gap-2 align-items-center">
+                                            <input type="hidden" name="asset_id" value="{{ asset.id }}">
+                                            <select name="policy_id" class="form-select form-select-sm" style="min-width:180px;">
+                                                <option value="">-- No Policy --</option>
+                                                {% for policy in backup_policies %}
+                                                <option value="{{ policy.id }}"
+                                                    {% if binfo.policy_id == policy.id %}selected{% endif %}>
+                                                    {{ policy.name }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                            <button type="submit" class="btn btn-sm btn-primary text-nowrap">
+                                                <i class="bi bi-save"></i> Assign
+                                            </button>
+                                        </form>
+                                        {% elif not binfo %}
+                                        <span class="text-muted small">Agent not enrolled — <a href="{{ url_for('monitoring.monitoring_dashboard') }}">enroll via RMM</a></span>
+                                        {% else %}
+                                        <span class="text-muted small">No backup policies configured — <a href="{{ url_for('backup.settings_backup') }}">create one</a></span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-inbox fs-2 d-block mb-2"></i>
+                        No assets assigned to this profile yet
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
 </div>
+
+<!-- Add Alert Modal -->
+<div class="modal fade" id="addAlertModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('monitoring.monitoring_profile_add_alert', profile_id=profile.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle text-warning"></i> Add Manual Alert</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Asset <span class="text-danger">*</span></label>
+                        <select name="asset_id" class="form-select" required>
+                            <option value="">-- Select Asset --</option>
+                            {% for asset in assets %}
+                            <option value="{{ asset.id }}">{{ asset.name }} ({{ asset.asset_tag }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Severity <span class="text-danger">*</span></label>
+                        <select name="severity" class="form-select" required>
+                            <option value="warning" selected>Warning</option>
+                            <option value="critical">Critical</option>
+                            <option value="info">Info</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Message <span class="text-danger">*</span></label>
+                        <textarea name="message" class="form-control" rows="3"
+                                  placeholder="Describe the alert condition..." required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-plus-circle"></i> Create Alert
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="bulkAssignAssetsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('monitoring.monitoring_profile_bulk_assign_assets', profile_id=profile.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle text-success"></i> Bulk Assign Assets</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted mb-3">
+                        Assign all <strong>{{ profile.device_type }}</strong> assets to this profile.
+                        {% if unassigned_count > 0 %}
+                        <strong>{{ unassigned_count }}</strong> unassigned matching asset(s) found.
+                        {% endif %}
+                    </p>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="overwrite" value="1" id="overwriteAssign">
+                        <label class="form-check-label" for="overwriteAssign">
+                            Also reassign assets that already have a different profile
+                        </label>
+                        <div class="form-text text-warning">
+                            <i class="bi bi-exclamation-triangle"></i> This will overwrite existing profile assignments.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-plus-circle"></i> Assign Matching Assets
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Add Check Modal -->
+<div class="modal fade" id="addCheckModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('monitoring.monitoring_profile_add_check', profile_id=profile.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle text-primary"></i> Add Monitoring Check</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Check <span class="text-danger">*</span></label>
+                        {% if available_checks %}
+                        <select name="check_id" class="form-select" required>
+                            <option value="">-- Select Check --</option>
+                            {% for c in available_checks %}
+                            <option value="{{ c.id }}">{{ c.name }}
+                                {% if c.check_type %} ({{ c.check_type }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if available_checks|length == 0 %}
+                        <div class="form-text text-warning">All available checks are already in this profile.</div>
+                        {% endif %}
+                        {% else %}
+                        <div class="alert alert-warning mb-0">All available checks are already assigned to this profile.</div>
+                        {% endif %}
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Warning Threshold</label>
+                            <input type="text" name="warning_threshold" class="form-control"
+                                   placeholder="e.g. 80 or Stopped">
+                            <div class="form-text">Leave blank for no warning threshold</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Critical Threshold</label>
+                            <input type="text" name="critical_threshold" class="form-control"
+                                   placeholder="e.g. 95 or Stopped">
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label fw-semibold">Interval Override (minutes)</label>
+                        <input type="number" name="interval_override" class="form-control" min="1"
+                               placeholder="Leave blank to use profile default ({{ profile.check_interval_minutes }} min)">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" {% if not available_checks %}disabled{% endif %}>
+                        <i class="bi bi-plus-circle"></i> Add Check
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Assign Existing Policy Modal -->
+<div class="modal fade" id="assignExistingPolicyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('monitoring.monitoring_profile_bulk_assign_backup', profile_id=profile.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-shield-check text-success"></i> Assign Existing Policy</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">Select a backup policy to apply to <strong>all enrolled agents</strong> in this profile. Agents that already have a different policy assigned will be updated.</p>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Backup Policy <span class="text-danger">*</span></label>
+                        <select name="policy_id" class="form-select" required>
+                            <option value="">-- Select Policy --</option>
+                            {% for policy in backup_policies %}
+                            <option value="{{ policy.id }}">{{ policy.name }}
+                                {% if policy.nas_unc_path %} &mdash; {{ policy.nas_unc_path }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="alert alert-info py-2 mb-0">
+                        <i class="bi bi-info-circle"></i>
+                        Only assets with an enrolled RMM agent will be assigned. Assets without an agent are skipped.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-shield-check"></i> Assign to All Agents
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Create Backup Policy Modal -->
+<div class="modal fade" id="createPolicyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('monitoring.monitoring_profile_create_backup_policy', profile_id=profile.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-shield-plus text-primary"></i> Create Backup Policy</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Policy Name <span class="text-danger">*</span></label>
+                        <input type="text" name="policy_name" class="form-control"
+                               placeholder="e.g. Windows Workstation Backup" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">NAS UNC Path <span class="text-danger">*</span></label>
+                        <input type="text" name="nas_unc_path" class="form-control"
+                               placeholder="\\\\nas-server\\backups" required>
+                        <div class="form-text">UNC path where backups will be stored</div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Full Backup Every (days)</label>
+                            <input type="number" name="full_backup_interval_days" class="form-control"
+                                   value="7" min="1">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Retain Backups (days)</label>
+                            <input type="number" name="retention_days" class="form-control"
+                                   value="30" min="1">
+                        </div>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="assign_all" value="1" id="assignAllAgents" checked>
+                        <label class="form-check-label" for="assignAllAgents">
+                            Assign this policy to all enrolled agents in this profile
+                        </label>
+                    </div>
+                    <div class="form-text mt-1">
+                        <i class="bi bi-info-circle"></i>
+                        Default include path: <code>C:\Users</code>. You can customise further from
+                        <a href="{{ url_for('backup.settings_backup') }}" target="_blank">Backup Settings</a>.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-shield-plus"></i> Create Policy
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 {% endblock %}

@@ -48,7 +48,13 @@
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 1.5rem;
     gap: .25rem;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 1px; /* keep active border-bottom visible under scroll crop */
 }
+.nav-tabs-main::-webkit-scrollbar { display: none; }
 .nav-tabs-main .nav-link {
     color: var(--text-secondary);
     font-weight: 500;
@@ -58,6 +64,7 @@
     border-radius: 0;
     background: transparent;
     transition: color .15s;
+    white-space: nowrap;
 }
 .nav-tabs-main .nav-link:hover { color: var(--text-primary); }
 .nav-tabs-main .nav-link.active {
@@ -94,7 +101,13 @@
     font-size: .95rem;
     font-weight: 500;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
 }
+
+/* table-responsive inside each card handles wide table scrolling;
+   body overflow-x: hidden prevents page-level horizontal scroll */
 
 /* History timeline */
 .history-item {

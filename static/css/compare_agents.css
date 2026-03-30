@@ -3,10 +3,41 @@
 .cmp-agent-row:hover { background:#0d1e2f; border-color:#2e3a4a !important; color:#c0d8f0; }
 .cmp-agent-row input[type=checkbox] { accent-color:#4dabf7; width:14px; height:14px; flex-shrink:0; cursor:pointer; }
 .cmp-agent-row:has(input:checked) { background:#0a1a2e; border-color:#4dabf7 !important; color:#e0f0ff; }
-  .stat-pill {
+
+/* stat pills */
+.stat-pill {
     background:#0a1420; border:1px solid #1a2d3d; border-radius:10px;
-    padding:10px 8px; text-align:center;
-  }
-  .stat-pill .sp-label { font-size:.6rem; letter-spacing:.08em; color:#566779; text-transform:uppercase; margin-bottom:3px; }
-  .stat-pill .sp-value { font-size:1.1rem; font-weight:700; line-height:1.2; }
-  .cmp-card-header { background:linear-gradient(135deg,#0d1e2f 0%,#15253a 100%); }
+    padding:8px 6px; text-align:center;
+}
+.stat-pill .sp-label { font-size:.58rem; letter-spacing:.08em; color:#566779; text-transform:uppercase; margin-bottom:3px; }
+.stat-pill .sp-value { font-size:clamp(.85rem,1.8vw,1.1rem); font-weight:700; line-height:1.2; }
+
+/* productivity progress bar inside stat-pill */
+.prod-bar { height:3px; background:#1a2535; border-radius:2px; overflow:hidden; }
+.prod-bar > div { height:100%; border-radius:2px; transition:width .5s ease; }
+
+/* card header */
+.cmp-card-header { background:linear-gradient(135deg,#0d1e2f 0%,#15253a 100%); }
+
+/* card hover glow */
+.cmp-card { transition: box-shadow .2s; }
+.cmp-card:hover { box-shadow: 0 0 0 1px #4dabf733, 0 8px 24px rgba(0,0,0,.5) !important; }
+
+/* info strip chips */
+.cmp-info-strip { display:flex; flex-wrap:wrap; gap:5px; }
+.cmp-chip {
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:.67rem; color:#8899aa;
+    background:#0a1420; border:1px solid #1a2d3d; border-radius:20px;
+    padding:2px 7px; white-space:nowrap;
+}
+
+/* chart section labels */
+.chart-label {
+    font-size:.6rem; text-transform:uppercase; letter-spacing:.07em; color:#4a5a6a;
+}
+
+/* mobile: full-width cards */
+@media (max-width:575px) {
+    #cmp-grid > div { flex: 0 0 100% !important; max-width:100% !important; }
+}

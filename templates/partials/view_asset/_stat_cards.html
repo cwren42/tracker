@@ -1,6 +1,6 @@
 <!-- ── STAT CARDS ─────────────────────────────────────────────── -->
 <div class="row g-3 mb-4">
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-cash-coin sc-icon text-success"></i>
             <div>
@@ -9,7 +9,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-calendar-check sc-icon text-primary"></i>
             <div>
@@ -18,7 +18,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}border-danger{% endif %} d-flex align-items-center gap-3">
             <i class="bi bi-shield-check sc-icon {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}text-danger{% else %}text-warning{% endif %}"></i>
             <div>
@@ -34,7 +34,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-hourglass-split sc-icon text-info"></i>
             <div>
@@ -48,7 +48,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-star sc-icon text-warning"></i>
             <div>
@@ -57,7 +57,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-cpu sc-icon text-primary"></i>
             <div>
@@ -66,7 +66,7 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg">
+    <div class="col-6 col-md-4 col-lg-3 col-xl">
         <div class="stat-card d-flex align-items-center gap-3">
             <i class="bi bi-geo-alt sc-icon text-secondary"></i>
             <div>
@@ -98,6 +98,8 @@
             <button id="rmm-tray-install-btn" class="btn btn-sm btn-outline-secondary" onclick="rmmInstallTray()"><i class="bi bi-display"></i> Install Tray</button>
             <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
                 <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
+            <button id="rmm-logoff-btn" class="btn btn-sm btn-danger" onclick="rmmForceLogoff()" title="Force logoff all active user sessions">
+                <i class="bi bi-door-open-fill"></i> Force Logoff</button>
         </div>
     </div>
 </div>

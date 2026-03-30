@@ -48,9 +48,11 @@ def employees():
     department_filter = request.args.get('department', '').strip()
     sort_by = request.args.get('sort', 'name')
     sort_order = request.args.get('order', 'asc')
+    location_filter = request.args.get('location', '').strip()
+    show_hidden = request.args.get('show_hidden', '0') == '1' and current_user.role == 'admin'
     
-    # Base query
-    query = Employee.query
+    # Base query — show only hidden employees or only visible employees
+    query = Employee.query.filter(Employee.is_visible == False) if show_hidden else Employee.query.filter(Employee.is_visible == True)
     
     # Apply search filter
     if search:
@@ -68,6 +70,10 @@ def employees():
     # Apply department filter
     if department_filter:
         query = query.filter(Employee.department == department_filter)
+    
+    # Apply location filter
+    if location_filter:
+        query = query.filter(Employee.location == location_filter)
     
     # Get all matching employees
     employees = query.all()
@@ -174,6 +180,8 @@ def employees():
         employees.sort(key=lambda e: len(e.assets), reverse=(sort_order == 'desc'))
     elif sort_by == 'licenses':
         employees.sort(key=lambda e: employee_license_counts.get(e.id, 0), reverse=(sort_order == 'desc'))
+    elif sort_by == 'location':
+        employees.sort(key=lambda e: (e.location or '').lower(), reverse=(sort_order == 'desc'))
     
     # Get all unique departments for filter dropdown
     all_departments = db.session.query(Employee.department).distinct().filter(
@@ -181,9 +189,16 @@ def employees():
         Employee.department != ''
     ).order_by(Employee.department).all()
     departments = [dept[0] for dept in all_departments]
+
+    # Get all unique locations for filter dropdown
+    all_locations = db.session.query(Employee.location).distinct().filter(
+        Employee.location.isnot(None),
+        Employee.location != ''
+    ).order_by(Employee.location).all()
+    locations = [loc[0] for loc in all_locations]
     
     # Calculate statistics
-    total_employees = Employee.query.count()
+    total_employees = Employee.query.filter(Employee.is_visible == True).count()
     total_assets_assigned = db.session.query(Asset).filter(Asset.employee_id.isnot(None)).count()
     total_licenses_assigned = LicenseAssignment.query.filter_by(status='Active').filter(
         LicenseAssignment.employee_id.isnot(None)
@@ -196,14 +211,64 @@ def employees():
                          employee_activity=employee_activity,
                          employee_rmm_online=employee_rmm_online,
                          departments=departments,
+                         locations=locations,
                          search=search,
                          department_filter=department_filter,
+                         location_filter=location_filter,
+                         show_hidden=show_hidden,
                          sort_by=sort_by,
                          sort_order=sort_order,
                          total_employees=total_employees,
                          total_assets_assigned=total_assets_assigned,
                          total_licenses_assigned=total_licenses_assigned,
                          departments_count=departments_count)
+
+
+
+@bp.route('/employees/bulk-update', methods=['POST'])
+@login_required
+@manager_required
+def bulk_update_employees():
+    """Bulk update location or visibility for a set of employees."""
+    action = request.form.get('action', 'location')
+    employee_ids = request.form.getlist('employee_ids')
+
+    if not employee_ids:
+        flash('No employees selected.', 'warning')
+        return redirect(request.referrer or url_for('employees.employees'))
+
+    try:
+        ids = [int(eid) for eid in employee_ids]
+    except ValueError:
+        flash('Invalid selection.', 'danger')
+        return redirect(request.referrer or url_for('employees.employees'))
+
+    employees_to_update = Employee.query.filter(Employee.id.in_(ids)).all()
+
+    if action == 'location':
+        location = request.form.get('location', '').strip() or None
+        for emp in employees_to_update:
+            emp.location = location
+        db.session.commit()
+        loc_label = location or '(none)'
+        flash(f'Updated location to "{loc_label}" for {len(employees_to_update)} employee(s).', 'success')
+
+    elif action == 'hide' and current_user.role == 'admin':
+        for emp in employees_to_update:
+            emp.is_visible = False
+        db.session.commit()
+        flash(f'Hidden {len(employees_to_update)} employee(s).', 'success')
+
+    elif action == 'unhide' and current_user.role == 'admin':
+        for emp in employees_to_update:
+            emp.is_visible = True
+        db.session.commit()
+        flash(f'Restored {len(employees_to_update)} employee(s) to visible.', 'success')
+
+    else:
+        flash('Unknown action.', 'danger')
+
+    return redirect(request.referrer or url_for('employees.employees'))
 
 
 @bp.route('/employees/sync-from-m365', methods=['POST'])
@@ -260,16 +325,9 @@ def sync_employees_from_m365():
 
                 emp = employees_by_email.get(email.lower())
                 if not emp:
-                    emp = Employee(
-                        name=display_name,
-                        email=email,
-                        department=department,
-                        position=position,
-                    )
-                    db.session.add(emp)
-                    db.session.flush()
-                    employees_by_email[email.lower()] = emp
-                    created += 1
+                    # AD is master — skip M365-only users, don't create new records
+                    skipped += 1
+                    continue
                 else:
                     changed = False
                     if display_name and emp.name != display_name:
@@ -287,13 +345,14 @@ def sync_employees_from_m365():
                 # Photo sync
                 photo_bytes = m365.get_user_photo_bytes(email)
                 if photo_bytes:
-                    photo_rel = f"employee_photos/employee_{emp.id}.jpg"
-                    photo_abs = os.path.join(current_app.config['UPLOAD_FOLDER'], photo_rel)
+                    photo_filename = f"employee_{emp.id}.jpg"
+                    photo_abs = os.path.join(current_app.config['UPLOAD_FOLDER'], 'employee_photos', photo_filename)
                     try:
                         with open(photo_abs, 'wb') as f:
                             f.write(photo_bytes)
-                        if emp.photo != photo_rel:
-                            emp.photo = photo_rel
+                        import time as _time
+                        photo_rel = f"employee_photos/{photo_filename}?v={int(_time.time())}"
+                        emp.photo = photo_rel
                         photo_updated += 1
                     except Exception:
                         pass
@@ -302,10 +361,193 @@ def sync_employees_from_m365():
                 continue
 
         db.session.commit()
-        flash(f'M365 sync complete: {created} created, {updated} updated, {photo_updated} photos refreshed, {skipped} skipped', 'success')
+        flash(f'M365 sync complete: {updated} updated, {photo_updated} photos refreshed, {skipped} skipped (M365-only users not imported — AD is master)', 'success')
     except Exception as e:
         db.session.rollback()
         flash(f'Error syncing from M365: {str(e)}', 'danger')
+
+    return redirect(url_for('employees.employees'))
+
+
+@bp.route('/employees/sync/ad', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def sync_employees_from_ad():
+    """Sync employees from local Active Directory.
+
+    AD is the master:
+      - Every user objectClass=user/objectCategory=person in the configured
+        base-DN is upserted into the Employee table, keyed by objectGUID.
+      - AD always wins on: name, email, department, position, phone,
+        sam_account_name, ad_guid, ad_dn, ad_enabled.
+      - Existing employees without an ad_guid are matched by email as a
+        one-time association, then pinned by objectGUID going forward.
+
+    M365 validation (if configured):
+      - After the AD pass, each employee's UPN is looked up in the Graph
+        API to populate m365_id, m365_account_enabled, m365_validated_at.
+      - Photos are pulled from M365 (or AD thumbnailPhoto as fallback).
+    """
+    try:
+        from ldap_service import LDAPService, load_ad_config
+        config = load_ad_config(Setting)
+        if not config.enabled:
+            flash('Active Directory integration is not enabled. Go to Settings → Directory to configure it.', 'warning')
+            return redirect(url_for('employees.employees'))
+
+        svc = LDAPService(config)
+        ad_users = svc.get_all_users()
+        svc.disconnect()
+
+        if not ad_users:
+            flash('No users returned from Active Directory — check your base DN and bind credentials.', 'warning')
+            return redirect(url_for('employees.employees'))
+
+        # ---- Load M365 users for validation (optional) ----
+        m365 = None
+        m365_by_upn = {}
+        try:
+            t = Setting.query.filter_by(key='m365_tenant_id').first()
+            c = Setting.query.filter_by(key='m365_client_id').first()
+            s = Setting.query.filter_by(key='m365_client_secret').first()
+            if t and c and s and t.value and c.value and s.value:
+                m365 = M365Service(tenant_id=t.value, client_id=c.value, client_secret=s.value)
+                m365_users_raw = m365.get_all_users() or []
+                m365_by_upn = {(u.get('userPrincipalName') or '').strip().lower(): u
+                               for u in m365_users_raw}
+        except Exception:
+            m365_by_upn = {}
+
+        # ---- Index existing employees ----
+        existing_by_guid  = {e.ad_guid: e for e in Employee.query.filter(Employee.ad_guid.isnot(None)).all()}
+        existing_by_email = {(e.email or '').strip().lower(): e
+                             for e in Employee.query.filter(Employee.ad_guid.is_(None), Employee.email.isnot(None)).all()}
+
+        os.makedirs(os.path.join(current_app.config['UPLOAD_FOLDER'], 'employee_photos'), exist_ok=True)
+
+        created = updated = skipped = photo_saved = 0
+        now = datetime.utcnow()
+
+        for u in ad_users:
+            guid         = u.get('ad_guid', '')
+            display_name = (u.get('display_name') or '').strip()
+            email        = (u.get('email') or '').strip()
+
+            if not display_name:
+                skipped += 1
+                continue
+
+            # Find or create
+            emp = existing_by_guid.get(guid)
+            if not emp and email:
+                emp = existing_by_email.pop(email.lower(), None)
+
+            if emp is None:
+                emp = Employee(ad_guid=guid)
+                db.session.add(emp)
+                db.session.flush()   # get emp.id
+                existing_by_guid[guid] = emp
+                created += 1
+            else:
+                updated += 1
+
+            # AD is master — always overwrite these
+            emp.name             = display_name
+            emp.ad_guid          = guid
+            emp.sam_account_name = u.get('sam_account_name') or emp.sam_account_name
+            emp.ad_dn            = u.get('distinguished_name')
+            emp.ad_enabled       = u.get('ad_enabled', True)
+            emp.ad_last_sync     = now
+            if email:
+                emp.email = email
+            if u.get('department'):
+                emp.department = u['department']
+            if u.get('title'):
+                emp.position = u['title']
+            if u.get('phone'):
+                emp.phone = u['phone']
+            # Store OU-inferred location only when no manual location is set
+            if u.get('ou_location') and not emp.id:  # new records only
+                pass  # location not a field on Employee model yet — safe to skip
+
+            # M365 validation
+            upn_key = (u.get('upn') or email).strip().lower()
+            m365_u  = m365_by_upn.get(upn_key)
+            if m365_u:
+                m365_user_id = m365_u.get('id')
+                emp.m365_id              = m365_user_id
+                emp.m365_account_enabled = m365_u.get('accountEnabled', False)
+                emp.m365_validated_at    = now
+                # Fetch + cache M365 licenses for this user
+                if m365 and m365_user_id:
+                    try:
+                        raw_licenses = m365.get_user_licenses(m365_user_id)
+                        license_list = []
+                        for lic in (raw_licenses or []):
+                            sku = lic.get('skuPartNumber') or lic.get('skuId', '')
+                            plans = [p.get('servicePlanName', '') for p in lic.get('servicePlans', []) if p.get('provisioningStatus') == 'Success']
+                            license_list.append({'sku': sku, 'skuId': lic.get('skuId'), 'plans': plans})
+                        emp.m365_licenses_json = json.dumps(license_list)
+                        emp.m365_licenses_synced_at = now
+                    except Exception:
+                        pass
+
+            # Photos — AD thumbnailPhoto first, M365 fallback
+            thumb = u.get('thumbnail_photo')
+            if thumb and isinstance(thumb, bytes):
+                try:
+                    photo_rel  = f"employee_photos/employee_{emp.id}.jpg"
+                    photo_path = os.path.join(current_app.config['UPLOAD_FOLDER'], photo_rel)
+                    with open(photo_path, 'wb') as fh:
+                        fh.write(thumb)
+                    emp.photo = photo_rel
+                    photo_saved += 1
+                except Exception:
+                    thumb = None  # fall through to M365
+
+            if not thumb and m365 and upn_key:
+                try:
+                    photo_bytes = m365.get_user_photo_bytes(upn_key)
+                    if photo_bytes:
+                        photo_rel  = f"employee_photos/employee_{emp.id}.jpg"
+                        photo_path = os.path.join(current_app.config['UPLOAD_FOLDER'], photo_rel)
+                        with open(photo_path, 'wb') as fh:
+                            fh.write(photo_bytes)
+                        emp.photo = photo_rel
+                        photo_saved += 1
+                except Exception:
+                    pass
+
+        # ---- Deactivate AD-synced employees no longer in AD ----
+        # Only affects employees that have an ad_guid (previously synced from AD).
+        # Manually-added employees (no ad_guid) are never touched.
+        synced_guids = {u.get('ad_guid') for u in ad_users if u.get('ad_guid')}
+        deactivated = 0
+        stale = Employee.query.filter(
+            Employee.ad_guid.isnot(None),
+            ~Employee.ad_guid.in_(synced_guids)
+        ).all()
+        for emp in stale:
+            if emp.ad_enabled is not False:
+                emp.ad_enabled = False
+                emp.ad_last_sync = now
+                deactivated += 1
+
+        db.session.commit()
+
+        m365_note = (f', {len(m365_by_upn)} validated against M365'
+                     if m365_by_upn else ' (M365 validation skipped — not configured)')
+        deact_note = f', {deactivated} marked inactive (removed from AD)' if deactivated else ''
+        flash(
+            f'AD sync complete: {created} added, {updated} updated, '
+            f'{skipped} skipped, {photo_saved} photos saved{deact_note}{m365_note}.',
+            'success',
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'AD sync error: {e}', 'danger')
 
     return redirect(url_for('employees.employees'))
 
@@ -355,9 +597,63 @@ def view_employee(employee_id):
         employee_id=employee_id, 
         status='Active'
     ).all()
+    # Parse cached M365 license data (populated during AD sync)
+    m365_licenses = []
+    if employee.m365_licenses_json:
+        try:
+            m365_licenses = json.loads(employee.m365_licenses_json)
+        except Exception:
+            pass
     return render_template('view_employee.html', 
                          employee=employee,
-                         license_assignments=license_assignments)
+                         license_assignments=license_assignments,
+                         m365_licenses=m365_licenses)
+
+
+@bp.route('/employees/<int:employee_id>/disable-ad', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def disable_in_ad(employee_id):
+    """Disable employee's Active Directory account.
+
+    AD is master — this only touches AD. If Azure AD Connect is running,
+    the disabled state will propagate to M365 automatically on the next
+    connect sync cycle (typically ≤30 minutes).
+    """
+    employee = Employee.query.get_or_404(employee_id)
+
+    if not employee.ad_guid:
+        flash('This employee has no linked Active Directory account.', 'warning')
+        return redirect(url_for('employees.view_employee', employee_id=employee_id))
+
+    try:
+        from ldap_service import LDAPService, load_ad_config
+        config = load_ad_config(Setting)
+        if not config.enabled:
+            flash('Active Directory integration is not enabled in Settings.', 'warning')
+            return redirect(url_for('employees.view_employee', employee_id=employee_id))
+
+        svc = LDAPService(config)
+        identifier = employee.sam_account_name or employee.email or employee.ad_guid
+        result = svc.disable_user(identifier)
+
+        if result.get('success'):
+            employee.ad_enabled = False
+            db.session.commit()
+            flash(
+                f'AD account for {employee.name} ({identifier}) has been disabled. '
+                'If Azure AD Connect is configured, M365 will reflect this within the next sync cycle.',
+                'success',
+            )
+        else:
+            flash(f'Failed to disable AD account: {result.get("error")}', 'danger')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error disabling AD account: {e}', 'danger')
+
+    return redirect(url_for('employees.view_employee', employee_id=employee_id))
 
 
 @bp.route('/employees/<int:employee_id>/edit', methods=['GET', 'POST'])
@@ -368,6 +664,11 @@ def edit_employee(employee_id):
     employee = Employee.query.get_or_404(employee_id)
     
     if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            flash('Error: Employee name cannot be blank.', 'danger')
+            return render_template('edit_employee.html', employee=employee)
+
         email = request.form.get('email')
         
         # Check if email already exists for another employee
@@ -378,11 +679,16 @@ def edit_employee(employee_id):
                 return render_template('edit_employee.html', employee=employee)
         
         try:
-            employee.name = request.form.get('name')
+            employee.name = name
             employee.email = email
             employee.department = request.form.get('department')
             employee.phone = request.form.get('phone')
             employee.position = request.form.get('position')
+            employee.location = request.form.get('location') or None
+            if current_user.role == 'admin':
+                # getlist returns all values; checkbox sends '1' when checked
+                is_visible_vals = request.form.getlist('is_visible')
+                employee.is_visible = '1' in is_visible_vals
             
             db.session.commit()
             
@@ -647,3 +953,110 @@ def download_employee_template():
         as_attachment=True,
         download_name='employee_import_template.csv'
     )
+
+
+# ---------------------------------------------------------------------------
+# ID Card routes
+# ---------------------------------------------------------------------------
+
+@bp.route('/employees/<int:employee_id>/upload-photo', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def upload_employee_photo(employee_id):
+    """Manual photo upload for an employee (fallback when AD/M365 has no photo)."""
+    employee = Employee.query.get_or_404(employee_id)
+
+    if 'photo' not in request.files:
+        flash('No file selected.', 'warning')
+        return redirect(url_for('employees.edit_employee', employee_id=employee_id))
+
+    file = request.files['photo']
+    if file.filename == '':
+        flash('No file selected.', 'warning')
+        return redirect(url_for('employees.edit_employee', employee_id=employee_id))
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in {'jpg', 'jpeg', 'png', 'gif', 'webp'}:
+        flash('Invalid file type. Only jpg, png, gif, webp allowed.', 'danger')
+        return redirect(url_for('employees.edit_employee', employee_id=employee_id))
+
+    try:
+        upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'employee_photos')
+        os.makedirs(upload_dir, exist_ok=True)
+
+        # Use same naming convention as M365/AD sync so they can overwrite this
+        filename = f"employee_{employee_id}.{ext}"
+        filepath = os.path.join(upload_dir, filename)
+        file.save(filepath)
+
+        import time
+        photo_rel = f"employee_photos/{filename}?v={int(time.time())}"
+        employee.photo = photo_rel
+        db.session.commit()
+
+        flash(f'Photo updated for {employee.name}.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Photo upload failed: {e}', 'danger')
+
+    return redirect(url_for('employees.edit_employee', employee_id=employee_id))
+
+
+@bp.route('/employees/id-cards')
+@login_required
+@license_required
+def id_card_designer():
+    """Bulk ID card designer — print any selection of employees."""
+    # Include hidden (is_visible=False) employees — they may still need ID cards
+    employees = Employee.query.order_by(Employee.name).all()
+    # Ensure all employees have a card number
+    changed = False
+    used = {e.card_number for e in employees if e.card_number}
+    import random as _random
+    for emp in employees:
+        if not emp.card_number:
+            while True:
+                num = str(_random.randint(100000, 999999))
+                if num not in used:
+                    used.add(num)
+                    break
+            emp.card_number = num
+            changed = True
+    if changed:
+        db.session.commit()
+
+    company_name = Setting.query.filter_by(key='company_name').first()
+    company_logo_url = url_for('static', filename='images/company_logo.png') if os.path.exists(
+        os.path.join(current_app.root_path, 'static', 'images', 'company_logo.png')) else None
+
+    all_locations = db.session.query(Employee.location).distinct().filter(
+        Employee.location.isnot(None),
+        Employee.location != ''
+    ).order_by(Employee.location).all()
+    locations = [loc[0] for loc in all_locations]
+
+    return render_template('id_card_designer.html', employees=employees,
+                           company_name=company_name.value if company_name else 'Cirque Corporation',
+                           company_logo_url=company_logo_url,
+                           locations=locations)
+
+
+@bp.route('/employees/<int:employee_id>/id-card')
+@login_required
+@license_required
+def employee_id_card(employee_id):
+    """Single-employee card preview / print page."""
+    employee = Employee.query.get_or_404(employee_id)
+    if not employee.card_number:
+        import random as _random
+        employee.card_number = str(_random.randint(100000, 999999))
+        db.session.commit()
+
+    company_name = Setting.query.filter_by(key='company_name').first()
+    company_logo_url = url_for('static', filename='images/company_logo.png') if os.path.exists(
+        os.path.join(current_app.root_path, 'static', 'images', 'company_logo.png')) else None
+
+    return render_template('id_card_designer.html', employees=[employee], single=True,
+                           company_name=company_name.value if company_name else 'Cirque Corporation',
+                           company_logo_url=company_logo_url)

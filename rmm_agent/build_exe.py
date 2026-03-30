@@ -168,10 +168,11 @@ Name "${{PRODUCT_NAME}} ${{PRODUCT_VERSION}}"
 OutFile "{OUTPUT_EXE}"
 InstallDir "${{INSTALL_DIR}}"
 RequestExecutionLevel admin
-ShowInstDetails show
+ShowInstDetails nevershow
+AutoCloseWindow true
+SilentInstall silent
 
 ; ── Pages ────────────────────────────────────────────────────────────────────
-Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
@@ -211,11 +212,11 @@ Section "Install" SEC_MAIN
   ; in background, and completes within 2-3 minutes.
   ; PDQ Deploy sees exit code 0 instantly. Verify via PDQ "Run Script" step:
   ;   (Get-Service CirqueRMM -ErrorAction SilentlyContinue).Status -eq 'Running'
-  DetailPrint "Files installed. Launching service setup in background..."
-  Exec '$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\\install_agent.ps1" -SkipDownload'
-  IfSilent skip_msg
-  MessageBox MB_ICONINFORMATION "Cirque RMM Agent {VERSION} files installed.$\\n$\\nService setup runs in the background (~2 min).$\\nLog: $INSTDIR\\logs\\setup.log"
-  skip_msg:
+  DetailPrint "Files installed. Scheduling service setup via Task Scheduler..."
+  ; Use schtasks to run the PS1 completely outside PDQ's process tree.
+  ; PDQ sees exit code 0 from the EXE immediately; the task runs in the background.
+  ExecWait 'schtasks.exe /Create /F /RU "SYSTEM" /SC ONCE /TN "CirqueRMM_Setup" /TR "$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"$INSTDIR\\install_agent.ps1\" -SkipDownload" /ST 00:00 /RL HIGHEST'
+  ExecWait 'schtasks.exe /Run /TN "CirqueRMM_Setup"'
 SectionEnd
 
 ; ── Uninstall section ─────────────────────────────────────────────────────────

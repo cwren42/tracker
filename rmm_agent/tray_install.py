@@ -239,7 +239,7 @@ def _launch_via_schtask(pythonw: str) -> bool:
         "    $line = ($qw | Select-String 'Active' | Select-Object -First 1) -replace '>','';"
         "    $u = (($line.Trim() -split '\\s+')[1]);"
         "}"
-        "$u = $u -replace '.*\\\\','';"
+        # Keep domain\\user for task principal; don't strip domain
         "if (-not $u) { Write-Host 'NO_USER'; exit 1; }"
         f"$a = New-ScheduledTaskAction -Execute '{py_esc}' "
         "       -Argument 'C:\\CirqueRMM\\tray.py' "

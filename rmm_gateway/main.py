@@ -1,4 +1,6 @@
+import asyncio
 import json
+from contextlib import asynccontextmanager
 from typing import Dict
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -8,6 +10,8 @@ from .db import (
     create_rmm_session,
     end_rmm_session,
     get_agent_flags,
+    get_conn,
+    get_cursor,
     get_eagle_config,
     get_latest_screenshot,
     get_latest_telemetry,
@@ -23,7 +27,201 @@ from .db import (
     validate_session_token,
 )
 
-app = FastAPI(title="Tracker RMM Gateway")
+async def _dispatch_next_product(websocket, agent_id: str) -> bool:
+    """Dispatch the next queued product (fewest CVEs first) to the agent.
+    Returns True if a product was dispatched, False if nothing queued."""
+    try:
+        conn = get_conn()
+        cur  = get_cursor(conn)
+        # Pick the product+asset group with the fewest pending CVE jobs (quickest to finish)
+        cur.execute(
+            """SELECT COALESCE(dv.product_name,'') AS product_name, j.asset_id,
+                      MIN(j.id) AS rep_id, COUNT(*) AS job_count
+               FROM cve_patch_job j
+               LEFT JOIN device_vulnerability dv
+                      ON dv.cve_id = j.cve_id AND dv.asset_id = j.asset_id
+               WHERE j.agent_id=%s AND j.status='queued'
+               GROUP BY COALESCE(dv.product_name,''), j.asset_id
+               ORDER BY COUNT(*) ASC
+               LIMIT 1""",
+            (agent_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return False
+        product_name = row["product_name"]
+        asset_id_j   = row["asset_id"]
+        rep_id       = row["rep_id"]
+        # Collect all sibling job IDs + CVE IDs for this product
+        if product_name:
+            cur.execute(
+                """SELECT j.id, j.cve_id FROM cve_patch_job j
+                   WHERE j.agent_id=%s AND j.status='queued'
+                     AND j.cve_id IN (
+                         SELECT cve_id FROM device_vulnerability
+                         WHERE product_name=%s AND asset_id=%s
+                     )""",
+                (agent_id, product_name, asset_id_j)
+            )
+        else:
+            cur.execute(
+                """SELECT id, cve_id FROM cve_patch_job
+                   WHERE agent_id=%s AND status='queued' AND id=%s""",
+                (agent_id, rep_id)
+            )
+        sibling_rows = cur.fetchall()
+        all_cves    = list({r["cve_id"] for r in sibling_rows})
+        sibling_ids = [r["id"] for r in sibling_rows]
+        job_id_out  = sibling_ids[0] if sibling_ids else rep_id
+        payload_out = json.dumps({
+            "type":         "install_cve_patches",
+            "job_id":       job_id_out,
+            "cve_ids":      all_cves,
+            "product_name": product_name,
+            "asset_id":     asset_id_j,
+        })
+        # Mark as deploying and commit BEFORE awaiting the send so the connection
+        # is returned to the pool before the event loop yields to other coroutines.
+        if sibling_ids:
+            cur.execute(
+                "UPDATE cve_patch_job SET status='deploying', updated_at=NOW() WHERE id = ANY(%s)",
+                (sibling_ids,)
+            )
+        conn.commit()
+        cur.close(); conn.close()
+        await websocket.send_text(payload_out)
+        print(f"[gw] dispatched product='{product_name}' {len(all_cves)} CVEs to {agent_id}", flush=True)
+        return True
+    except Exception as _e:
+        print(f"[gw] dispatch-next error for {agent_id}: {_e}", flush=True)
+        return False
+
+
+async def _stale_job_reset_loop():
+    """Background task: reset deploying jobs older than 40 min back to queued."""
+    while True:
+        await asyncio.sleep(600)  # run every 10 minutes
+        try:
+            conn = get_conn()
+            cur = get_cursor(conn)
+            # Only reset deploying jobs for agents that are no longer online.
+            # Skip agents seen in the last 10 min so active long-running WUA installs
+            # are not interrupted.
+            cur.execute(
+                "UPDATE cve_patch_job SET status='queued', updated_at=NOW() "
+                "WHERE status='deploying' AND updated_at < NOW() - INTERVAL '40 minutes' "
+                "AND agent_id NOT IN ("
+                "    SELECT agent_id FROM rmm_agent WHERE last_seen_at > NOW() - INTERVAL '10 minutes'"
+                ")"
+            )
+            n = cur.rowcount
+            conn.commit()
+            cur.close()
+            conn.close()
+            if n:
+                print(f"[gw] stale-reset: {n} deploying jobs reset to queued", flush=True)
+        except Exception as _e:
+            print(f"[gw] stale-reset error: {_e}", flush=True)
+
+
+async def _failed_job_retry_loop():
+    """Background task: every 2 hours, reset transient-failed CVE patch jobs back
+    to queued for currently-online agents so they are retried automatically.
+    Only resets jobs that have been failed for at least 2 hours to allow cool-down."""
+    await asyncio.sleep(120)  # initial delay
+    while True:
+        await asyncio.sleep(7200)  # every 2 hours
+        connected = list(agents.keys())
+        if not connected:
+            continue
+        try:
+            conn = get_conn()
+            cur = get_cursor(conn)
+            cur.execute(
+                """UPDATE cve_patch_job SET status='queued', updated_at=NOW()
+                   WHERE status='failed'
+                     AND agent_id = ANY(%s)
+                     AND updated_at < NOW() - INTERVAL '2 hours'""",
+                (connected,)
+            )
+            n = cur.rowcount
+            conn.commit()
+            cur.close()
+            conn.close()
+            if n:
+                print(f"[gw] failed-retry: reset {n} failed jobs to queued for {len(connected)} online agents", flush=True)
+                for aid in connected:
+                    ws = agents.get(aid)
+                    if ws:
+                        try:
+                            await _dispatch_next_product(ws, aid)
+                        except Exception as _de:
+                            print(f"[gw] failed-retry dispatch error for {aid}: {_de}", flush=True)
+        except Exception as _e:
+            print(f"[gw] failed-retry error: {_e}", flush=True)
+
+
+async def _new_vuln_dispatch_loop():
+    """Background task: every 5 minutes, create and dispatch CVE patch jobs for
+    currently-connected agents that have open vulns with no existing job.
+    This handles the case where Defender sync adds new vulnerabilities after
+    an agent is already connected (on-connect auto-create doesn't catch these)."""
+    await asyncio.sleep(30)  # short initial delay to let agents connect at startup
+    while True:
+        connected = list(agents.keys())
+        if connected:
+            try:
+                conn = get_conn()
+                cur = get_cursor(conn)
+                # Bulk-insert missing jobs for all connected agents in one shot
+                cur.execute(
+                    """INSERT INTO cve_patch_job
+                              (asset_id, agent_id, cve_id, status, deployed_by,
+                               deployed_at, updated_at, created_at)
+                       SELECT dv.asset_id, ra.agent_id, dv.cve_id,
+                              'queued', 'auto', NOW(), NOW(), NOW()
+                       FROM device_vulnerability dv
+                       JOIN rmm_agent ra ON ra.asset_id = dv.asset_id
+                       WHERE ra.agent_id = ANY(%s)
+                         AND dv.status = 'Open'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM cve_patch_job cpj
+                             WHERE cpj.asset_id = dv.asset_id
+                               AND cpj.cve_id = dv.cve_id
+                         )""",
+                    (connected,)
+                )
+                new_jobs = cur.rowcount
+                conn.commit()
+                cur.close(); conn.close()
+                if new_jobs:
+                    print(f"[gw] new-vuln-loop: created {new_jobs} patch jobs across {len(connected)} agents", flush=True)
+                    # Dispatch to each agent that now has queued jobs
+                    for aid in connected:
+                        ws = agents.get(aid)
+                        if ws:
+                            try:
+                                await _dispatch_next_product(ws, aid)
+                            except Exception as _de:
+                                print(f"[gw] new-vuln-loop dispatch error for {aid}: {_de}", flush=True)
+            except Exception as _e:
+                print(f"[gw] new-vuln-loop error: {_e}", flush=True)
+        await asyncio.sleep(300)  # run every 5 minutes
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task1 = asyncio.create_task(_stale_job_reset_loop())
+    task2 = asyncio.create_task(_new_vuln_dispatch_loop())
+    task3 = asyncio.create_task(_failed_job_retry_loop())
+    yield
+    task1.cancel()
+    task2.cancel()
+    task3.cancel()
+
+
+app = FastAPI(title="Tracker RMM Gateway", lifespan=lifespan)
 
 # In-memory connection maps
 agents: Dict[str, WebSocket] = {}
@@ -64,6 +262,7 @@ async def push_eagle_config(agent_id: str, request: Request):
             "type": "eagle_eyes_config",
             "enabled": bool(body.get("enabled", False)),
             "screenshot_interval_min": int(body.get("screenshot_interval_min", 30)),
+            "screenshots_enabled": bool(body.get("screenshots_enabled", True)),
         }))
         return JSONResponse({"ok": True})
     except Exception as e:
@@ -157,10 +356,73 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     "type": "eagle_eyes_config",
                     "enabled": True,
                     "screenshot_interval_min": ecfg.get("screenshot_interval_min", 30),
+                    "screenshots_enabled": ecfg.get("screenshots_enabled", True),
                 }))
                 print(f"[gw] pushed eagle_eyes_config to {agent_id} on connect", flush=True)
         except Exception as _e:
             print(f"[gw] eagle auto-push error: {_e}", flush=True)
+
+        # Dispatch any queued CVE patch jobs for this agent on (re)connect.
+        # First reset this agent's own stale deploying jobs so they're picked up below.
+        try:
+            _conn = get_conn()
+            _cur = get_cursor(_conn)
+            # On reconnect, reset ALL deploying jobs for this agent regardless of age.
+            # This ensures re-dispatch of any jobs that were in-flight when the agent
+            # disconnected or the gateway restarted.
+            _cur.execute(
+                "UPDATE cve_patch_job SET status='queued', updated_at=NOW() "
+                "WHERE agent_id=%s AND status='deploying'",
+                (agent_id,)
+            )
+            _stale_n = _cur.rowcount
+            if _stale_n:
+                print(f"[gw] reset {_stale_n} stale deploying jobs for {agent_id}", flush=True)
+            _conn.commit()
+            _cur.close(); _conn.close()  # return to pool before next operation
+        except Exception as _e:
+            print(f"[gw] stale-reset on-connect error for {agent_id}: {_e}", flush=True)
+
+        # Auto-create queued patch jobs for any open exposure that has no job yet.
+        try:
+            _conn = get_conn()  # fresh connection — previous one was closed above
+            _cur = get_cursor(_conn)
+            _cur.execute(
+                """INSERT INTO cve_patch_job
+                          (asset_id, agent_id, cve_id, status, deployed_by,
+                           deployed_at, updated_at, created_at)
+                   SELECT dv.asset_id, ra.agent_id, dv.cve_id,
+                          'queued', 'auto', NOW(), NOW(), NOW()
+                   FROM device_vulnerability dv
+                   JOIN rmm_agent ra ON ra.asset_id = dv.asset_id
+                   WHERE ra.agent_id = %s
+                     AND dv.status = 'Open'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM cve_patch_job cpj
+                         WHERE cpj.asset_id = dv.asset_id
+                           AND cpj.cve_id = dv.cve_id
+                     )""",
+                (agent_id,)
+            )
+            _new_jobs = _cur.rowcount
+            _conn.commit()
+            if _new_jobs:
+                print(f"[gw] auto-created {_new_jobs} queued patch jobs for {agent_id}", flush=True)
+            _cur.close(); _conn.close()  # return to pool before dispatch
+        except Exception as _e:
+            print(f"[gw] auto-create job error for {agent_id}: {_e}", flush=True)
+            try:
+                _conn.rollback()
+                _conn.close()
+            except Exception:
+                pass
+
+        try:
+            # Dispatch ONE product at a time (fewest CVEs first) to prevent
+            # the agent from being overwhelmed with concurrent WUA/winget runs.
+            await _dispatch_next_product(websocket, agent_id)
+        except Exception as _e:
+            print(f"[gw] queued-job dispatch error for {agent_id}: {_e}", flush=True)
 
         while True:
             msg = await websocket.receive_text()
@@ -222,6 +484,168 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     print(f"[gw] stored {len(patches)} patches for {agent_id}", flush=True)
                 except Exception as e:
                     print(f"[gw] store_patches error: {e}", flush=True)
+                continue
+
+            # --- CVE patch job result ---
+            if msg_type == "cve_patch_result":
+                job_id = payload.get("job_id")
+                result = payload.get("result") or {}
+                if job_id:
+                    try:
+                        conn = get_conn()
+                        cur  = get_cursor(conn)
+                        error     = result.get("error") or ""
+                        installed = int(result.get("installed") or 0)
+                        found     = int(result.get("updates_found") or 0)
+                        # Transient failures (timeout, download error, network) must be
+                        # 'failed' — NOT 'no_patch' — so CVEs are not falsely auto-closed.
+                        _transient_fail = any(kw in error for kw in (
+                            "timed out", "download failed", "timed_out",
+                            "connection", "network", "exit code",
+                        ))
+                        if installed > 0 or error == "Already up to date":
+                            new_status = "installed"
+                        elif _transient_fail:
+                            new_status = "failed"
+                        elif found == 0 or "No pending patches" in error or "not found in installed" in error:
+                            new_status = "no_patch"
+                        elif error:
+                            new_status = "failed"
+                        else:
+                            new_status = "installed"
+                        # Fetch asset_id + cve_id before updating
+                        cur.execute("SELECT asset_id, cve_id FROM cve_patch_job WHERE id=%s", (job_id,))
+                        job_row = cur.fetchone()
+                        cur.execute(
+                            """UPDATE cve_patch_job
+                               SET status=%s, result_json=%s, reboot_required=%s,
+                                   updates_found=%s, completed_at=NOW(),
+                                   updated_at=NOW()
+                               WHERE id=%s""",
+                            (new_status, json.dumps(result),
+                             bool(result.get("reboot_required")),
+                             result.get("installed", 0), job_id)
+                        )
+                        # Auto-close CVEs on success or no applicable patch.
+                        # Close ALL CVEs for the same product on this asset so WUA cumulative
+                        # patches (which cover many CVEs at once) are fully reflected.
+                        product_name_j = None  # ensure always defined before bulk-close block
+                        if new_status in ("installed", "no_patch") and job_row:
+                            j_asset = job_row["asset_id"]
+                            j_cve   = job_row["cve_id"]
+                            if new_status == 'installed':
+                                close_status = 'Remediated'
+                                close_note   = 'Auto-closed: patch confirmed by RMM'
+                            else:
+                                close_status = 'Exception'
+                                close_note   = 'No patch available: no Windows Update KB or package manager update found for this CVE as of auto-scan'
+                            # Look up product_name for this CVE to close all related CVEs
+                            cur.execute(
+                                "SELECT product_name FROM device_vulnerability "
+                                "WHERE cve_id=%s AND asset_id=%s LIMIT 1",
+                                (j_cve, j_asset)
+                            )
+                            prod_row = cur.fetchone()
+                            product_name_j = prod_row["product_name"] if prod_row else None
+                            if product_name_j:
+                                cur.execute(
+                                    """UPDATE device_vulnerability
+                                       SET status=%s, remediation_note=%s,
+                                           updated_at=NOW()
+                                       WHERE asset_id=%s AND product_name=%s AND status='Open'""",
+                                    (close_status, close_note, j_asset, product_name_j)
+                                )
+                                affected = cur.rowcount
+                                print(f"[gw] {close_status} {affected} CVE(s) for product='{product_name_j}' "
+                                      f"asset={j_asset} reason={new_status}", flush=True)
+                            else:
+                                cur.execute(
+                                    """UPDATE device_vulnerability
+                                       SET status=%s, remediation_note=%s,
+                                           updated_at=NOW()
+                                       WHERE cve_id=%s AND asset_id=%s AND status='Open'""",
+                                    (close_status, close_note, j_cve, j_asset)
+                                )
+                                print(f"[gw] {close_status} device_vulnerability cve={j_cve} asset={j_asset} reason={new_status}", flush=True)
+                        # Bulk-close all sibling deploying jobs for the same agent+asset+product.
+                        # Dispatch batches multiple CVE jobs into one product-level message;
+                        # the agent returns one result covering all of them.
+                        if job_row:
+                            j_asset_b = job_row["asset_id"]
+                            if product_name_j:
+                                cur.execute(
+                                    """UPDATE cve_patch_job
+                                       SET status=%s, result_json=%s, reboot_required=%s,
+                                           updates_found=%s, completed_at=NOW(), updated_at=NOW()
+                                       WHERE agent_id=%s AND asset_id=%s
+                                         AND status IN ('deploying','queued')
+                                         AND id != %s
+                                         AND cve_id IN (
+                                             SELECT cve_id FROM device_vulnerability
+                                             WHERE product_name=%s AND asset_id=%s
+                                         )""",
+                                    (new_status, json.dumps(result),
+                                     bool(result.get("reboot_required")),
+                                     result.get("installed", 0),
+                                     agent_id, j_asset_b, job_id,
+                                     product_name_j, j_asset_b)
+                                )
+                                bulk_n = cur.rowcount
+                                if bulk_n:
+                                    print(f"[gw] bulk-closed {bulk_n} sibling jobs for product='{product_name_j}' agent={agent_id}", flush=True)
+                            else:
+                                # No product — close sibling jobs matching same cve_id
+                                cur.execute(
+                                    """UPDATE cve_patch_job
+                                       SET status=%s, result_json=%s, reboot_required=%s,
+                                           updates_found=%s, completed_at=NOW(), updated_at=NOW()
+                                       WHERE agent_id=%s AND asset_id=%s AND cve_id=%s
+                                         AND status IN ('deploying','queued') AND id != %s""",
+                                    (new_status, json.dumps(result),
+                                     bool(result.get("reboot_required")),
+                                     result.get("installed", 0),
+                                     agent_id, j_asset_b, job_row["cve_id"], job_id)
+                                )
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                        print(f"[gw] cve_patch_result job={job_id} status={new_status}", flush=True)
+                        # Serial dispatch: send next queued product now that this one finished
+                        await _dispatch_next_product(websocket, agent_id)
+                    except Exception as e:
+                        print(f"[gw] cve_patch_result DB error: {e}", flush=True)
+                continue
+
+            # --- Windows Update (rmm_patch_job) result ---
+            if msg_type == "patch_install_result":
+                job_id = payload.get("job_id")
+                result = payload.get("result") or {}
+                if job_id:
+                    try:
+                        conn = get_conn()
+                        cur  = get_cursor(conn)
+                        error     = result.get("error") or ""
+                        installed = int(result.get("installed") or 0)
+                        if installed > 0:
+                            new_status = "completed"
+                        elif error:
+                            new_status = "failed"
+                        else:
+                            new_status = "completed"
+                        cur.execute(
+                            """UPDATE rmm_patch_job
+                               SET status=%s, result_json=%s, reboot_required=%s,
+                                   completed_at=NOW(), updated_at=NOW()
+                               WHERE id=%s""",
+                            (new_status, json.dumps(result),
+                             bool(result.get("reboot_required")), job_id)
+                        )
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                        print(f"[gw] patch_install_result job={job_id} status={new_status} installed={installed}", flush=True)
+                    except Exception as e:
+                        print(f"[gw] patch_install_result DB error: {e}", flush=True)
                 continue
 
             # --- Store pending Windows Updates ---
@@ -313,7 +737,9 @@ async def ws_tech(websocket: WebSocket, agent_id: str, api_key: str = "", sessio
         await websocket.close(code=4404)
         return
 
-    asset_id = agent_asset_ids.get(agent_id, 0)
+    asset_id = agent_asset_ids.get(agent_id)
+    if not asset_id:
+        asset_id = None
     session_id = create_rmm_session(asset_id=asset_id, started_by_user_id=validation.get("user_id"), reason=reason or "")
     tech_sessions[session_id] = websocket
     log_rmm_event(session_id, "tech", "session_start", {"agent_id": agent_id, "reason": reason or ""})

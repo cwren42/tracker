@@ -164,17 +164,17 @@ function renderProductivity(summary) {
   }
   const total = productiveS + unproductiveS + neutralS;
   if (total === 0) { el.textContent='—'; sub.textContent='No data'; return; }
-  const classified = productiveS + unproductiveS;
-  if (classified === 0) {
+  if (productiveS + unproductiveS === 0) {
     el.textContent='—';
     el.style.color='#adb5bd';
     sub.textContent='No apps classified yet';
     return;
   }
-  const score = Math.round(productiveS / classified * 100);
+  // Score = productive / total tracked time (neutral counts against score)
+  const score = Math.round(productiveS / total * 100);
   el.textContent = score+'%';
   el.style.color = score>=75?'#51cf66':score>=50?'#fcc419':'#ff6b6b';
-  sub.textContent = `${fmtDuration(productiveS)} productive · ${fmtDuration(unproductiveS)} unproductive`;
+  sub.textContent = `${fmtDuration(productiveS)} productive · ${fmtDuration(unproductiveS)} unproductive · ${fmtDuration(neutralS)} neutral`;
 }
 /* ── Stat cards ───────────────────────────────────────────────────────── */
 function renderStats(summary, daily, hourly) {
@@ -189,7 +189,9 @@ function renderStats(summary, daily, hourly) {
 
   const activeDays = daily.filter(d => d.total_s > 0).length;
   document.getElementById('stat-active-days').textContent    = activeDays;
-  document.getElementById('stat-active-days-sub').textContent = `of ${daily.length} days in period`;
+  // Use actual period length: daily is now a full series, so daily.length = period days
+  const periodDays = daily.length || (parseInt(document.getElementById('ee-days').value) || 7);
+  document.getElementById('stat-active-days-sub').textContent = `of ${periodDays} days in period`;
 
   const peak = hourly.length ? hourly.reduce((a,b) => b.total_s>a.total_s?b:a, hourly[0]) : null;
   if (peak && peak.total_s > 0) {
@@ -590,6 +592,16 @@ async function loadFocusSessions() {
 }
 
 /* ── App Classifications ───────────────────────────────────────────── */
+const PROD_BADGE = {
+  productive:   '<span class="badge bg-success" style="font-size:.72rem;">✅ Productive</span>',
+  unproductive: '<span class="badge bg-danger"  style="font-size:.72rem;">❌ Unproductive</span>',
+  neutral:      '<span class="badge bg-secondary" style="font-size:.72rem;">⚪ Neutral</span>',
+};
+
+let _clsData = [];           // all loaded classifications (global app + this agent's sites)
+let _clsEditId = null;       // id of app rule being edited (null = adding new)
+let _clsSiteEditId = null;   // id of site rule being edited
+
 function clsTab(tab) {
   const isApp = tab === 'app';
   document.getElementById('cls-panel-app').style.display  = isApp ? '' : 'none';
@@ -598,71 +610,224 @@ function clsTab(tab) {
   document.getElementById('cls-tab-site').classList.toggle('active', !isApp);
   if (!isApp) clsLoadTopSites();
 }
+
 async function loadClassifications() {
-  const res  = await fetch('/api/rmm/eagle-eyes/app-classifications');
+  const res  = await fetch(`/api/rmm/eagle-eyes/app-classifications?agent_id=${encodeURIComponent(agentId)}`);
   const data = await res.json();
   if (!data.ok) return;
-  const PROD_BADGE = {productive:'<span class="badge bg-success">✅ Productive</span>', unproductive:'<span class="badge bg-danger">❌ Unproductive</span>', neutral:'<span class="badge bg-secondary">⚪ Neutral</span>'};
-  const appRows  = data.classifications.filter(c => !c.window_title_pattern);
-  const siteRows = data.classifications.filter(c =>  c.window_title_pattern);
-  document.getElementById('cls-tbody').innerHTML = appRows.map(c =>
-    `<tr><td><code>${c.process_pattern||'—'}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
-     <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})">✕</button></td></tr>`
-  ).join('') || '<tr><td colspan="4" class="text-muted text-center small">No app rules yet</td></tr>';
-  document.getElementById('cls-site-tbody').innerHTML = siteRows.map(c =>
-    `<tr><td><code>${c.window_title_pattern}</code></td><td>${c.label||'—'}</td><td>${PROD_BADGE[c.productivity]||c.productivity}</td>
-     <td><button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})">✕</button></td></tr>`
-  ).join('') || '<tr><td colspan="4" class="text-muted text-center small">No site rules yet</td></tr>';
+  _clsData = data.classifications;
+  _clsRender();
+  // Also refresh suggestions in case a new app rule was added
+  loadFleetSuggestions();
 }
+
+function _clsRender() {
+  const search  = (document.getElementById('cls-search')?.value || '').toLowerCase();
+  const appRows = _clsData.filter(c => !c.window_title_pattern);
+  const siteRows = _clsData.filter(c => c.window_title_pattern && (!c.agent_id || c.agent_id === agentId));
+
+  // Update app count badge
+  const countEl = document.getElementById('cls-app-count');
+  if (countEl) countEl.textContent = appRows.length || '';
+
+  // App rules table
+  const filtered = search
+    ? appRows.filter(c => (c.process_pattern||'').includes(search) || (c.label||'').toLowerCase().includes(search))
+    : appRows;
+  document.getElementById('cls-tbody').innerHTML = filtered.map(c =>
+    `<tr>
+      <td><code>${escHtml(c.process_pattern||'—')}</code></td>
+      <td>${escHtml(c.label||'—')}</td>
+      <td>${PROD_BADGE[c.productivity]||escHtml(c.productivity)}</td>
+      <td class="text-end">
+        <button class="btn btn-xs btn-outline-secondary py-0 px-1 me-1" style="font-size:.7rem;" onclick="clsEdit(${c.id})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})"><i class="bi bi-trash"></i></button>
+      </td>
+    </tr>`
+  ).join('') || '<tr><td colspan="4" class="text-muted text-center small py-3">No app rules yet — add one above or click a fleet suggestion</td></tr>';
+
+  // Site rules table (this agent's rules only)
+  const agentSiteRows = siteRows.filter(c => c.agent_id === agentId);
+  const globalSiteRows = siteRows.filter(c => !c.agent_id);
+  const allSiteRows = [...agentSiteRows, ...globalSiteRows];
+  document.getElementById('cls-site-tbody').innerHTML = allSiteRows.map(c => {
+    const isGlobal = !c.agent_id;
+    return `<tr>
+      <td><code>${escHtml(c.window_title_pattern)}</code>${isGlobal ? ' <span class="badge bg-light text-secondary border" style="font-size:.65rem;">global</span>' : ''}</td>
+      <td>${escHtml(c.label||'—')}</td>
+      <td>${PROD_BADGE[c.productivity]||escHtml(c.productivity)}</td>
+      <td class="text-end">
+        ${!isGlobal ? `<button class="btn btn-xs btn-outline-secondary py-0 px-1 me-1" style="font-size:.7rem;" onclick="clsSiteEdit(${c.id})"><i class="bi bi-pencil"></i></button>` : ''}
+        <button class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size:.7rem;" onclick="clsDelete(${c.id})"><i class="bi bi-trash"></i></button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="text-muted text-center small py-3">No site rules for this asset yet — add one above or click a top-site chip</td></tr>';
+}
+
+function clsFilterTable() {
+  _clsRender();
+}
+
+/* ── App rule edit / cancel ─────────────────────────────────── */
+function clsEdit(id) {
+  const c = _clsData.find(x => x.id === id);
+  if (!c) return;
+  _clsEditId = id;
+  document.getElementById('cls-pattern').value = c.process_pattern || '';
+  document.getElementById('cls-label').value   = c.label || '';
+  document.getElementById('cls-prod').value    = c.productivity || 'neutral';
+  document.getElementById('cls-form-title').textContent = 'Edit App Rule';
+  document.getElementById('cls-edit-badge').style.display = '';
+  document.getElementById('cls-cancel-btn').style.display = '';
+  document.getElementById('cls-pattern').focus();
+}
+function clsCancelEdit() {
+  _clsEditId = null;
+  document.getElementById('cls-pattern').value = '';
+  document.getElementById('cls-label').value   = '';
+  document.getElementById('cls-prod').value    = 'neutral';
+  document.getElementById('cls-form-title').textContent = 'Add App Rule';
+  document.getElementById('cls-edit-badge').style.display = 'none';
+  document.getElementById('cls-cancel-btn').style.display = 'none';
+}
+
+/* ── Site rule edit / cancel ────────────────────────────────── */
+function clsSiteEdit(id) {
+  const c = _clsData.find(x => x.id === id);
+  if (!c) return;
+  _clsSiteEditId = id;
+  document.getElementById('cls-site-pat').value   = c.window_title_pattern || '';
+  document.getElementById('cls-site-label').value = c.label || '';
+  document.getElementById('cls-site-prod').value  = c.productivity || 'unproductive';
+  document.getElementById('cls-site-form-title').textContent = 'Edit Site Rule';
+  document.getElementById('cls-site-edit-badge').style.display = '';
+  document.getElementById('cls-site-cancel-btn').style.display = '';
+  document.getElementById('cls-site-pat').focus();
+}
+function clsSiteCancelEdit() {
+  _clsSiteEditId = null;
+  document.getElementById('cls-site-pat').value   = '';
+  document.getElementById('cls-site-label').value = '';
+  document.getElementById('cls-site-prod').value  = 'unproductive';
+  document.getElementById('cls-site-form-title').textContent = 'Add Site Rule';
+  document.getElementById('cls-site-edit-badge').style.display = 'none';
+  document.getElementById('cls-site-cancel-btn').style.display = 'none';
+}
+
+/* ── Save handlers ──────────────────────────────────────────── */
 async function clsSave() {
   const pattern = document.getElementById('cls-pattern').value.trim().toLowerCase();
   const label   = document.getElementById('cls-label').value.trim();
   const prod    = document.getElementById('cls-prod').value;
   if (!pattern) return;
-  await fetch('/api/rmm/eagle-eyes/app-classifications', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({process_pattern:pattern,label,productivity:prod})});
-  document.getElementById('cls-pattern').value = '';
-  document.getElementById('cls-label').value = '';
+  // If editing, delete old entry first (process_pattern may have changed)
+  if (_clsEditId !== null) {
+    await fetch(`/api/rmm/eagle-eyes/app-classifications/${_clsEditId}`, {method:'DELETE'});
+  }
+  await fetch('/api/rmm/eagle-eyes/app-classifications', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({process_pattern: pattern, label, productivity: prod}),
+  });
+  clsCancelEdit();
   loadClassifications();
 }
+
 async function clsSiteSave() {
   const sitePat = document.getElementById('cls-site-pat').value.trim().toLowerCase();
   const label   = document.getElementById('cls-site-label').value.trim();
   const prod    = document.getElementById('cls-site-prod').value;
   if (!sitePat) return;
-  await fetch('/api/rmm/eagle-eyes/app-classifications', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({window_title_pattern:sitePat, label:label||sitePat, productivity:prod})});
-  document.getElementById('cls-site-pat').value = '';
-  document.getElementById('cls-site-label').value = '';
+  // Per-agent site rule — always pass agent_id
+  await fetch('/api/rmm/eagle-eyes/app-classifications', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({window_title_pattern: sitePat, label: label || sitePat, productivity: prod, agent_id: agentId}),
+  });
+  clsSiteCancelEdit();
   loadClassifications();
 }
+
+/* ── Fleet suggestions panel ────────────────────────────────── */
+async function loadFleetSuggestions() {
+  const listEl    = document.getElementById('cls-suggestions-list');
+  const loadingEl = document.getElementById('cls-suggestions-loading');
+  if (!listEl) return;
+  try {
+    const res  = await fetch('/api/rmm/eagle-eyes/fleet-app-suggestions');
+    const data = await res.json();
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (!data.ok || !data.suggestions.length) {
+      listEl.innerHTML = '<span class="text-muted small">All top apps are classified!</span>';
+      return;
+    }
+    listEl.innerHTML = data.suggestions.map(s => {
+      const agents = s.agent_count === 1 ? '1 agent' : `${s.agent_count} agents`;
+      const mins   = Math.round(s.total_s / 60);
+      const name   = escHtml(s.process_name);
+      return `<button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.73rem;"
+        onclick="clsApplySuggestion('${s.process_name.replace(/'/g,"\\'")}')">
+        ${name} <span class="text-muted">${agents}${mins ? ` · ${mins}m` : ''}</span>
+      </button>`;
+    }).join('');
+  } catch(_) {
+    if (loadingEl) loadingEl.style.display = 'none';
+  }
+}
+
+function clsApplySuggestion(name) {
+  document.getElementById('cls-pattern').value = name;
+  // Auto-fill label as title-cased name
+  document.getElementById('cls-label').value   = name.charAt(0).toUpperCase() + name.slice(1);
+  document.getElementById('cls-prod').value    = 'neutral';
+  document.getElementById('cls-pattern').focus();
+}
+
+/* ── Top sites chips (per-asset) ────────────────────────────── */
 async function clsLoadTopSites() {
   try {
-    const res  = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?days=30`);
-    const data = await res.json();
-    if (!data.ok || !data.sites.length) return;
-    // Fetch existing classifications to show which sites already have rules
-    const clsRes  = await fetch('/api/rmm/eagle-eyes/app-classifications');
-    const clsData = await clsRes.json();
-    const classified = new Set((clsData.classifications||[]).filter(c=>c.window_title_pattern).map(c=>c.window_title_pattern.toLowerCase()));
-    const chips = data.sites.map(s => {
-      const key = s.site.toLowerCase();
-      const done = classified.has(key);
-      const safesite = s.site.replace(/'/g, "\\'");
+    const [sitesRes, clsRes] = await Promise.all([
+      fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?days=30`),
+      fetch(`/api/rmm/eagle-eyes/app-classifications?agent_id=${encodeURIComponent(agentId)}`),
+    ]);
+    const [sitesData, clsData] = await Promise.all([sitesRes.json(), clsRes.json()]);
+    if (!sitesData.ok || !sitesData.sites.length) return;
+    const classified = new Set(
+      (clsData.classifications||[])
+        .filter(c => c.window_title_pattern)
+        .map(c => c.window_title_pattern.toLowerCase())
+    );
+    const chips = sitesData.sites.map(s => {
+      const key      = s.site.toLowerCase();
+      const done     = classified.has(key);
+      const safeSite = s.site.replace(/'/g, "\\'");
+      const mins     = Math.round(s.total_s / 60);
       return `<button class="btn btn-xs ${done?'btn-outline-success':'btn-outline-secondary'} py-0 px-2" style="font-size:.75rem;"
-        onclick="clsSiteChip('${safesite}')" ${done?'disabled title="Already classified"':''}>
-        ${done?'✓ ':''}${s.site} <span class="text-muted">${Math.round(s.total_s/60)}m</span></button>`;
+        onclick="clsSiteChip('${safeSite}')" ${done?'disabled title="Already classified"':''}>
+        ${done?'✓ ':''}${escHtml(s.site)} <span class="text-muted">${mins}m</span></button>`;
     }).join('');
     document.getElementById('cls-top-sites-chips').innerHTML = chips;
     document.getElementById('cls-top-sites-wrap').style.display = '';
   } catch(_) {}
 }
+
 function clsSiteChip(site) {
   document.getElementById('cls-site-pat').value   = site.toLowerCase();
   document.getElementById('cls-site-label').value = site;
   document.getElementById('cls-site-prod').value  = 'unproductive';
+  document.getElementById('cls-site-pat').focus();
 }
+
 async function clsDelete(id) {
+  if (!confirm('Delete this rule?')) return;
   await fetch(`/api/rmm/eagle-eyes/app-classifications/${id}`, {method:'DELETE'});
   loadClassifications();
+}
+
+/* ── Escape helper (if not already defined) ─────────────────── */
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 /* ── Alert Rules ───────────────────────────────────────────────────── */
@@ -745,7 +910,10 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(eeLoadCurrent, 30000);  // live poll every 30s
 
   // Lazy-load modals on first open
-  document.getElementById('ee-classify-modal').addEventListener('show.bs.modal', () => loadClassifications(), {once:false});
+  document.getElementById('ee-classify-modal').addEventListener('show.bs.modal', () => {
+    loadClassifications();
+    loadFleetSuggestions();
+  }, {once:false});
   document.getElementById('ee-alerts-modal').addEventListener('show.bs.modal', () => loadAlerts(), {once:false});
   document.getElementById('ee-schedule-modal').addEventListener('show.bs.modal', () => loadSchedules(), {once:false});
 });

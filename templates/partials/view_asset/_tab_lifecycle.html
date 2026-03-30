@@ -39,15 +39,15 @@
                 <div class="col-12"><h6 class="text-muted fw-semibold text-uppercase mb-0" style="font-size:.7rem;letter-spacing:.08em;">Procurement</h6></div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Vendor / Supplier</div>
-                    <div class="field-value">{{ asset.vendor or '-' }}</div>
+                    <div class="field-value">{{ asset.vendor or 'None' }}</div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Purchase Date</div>
-                    <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') if asset.purchase_date else '-' }}</div>
+                    <div class="field-value">{{ asset.purchase_date.strftime('%Y-%m-%d') if asset.purchase_date else 'None' }}</div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <div class="field-label">Purchase Cost</div>
-                    <div class="field-value">{{ ('$%.2f'|format(asset.purchase_cost)) if asset.purchase_cost else '-' }}</div>
+                    <div class="field-value">{{ ('$%.2f'|format(asset.purchase_cost)) if asset.purchase_cost else 'None' }}</div>
                 </div>
 
                 <!-- Warranty & EOL -->
@@ -62,7 +62,7 @@
                             {% elif (asset.warranty_expiry - now().date()).days <= 90 %}
                             <span class="badge bg-warning text-dark ms-1">Expiring Soon</span>
                             {% endif %}
-                        {% else %}-{% endif %}
+                        {% else %}None{% endif %}
                     </div>
                 </div>
                 <div class="col-sm-6 col-md-3">

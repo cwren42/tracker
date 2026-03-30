@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h1 class="mb-0">Assets</h1>
-        {% set any_filter = request.args.get('category') or request.args.get('status') or request.args.get('lifecycle') or request.args.get('filter') or request.args.get('search') or request.args.get('warranty_status') %}
+        {% set any_filter = request.args.get('category') or request.args.get('status') or request.args.get('lifecycle') or request.args.get('filter') or request.args.get('search') or request.args.get('warranty_status') or request.args.get('location') or request.args.get('device_type') or request.args.get('availability') %}
         {% if any_filter %}
         <div class="mt-1">
             <small class="text-muted me-1">Filtered:</small>
@@ -16,6 +16,9 @@
             {% if request.args.get('status') %}<span class="badge bg-info me-1">{{ request.args.get('status') }}</span>{% endif %}
             {% if request.args.get('lifecycle') %}<span class="badge bg-warning text-dark me-1">{{ request.args.get('lifecycle') }}</span>{% endif %}
             {% if request.args.get('warranty_status') %}<span class="badge bg-secondary me-1">Warranty: {{ request.args.get('warranty_status') }}</span>{% endif %}
+            {% if request.args.get('location') %}<span class="badge bg-success me-1">{{ request.args.get('location') }}</span>{% endif %}
+            {% if request.args.get('device_type') %}<span class="badge bg-secondary me-1">{{ request.args.get('device_type') }}</span>{% endif %}
+            {% if request.args.get('availability') %}<span class="badge bg-{{ 'success' if request.args.get('availability') == 'online' else 'secondary' }} me-1">{{ request.args.get('availability')|title }}</span>{% endif %}
             <a href="{{ url_for('assets.assets') }}" class="text-muted small">✕ clear</a>
         </div>
         {% endif %}
@@ -106,22 +109,31 @@
             <i class="bi bi-chevron-down ms-1" style="font-size:.75rem;"></i>
         </button>
     </div>
-    <div class="collapse {% if request.args.get('search') or request.args.get('status') or request.args.getlist('categories') or request.args.get('purchase_from') or request.args.get('purchase_to') or request.args.get('warranty_status') or request.args.get('lifecycle') %}show{% endif %}" id="advancedFilters">
+    <div class="collapse {% if request.args.get('search') or request.args.get('status') or request.args.get('purchase_from') or request.args.get('purchase_to') or request.args.get('warranty_status') or request.args.get('lifecycle') or request.args.get('location') or request.args.get('device_type') or request.args.get('availability') %}show{% endif %}" id="advancedFilters">
         <div class="card-body">
             <form method="GET" id="filterForm" class="row g-3">
-                <!-- Row 1: Text Search and Multi-select Categories -->
+                {% if request.args.get('filter') %}
+                <input type="hidden" name="filter" value="{{ request.args.get('filter') }}">
+                {% endif %}
+                <!-- Row 1: Text Search, Device Type, Status -->
                 <div class="col-md-4">
                     <label class="form-label small">Search</label>
                     <input type="text" class="form-control" name="search" placeholder="Asset name, tag, serial..." value="{{ request.args.get('search', '') }}">
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label small">Categories (Multi-select)</label>
-                    <select class="form-select" name="categories" id="categoriesSelect" multiple size="1">
-                        {% for cat in categories %}
-                        <option value="{{ cat[0] }}" {% if cat[0] in request.args.getlist('categories') %}selected{% endif %}>{{ cat[0] }}</option>
-                        {% endfor %}
+                    <label class="form-label small">Device Type</label>
+                    <select class="form-select" name="device_type">
+                        <option value="">All Device Types</option>
+                        <option value="Windows PC" {% if request.args.get('device_type') == 'Windows PC' %}selected{% endif %}>Windows PC</option>
+                        <option value="Mac" {% if request.args.get('device_type') == 'Mac' %}selected{% endif %}>Mac</option>
+                        <option value="Windows Server" {% if request.args.get('device_type') == 'Windows Server' %}selected{% endif %}>Windows Server</option>
+                        <option value="Linux Server" {% if request.args.get('device_type') == 'Linux Server' %}selected{% endif %}>Linux Server</option>
+                        <option value="Virtual Machine" {% if request.args.get('device_type') == 'Virtual Machine' %}selected{% endif %}>Virtual Machine</option>
+                        <option value="Network Device" {% if request.args.get('device_type') == 'Network Device' %}selected{% endif %}>Network Device</option>
+                        <option value="Printer / Scanner" {% if request.args.get('device_type') == 'Printer / Scanner' %}selected{% endif %}>Printer / Scanner</option>
+                        <option value="Mobile Device" {% if request.args.get('device_type') == 'Mobile Device' %}selected{% endif %}>Mobile Device</option>
+                        <option value="Other" {% if request.args.get('device_type') == 'Other' %}selected{% endif %}>Other</option>
                     </select>
-                    <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
                 </div>
                 <div class="col-md-4">
                     <label class="form-label small">Status</label>
@@ -134,14 +146,23 @@
                     </select>
                 </div>
                 
-                <!-- Row 2: Date Ranges -->
+                <!-- Row 2: Location, Availability, Warranty, Lifecycle -->
                 <div class="col-md-3">
-                    <label class="form-label small">Purchase Date From</label>
-                    <input type="date" class="form-control" name="purchase_from" value="{{ request.args.get('purchase_from', '') }}">
+                    <label class="form-label small">Location</label>
+                    <select class="form-select" name="location">
+                        <option value="">All Locations</option>
+                        <option value="Cirque US" {% if request.args.get('location') == 'Cirque US' %}selected{% endif %}>Cirque US</option>
+                        <option value="Cirque Taiwan" {% if request.args.get('location') == 'Cirque Taiwan' %}selected{% endif %}>Cirque Taiwan</option>
+                        <option value="Cirque China" {% if request.args.get('location') == 'Cirque China' %}selected{% endif %}>Cirque China</option>
+                    </select>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label small">Purchase Date To</label>
-                    <input type="date" class="form-control" name="purchase_to" value="{{ request.args.get('purchase_to', '') }}">
+                    <label class="form-label small">Availability</label>
+                    <select class="form-select" name="availability">
+                        <option value="">All</option>
+                        <option value="online" {% if request.args.get('availability') == 'online' %}selected{% endif %}>Online</option>
+                        <option value="offline" {% if request.args.get('availability') == 'offline' %}selected{% endif %}>Offline</option>
+                    </select>
                 </div>
                 <div class="col-md-3">
                     <label class="form-label small">Warranty Status</label>
@@ -200,6 +221,9 @@
             </div>
             <div class="col-md-9 text-end">
                 <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm btn-primary" onclick="bulkEdit()">
+                        <i class="bi bi-pencil-square"></i> Bulk Edit
+                    </button>
                     <button type="button" class="btn btn-sm btn-outline-primary" onclick="bulkUpdateStatus()">
                         <i class="bi bi-arrow-repeat"></i> Update Status
                     </button>
@@ -208,6 +232,21 @@
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-success" onclick="bulkExportSelected()">
                         <i class="bi bi-download"></i> Export Selected
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" onclick="bulkEagleEyes(true)">
+                        <i class="bi bi-eye-fill"></i> Enable Eagle Eyes
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-info" onclick="bulkUpdateAgent()">
+                        <i class="bi bi-arrow-up-circle"></i> Update Agent
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" onclick="bulkScanPatches()">
+                        <i class="bi bi-search"></i> Scan Patches
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-success" onclick="bulkDeployPatches()">
+                        <i class="bi bi-cloud-download"></i> Deploy Patches
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkSyncVulns()">
+                        <i class="bi bi-shield-exclamation"></i> Sync Vulns
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkDelete()">
                         <i class="bi bi-trash"></i> Delete Selected
@@ -225,7 +264,7 @@
 <div class="card">
     <div class="card-body">
         <div class="table-responsive">
-            <table class="table table-hover">
+            <table class="table table-hover table-sm" style="font-size:.8rem;">
                 <thead>
                     <tr>
                         {% if current_user.role in ['admin', 'manager'] %}
@@ -250,6 +289,7 @@
                                 <i class="bi bi-arrow-down-up text-muted"></i>
                             {% endif %}
                         </th>
+                        <th class="mobile-hide">User</th>
                         <th>Availability</th>
                         <th class="mobile-hide" style="cursor: pointer;" onclick="sortTable('device_type')">
                             Device Type
@@ -260,8 +300,8 @@
                             {% endif %}
                         </th>
                         <th class="mobile-hide">Alerts</th>
-                        <th class="mobile-hide">Available Patches</th>
-                        <th class="mobile-hide">Pending Reboot</th>
+                        <th class="mobile-hide">Patches</th>
+                        <th class="mobile-hide">Reboot</th>
                         <th class="mobile-hide">Remote Access</th>
                         <th>Actions</th>
                     </tr>
@@ -276,19 +316,29 @@
                         {% endif %}
                         <td>
                             <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}" class="text-decoration-none fw-semibold">{{ asset.name }}</a>
-                            <div class="text-muted" style="font-size:.75rem;">{{ asset.asset_tag }}{% if asset.manufacturer %} &middot; {{ asset.manufacturer }}{% endif %}</div>
+                            <div class="text-muted" style="font-size:.75rem;">{{ asset.asset_tag }}</div>
                         </td>
                         <td class="mobile-hide">
-                            <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}#ai" class="text-muted" title="AI Analysis" data-bs-toggle="tooltip">
+                            <button class="btn btn-sm btn-link p-0 text-warning"
+                                    onclick="openAssetAI({{ asset.id }}, '{{ asset.name | e }}')"
+                                    title="AI Health Check" data-bs-toggle="tooltip">
                                 <i class="bi bi-stars"></i>
-                            </a>
+                            </button>
                         </td>
                         <td class="mobile-hide">
                             {% set ls = asset.last_seen or asset.intune_last_sync %}
                             {% if ls %}
-                                <span title="{{ ls.strftime('%Y-%m-%d %H:%M') }}" data-bs-toggle="tooltip" style="font-size:.85rem;">
-                                    {{ ls.strftime('%b %d, %Y') }}
+                                <span class="local-time" data-utc="{{ ls.strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+                                      data-bs-toggle="tooltip" style="font-size:.85rem;">
+                                    {{ ls.strftime('%b %d, %Y %H:%M') }}
                                 </span>
+                            {% else %}
+                                <span class="text-muted">&#8212;</span>
+                            {% endif %}
+                        </td>
+                        <td class="mobile-hide">
+                            {% if asset.id in logged_in_users %}
+                                <span style="font-size:.8rem;">{{ logged_in_users[asset.id] }}</span>
                             {% else %}
                                 <span class="text-muted">—</span>
                             {% endif %}
@@ -335,7 +385,11 @@
                         <td class="mobile-hide">
                             {% if asset.id in patch_counts %}
                                 {% set pc = patch_counts[asset.id] %}
-                                <span class="badge {% if pc > 0 %}bg-warning text-dark{% else %}bg-light text-muted border{% endif %}">{{ pc }}</span>
+                                <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}#tab-patches"
+                                   title="{{ pc }} pending patch{{ 'es' if pc != 1 else '' }} — click to view"
+                                   data-bs-toggle="tooltip" class="text-decoration-none">
+                                    <span class="badge {% if pc > 0 %}bg-warning text-dark{% else %}bg-light text-muted border{% endif %}">{{ pc }}</span>
+                                </a>
                             {% else %}
                                 <span class="text-muted">—</span>
                             {% endif %}
@@ -343,7 +397,15 @@
                         <td class="mobile-hide">
                             {% if asset.id in reboot_flags %}
                                 {% if reboot_flags[asset.id] %}
+                                    {% if asset.id in asset_agent_ids and asset.id in rmm_online_ids %}
+                                    <button class="badge bg-danger border-0"
+                                            onclick="rebootAsset('{{ asset_agent_ids[asset.id] }}', '{{ asset.name | e }}')"
+                                            title="Click to reboot" data-bs-toggle="tooltip">
+                                        <i class="bi bi-arrow-clockwise me-1"></i>Yes
+                                    </button>
+                                    {% else %}
                                     <span class="badge bg-danger"><i class="bi bi-arrow-clockwise me-1"></i>Yes</span>
+                                    {% endif %}
                                 {% else %}
                                     <span class="badge bg-light text-muted border">No</span>
                                 {% endif %}
@@ -455,5 +517,348 @@
     </div>
 </div>
 
+<!-- Bulk Edit Modal -->
+<div class="modal fade" id="bulkEditModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil-square me-2"></i>Bulk Edit — <span id="bulkEditCount">0</span> assets selected</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">Only fields you fill in will be updated. Leave a field blank to leave it unchanged.</p>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Status</label>
+                        <select class="form-select" id="beStatus">
+                            <option value="">— no change —</option>
+                            <option>Available</option>
+                            <option>In Use</option>
+                            <option>In Repair</option>
+                            <option>Retired</option>
+                            <option>Lost/Stolen</option>
+                            <option>Disposed</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Category</label>
+                        <input type="text" class="form-control" id="beCategory" placeholder="— no change —" list="beCategoryList">
+                        <datalist id="beCategoryList">
+                            {% for cat in categories %}<option value="{{ cat[0] }}">{% endfor %}
+                        </datalist>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Device Type</label>
+                        <select class="form-select" id="beDeviceType">
+                            <option value="">— no change —</option>
+                            <option value="Windows PC">Windows PC</option>
+                            <option value="Mac">Mac</option>
+                            <option value="Windows Server">Windows Server</option>
+                            <option value="Linux Server">Linux Server</option>
+                            <option value="Virtual Machine">Virtual Machine</option>
+                            <option value="Network Device">Network Device</option>
+                            <option value="Printer / Scanner">Printer / Scanner</option>
+                            <option value="Mobile Device">Mobile Device</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Location</label>
+                        <select class="form-select" id="beLocation">
+                            <option value="">— no change —</option>
+                            <option value="Cirque US">Cirque US</option>
+                            <option value="Cirque Taiwan">Cirque Taiwan</option>
+                            <option value="Cirque China">Cirque China</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Department</label>
+                        <input type="text" class="form-control" id="beDepartment" placeholder="— no change —">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Monitoring Policy</label>
+                        <select class="form-select" id="beMonitoringProfile">
+                            <option value="">— no change —</option>
+                            {% for p in monitoring_profiles %}
+                            <option value="{{ p.id }}">{{ p.name }}{% if p.device_type %} ({{ p.device_type }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Backup Policy</label>
+                        <select class="form-select" id="beBackupPolicy">
+                            <option value="">— no change —</option>
+                            {% for bp in backup_policies %}
+                            <option value="{{ bp.id }}">{{ bp.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Only applied to assets with an RMM agent.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold">Notes <span class="text-muted fw-normal">(appends to existing notes)</span></label>
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input" type="checkbox" id="beNotesReplace">
+                            <label class="form-check-label small text-muted" for="beNotesReplace">Replace notes instead of appending</label>
+                        </div>
+                        <textarea class="form-control" id="beNotes" rows="2" placeholder="— no change —"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitBulkEdit()">
+                    <i class="bi bi-check2 me-1"></i>Apply to <span id="bulkEditCountBtn">0</span> assets
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="/static/js/assets.js"></script>
+
+<!-- AI Health Check Offcanvas -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="aiHealthPanel" style="width:480px;">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title">
+            <i class="bi bi-stars text-warning me-2"></i>
+            <span id="aiPanelTitle">AI Health Check</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="aiPanelBody">
+        <div id="aiLoadingState" class="text-center py-5">
+            <div class="spinner-border text-warning mb-3" role="status"></div>
+            <p class="text-muted">Running AI health analysis…</p>
+        </div>
+        <div id="aiResultState" style="display:none;">
+            <!-- Health score -->
+            <div class="d-flex align-items-center gap-3 mb-3">
+                <div class="text-center">
+                    <div id="aiScoreCircle" class="rounded-circle d-flex align-items-center justify-content-center fw-bold fs-4" style="width:70px;height:70px;">--</div>
+                    <small class="text-muted">Score</small>
+                </div>
+                <div>
+                    <span id="aiStatusBadge" class="badge fs-6 mb-1">--</span><br>
+                    <small id="aiSummaryText" class="text-muted"></small>
+                </div>
+            </div>
+
+            <!-- Issues -->
+            <div id="aiIssuesSection">
+                <h6 class="fw-semibold mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Issues Found</h6>
+                <div id="aiIssuesList"></div>
+            </div>
+
+            <!-- Positive notes -->
+            <div id="aiPositiveSection" class="mt-3" style="display:none;">
+                <h6 class="fw-semibold mb-2 text-success"><i class="bi bi-check-circle me-1"></i>Looking Good</h6>
+                <ul id="aiPositiveList" class="mb-0 small"></ul>
+            </div>
+
+            <!-- Recommended actions -->
+            <div id="aiActionsSection" class="mt-3">
+                <h6 class="fw-semibold mb-2"><i class="bi bi-lightbulb me-1 text-warning"></i>Recommended Actions</h6>
+                <ol id="aiActionsList" class="small mb-0"></ol>
+            </div>
+
+            <!-- Quick action buttons -->
+            <div id="aiQuickActions" class="mt-4 pt-3 border-top" style="display:none;">
+                <h6 class="fw-semibold mb-2"><i class="bi bi-lightning-charge me-1 text-primary"></i>Execute on Device</h6>
+                <div class="d-flex flex-wrap gap-2" id="aiQuickBtns"></div>
+                <div id="aiCmdResult" class="mt-2 small text-muted"></div>
+            </div>
+
+            <!-- Nav links -->
+            <div class="mt-4 pt-3 border-top d-flex gap-2 flex-wrap">
+                <a id="aiViewLink" href="#" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-eye me-1"></i>Open Device
+                </a>
+                <a id="aiVulnLink" href="#" class="btn btn-sm btn-outline-danger">
+                    <i class="bi bi-shield-exclamation me-1"></i>Vulnerabilities
+                </a>
+                <a id="aiTicketLink" href="#" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-ticket me-1"></i>New Ticket
+                </a>
+            </div>
+        </div>
+        <div id="aiErrorState" style="display:none;" class="text-center py-5">
+            <i class="bi bi-exclamation-circle text-danger fs-1"></i>
+            <p class="mt-2 text-danger" id="aiErrorMsg"></p>
+        </div>
+    </div>
+</div>
+
+<script>
+let _aiCurrentAssetId = null;
+let _aiCurrentAgentId = null;
+
+function openAssetAI(assetId, assetName) {
+    _aiCurrentAssetId = assetId;
+    _aiCurrentAgentId = null;
+
+    document.getElementById('aiPanelTitle').textContent = assetName;
+    document.getElementById('aiLoadingState').style.display = '';
+    document.getElementById('aiResultState').style.display = 'none';
+    document.getElementById('aiErrorState').style.display = 'none';
+
+    const oc = new bootstrap.Offcanvas(document.getElementById('aiHealthPanel'));
+    oc.show();
+
+    fetch(`/api/ai/asset-health/${assetId}`, {method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.cookie.match(/csrf_token=([^;]+)/)?.[1] || ''}
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) throw new Error(data.error);
+        renderAIResult(data, assetId);
+    })
+    .catch(err => {
+        document.getElementById('aiLoadingState').style.display = 'none';
+        document.getElementById('aiErrorState').style.display = '';
+        document.getElementById('aiErrorMsg').textContent = err.message || 'Analysis failed';
+    });
+}
+
+function renderAIResult(d, assetId) {
+    _aiCurrentAgentId = d.agent_id;
+
+    // Score circle
+    const score = d.health_score || 0;
+    const status = (d.health_status || 'unknown').toLowerCase();
+    const colorMap = {healthy: ['#198754','#d1e7dd'], warning: ['#fd7e14','#fff3cd'], critical: ['#dc3545','#f8d7da'], unknown: ['#6c757d','#e2e3e5']};
+    const [fg, bg] = colorMap[status] || colorMap.unknown;
+    const circ = document.getElementById('aiScoreCircle');
+    circ.style.background = bg; circ.style.color = fg; circ.style.border = `3px solid ${fg}`;
+    circ.textContent = score;
+
+    const badgeMap = {healthy: 'bg-success', warning: 'bg-warning text-dark', critical: 'bg-danger', unknown: 'bg-secondary'};
+    const badge = document.getElementById('aiStatusBadge');
+    badge.className = 'badge fs-6 mb-1 ' + (badgeMap[status] || 'bg-secondary');
+    badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+
+    document.getElementById('aiSummaryText').textContent = d.summary || '';
+
+    // Issues
+    const issueDiv = document.getElementById('aiIssuesList');
+    issueDiv.innerHTML = '';
+    const issues = d.issues || [];
+    if (issues.length === 0) {
+        issueDiv.innerHTML = '<p class="text-muted small">No issues detected.</p>';
+    } else {
+        const sevIcon = {critical: 'bi-exclamation-octagon-fill text-danger', warning: 'bi-exclamation-triangle-fill text-warning', info: 'bi-info-circle-fill text-info'};
+        issues.forEach(iss => {
+            const icon = sevIcon[iss.severity] || sevIcon.info;
+            issueDiv.innerHTML += `<div class="d-flex gap-2 mb-2 p-2 rounded ai-issue-row">
+                <i class="bi ${icon} mt-1 flex-shrink-0"></i>
+                <div><strong class="small">${iss.title}</strong><div class="text-muted" style="font-size:.8rem">${iss.detail || ''}</div></div></div>`;
+        });
+    }
+
+    // Positives
+    const posSection = document.getElementById('aiPositiveSection');
+    const posList = document.getElementById('aiPositiveList');
+    const positives = d.positive_notes || [];
+    if (positives.length > 0) {
+        posList.innerHTML = positives.map(p => `<li>${p}</li>`).join('');
+        posSection.style.display = '';
+    } else {
+        posSection.style.display = 'none';
+    }
+
+    // Recommended actions
+    const actionOl = document.getElementById('aiActionsList');
+    const actions = d.recommended_actions || [];
+    actionOl.innerHTML = actions.length ? actions.map(a => `<li class="mb-1">${a}</li>`).join('') : '<li class="text-muted">No specific actions needed.</li>';
+
+    // Quick action buttons (only if agent is online)
+    const qaDiv = document.getElementById('aiQuickActions');
+    const qaBtns = document.getElementById('aiQuickBtns');
+    if (d.has_agent && d.is_online && d.agent_id) {
+        qaDiv.style.display = '';
+        qaBtns.innerHTML = '';
+        const cmds = [
+            {label: 'Disk Cleanup', icon: 'bi-hdd', cmd: 'cleanmgr /sagerun:1', type: 'shell'},
+            {label: 'Force Update', icon: 'bi-patch-check', cmd: 'force_update', type: 'control'},
+            {label: 'Reboot', icon: 'bi-arrow-clockwise', cmd: 'shutdown /r /t 30 /c "Remote reboot via Cirque RMM"', type: 'shell'},
+            {label: 'Flush DNS', icon: 'bi-ethernet', cmd: 'ipconfig /flushdns', type: 'shell'},
+            {label: 'Clear Temp', icon: 'bi-trash', cmd: 'Remove-Item -Path $env:TEMP\\* -Recurse -Force -ErrorAction SilentlyContinue', type: 'shell'},
+        ];
+        cmds.forEach(c => {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline-secondary';
+            btn.innerHTML = `<i class="bi ${c.icon} me-1"></i>${c.label}`;
+            btn.onclick = () => sendAICommand(c.cmd, c.type, c.label);
+            qaBtns.appendChild(btn);
+        });
+    } else {
+        qaDiv.style.display = 'none';
+    }
+
+    // Nav links
+    document.getElementById('aiViewLink').href = `/assets/${assetId}`;
+    document.getElementById('aiVulnLink').href = `/assets/${assetId}#tab-vulns`;
+    document.getElementById('aiTicketLink').href = `/tickets/new?asset_id=${assetId}`;
+
+    document.getElementById('aiLoadingState').style.display = 'none';
+    document.getElementById('aiResultState').style.display = '';
+}
+
+function sendAICommand(cmd, type, label) {
+    if (!_aiCurrentAgentId) return;
+    if (!confirm(`Send "${label}" command to this device?`)) return;
+
+    const resultDiv = document.getElementById('aiCmdResult');
+    resultDiv.textContent = `Sending ${label}…`;
+
+    fetch('/api/rmm/admin/send-command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_id: _aiCurrentAgentId, command: cmd, command_type: type})
+    })
+    .then(r => r.json())
+    .then(d => {
+        resultDiv.textContent = d.ok ? `✓ ${label} command queued. Agent will execute shortly.` : `Error: ${d.error}`;
+        resultDiv.className = d.ok ? 'mt-2 small text-success' : 'mt-2 small text-danger';
+    })
+    .catch(e => {
+        resultDiv.textContent = `Error: ${e.message}`;
+        resultDiv.className = 'mt-2 small text-danger';
+    });
+}
+
+function rebootAsset(agentId, assetName) {
+    if (!confirm(`Reboot "${assetName}" now?\n\nThe device will restart immediately.`)) return;
+    fetch('/api/rmm/admin/send-command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_id: agentId, command: 'shutdown /r /t 30 /c "Remote reboot via Cirque RMM"', command_type: 'shell'})
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.ok) {
+            const toast = document.createElement('div');
+            toast.className = 'position-fixed bottom-0 end-0 p-3';
+            toast.style.zIndex = 9999;
+            toast.innerHTML = `<div class="toast show align-items-center text-bg-success border-0" role="alert">
+                <div class="d-flex"><div class="toast-body"><i class="bi bi-check-circle me-2"></i>Reboot queued for ${assetName}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.position-fixed').remove()"></button></div></div>`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        } else {
+            alert('Error: ' + (d.error || 'Unknown error'));
+        }
+    })
+    .catch(e => alert('Error: ' + e.message));
+}
+
+// Convert UTC timestamps to browser local time
+document.querySelectorAll('.local-time[data-utc]').forEach(el => {
+    const utc = el.dataset.utc;
+    if (!utc) return;
+    const d = new Date(utc);
+    const formatted = d.toLocaleString(undefined, {month:'short', day:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+    el.textContent = formatted;
+    el.title = d.toLocaleString(undefined, {dateStyle:'full', timeStyle:'short'}) + ' (your local time)';
+});
+</script>
 {% endblock %}

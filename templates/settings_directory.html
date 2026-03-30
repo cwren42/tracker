@@ -29,10 +29,13 @@
                     <p class="text-muted mb-3">Configure LDAP/LDAPS to manage users and groups in on-prem AD.</p>
                     <form method="POST">
                         <input type="hidden" name="action" value="update_ad">
+
+                        <!-- Connection -->
+                        <h6 class="text-uppercase text-muted small fw-semibold mb-2 mt-1">Connection</h6>
                         <div class="row">
                             <div class="col-md-8 mb-3">
                                 <label class="form-label">AD Server / Domain Controller <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.example.com or 10.0.0.10" required>
+                                <input type="text" class="form-control" name="ad_server" value="{{ ad_config.ad_server }}" placeholder="dc01.corp.cirque.com or 10.0.0.10" required>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">LDAP Port <span class="text-danger">*</span></label>
@@ -40,15 +43,12 @@
                                 <small class="form-text text-muted">389 (LDAP) or 636 (LDAPS)</small>
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}" placeholder="DC=corp,DC=example,DC=com" required>
-                            <small class="form-text text-muted">Base DN for user searches.</small>
-                        </div>
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Bind DN (Service Account) <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}" placeholder="CN=Service,OU=Service Accounts,DC=corp,DC=example,DC=com" required>
+                                <input type="text" class="form-control" name="ad_bind_username" value="{{ ad_config.ad_bind_username }}"
+                                       placeholder="CN=SvcTracker,OU=Service Accounts,DC=corp,DC=cirque,DC=com" required>
+                                <small class="form-text text-muted">Read-only service account — does not need Domain Admin.</small>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Service Account Password</label>
@@ -56,24 +56,108 @@
                                 <small class="form-text text-muted">Leave blank to keep the existing password.</small>
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">User OU DN (optional)</label>
-                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}" placeholder="OU=Users,DC=corp,DC=example,DC=com">
-                            <small class="form-text text-muted">If set, new users can be created under this OU.</small>
-                        </div>
-                        <div class="form-check mb-2">
+                        <div class="form-check form-switch mb-2">
                             <input class="form-check-input" type="checkbox" name="ad_use_ssl" id="adUseSSL" {{ 'checked' if ad_config.ad_use_ssl else '' }}>
-                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong></label>
+                            <label class="form-check-label" for="adUseSSL"><strong>Use SSL/TLS (LDAPS)</strong> — required for password changes / account enable</label>
                         </div>
-                        <div class="form-check mb-3">
+                        <div class="form-check form-switch mb-4">
                             <input class="form-check-input" type="checkbox" name="ad_enabled" id="adEnabled" {{ 'checked' if ad_config.ad_enabled else '' }}>
                             <label class="form-check-label" for="adEnabled"><strong>Enable AD Integration</strong></label>
                         </div>
+
+                        <!-- Directory Structure -->
+                        <h6 class="text-uppercase text-muted small fw-semibold mb-2">Directory Structure</h6>
+                        <div class="mb-3">
+                            <label class="form-label">Base DN <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" name="ad_base_dn" value="{{ ad_config.ad_base_dn }}"
+                                   placeholder="DC=corp,DC=cirque,DC=com" required>
+                            <small class="form-text text-muted">Root of your domain — e.g. <code>DC=corp,DC=cirque,DC=com</code></small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">User Sync OU <span class="text-muted fw-normal">(recommended)</span></label>
+                            <input type="text" class="form-control" name="ad_user_ou_dn" value="{{ ad_config.ad_user_ou_dn }}"
+                                   placeholder="OU=CirqueUsers,OU=CirqueCompany,DC=corp,DC=cirque,DC=com">
+                            <small class="form-text text-muted">
+                                Restricts the employee sync to this OU subtree — should be your top-level user OU
+                                (e.g. <code>OU=CirqueUsers,DC=corp,DC=cirque,DC=com</code>).
+                                Also used as the default OU when creating new AD accounts.
+                                Leave blank to search the entire domain.
+                            </small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Computer Sync OU <span class="text-muted fw-normal">(optional)</span></label>
+                            <input type="text" class="form-control" name="ad_computer_ou_dn" value="{{ ad_config.ad_computer_ou_dn }}"
+                                   placeholder="OU=CirqueComputersAzure,OU=CirqueCompany,DC=corp,DC=cirque,DC=com">
+                            <small class="form-text text-muted">
+                                OU containing managed workstations — used for future computer-to-asset matching
+                                (e.g. <code>OU=CirqueComputersAzure,DC=corp,DC=cirque,DC=com</code>).
+                            </small>
+                        </div>
+
+                        <!-- Sync Behaviour -->
+                        <h6 class="text-uppercase text-muted small fw-semibold mb-2">Sync Behaviour</h6>
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input" type="checkbox" name="ad_ou_as_department" id="adOuAsDept"
+                                   {{ 'checked' if ad_config.ad_ou_as_department else '' }}>
+                            <label class="form-check-label" for="adOuAsDept">
+                                <strong>Infer department from OU path when AD department attribute is blank</strong>
+                            </label>
+                        </div>
+                        <div class="ms-4 mb-4">
+                            <small class="text-muted">
+                                Reads the employee's OU hierarchy to fill in department and region automatically:<br>
+                                <code>OU=Engineering,OU=CirqueUS,…</code> → dept <strong>Engineering</strong>, location <strong>US</strong><br>
+                                <code>OU=China,OU=CirqueTaiwan,…</code> → dept <strong>China</strong>, location <strong>Taiwan</strong>
+                            </small>
+                        </div>
+
                         <button type="submit" class="btn btn-success">
                             <i class="bi bi-save me-1"></i>Save Directory Settings
                         </button>
                     </form>
                     <div class="mt-3" id="adTestResult" style="display:none;"></div>
+                </div>
+            </div>
+
+            <!-- Quick Reference Card -->
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Your AD Structure Reference</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <p class="small fw-semibold mb-1">User OUs detected</p>
+                            <ul class="small mb-0 text-muted">
+                                <li><code>OU=CirqueUS</code> → US region
+                                    <ul>
+                                        <li>Admin, Engineering, Executive</li>
+                                        <li>Finance, HR, IT, Management, Production</li>
+                                    </ul>
+                                </li>
+                                <li><code>OU=CirqueTaiwan</code> → Taiwan
+                                    <ul><li><code>OU=China</code> sub-OU → China</li></ul>
+                                </li>
+                                <li><code>OU=Cirque-China</code> → China</li>
+                                <li><code>OU=CirqueAdmins</code>, <code>OU=Cirque-Domain-Users</code></li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <p class="small fw-semibold mb-1">Computer OUs</p>
+                            <ul class="small mb-0 text-muted">
+                                <li><code>OU=CirqueComputersAzure</code> — Azure AD joined <span class="badge bg-primary" style="font-size:0.65rem">sync target</span>
+                                    <ul><li><code>OU=TEST – USB Block</code></li></ul>
+                                </li>
+                                <li><code>OU=CirqueComputers</code> — on-prem (not synced)</li>
+                            </ul>
+                            <p class="small fw-semibold mb-1 mt-3">Configured settings</p>
+                            <ul class="small mb-0 text-muted">
+                                <li>Base DN: <code>DC=corp,DC=cirque,DC=com</code></li>
+                                <li>User Sync OU: <code>OU=CirqueUsers,OU=CirqueCompany,DC=corp,DC=cirque,DC=com</code></li>
+                                <li>Computer OU: <code>OU=CirqueComputersAzure,OU=CirqueCompany,DC=corp,DC=cirque,DC=com</code></li>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

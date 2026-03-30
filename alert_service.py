@@ -596,9 +596,113 @@ def sync_defender_vulnerabilities():
                 matched += 1
         logger.info(f'Defender sync: matched {matched}/{len(machines)} Defender machines to tracked assets')
 
+        # ── Software-presence validation ──────────────────────────────────────
+        # Products that are OS/system/library level — always accept because they
+        # cannot be detected as standalone entries in the installed-apps list.
+        _ALWAYS_ACCEPT = {
+            'windows_11', 'windows_10',
+            '.net', '.net_core', '.net_framework', 'asp.net_core',
+            'chipset_device_software', 'computing_improvement_program',
+            'dynamic_platform_and_thermal_framework', 'dynamic_tuning_technology',
+            'proset_wireless', 'rapid_storage_technology',
+            'hardware_accelerated_execution_manager',
+            # Bundled libraries — cannot validate as standalone apps
+            'openssl', 'log4j', 'libwebp', 'commons_text', 'sqlite', 'qt',
+            # Ambiguous / meta product names
+            'agent', 'update', 'next', 'desktop', 'software_updater',
+            'odbc', 'command_update',
+        }
+        # Defender product_name → keywords to find in rmm_software.name (lowercase)
+        _PRODUCT_KEYWORDS = {
+            'chrome': ['chrome'], 'chrome_for_mac': ['chrome'],
+            'firefox': ['firefox'],
+            'python': ['python'],
+            'jre': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
+            'jdk': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
+            'meetings': ['zoom', 'webex', 'teams', 'goto'],
+            'reader': ['reader', 'acrobat', 'foxit'],
+            'visual_studio_2017': ['visual studio'], 'visual_studio_2022': ['visual studio'],
+            'visual_studio_2013': ['visual studio'],
+            'edge_chromium-based': ['microsoft edge', 'edge'],
+            'edge_webview2_runtime': ['webview2', 'edge'],
+            'mariadb': ['mariadb', 'mysql'],
+            'visual_studio_code': ['visual studio code'], 'visual_studio_code_for_mac': ['visual studio code'],
+            'geforce_experience': ['geforce', 'nvidia'],
+            'vim': ['vim'], 'teams': ['teams'],
+            'vlc_media_player': ['vlc'], 'vlc_media_player_for_mac': ['vlc'],
+            '7-zip': ['7-zip', '7zip'],
+            'office': ['microsoft 365', 'office'],
+            'notepad++': ['notepad++'], 'wireshark': ['wireshark'],
+            'netextender': ['netextender', 'sonicwall'],
+            'git': ['git'], 'gimp': ['gimp'], 'silverlight': ['silverlight'],
+            'illustrator': ['illustrator'],
+            'openoffice': ['openoffice', 'libreoffice'],
+            'sourcetree': ['sourcetree'],
+            'pdf_reader': ['reader', 'acrobat', 'foxit'],
+            'global_vpn_client': ['global vpn', 'sonicwall'],
+            'supportassist': ['supportassist'],
+            'vm_virtualbox': ['virtualbox'],
+            'dragon_center': ['dragon center', 'msi center', 'msi app'],
+            'workstation': ['vmware workstation'],
+            'itunes': ['itunes'], 'webex': ['webex'], 'webex_meetings': ['webex'],
+            'digital_delivery': ['digital delivery', 'autodesk'],
+            'filezilla': ['filezilla'],
+            'synapse': ['razer synapse'], 'winrar': ['winrar'],
+            'tera_term': ['tera term'],
+            'nodejs': ['node.js', 'nodejs', 'node '],
+            'acrobat_reader_dc': ['acrobat', 'reader'],
+            'pycharm': ['pycharm', 'jetbrains'],
+            'skype': ['skype'],
+            'tortoisesvn': ['tortoisesvn'],
+            'creative_cloud': ['creative cloud'],
+            'codemeter_runtime': ['codemeter'],
+            'keepass': ['keepass'],
+            'photoshop_elements': ['photoshop'],
+            'tightvnc': ['tightvnc'], 'ultravnc': ['ultravnc'],
+            'snagit': ['snagit'], 'mobaxterm': ['mobaxterm'],
+            'xmind': ['xmind'], 'beyond_compare': ['beyond compare'],
+            'expressvpn': ['expressvpn'],
+            'viscosity_for_mac': ['viscosity'],
+            'wibukey': ['wibu', 'codemeter'],
+            'everything': ['everything'],
+        }
+
+        # Build per-asset installed-software set from RMM agent inventory.
+        # Only assets that have rmm_software data are in this dict; assets
+        # without data are treated conservatively (no filtering applied).
+        _asset_software: dict = {}
+        try:
+            for _row in con.execute(
+                """SELECT ra.asset_id, lower(rs.name) AS sw_name
+                   FROM rmm_software rs
+                   JOIN rmm_agent ra ON ra.agent_id = rs.agent_id
+                   WHERE ra.asset_id IS NOT NULL"""
+            ).fetchall():
+                _aid = _row['asset_id']
+                if _aid not in _asset_software:
+                    _asset_software[_aid] = set()
+                _asset_software[_aid].add(_row['sw_name'])
+        except Exception as _sw_err:
+            logger.warning(f'Defender sync: could not load software inventory for validation: {_sw_err}')
+
+        def _software_present(asset_id, product_name: str) -> bool:
+            """Return True if this CVE should be inserted for this asset."""
+            pn = (product_name or '').lower().strip()
+            if not pn or pn in _ALWAYS_ACCEPT:
+                return True
+            installed = _asset_software.get(asset_id)
+            if installed is None:
+                return True  # no RMM inventory — accept conservatively
+            keywords = _PRODUCT_KEYWORDS.get(pn)
+            if keywords is None:
+                return True  # unknown product — accept conservatively
+            return any(any(kw in sw for sw in installed) for kw in keywords)
+        # ─────────────────────────────────────────────────────────────────────
+
         # Bulk-fetch ALL machine-CVE pairs in one API call (much faster than per-machine calls)
         all_machine_vulns = svc.get_all_machine_vulnerabilities()
         dev_count = 0
+        filtered_count = 0
         for mv in all_machine_vulns:
             machine_id = mv.get('machineId', '')
             asset_id   = machine_asset_map.get(machine_id)
@@ -607,19 +711,27 @@ def sync_defender_vulnerabilities():
             cve_id = mv.get('cveId', '')
             if not cve_id:
                 continue
+            product_name = mv.get('productName', '')
+            if not _software_present(asset_id, product_name):
+                filtered_count += 1
+                continue  # software not found on device — skip false positive
             con.execute(
                 """INSERT INTO device_vulnerability
                    (asset_id, agent_id, cve_id, severity, cvss, product_name, status, synced_at)
                    VALUES (?,?,?,?,?,?,'Open',datetime('now'))
                    ON CONFLICT(asset_id, cve_id) DO UPDATE SET
                      severity=excluded.severity, cvss=excluded.cvss,
-                     product_name=excluded.product_name, synced_at=excluded.synced_at""",
+                     product_name=excluded.product_name, synced_at=excluded.synced_at,
+                     status=CASE WHEN device_vulnerability.status IN ('Remediated','Accepted')
+                                 THEN device_vulnerability.status ELSE 'Open' END""",
                 (asset_id, machine_id, cve_id,
                  mv.get('severity', 'Unknown'), mv.get('cvssV3', 0) or 0,
-                 mv.get('productName', ''))
+                 product_name)
             )
             dev_count += 1
 
+        if filtered_count:
+            logger.info(f'Defender sync: filtered {filtered_count} CVEs where software not found in device inventory')
         con.commit()
         con.close()
         return vuln_count, dev_count, None

@@ -3,7 +3,7 @@ Cirque RMM — AI Engine
 Wraps OpenAI API for ticket assistant and security monitoring.
 API key stored in setting table (key='openai_api_key').
 """
-import json, logging, urllib.request, urllib.error
+import json, logging, re, urllib.request, urllib.error
 from datetime import datetime
 
 from pg_db import pg_connect
@@ -701,3 +701,156 @@ def auto_triage_ticket(ticket_id: int) -> dict:
         pass  # Use rule-based result
 
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Asset health analysis
+# ──────────────────────────────────────────────────────────────────────────────
+def analyze_asset_health(asset_id: int) -> dict:
+    """
+    Gather all available data for a single asset and ask OpenAI to produce
+    a structured health report with issues and recommended actions.
+    """
+    db = _db()
+
+    asset = db.execute(
+        "SELECT id, name, device_type, status, last_seen, online_state FROM asset WHERE id=?",
+        (asset_id,)
+    ).fetchone()
+    if not asset:
+        db.close()
+        raise ValueError(f"Asset {asset_id} not found")
+
+    # RMM telemetry (most recent row for this asset)
+    tel = db.execute(
+        """SELECT hostname, os_name, os_version, cpu_percent, ram_percent,
+                  ram_total_gb, ram_available_gb, disk_json, logged_in_user,
+                  uptime_seconds, security_json, captured_at
+           FROM rmm_telemetry WHERE asset_id=? ORDER BY captured_at DESC LIMIT 1""",
+        (asset_id,)
+    ).fetchone()
+
+    # Agent row (for agent_id and last_seen_at)
+    agent = db.execute(
+        "SELECT agent_id, last_seen_at FROM rmm_agent WHERE asset_id=? AND enabled=true LIMIT 1",
+        (asset_id,)
+    ).fetchone()
+
+    # Open CVEs grouped by severity
+    vuln_rows = db.execute(
+        """SELECT severity, COUNT(*) as cnt FROM device_vulnerability
+           WHERE asset_id=? AND status='Open' GROUP BY severity""",
+        (asset_id,)
+    ).fetchall()
+    vuln_by_sev = {}
+    for r in vuln_rows:
+        sev = (r['severity'] or 'unknown').lower()
+        vuln_by_sev[sev] = vuln_by_sev.get(sev, 0) + r['cnt']
+
+    # Pending patches + reboot flag
+    patch_data = db.execute(
+        """SELECT COUNT(*) as cnt, BOOL_OR(rpu.reboot_required) as needs_reboot
+           FROM rmm_pending_update rpu
+           JOIN rmm_agent ra ON ra.agent_id = rpu.agent_id
+           WHERE ra.asset_id=?""",
+        (asset_id,)
+    ).fetchone()
+
+    # Open support tickets
+    tickets = db.execute(
+        "SELECT COUNT(*) as cnt FROM support_ticket WHERE asset_id=? AND status NOT IN ('resolved','closed')",
+        (asset_id,)
+    ).fetchone()
+
+    # Active monitoring alerts
+    alert_rows = db.execute(
+        """SELECT message, severity FROM monitoring_alert
+           WHERE asset_id=? AND resolved_at IS NULL ORDER BY triggered_at DESC LIMIT 5""",
+        (asset_id,)
+    ).fetchall()
+
+    db.close()
+
+    # Parse disk JSON for low-space drives
+    disk_issues = []
+    if tel and tel['disk_json']:
+        try:
+            disks = json.loads(tel['disk_json']) if isinstance(tel['disk_json'], str) else tel['disk_json']
+            for d in (disks if isinstance(disks, list) else []):
+                free_pct = d.get('free_percent') or d.get('free_pct')
+                if free_pct is None and d.get('total_gb') and d.get('free_gb'):
+                    free_pct = round(d['free_gb'] / d['total_gb'] * 100, 1)
+                if free_pct is not None and float(free_pct) < 15:
+                    label = d.get('device') or d.get('path') or d.get('drive', 'Disk')
+                    disk_issues.append(f"{label}: {float(free_pct):.0f}%% free")
+        except Exception:
+            pass
+
+    # Parse security JSON
+    security_info = {}
+    if tel and tel['security_json']:
+        try:
+            security_info = json.loads(tel['security_json']) if isinstance(tel['security_json'], str) else (tel['security_json'] or {})
+        except Exception:
+            pass
+
+    raw_data = {
+        "asset_name": asset['name'],
+        "device_type": asset['device_type'] or 'Unknown',
+        "asset_status": asset['status'],
+        "online_state": asset['online_state'],
+        "os": f"{tel['os_name']} {tel['os_version']}" if tel else None,
+        "cpu_percent": tel['cpu_percent'] if tel else None,
+        "ram_percent": tel['ram_percent'] if tel else None,
+        "logged_in_user": tel['logged_in_user'] if tel else None,
+        "disk_low_free": disk_issues,
+        "uptime_hours": round(tel['uptime_seconds'] / 3600, 1) if tel and tel.get('uptime_seconds') else None,
+        "av_status": (security_info.get('antivirus') or {}).get('state') if security_info else None,
+        "firewall_enabled": (security_info.get('firewall') or {}).get('enabled') if security_info else None,
+        "pending_reboot": bool(patch_data['needs_reboot']) if patch_data else False,
+        "open_vulns": vuln_by_sev,
+        "pending_patches": patch_data['cnt'] if patch_data else 0,
+        "open_tickets": tickets['cnt'] if tickets else 0,
+        "active_alerts": [{"rule": r['message'], "severity": r['severity']} for r in alert_rows],
+    }
+
+    prompt = (
+        "You are an IT system health analyst. Analyse this Windows/Linux device data and return ONLY valid JSON.\n"
+        "Be specific and actionable. Skip checks where data is None/missing.\n\n"
+        '{"health_status": "healthy|warning|critical", '
+        '"health_score": <integer 0-100>, '
+        '"summary": "<1-2 sentence plain-English summary>", '
+        '"issues": [{"severity": "critical|warning|info", "title": "<short title>", "detail": "<detail>"}], '
+        '"recommended_actions": ["<action 1>", "<action 2>"], '
+        '"positive_notes": ["<what is good>"]}\n\n'
+        f"Device data: {json.dumps(raw_data)}"
+    )
+
+    raw = _openai_chat([{"role": "user", "content": prompt}], max_tokens=800)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group())
+            except Exception:
+                parsed = {}
+        else:
+            parsed = {}
+        if not parsed:
+            parsed = {
+                "health_status": "unknown", "health_score": 50,
+                "summary": raw, "issues": [], "recommended_actions": [], "positive_notes": []
+            }
+
+    return {
+        **parsed,
+        "raw_data": raw_data,
+        "agent_id": agent['agent_id'] if agent else None,
+        "is_online": (asset['online_state'] or '').lower() == 'online',
+        "has_agent": bool(agent),
+        "asset_id": asset_id,
+        "asset_name": asset['name'],
+    }

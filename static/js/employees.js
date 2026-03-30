@@ -1,5 +1,11 @@
+// Scroll position save/restore across filter/sort navigations
+function navigateTo(url) {
+    sessionStorage.setItem('emp_scroll', window.scrollY);
+    window.location.href = url;
+}
+
 // View mode management
-let currentView = localStorage.getItem('employeeView') || 'grid';
+let currentView = localStorage.getItem('employeeView') || 'table';
 
 function setView(view) {
     currentView = view;
@@ -22,6 +28,13 @@ function setView(view) {
 
 // Initialize view on page load
 document.addEventListener('DOMContentLoaded', function() {
+    // Restore scroll position after filter/sort navigation
+    const savedScroll = sessionStorage.getItem('emp_scroll');
+    if (savedScroll !== null) {
+        sessionStorage.removeItem('emp_scroll');
+        window.scrollTo(0, parseInt(savedScroll, 10));
+    }
+
     setView(currentView);
     
     // View toggle buttons
@@ -40,6 +53,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Department filter
     document.getElementById('departmentFilter').addEventListener('change', applyFilters);
+
+    // Location filter
+    document.getElementById('locationFilter').addEventListener('change', applyFilters);
     
     // Sort select
     document.getElementById('sortSelect').addEventListener('change', applyFilters);
@@ -48,38 +64,39 @@ document.addEventListener('DOMContentLoaded', function() {
 function applyFilters() {
     const search = document.getElementById('searchInput').value;
     const department = document.getElementById('departmentFilter').value;
+    const location = document.getElementById('locationFilter').value;
     const sort = document.getElementById('sortSelect').value;
     
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    if (department) params.append('department', department);
-    if (sort) params.append('sort', sort);
-    params.append('order', 'window.EMPLOYEESCFG.sort_order');
+    const params = new URLSearchParams(window.location.search);
+    if (search) params.set('search', search); else params.delete('search');
+    if (department) params.set('department', department); else params.delete('department');
+    if (location) params.set('location', location); else params.delete('location');
+    if (sort) params.set('sort', sort); else params.delete('sort');
     
-    window.location.href = 'window.EMPLOYEESCFG.employees_url?' + params.toString();
+    navigateTo(window.location.pathname + '?' + params.toString());
 }
 
 function sortBy(column) {
-    const currentSort = 'window.EMPLOYEESCFG.sort_by';
-    const currentOrder = 'window.EMPLOYEESCFG.sort_order';
+    const params = new URLSearchParams(window.location.search);
+    const currentSort = params.get('sort') || 'name';
+    const currentOrder = params.get('order') || 'asc';
     let newOrder = 'asc';
     
     if (currentSort === column) {
         newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
     }
     
-    const params = new URLSearchParams(window.location.search);
     params.set('sort', column);
     params.set('order', newOrder);
     
-    window.location.href = 'window.EMPLOYEESCFG.employees_url?' + params.toString();
+    navigateTo(window.location.pathname + '?' + params.toString());
 }
 
 function toggleSortOrder() {
     const params = new URLSearchParams(window.location.search);
-    const currentOrder = 'window.EMPLOYEESCFG.sort_order';
+    const currentOrder = params.get('order') || 'asc';
     params.set('order', currentOrder === 'asc' ? 'desc' : 'asc');
-    window.location.href = 'window.EMPLOYEESCFG.employees_url?' + params.toString();
+    navigateTo(window.location.pathname + '?' + params.toString());
 }
 
 function clearSearch() {
@@ -146,5 +163,10 @@ function filterByLicenses() {
 }
 function clearDepartment() {
     document.getElementById('departmentFilter').value = '';
+    applyFilters();
+}
+
+function clearLocation() {
+    document.getElementById('locationFilter').value = '';
     applyFilters();
 }

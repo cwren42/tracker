@@ -121,10 +121,70 @@ function submitBulkDepartment() {
     });
 }
 
+// Bulk Edit
+function bulkEdit() {
+    const count = getSelectedAssetIds().length;
+    document.getElementById('bulkEditCount').textContent = count;
+    document.getElementById('bulkEditCountBtn').textContent = count;
+    ['beStatus','beCategory','beLocation','beDeviceType','beDepartment','beMonitoringProfile','beBackupPolicy','beNotes'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    document.getElementById('beNotesReplace').checked = false;
+    new bootstrap.Modal(document.getElementById('bulkEditModal')).show();
+}
+
+function submitBulkEdit() {
+    const assetIds = getSelectedAssetIds();
+    const payload = { asset_ids: assetIds };
+
+    const rawFields = {
+        status:      document.getElementById('beStatus').value.trim(),
+        category:    document.getElementById('beCategory').value.trim(),
+        location:    document.getElementById('beLocation').value.trim(),
+        device_type: document.getElementById('beDeviceType').value.trim(),
+        department:  document.getElementById('beDepartment').value.trim(),
+        notes:       document.getElementById('beNotes').value.trim(),
+    };
+
+    let changed = 0;
+    for (const [k, v] of Object.entries(rawFields)) {
+        if (v) { payload[k] = v; changed++; }
+    }
+
+    const monProfile = document.getElementById('beMonitoringProfile').value;
+    const backupPol  = document.getElementById('beBackupPolicy').value;
+    if (monProfile)  { payload.monitoring_profile_id = monProfile; changed++; }
+    if (backupPol)   { payload.backup_policy_id = backupPol; changed++; }
+
+    if (document.getElementById('beNotesReplace').checked) payload.notes_replace = true;
+
+    if (changed === 0) {
+        alert('No fields filled in — nothing to update.');
+        return;
+    }
+
+    fetch('/assets/bulk/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            bootstrap.Modal.getInstance(document.getElementById('bulkEditModal')).hide();
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
 // Bulk Export Selected
 function bulkExportSelected() {
     const assetIds = getSelectedAssetIds();
-    
+
     // Create a form and submit it to trigger file download
     const form = document.createElement('form');
     form.method = 'POST';
@@ -139,6 +199,97 @@ function bulkExportSelected() {
     document.body.appendChild(form);
     form.submit();
     document.body.removeChild(form);
+}
+
+// Bulk Eagle Eyes
+function bulkEagleEyes(enabled) {
+    const assetIds = getSelectedAssetIds();
+    const state = enabled ? 'enable' : 'disable';
+    if (!confirm(`${state.charAt(0).toUpperCase() + state.slice(1)} Eagle Eyes for ${assetIds.length} selected asset(s)?`)) return;
+    fetch('/assets/bulk/eagle-eyes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset_ids: assetIds, enabled: enabled })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert(data.message);
+            clearSelection();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+
+// Bulk Deploy Patches — creates patch jobs for all pending updates and fires install_patches
+async function bulkDeployPatches() {
+    const assetIds = getSelectedAssetIds();
+    if (!assetIds.length) return;
+    if (!confirm(`Deploy ALL pending Windows Updates to agents on ${assetIds.length} selected asset(s)?\n\nThis will immediately install pending patches on each online device. Devices may reboot.`)) return;
+    try {
+        const r = await fetch('/assets/bulk/deploy-patches', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: assetIds})
+        });
+        const data = await r.json();
+        alert(data.success ? data.message : 'Error: ' + (data.message || 'Unknown error'));
+        if (data.success) clearSelection();
+    } catch(err) { alert('Error: ' + err); }
+}
+
+// Bulk Scan Patches
+async function bulkScanPatches() {
+    const assetIds = getSelectedAssetIds();
+    if (!assetIds.length) return;
+    if (!confirm(`Send a patch scan request to agents on ${assetIds.length} selected asset(s)?\n\nThis will trigger an online Windows Update scan on each online agent (may take 1-2 min per device).`)) return;
+    try {
+        const r = await fetch('/assets/bulk/scan-patches', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: assetIds})
+        });
+        const data = await r.json();
+        alert(data.success ? data.message : 'Error: ' + (data.message || 'Unknown error'));
+        if (data.success) clearSelection();
+    } catch(err) { alert('Error: ' + err); }
+}
+
+// Bulk Sync Vulnerabilities
+async function bulkSyncVulns() {
+    const assetIds = getSelectedAssetIds();
+    if (!assetIds.length) return;
+    if (!confirm(`Trigger a Defender vulnerability sync?\n\nThis refreshes CVE data for all enrolled devices (not just selected ones). It may take a minute.`)) return;
+    try {
+        const r = await fetch('/api/vulnerabilities/sync', {method: 'POST'});
+        const data = await r.json();
+        alert(data.ok ? 'Defender sync started in the background. Refresh the page in a minute to see updated data.' : 'Error starting sync.');
+        clearSelection();
+    } catch(err) { alert('Error: ' + err); }
+}
+
+// Bulk Update Agent
+function bulkUpdateAgent() {
+    const assetIds = getSelectedAssetIds();
+    if (!assetIds.length) return;
+    if (!confirm(`Push a force-update to the RMM agent on ${assetIds.length} selected asset(s)?\n\nAgents will download the latest version on their next heartbeat (within 5 minutes).`)) return;
+    fetch('/assets/bulk/update-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset_ids: assetIds })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert(data.message);
+            clearSelection();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
 }
 
 // Bulk Delete

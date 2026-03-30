@@ -159,16 +159,31 @@ def inject_impersonation_state():
             if real_admin_id:
                 real_admin = User.query.get(int(real_admin_id))
                 if real_admin and real_admin.role == 'admin':
-                    return dict(impersonating=True, real_admin=real_admin)
+                    return dict(impersonating=True, real_admin=real_admin,
+                                photo_url=_photo_url)
     except Exception:
         pass
-    return dict(impersonating=False, real_admin=None)
+    return dict(impersonating=False, real_admin=None, photo_url=_photo_url)
+
+
+def _photo_url(photo_rel):
+    """Build a cache-busted static URL for an employee photo.
+
+    photo_rel may be stored as 'employee_photos/employee_1.jpg?v=123456'
+    We split off the ?v= before passing to url_for so Flask doesn't encode it.
+    """
+    if not photo_rel:
+        return None
+    parts = photo_rel.split('?', 1)
+    base = url_for('static', filename='uploads/' + parts[0])
+    return base + ('?' + parts[1] if len(parts) > 1 else '')
 
 
 # ── Register Blueprints ───────────────────────────────────────────────────
 from blueprints import auth, assets, dashboard, employees, licenses
 from blueprints import monitoring, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
+from blueprints import backup
 
 app.register_blueprint(auth.bp)
 app.register_blueprint(assets.bp)
@@ -184,3 +199,4 @@ app.register_blueprint(tickets.bp)
 app.register_blueprint(vulnerabilities.bp)
 app.register_blueprint(ai.bp)
 app.register_blueprint(misc.bp)
+app.register_blueprint(backup.bp)

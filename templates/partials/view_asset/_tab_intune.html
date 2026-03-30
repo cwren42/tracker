@@ -1,95 +1,49 @@
 <!-- ══ INTUNE TAB ═══════════════════════════════════════════ -->
-{% if asset.category not in ['Server'] %}
+{% if asset.intune_device_id %}
 <div class="tab-pane fade" id="tab-intune" role="tabpanel">
-    {% if not asset.serial_number %}
-    <div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No serial number on file. Add a serial number to enable Intune data comparison.</div>
-    {% elif intune_error %}
-    <div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Unable to fetch Intune data: {{ intune_error }}</div>
-    {% elif intune_device %}
-    <p class="text-muted mb-3"><small><i class="bi bi-info-circle me-1"></i>Live data from Microsoft Intune compared against your asset record.</small></p>
-    <div class="card section-card">
-        <div class="table-responsive">
-            <table class="table table-bordered mb-0">
-                <thead class="table-light">
-                    <tr><th style="width:22%;">Field</th><th>Asset Record</th><th>Intune Live Data</th></tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>Device Name</strong></td>
-                        <td>{{ asset.name }}</td>
-                        <td>{{ intune_device.get('deviceName', '-') }}{% if asset.name != intune_device.get('deviceName') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Serial Number</strong></td>
-                        <td><code>{{ asset.serial_number }}</code></td>
-                        <td><code>{{ intune_device.get('serialNumber', '-') }}</code>{% if asset.serial_number == intune_device.get('serialNumber') %} <span class="badge bg-success ms-1">Match</span>{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Manufacturer</strong></td>
-                        <td>{{ asset.manufacturer or '-' }}</td>
-                        <td>{{ intune_device.get('manufacturer', '-') }}{% if asset.manufacturer != intune_device.get('manufacturer') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Model</strong></td>
-                        <td>{{ asset.model or '-' }}</td>
-                        <td>{{ intune_device.get('model', '-') }}{% if asset.model != intune_device.get('model') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Operating System</strong></td>
-                        <td>{{ asset.os_version or '-' }}</td>
-                        <td>{{ intune_device.get('operatingSystem', '-') }} {{ intune_device.get('osVersion', '') }}{% if asset.os_version and intune_device.get('operatingSystem') and asset.os_version != intune_device.get('operatingSystem') %} <span class="badge bg-warning ms-1">Different</span>{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Assigned User</strong></td>
-                        <td>{% if asset.employee %}{{ asset.employee.name }}<br><small class="text-muted">{{ asset.employee.email }}</small>{% else %}<span class="text-muted">Not assigned</span>{% endif %}</td>
-                        <td>
-                            {% if intune_device.get('userPrincipalName') %}
-                                {{ intune_device.get('userDisplayName', '-') }}<br>
-                                <small class="text-muted">{{ intune_device.get('userPrincipalName') }}</small>
-                                {% if asset.employee and asset.employee.email != intune_device.get('userPrincipalName') %}<br><span class="badge bg-warning">Different user</span>
-                                {% elif not asset.employee %}<br><span class="badge bg-info">Can sync</span>{% endif %}
-                            {% else %}<span class="text-muted">Not assigned in Intune</span>{% endif %}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td><strong>Compliance</strong></td>
-                        <td>{{ asset.online_state or '-' }}</td>
-                        <td>{% set compliance = intune_device.get('complianceState', 'unknown') %}
-                            {% if compliance == 'compliant' %}<span class="badge bg-success">{{ compliance|title }}</span>
-                            {% elif compliance == 'noncompliant' %}<span class="badge bg-danger">{{ compliance|title }}</span>
-                            {% else %}<span class="badge bg-secondary">{{ compliance|title }}</span>{% endif %}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td><strong>Last Seen / Sync</strong></td>
-                        <td>{% if asset.last_seen %}{{ asset.last_seen.strftime('%Y-%m-%d %H:%M UTC') }}{% else %}-{% endif %}</td>
-                        <td>{% if intune_device.get('lastSyncDateTime') %}{{ intune_device.get('lastSyncDateTime', '').replace('T',' ').replace('Z',' UTC')[:19] + ' UTC' }}{% else %}-{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Enrollment Date</strong></td>
-                        <td>-</td>
-                        <td>{% if intune_device.get('enrolledDateTime') %}{{ intune_device.get('enrolledDateTime', '').split('T')[0] }}{% else %}-{% endif %}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Management State</strong></td>
-                        <td>-</td>
-                        <td>{{ intune_device.get('managementState', '-') }}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Device ID (Intune)</strong></td>
-                        <td>-</td>
-                        <td><small><code>{{ intune_device.get('id', '-') }}</code></small></td>
-                    </tr>
-                </tbody>
-            </table>
+    <p class="text-muted mb-3" style="font-size:.85rem;"><i class="bi bi-info-circle me-1"></i>Intune data is synced periodically. Use <strong>Sync from Intune</strong> on the Assets list to refresh.</p>
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card section-card">
+                <div class="card-header"><i class="bi bi-microsoft me-2" style="color:#00a4ef;"></i>Enrollment &amp; Compliance</div>
+                <div class="card-body">
+                    <table class="table table-sm table-borderless mb-0" style="font-size:.87rem;">
+                        <tr><td class="text-muted" style="width:140px;">Device ID</td><td><code style="font-size:.78rem;">{{ asset.intune_device_id }}</code></td></tr>
+                        <tr><td class="text-muted">Enrolled</td><td>{{ asset.intune_enrolled_date.strftime('%Y-%m-%d') if asset.intune_enrolled_date else '—' }}</td></tr>
+                        <tr><td class="text-muted">Last Sync</td><td>{{ asset.intune_last_sync.strftime('%Y-%m-%d %H:%M UTC') if asset.intune_last_sync else '—' }}</td></tr>
+                        <tr><td class="text-muted">Compliance</td><td>
+                            {% if asset.intune_compliance_state == 'compliant' %}<span class="badge bg-success">Compliant</span>
+                            {% elif asset.intune_compliance_state == 'noncompliant' %}<span class="badge bg-danger">Non-Compliant</span>
+                            {% else %}<span class="badge bg-secondary">{{ asset.intune_compliance_state|title if asset.intune_compliance_state else 'Unknown' }}</span>{% endif %}
+                        </td></tr>
+                        <tr><td class="text-muted">Management</td><td><span class="badge bg-info">{{ asset.intune_management_state|title if asset.intune_management_state else 'Unknown' }}</span></td></tr>
+                        <tr><td class="text-muted">OS Version</td><td>{{ asset.intune_os_version or '—' }}</td></tr>
+                        {% if asset.azure_ad_device_id %}
+                        <tr><td class="text-muted" style="vertical-align:top;">Azure AD ID</td><td><code style="font-size:.75rem;">{{ asset.azure_ad_device_id }}</code></td></tr>
+                        {% endif %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card section-card">
+                <div class="card-header"><i class="bi bi-cpu me-2 text-info"></i>Hardware (from Intune)</div>
+                <div class="card-body">
+                    <table class="table table-sm table-borderless mb-0" style="font-size:.87rem;">
+                        {% if asset.hardware_cpu %}<tr><td class="text-muted" style="width:130px;">Processor</td><td>{{ asset.hardware_cpu }}</td></tr>{% endif %}
+                        {% if asset.hardware_ram_gb %}<tr><td class="text-muted">RAM</td><td>{{ '%.1f'|format(asset.hardware_ram_gb) }} GB</td></tr>{% endif %}
+                        {% if asset.hardware_storage_total_gb %}<tr><td class="text-muted" style="vertical-align:top;">Storage</td><td>{{ '%.1f'|format(asset.hardware_storage_total_gb) }} GB{% if asset.hardware_storage_free_gb %}<br><small class="text-muted">{{ '%.1f'|format(asset.hardware_storage_free_gb) }} GB free</small>{% endif %}</td></tr>{% endif %}
+                        {% if asset.hardware_bios_version %}<tr><td class="text-muted">BIOS</td><td><code style="font-size:.8rem;">{{ asset.hardware_bios_version }}</code></td></tr>{% endif %}
+                        {% if asset.hardware_tpm_version %}<tr><td class="text-muted">TPM</td><td>{{ asset.hardware_tpm_version }}</td></tr>{% endif %}
+                        {% if asset.hardware_mac_wifi %}<tr><td class="text-muted">WiFi MAC</td><td><code style="font-size:.8rem;">{{ asset.hardware_mac_wifi }}</code></td></tr>{% endif %}
+                        {% if asset.hardware_mac_ethernet %}<tr><td class="text-muted">Ethernet MAC</td><td><code style="font-size:.8rem;">{{ asset.hardware_mac_ethernet }}</code></td></tr>{% endif %}
+                    </table>
+                    {% if not (asset.hardware_cpu or asset.hardware_ram_gb or asset.hardware_storage_total_gb) %}
+                    <p class="text-muted mb-0" style="font-size:.85rem;">No hardware data synced yet.</p>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
-    {% if asset.manufacturer != intune_device.get('manufacturer') or asset.model != intune_device.get('model') or asset.name != intune_device.get('deviceName') %}
-    <div class="alert alert-info mt-3"><i class="bi bi-info-circle me-2"></i><strong>Data Mismatch Detected:</strong> Some fields differ. Run "Sync from Intune" on the Assets page to update.</div>
-    {% endif %}
-    {% else %}
-    <div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Device (Serial: <code>{{ asset.serial_number }}</code>) was not found in Microsoft Intune. It may not be enrolled.</div>
-    {% endif %}
 </div>
-
 {% endif %}

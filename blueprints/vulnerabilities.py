@@ -88,7 +88,8 @@ def vulnerability_dashboard():
 @bp.route('/api/vulnerabilities/sync', methods=['POST'])
 @login_required
 def api_vuln_sync():
-    _app = app
+    from flask import current_app as _current_app
+    _app = _current_app._get_current_object()
     def _bg():
         with _app.app_context():
             vc, dc, err = _alert_svc.sync_defender_vulnerabilities()
@@ -150,8 +151,8 @@ def api_vulnerabilities():
                    JOIN (SELECT cve_id, COUNT(DISTINCT asset_id) AS device_count
                          FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
                      ON dc.cve_id = vc.cve_id
-                   WHERE vc.severity=?
-                   ORDER BY vc.cvss DESC LIMIT ?""",
+                   WHERE vc.severity=%s
+                   ORDER BY vc.cvss DESC LIMIT %s""",
                 (sev, limit)
             ).fetchall()
         else:
@@ -162,7 +163,7 @@ def api_vulnerabilities():
                          FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
                      ON dc.cve_id = vc.cve_id
                    ORDER BY CASE vc.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
-                             WHEN 'Medium' THEN 3 ELSE 4 END, vc.cvss DESC LIMIT ?""",
+                             WHEN 'Medium' THEN 3 ELSE 4 END, vc.cvss DESC LIMIT %s""",
                 (limit,)
             ).fetchall()
         return jsonify(ok=True, vulnerabilities=[dict(r) for r in rows])
@@ -179,11 +180,12 @@ def api_vuln_devices():
         asset_id = request.args.get('asset_id')
         if cve_id:
             rows = con.execute(
-                """SELECT dv.*, a.name as asset_name,
-                          COALESCE(a.hostname, a.name) as display_name
+                """SELECT dv.*, a.name as asset_name, a.name as display_name
                    FROM device_vulnerability dv
                    LEFT JOIN asset a ON a.id = dv.asset_id
-                   WHERE dv.cve_id=? ORDER BY dv.severity""",
+                   WHERE dv.cve_id=%s
+                   ORDER BY CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
+                             WHEN 'Medium' THEN 3 ELSE 4 END""",
                 (cve_id,)
             ).fetchall()
         elif asset_id:
@@ -191,13 +193,14 @@ def api_vuln_devices():
                 """SELECT dv.*, vc.name as vuln_name, vc.description
                    FROM device_vulnerability dv
                    LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
-                   WHERE dv.asset_id=? ORDER BY CASE dv.severity
+                   WHERE dv.asset_id=%s AND dv.status NOT IN ('Closed','Remediated','Exception')
+                   ORDER BY CASE dv.severity
                    WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END""",
                 (asset_id,)
             ).fetchall()
         else:
             rows = con.execute(
-                """SELECT dv.*, a.name as asset_name, a.hostname
+                """SELECT dv.*, a.name as asset_name, a.name as display_name
                    FROM device_vulnerability dv
                    LEFT JOIN asset a ON a.id = dv.asset_id
                    WHERE dv.status='Open'
@@ -225,16 +228,16 @@ def api_vuln_status(cve_id):
         if asset_id:
             con.execute(
                 """UPDATE device_vulnerability
-                   SET status=?, remediation_note=?, plan_date=?, updated_at=?, updated_by=?
-                   WHERE cve_id=? AND asset_id=?""",
+                   SET status=%s, remediation_note=%s, plan_date=%s, updated_at=%s, updated_by=%s
+                   WHERE cve_id=%s AND asset_id=%s""",
                 (status, note, plan, now_str, username, cve_id, asset_id)
             )
             con.commit()
         else:
             con.execute(
                 """UPDATE device_vulnerability
-                   SET status=?, remediation_note=?, plan_date=?, updated_at=?, updated_by=?
-                   WHERE cve_id=?""",
+                   SET status=%s, remediation_note=%s, plan_date=%s, updated_at=%s, updated_by=%s
+                   WHERE cve_id=%s""",
                 (status, note, plan, now_str, username, cve_id)
             )
             con.commit()
@@ -254,18 +257,18 @@ def api_vuln_deploy(cve_id):
     try:
         if asset_id:
             rows = con.execute(
-                """SELECT dv.asset_id, ra.agent_id
+                """SELECT dv.asset_id, ra.agent_id, dv.product_name
                    FROM device_vulnerability dv
                    JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
-                   WHERE dv.cve_id = ? AND dv.asset_id = ? LIMIT 1""",
+                   WHERE dv.cve_id = %s AND dv.asset_id = %s LIMIT 1""",
                 (cve_id, asset_id)
             ).fetchall()
         else:
             rows = con.execute(
-                """SELECT DISTINCT dv.asset_id, ra.agent_id
+                """SELECT DISTINCT dv.asset_id, ra.agent_id, dv.product_name
                    FROM device_vulnerability dv
                    JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
-                   WHERE dv.cve_id = ? AND dv.status = 'Open'""",
+                   WHERE dv.cve_id = %s AND dv.status NOT IN ('Closed','Remediated','Exception')""",
                 (cve_id,)
             ).fetchall()
     finally:
@@ -274,7 +277,8 @@ def api_vuln_deploy(cve_id):
         return jsonify(ok=False, error='No connected agents found for this CVE'), 404
     dispatched = []
     errors     = []
-    for (aid, agent_id) in rows:
+    for row in rows:
+        aid, agent_id, product_name = row['asset_id'], row['agent_id'], (row['product_name'] or '')
         try:
             result = db.session.execute(
                 text("""INSERT INTO cve_patch_job
@@ -283,16 +287,17 @@ def api_vuln_deploy(cve_id):
                         RETURNING id"""),
                 {'aid': aid, 'agent': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
             )
-            db.session.commit()
             job_id = result.scalar()
+            db.session.commit()
         except Exception as e:
+            db.session.rollback()
             errors.append({'agent_id': agent_id, 'error': f'DB error: {e}'})
             continue
-        payload = json.dumps({'job_id': job_id, 'cve_ids': [cve_id]}).encode()
+        payload = json.dumps({'type': 'install_cve_patches', 'job_id': job_id, 'cve_ids': [cve_id], 'product_name': product_name}).encode()
         try:
             import urllib.request as _req
             req = _req.Request(
-                f"{RMM_GATEWAY_INTERNAL}/deploy-cve-patches/{agent_id}",
+                f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
                 data=payload, headers={'Content-Type': 'application/json'}, method='POST'
             )
             with _req.urlopen(req, timeout=10) as resp:
@@ -305,9 +310,23 @@ def api_vuln_deploy(cve_id):
                 )
                 db.session.commit()
             else:
-                errors.append({'agent_id': agent_id, 'error': result.get('error', 'gateway error')})
+                gw_err = result.get('error', 'gateway error')
+                errors.append({'agent_id': agent_id, 'error': gw_err})
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
         except Exception as e:
             errors.append({'agent_id': agent_id, 'error': str(e)})
+            try:
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
     return jsonify(ok=True, dispatched=dispatched, errors=errors, total=len(rows), sent=len(dispatched))
 
 
@@ -324,16 +343,64 @@ def api_cve_patch_jobs():
             rows = con.execute(
                 """SELECT j.*, a.name as asset_name FROM cve_patch_job j
                    LEFT JOIN asset a ON a.id = j.asset_id
-                   WHERE j.cve_id = ? AND j.asset_id = ? ORDER BY j.id DESC LIMIT 1""",
+                   WHERE j.cve_id = %s AND j.asset_id = %s ORDER BY j.id DESC LIMIT 1""",
                 (cve_id, asset_id)
             ).fetchall()
         else:
             rows = con.execute(
                 """SELECT j.*, a.name as asset_name FROM cve_patch_job j
                    LEFT JOIN asset a ON a.id = j.asset_id
-                   WHERE j.cve_id = ? ORDER BY j.id DESC LIMIT 50""",
+                   WHERE j.cve_id = %s ORDER BY j.id DESC LIMIT 50""",
                 (cve_id,)
             ).fetchall()
+        return jsonify(ok=True, jobs=[dict(r) for r in rows])
+    finally:
+        con.close()
+
+
+@bp.route('/api/vulnerabilities/bulk-status', methods=['PUT'])
+@login_required
+def api_vuln_bulk_status():
+    d        = request.get_json(force=True) or {}
+    asset_id = d.get('asset_id')
+    cve_ids  = d.get('cve_ids') or []
+    status   = d.get('status', 'Open')
+    if not asset_id or not cve_ids:
+        return jsonify(ok=False, error='asset_id and cve_ids required'), 400
+    username = current_user.username if current_user.is_authenticated else 'system'
+    now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
+    con = _alert_svc._get_db()
+    try:
+        for cve_id in cve_ids:
+            con.execute(
+                """UPDATE device_vulnerability
+                   SET status=%s, updated_at=%s, updated_by=%s
+                   WHERE cve_id=%s AND asset_id=%s""",
+                (status, now_str, username, cve_id, asset_id)
+            )
+        con.commit()
+        return jsonify(ok=True, updated=len(cve_ids))
+    finally:
+        con.close()
+
+
+@bp.route('/api/vulnerabilities/patch-history')
+@login_required
+def api_vuln_patch_history():
+    asset_id = request.args.get('asset_id')
+    if not asset_id:
+        return jsonify(ok=False, error='asset_id required'), 400
+    con = _alert_svc._get_db()
+    try:
+        rows = con.execute(
+            """SELECT j.id, j.cve_id, j.status, j.deployed_by, j.deployed_at,
+                      j.completed_at, j.result_json, j.reboot_required, j.updates_found
+               FROM cve_patch_job j
+               WHERE j.asset_id = %s
+               ORDER BY j.id DESC
+               LIMIT 200""",
+            (asset_id,)
+        ).fetchall()
         return jsonify(ok=True, jobs=[dict(r) for r in rows])
     finally:
         con.close()
@@ -391,7 +458,7 @@ def api_patch_all_by_app():
             SELECT DISTINCT dv.cve_id, dv.asset_id, ra.agent_id
             FROM device_vulnerability dv
             JOIN rmm_agent ra ON ra.asset_id = dv.asset_id AND ra.enabled = true
-            WHERE dv.product_name = ? AND dv.status = 'Open'
+            WHERE dv.product_name = %s AND dv.status = 'Open'
         """, (product_name,)).fetchall()
     finally:
         con.close()
@@ -400,18 +467,149 @@ def api_patch_all_by_app():
     username = current_user.username
     now_str  = now_mst().strftime('%Y-%m-%d %H:%M')
     dispatched, errors = [], []
+    # Group CVEs by agent so we send one message per agent with all its CVEs
+    agent_map = {}
     for r in rows:
-        cve_id, asset_id, agent_id = r['cve_id'], r['asset_id'], r['agent_id']
+        key = (r['asset_id'], r['agent_id'])
+        if key not in agent_map:
+            agent_map[key] = []
+        agent_map[key].append(r['cve_id'])
+    for (asset_id, agent_id), cve_ids in agent_map.items():
+        job_id = None
         try:
-            db.session.execute(
+            result = db.session.execute(
                 text("""INSERT INTO cve_patch_job
                         (asset_id, agent_id, cve_id, status, deployed_by, deployed_at, updated_at, created_at)
                         VALUES (:aid, :agt, :cve, 'queued', :who, :now, :now, :now)
-                        ON CONFLICT DO NOTHING"""),
-                {'aid': asset_id, 'agt': agent_id, 'cve': cve_id, 'who': username, 'now': now_str}
+                        RETURNING id"""),
+                {'aid': asset_id, 'agt': agent_id, 'cve': cve_ids[0], 'who': username, 'now': now_str}
             )
-            dispatched.append({'asset_id': asset_id, 'cve_id': cve_id})
+            job_id = result.scalar()
+            db.session.commit()
         except Exception as e:
-            errors.append({'cve_id': cve_id, 'asset_id': asset_id, 'error': str(e)})
-    db.session.commit()
+            db.session.rollback()
+            errors.append({'asset_id': asset_id, 'agent_id': agent_id, 'error': f'DB error: {e}'})
+            continue
+        payload = json.dumps({'type': 'install_cve_patches', 'job_id': job_id, 'cve_ids': cve_ids, 'product_name': product_name}).encode()
+        try:
+            import urllib.request as _req
+            req = _req.Request(
+                f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+                data=payload, headers={'Content-Type': 'application/json'}, method='POST'
+            )
+            with _req.urlopen(req, timeout=10) as resp:
+                gw_result = json.loads(resp.read())
+            if gw_result.get('ok'):
+                dispatched.append({'asset_id': asset_id, 'agent_id': agent_id, 'job_id': job_id, 'cve_count': len(cve_ids)})
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='deploying', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+            else:
+                gw_err = gw_result.get('error', 'gateway error')
+                errors.append({'asset_id': asset_id, 'agent_id': agent_id, 'error': gw_err})
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+        except Exception as e:
+            errors.append({'asset_id': asset_id, 'agent_id': agent_id, 'error': str(e)})
+            try:
+                db.session.execute(
+                    text("UPDATE cve_patch_job SET status='failed', updated_at=:now WHERE id=:jid"),
+                    {'now': now_str, 'jid': job_id}
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
     return jsonify(ok=True, product_name=product_name, queued=len(dispatched), errors=errors)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REPORT ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@bp.route('/api/vulnerabilities/report/summary')
+@login_required
+def api_vuln_report_summary():
+    """Overall stats: severity counts, exposure totals, patch job pipeline."""
+    con = _alert_svc._get_db()
+    try:
+        job_rows = con.execute(
+            "SELECT status, COUNT(*) AS c FROM cve_patch_job GROUP BY status"
+        ).fetchall()
+        jobs = {r['status']: r['c'] for r in job_rows}
+
+        dv_rows = con.execute(
+            "SELECT status, COUNT(*) AS c FROM device_vulnerability GROUP BY status"
+        ).fetchall()
+        dv_status = {r['status']: r['c'] for r in dv_rows}
+
+        sev_rows = con.execute("""
+            SELECT vc.severity, COUNT(DISTINCT vc.cve_id) AS c
+            FROM vulnerability_cache vc
+            INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status = 'Open'
+            GROUP BY vc.severity
+        """).fetchall()
+        sev = {r['severity']: r['c'] for r in sev_rows}
+
+        return jsonify(
+            ok=True,
+            patch_jobs=jobs,
+            exposures=dv_status,
+            severity=sev,
+        )
+    finally:
+        con.close()
+
+
+@bp.route('/api/vulnerabilities/report/top-assets')
+@login_required
+def api_vuln_report_top_assets():
+    """Top 20 assets ordered by critical → high → total open CVEs."""
+    con = _alert_svc._get_db()
+    try:
+        rows = con.execute("""
+            SELECT
+                a.name             AS asset_name,
+                dv.asset_id,
+                COUNT(*)           AS open_count,
+                COUNT(*) FILTER (WHERE vc.severity = 'Critical') AS critical_count,
+                COUNT(*) FILTER (WHERE vc.severity = 'High')     AS high_count,
+                COUNT(*) FILTER (WHERE vc.severity = 'Medium')   AS medium_count,
+                COUNT(*) FILTER (WHERE vc.severity = 'Low')      AS low_count
+            FROM device_vulnerability dv
+            LEFT JOIN asset a ON a.id = dv.asset_id
+            LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
+            WHERE dv.status = 'Open'
+            GROUP BY dv.asset_id, a.name
+            ORDER BY critical_count DESC, high_count DESC, open_count DESC
+            LIMIT 20
+        """).fetchall()
+        return jsonify(ok=True, assets=[dict(r) for r in rows])
+    finally:
+        con.close()
+
+
+@bp.route('/api/vulnerabilities/report/trend')
+@login_required
+def api_vuln_report_trend():
+    """Daily count of CVEs remediated over the past 30 days."""
+    con = _alert_svc._get_db()
+    try:
+        rows = con.execute("""
+            SELECT
+                DATE(updated_at) AS day,
+                COUNT(*)         AS count
+            FROM device_vulnerability
+            WHERE status = 'Remediated'
+              AND updated_at >= NOW() - INTERVAL '30 days'
+            GROUP BY DATE(updated_at)
+            ORDER BY day
+        """).fetchall()
+        return jsonify(ok=True, trend=[{'day': str(r['day']), 'count': r['count']} for r in rows])
+    finally:
+        con.close()

@@ -309,6 +309,13 @@ def settings(section):
             return redirect(url_for(section_endpoints[section]))
         return redirect(url_for('dashboard.index'))
 
+    # GET — each section has its own dedicated page now. Send the user to the
+    # requested section, or default the bare /settings to Appearance (theme).
+    # (Previously a GET fell through here with no return -> 500.)
+    if section:
+        return redirect(url_for(section_endpoints[section]))
+    return redirect(url_for('settings.settings_theme'))
+
 
 @bp.route('/settings/theme', methods=['GET', 'POST'])
 @login_required

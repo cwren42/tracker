@@ -23,17 +23,16 @@ class SOC2SyncService:
         from app import Setting
         
         with self.app.app_context():
-            tenant_id = Setting.query.filter_by(key='m365_tenant_id').first()
-            client_id = Setting.query.filter_by(key='m365_client_id').first()
-            client_secret = Setting.query.filter_by(key='m365_client_secret').first()
-            
+            from m365_config import get_m365_credentials
+            tenant_id, client_id, client_secret = get_m365_credentials()
+
             if not all([tenant_id, client_id, client_secret]):
-                raise Exception("M365 credentials not configured in settings")
-            
+                raise Exception("M365 credentials not configured")
+
             self.m365_service = M365Service(
-                tenant_id=tenant_id.value,
-                client_id=client_id.value,
-                client_secret=client_secret.value
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret
             )
             
             return self.m365_service

@@ -18,9 +18,8 @@ class AzureSecurityService:
         from app import db
         from app import Setting
         
-        self.tenant_id = self._get_setting('m365_tenant_id')
-        self.client_id = self._get_setting('m365_client_id')
-        self.client_secret = self._get_setting('m365_client_secret')
+        from m365_config import get_m365_credentials
+        self.tenant_id, self.client_id, self.client_secret = get_m365_credentials()
         self.subscription_id = self._get_setting('azure_subscription_id')
         
         if not all([self.tenant_id, self.client_id, self.client_secret]):

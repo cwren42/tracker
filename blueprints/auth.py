@@ -28,6 +28,7 @@ from models import (
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
+from m365_config import get_m365_credentials, m365_configured
 from utils import (
     admin_required, manager_required, eagle_eyes_required,
     ticket_access_required, license_required,
@@ -72,28 +73,27 @@ def login():
         flash('Local login is disabled. Please sign in with Microsoft.', 'warning')
         return redirect(url_for('auth.login'))
     
-    # Check if Azure AD is configured for SSO button
-    azure_config = AzureIntegrationConfig.query.filter_by(enabled=True, app_name='tracker').first()
-    azure_enabled = azure_config is not None
-    
+    # Show the SSO button if M365 credentials are configured (env-first, DB fallback)
+    azure_enabled = m365_configured()
+
     return render_template('login.html', azure_enabled=azure_enabled)
 
 
 @bp.route('/login/microsoft')
 def login_microsoft():
     """Initiate Microsoft/Azure AD OAuth2 login flow"""
-    # Get Azure configuration
-    azure_config = AzureIntegrationConfig.query.filter_by(enabled=True, app_name='tracker').first()
-    
-    if not azure_config:
+    # Get M365 credentials (env-first, DB fallback)
+    tenant_id, client_id, client_secret = get_m365_credentials()
+
+    if not (tenant_id and client_id and client_secret):
         flash('Azure AD authentication is not configured.', 'danger')
         return redirect(url_for('auth.login'))
-    
+
     # Create MSAL confidential client
     msal_app = msal.ConfidentialClientApplication(
-        azure_config.client_id,
-        authority=f"https://login.microsoftonline.com/{azure_config.tenant_id}",
-        client_credential=azure_config.client_secret
+        client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        client_credential=client_secret
     )
     
     # Generate auth URL with PKCE
@@ -128,18 +128,18 @@ def login_microsoft_callback():
         flash('Authentication failed: No authorization code received.', 'danger')
         return redirect(url_for('auth.login'))
     
-    # Get Azure configuration
-    azure_config = AzureIntegrationConfig.query.filter_by(enabled=True, app_name='tracker').first()
-    
-    if not azure_config:
+    # Get M365 credentials (env-first, DB fallback)
+    tenant_id, client_id, client_secret = get_m365_credentials()
+
+    if not (tenant_id and client_id and client_secret):
         flash('Azure AD authentication is not configured.', 'danger')
         return redirect(url_for('auth.login'))
-    
+
     # Exchange code for token
     msal_app = msal.ConfidentialClientApplication(
-        azure_config.client_id,
-        authority=f"https://login.microsoftonline.com/{azure_config.tenant_id}",
-        client_credential=azure_config.client_secret
+        client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        client_credential=client_secret
     )
     
     result = msal_app.acquire_token_by_authorization_code(

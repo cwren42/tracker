@@ -120,13 +120,18 @@ def perform_intune_asset_sync():
         # Preload assets/employees to avoid per-device queries
         all_assets = Asset.query.all()
         assets_by_serial = {}
+        assets_by_azure_id = {}
         assets_by_name_lower = {}
         existing_asset_tags = set()
+        _ZERO_GUID = '00000000-0000-0000-0000-000000000000'
         for existing_asset in all_assets:
             if existing_asset.asset_tag:
                 existing_asset_tags.add(existing_asset.asset_tag)
             if existing_asset.serial_number:
                 assets_by_serial[existing_asset.serial_number] = existing_asset
+            _aad = (existing_asset.azure_ad_device_id or '').strip().lower()
+            if _aad and _aad != _ZERO_GUID:
+                assets_by_azure_id.setdefault(_aad, existing_asset)
             if existing_asset.name:
                 assets_by_name_lower.setdefault(existing_asset.name.strip().lower(), existing_asset)
 
@@ -154,6 +159,12 @@ def perform_intune_asset_sync():
                 return None
             return value
 
+        def normalize_azure_id(value):
+            v = (value or '').strip().lower()
+            if not v or v == _ZERO_GUID:
+                return None
+            return v
+
         def build_unique_asset_tag(base):
             if not base:
                 base = f"TEMP-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -175,10 +186,18 @@ def perform_intune_asset_sync():
 
                 device_name_norm = str(device_name).strip()
                 serial_number = normalize_serial(device.get('serialNumber'))
+                azure_id = normalize_azure_id(device.get('azureADDeviceId'))
 
                 asset = None
                 if serial_number and serial_number in assets_by_serial:
                     asset = assets_by_serial[serial_number]
+                # Match on the stable Azure AD device id before name/create. A device
+                # that re-enrolls in Intune gets a NEW intune_device_id (and Intune may
+                # return several records) but keeps the SAME azureADDeviceId — and
+                # serial-less devices never matched at all. Without this, every sync
+                # created duplicate assets (e.g. gao.yang_Windows_N piling up daily).
+                if not asset and azure_id and azure_id in assets_by_azure_id:
+                    asset = assets_by_azure_id[azure_id]
                 if not asset:
                     asset = assets_by_name_lower.get(device_name_norm.lower())
 
@@ -248,6 +267,8 @@ def perform_intune_asset_sync():
                     asset.hardware_mac_wifi = wifi_mac
                     asset.hardware_mac_ethernet = eth_mac
                     asset.azure_ad_device_id = device.get('azureADDeviceId')
+                    if azure_id:
+                        assets_by_azure_id.setdefault(azure_id, asset)
 
                     if employee:
                         if not asset.employee_id:
@@ -300,6 +321,8 @@ def perform_intune_asset_sync():
                     db.session.add(new_asset)
                     if serial_number:
                         assets_by_serial[serial_number] = new_asset
+                    if azure_id:
+                        assets_by_azure_id.setdefault(azure_id, new_asset)
                     assets_by_name_lower.setdefault(device_name_norm.lower(), new_asset)
                     synced_count += 1
 

@@ -66,39 +66,38 @@
 {% set ai_context = "assets" %}{% include '_ai_search_bar.html' %}
 
 
-<!-- Quick Filters -->
-<div class="mb-3">
-    <div class="btn-group" role="group" aria-label="Quick filters">
-        <a href="{{ url_for('assets.assets', filter='noncompliant') }}" class="btn {% if request.args.get('filter') == 'noncompliant' %}btn-danger{% else %}btn-outline-danger{% endif %}">
-            <i class="bi bi-shield-exclamation"></i> Non-Compliant
-        </a>
-        <a href="{{ url_for('assets.assets', filter='low_storage') }}" class="btn {% if request.args.get('filter') == 'low_storage' %}btn-warning{% else %}btn-outline-warning{% endif %}">
-            <i class="bi bi-hdd"></i> Low Storage (<20%)
-        </a>
-        <a href="{{ url_for('assets.assets', filter='offline') }}" class="btn {% if request.args.get('filter') == 'offline' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
-            <i class="bi bi-wifi-off"></i> Offline 7+ Days
-        </a>
-        <a href="{{ url_for('assets.assets', filter='warranty_expiring') }}" class="btn {% if request.args.get('filter') == 'warranty_expiring' %}btn-info{% else %}btn-outline-info{% endif %}">
-            <i class="bi bi-calendar-x"></i> Warranty Expiring
-        </a>
-        <a href="{{ url_for('assets.assets', filter='unassigned') }}" class="btn {% if request.args.get('filter') == 'unassigned' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
-            <i class="bi bi-person-x"></i> Unassigned
-        </a>
-        <a href="{{ url_for('assets.assets', filter='with_agent') }}" class="btn {% if request.args.get('filter') == 'with_agent' %}btn-success{% else %}btn-outline-success{% endif %}">
-            <i class="bi bi-robot"></i> With Agent
-        </a>
-        <a href="{{ url_for('assets.assets', filter='without_agent') }}" class="btn {% if request.args.get('filter') == 'without_agent' %}btn-warning{% else %}btn-outline-warning{% endif %}">
-            <i class="bi bi-robot"></i> Without Agent
-        </a>
-        <a href="{{ url_for('assets.assets', filter='network_devices') }}" class="btn {% if request.args.get('filter') == 'network_devices' %}btn-info{% else %}btn-outline-info{% endif %}">
-            <i class="bi bi-diagram-3"></i> Network Devices
-        </a>
-        {% if request.args.get('filter') %}
-        <a href="{{ url_for('assets.assets') }}" class="btn btn-outline-secondary">
-            <i class="bi bi-x"></i> Clear Filter
-        </a>
-        {% endif %}
-    </div>
+<!-- Quick Filters — neutral chips at rest, indigo when active (calm, wraps cleanly) -->
+{% set _qf = request.args.get('filter') %}
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center" aria-label="Quick filters">
+    <a href="{{ url_for('assets.assets', filter='noncompliant') }}" class="btn btn-sm {% if _qf == 'noncompliant' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-shield-exclamation"></i> Non-Compliant
+    </a>
+    <a href="{{ url_for('assets.assets', filter='low_storage') }}" class="btn btn-sm {% if _qf == 'low_storage' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-hdd"></i> Low Storage (<20%)
+    </a>
+    <a href="{{ url_for('assets.assets', filter='offline') }}" class="btn btn-sm {% if _qf == 'offline' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-wifi-off"></i> Offline 7+ Days
+    </a>
+    <a href="{{ url_for('assets.assets', filter='warranty_expiring') }}" class="btn btn-sm {% if _qf == 'warranty_expiring' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-calendar-x"></i> Warranty Expiring
+    </a>
+    <a href="{{ url_for('assets.assets', filter='unassigned') }}" class="btn btn-sm {% if _qf == 'unassigned' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-person-x"></i> Unassigned
+    </a>
+    <a href="{{ url_for('assets.assets', filter='with_agent') }}" class="btn btn-sm {% if _qf == 'with_agent' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-robot"></i> With Agent
+    </a>
+    <a href="{{ url_for('assets.assets', filter='without_agent') }}" class="btn btn-sm {% if _qf == 'without_agent' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-robot"></i> Without Agent
+    </a>
+    <a href="{{ url_for('assets.assets', filter='network_devices') }}" class="btn btn-sm {% if _qf == 'network_devices' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-diagram-3"></i> Network Devices
+    </a>
+    {% if _qf %}
+    <a href="{{ url_for('assets.assets') }}" class="btn btn-sm btn-link text-muted text-decoration-none">
+        <i class="bi bi-x-lg"></i> Clear
+    </a>
+    {% endif %}
 </div>
 
 <!-- Advanced Search & Filters -->

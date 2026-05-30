@@ -86,52 +86,12 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 app = Flask(__name__)
 
-# ── Security / session config ─────────────────────────────────────────────
-_secret_key = os.environ.get('SECRET_KEY')
-if not _secret_key:
-    raise RuntimeError('SECRET_KEY environment variable is not set. Set it in /etc/tracker/secrets.env')
-app.config['SECRET_KEY'] = _secret_key
-_database_url = os.environ.get('DATABASE_URL')
-if not _database_url:
-    raise RuntimeError('DATABASE_URL environment variable is not set. Set it in /var/www/tracker/.secrets.env '
-                       '(loaded by systemd EnvironmentFile). A full `systemctl restart tracker` is required to pick it up.')
-app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'connect_args': {'options': '-c timezone=UTC'},
-    'pool_size': 10,
-    'max_overflow': 20,
-    'pool_pre_ping': True,
-    'pool_recycle': 1800,
-}
-app.config['SESSION_COOKIE_SECURE'] = True
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
-app.config['REMEMBER_COOKIE_SECURE'] = True
-app.config['REMEMBER_COOKIE_HTTPONLY'] = True
-app.config['PREFERRED_URL_SCHEME'] = 'https'
-app.config['UPLOAD_FOLDER'] = '/var/www/tracker/static/uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
-app.config['MAX_FORM_MEMORY_SIZE'] = 16 * 1024 * 1024  # 16 MB for large markdown/manual edits
+# ── Configuration (centralized in config.py; secrets required from env) ─────
+from config import Config
+app.config.from_object(Config)
 app.request_class.max_form_memory_size = app.config['MAX_FORM_MEMORY_SIZE']
+CSRF_ENABLED = app.config['WTF_CSRF_ENABLED']  # kill-switch: TRACKER_CSRF_ENABLED=0
 
-# ── Email config ──────────────────────────────────────────────────────────
-app.config['MAIL_SERVER'] = 'cirque-com.mail.protection.outlook.com'
-app.config['MAIL_PORT'] = 25
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False
-app.config['MAIL_USERNAME'] = None
-app.config['MAIL_PASSWORD'] = None
-app.config['MAIL_DEFAULT_SENDER'] = ('Tracker', 'tracker@cirque.com')
-app.config['MAIL_DELIVERY_METHOD'] = 'smtp'
-app.config['SEND_EMPLOYEE_EMAILS'] = False
-
-# ── Linux Agent key ───────────────────────────────────────────────────────
-_linux_agent_key = os.environ.get('LINUX_AGENT_API_KEY')
-if not _linux_agent_key:
-    raise RuntimeError('LINUX_AGENT_API_KEY environment variable is not set. Set it in /etc/tracker/secrets.env')
-app.config['LINUX_AGENT_API_KEY'] = _linux_agent_key
 
 def _valid_agent_key(key):
     return bool(key) and key == app.config.get('LINUX_AGENT_API_KEY', '')
@@ -141,18 +101,8 @@ db.init_app(app)
 login_manager.init_app(app)
 mail.init_app(app)
 limiter.init_app(app)
-
-# ── CSRF protection ────────────────────────────────────────────────────────
-# Protects all session-cookie-authenticated POST/PUT/PATCH/DELETE. Agent and
-# external-API endpoints (token/API-key authenticated, no browser session) are
-# exempted by URL prefix after blueprints register, below. Kill-switch: set
-# TRACKER_CSRF_ENABLED=0 in /var/www/tracker/.secrets.env to disable without a
-# code change if something regresses post-deploy.
-CSRF_ENABLED = os.environ.get('TRACKER_CSRF_ENABLED', '1') != '0'
-app.config['WTF_CSRF_ENABLED'] = CSRF_ENABLED       # toggles enforcement only
-app.config['WTF_CSRF_TIME_LIMIT'] = None            # token valid for the session lifetime
-# Always init_app so the csrf_token() template global and the <meta> tag keep
-# working even when enforcement is switched off via the kill-switch.
+# init_app always (not gated) so csrf_token() template global + <meta> tag keep
+# working even when enforcement is off; CSRF_ENABLED only toggles enforcement.
 csrf.init_app(app)
 
 from license_service import license_service

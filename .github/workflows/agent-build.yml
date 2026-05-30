@@ -23,6 +23,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Only the agent tree is needed to build. A full checkout fails on
+          # Windows because some static/evidence/ filenames are illegal on NTFS
+          # (long names with spaces/commas under a deep path). Sparse avoids them.
+          sparse-checkout: rmm_agent
+          sparse-checkout-cone-mode: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,8 +41,20 @@ jobs:
           echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
 
       - name: Verify version sources are in sync
-        # Same guard the CI job runs — fail fast before producing a mislabeled build.
-        run: python -m pytest tests/test_agent_version_sync.py -q
+        # Same guard as tests/test_agent_version_sync.py, inlined so it works under
+        # the sparse checkout (tests/conftest.py imports the full app, not present here).
+        shell: python
+        run: |
+          import re, sys
+          ver = open("rmm_agent/version.txt", encoding="utf-8").read().strip()
+          code = None
+          for line in open("rmm_agent/agent_client.py", encoding="utf-8"):
+              m = re.match(r'\s*AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', line)
+              if m:
+                  code = m.group(1); break
+          if ver != code:
+              sys.exit(f"Agent version drift: version.txt={ver!r} AGENT_VERSION={code!r}")
+          print(f"version OK: {ver}")
 
       - name: Build installer
         env:

@@ -241,7 +241,19 @@ class SupportTicket(db.Model):
     csat_token = db.Column(db.String(64))
     csat_score = db.Column(db.Integer)       # 1=positive, 0=negative
     csat_comment = db.Column(db.Text)
+    due_date = db.Column(db.Date)
 
+    # Many-to-many tags (via ticket_tag_link association table)
+    tags = db.relationship('TicketTag', secondary='ticket_tag_link', lazy='subquery',
+                           backref=db.backref('tickets', lazy=True))
+    # Watchers (users who get notified on updates)
+    watchers = db.relationship('TicketWatcher', lazy='dynamic',
+                               primaryjoin='SupportTicket.id == TicketWatcher.ticket_id',
+                               cascade='all, delete-orphan')
+    # Related ticket links (one-directional entries)
+    links = db.relationship('TicketLink', lazy='dynamic',
+                            primaryjoin='SupportTicket.id == TicketLink.ticket_id',
+                            cascade='all, delete-orphan')
     _SLA_HOURS = {'Low': 120, 'Normal': 72, 'High': 24, 'Urgent': 4}
 
     @property
@@ -274,6 +286,9 @@ class TicketNote(db.Model):
     ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     content = db.Column(db.Text, nullable=False)
+    is_internal = db.Column(db.Boolean, default=False, nullable=False)
+    is_reply = db.Column(db.Boolean, default=False, nullable=False)
+    reply_to = db.Column(db.Text)   # email address the reply was sent to
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     author = db.relationship('User', foreign_keys=[user_id])
@@ -289,6 +304,38 @@ class TicketActivity(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     user = db.relationship('User', foreign_keys=[user_id])
+
+
+# Association table for ticket ↔ tag (many-to-many)
+ticket_tag_link = db.Table(
+    'ticket_tag_link',
+    db.Column('ticket_id', db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('tag_id', db.Integer, db.ForeignKey('ticket_tag.id', ondelete='CASCADE'), primary_key=True),
+)
+
+
+class TicketTag(db.Model):
+    __tablename__ = 'ticket_tag'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False, unique=True)
+    color = db.Column(db.String(7), nullable=False, default='#6c757d')
+
+
+class TicketWatcher(db.Model):
+    __tablename__ = 'ticket_watcher'
+    ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
+class TicketLink(db.Model):
+    __tablename__ = 'ticket_link'
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), nullable=False)
+    linked_ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), nullable=False)
+    link_type = db.Column(db.String(20), nullable=False, default='related')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    linked_ticket = db.relationship('SupportTicket', foreign_keys=[linked_ticket_id])
 
 
 class AssetHistory(db.Model):
@@ -418,6 +465,362 @@ class PolicySection(db.Model):
     section_title = db.Column(db.Text, nullable=False)
     section_content = db.Column(db.Text)
     section_order = db.Column(db.Integer)
+
+
+class ISMSDocument(db.Model):
+    __tablename__ = 'isms_document'
+
+    id = db.Column(db.Integer, primary_key=True)
+    slug = db.Column(db.String(255), unique=True, nullable=False)
+    title = db.Column(db.Text, nullable=False)
+    doc_type = db.Column(db.String(50), default='policy')
+    category = db.Column(db.String(100))
+    status = db.Column(db.String(20), default='draft')
+    source_path = db.Column(db.String(500), unique=True)
+    current_version_id = db.Column(db.Integer, db.ForeignKey('isms_document_version.id'))
+    created_by = db.Column(db.String(100))
+    updated_by = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    versions = db.relationship(
+        'ISMSDocumentVersion',
+        backref='document',
+        lazy=True,
+        cascade='all, delete-orphan',
+        foreign_keys='ISMSDocumentVersion.document_id',
+        order_by='desc(ISMSDocumentVersion.version_number)',
+    )
+    current_version = db.relationship(
+        'ISMSDocumentVersion',
+        foreign_keys=[current_version_id],
+        post_update=True,
+    )
+
+
+class ISMSDocumentVersion(db.Model):
+    __tablename__ = 'isms_document_version'
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey('isms_document.id', ondelete='CASCADE'), nullable=False)
+    version_number = db.Column(db.Integer, nullable=False)
+    markdown_body = db.Column(db.Text, nullable=False)
+    rendered_html = db.Column(db.Text)
+    change_summary = db.Column(db.Text)
+    is_restore = db.Column(db.Boolean, default=False)
+    restored_from_version_id = db.Column(db.Integer, db.ForeignKey('isms_document_version.id', ondelete='SET NULL'))
+    created_by = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    restored_from_version = db.relationship(
+        'ISMSDocumentVersion',
+        remote_side=[id],
+        foreign_keys=[restored_from_version_id],
+    )
+
+
+class ISMSExportRun(db.Model):
+    __tablename__ = 'isms_export_run'
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey('isms_document.id', ondelete='CASCADE'), nullable=False)
+    document_version_id = db.Column(db.Integer, db.ForeignKey('isms_document_version.id', ondelete='SET NULL'))
+    export_format = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='pending')
+    output_path = db.Column(db.String(500))
+    generated_by = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    export_document = db.relationship('ISMSDocument', foreign_keys=[document_id])
+    export_version = db.relationship('ISMSDocumentVersion', foreign_keys=[document_version_id])
+
+
+class SOC2ReadinessItem(db.Model):
+    __tablename__ = 'soc2_readiness_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    item_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.Text, nullable=False)
+    domain = db.Column(db.String(120))
+    audit_alignment = db.Column(db.Text)
+    priority = db.Column(db.String(50), default='P2-High')
+    status = db.Column(db.String(50), default='Not In Place', index=True)
+    owner = db.Column(db.String(200))
+    frequency = db.Column(db.String(100))
+    source_type = db.Column(db.String(50), default='manual')
+    source_reference = db.Column(db.String(500))
+    manual_reference = db.Column(db.String(500))
+    evidence_reference = db.Column(db.String(500))
+    next_step = db.Column(db.Text)
+    notes = db.Column(db.Text)
+    due_date = db.Column(db.Date)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    updates = db.relationship(
+        'SOC2ReadinessUpdate',
+        backref='item',
+        lazy=True,
+        cascade='all, delete-orphan',
+        order_by='desc(SOC2ReadinessUpdate.created_at)',
+    )
+    audit_findings = db.relationship(
+        'SOC2InternalAuditFinding',
+        backref='linked_readiness_item',
+        lazy=True,
+        foreign_keys='SOC2InternalAuditFinding.readiness_item_id',
+        order_by='desc(SOC2InternalAuditFinding.created_at)',
+    )
+
+
+class SOC2ReadinessUpdate(db.Model):
+    __tablename__ = 'soc2_readiness_update'
+
+    id = db.Column(db.Integer, primary_key=True)
+    readiness_item_id = db.Column(db.Integer, db.ForeignKey('soc2_readiness_item.id', ondelete='CASCADE'), nullable=False)
+    update_type = db.Column(db.String(50), default='status_change')
+    previous_status = db.Column(db.String(50))
+    new_status = db.Column(db.String(50))
+    note = db.Column(db.Text)
+    created_by = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class SOC2InternalAudit(db.Model):
+    __tablename__ = 'soc2_internal_audit'
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.Text, nullable=False)
+    scope = db.Column(db.Text)
+    status = db.Column(db.String(50), default='Planned', index=True)
+    owner = db.Column(db.String(200))
+    audit_period_start = db.Column(db.Date)
+    audit_period_end = db.Column(db.Date)
+    planned_date = db.Column(db.Date)
+    performed_date = db.Column(db.Date)
+    summary = db.Column(db.Text)
+    evidence_reference = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    findings = db.relationship(
+        'SOC2InternalAuditFinding',
+        backref='audit',
+        lazy=True,
+        cascade='all, delete-orphan',
+        order_by='desc(SOC2InternalAuditFinding.created_at)',
+    )
+
+
+class SOC2InternalAuditFinding(db.Model):
+    __tablename__ = 'soc2_internal_audit_finding'
+
+    id = db.Column(db.Integer, primary_key=True)
+    audit_id = db.Column(db.Integer, db.ForeignKey('soc2_internal_audit.id', ondelete='CASCADE'), nullable=False)
+    readiness_item_id = db.Column(db.Integer, db.ForeignKey('soc2_readiness_item.id', ondelete='SET NULL'))
+    finding_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.Text, nullable=False)
+    severity = db.Column(db.String(50), default='Minor')
+    status = db.Column(db.String(50), default='Open', index=True)
+    criteria_reference = db.Column(db.String(200))
+    owner = db.Column(db.String(200))
+    due_date = db.Column(db.Date)
+    description = db.Column(db.Text)
+    recommendation = db.Column(db.Text)
+    evidence_reference = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SOC2Vendor(db.Model):
+    __tablename__ = 'soc2_vendor'
+
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_key = db.Column(db.String(120), unique=True, nullable=False)
+    vendor_name = db.Column(db.String(200), nullable=False)
+    service_description = db.Column(db.Text)
+    vendor_type = db.Column(db.String(100))
+    criticality = db.Column(db.String(50), default='Medium')
+    risk_level = db.Column(db.String(50), default='Medium')
+    owner = db.Column(db.String(200))
+    data_access_scope = db.Column(db.Text)
+    contract_status = db.Column(db.String(50), default='Active')
+    assurance_status = db.Column(db.String(100))
+    last_review_date = db.Column(db.Date)
+    next_review_date = db.Column(db.Date)
+    evidence_reference = db.Column(db.String(500))
+    notes = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    reviews = db.relationship(
+        'SOC2VendorReview',
+        backref='vendor',
+        lazy=True,
+        cascade='all, delete-orphan',
+        order_by='desc(SOC2VendorReview.review_date)',
+    )
+
+
+class SOC2VendorReview(db.Model):
+    __tablename__ = 'soc2_vendor_review'
+
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_id = db.Column(db.Integer, db.ForeignKey('soc2_vendor.id', ondelete='CASCADE'), nullable=False)
+    review_date = db.Column(db.Date, nullable=False)
+    review_type = db.Column(db.String(100), default='Annual Review')
+    status = db.Column(db.String(50), default='Completed')
+    reviewer = db.Column(db.String(200))
+    summary = db.Column(db.Text)
+    findings = db.Column(db.Text)
+    evidence_reference = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SOC2ManagementReview(db.Model):
+    __tablename__ = 'soc2_management_review'
+
+    id = db.Column(db.Integer, primary_key=True)
+    review_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    review_date = db.Column(db.Date, nullable=False)
+    review_period_start = db.Column(db.Date)
+    review_period_end = db.Column(db.Date)
+    chairperson = db.Column(db.String(200))
+    minute_taker = db.Column(db.String(200))
+    location = db.Column(db.String(200))
+    status = db.Column(db.String(50), default='Planned', index=True)
+    attendees = db.Column(db.Text)
+    agenda_summary = db.Column(db.Text)
+    decisions_summary = db.Column(db.Text)
+    effectiveness_summary = db.Column(db.Text)
+    resource_summary = db.Column(db.Text)
+    evidence_reference = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    actions = db.relationship(
+        'SOC2ManagementReviewAction',
+        backref='review',
+        lazy=True,
+        cascade='all, delete-orphan',
+        order_by='desc(SOC2ManagementReviewAction.created_at)',
+    )
+
+
+class SOC2ManagementReviewAction(db.Model):
+    __tablename__ = 'soc2_management_review_action'
+
+    id = db.Column(db.Integer, primary_key=True)
+    review_id = db.Column(db.Integer, db.ForeignKey('soc2_management_review.id', ondelete='CASCADE'), nullable=False)
+    action_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.Text, nullable=False)
+    owner = db.Column(db.String(200))
+    due_date = db.Column(db.Date)
+    status = db.Column(db.String(50), default='Open', index=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SOC2SecurityTrainingRecord(db.Model):
+    __tablename__ = 'soc2_security_training_record'
+
+    id = db.Column(db.Integer, primary_key=True)
+    record_key = db.Column(db.String(120), unique=True, nullable=False)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id', ondelete='SET NULL'))
+    trainee_name = db.Column(db.String(200), nullable=False)
+    trainee_email = db.Column(db.String(200))
+    department = db.Column(db.String(100))
+    role_title = db.Column(db.String(100))
+    training_date = db.Column(db.Date, nullable=False)
+    training_topic = db.Column(db.String(200), nullable=False)
+    provider_method = db.Column(db.String(200))
+    duration = db.Column(db.String(100))
+    completion_status = db.Column(db.String(50), default='Completed', index=True)
+    score = db.Column(db.Integer)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
+
+
+class SOC2PolicyAcknowledgement(db.Model):
+    __tablename__ = 'soc2_policy_acknowledgement'
+
+    id = db.Column(db.Integer, primary_key=True)
+    acknowledgement_key = db.Column(db.String(120), unique=True, nullable=False)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id', ondelete='SET NULL'))
+    person_name = db.Column(db.String(200), nullable=False)
+    person_email = db.Column(db.String(200))
+    department = db.Column(db.String(100))
+    acknowledgement_type = db.Column(db.String(100), default='Security Policy')
+    policy_name = db.Column(db.String(200), nullable=False)
+    policy_version = db.Column(db.String(50))
+    acknowledged_on = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(50), default='Acknowledged', index=True)
+    evidence_reference = db.Column(db.String(500))
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
+
+
+class SOC2PhishingCampaign(db.Model):
+    __tablename__ = 'soc2_phishing_campaign'
+
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    campaign_date = db.Column(db.Date, nullable=False)
+    provider = db.Column(db.String(200))
+    scope = db.Column(db.String(200))
+    status = db.Column(db.String(50), default='Completed', index=True)
+    scenario = db.Column(db.Text)
+    follow_up_training_topic = db.Column(db.String(200))
+    summary = db.Column(db.Text)
+    evidence_reference = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    results = db.relationship(
+        'SOC2PhishingResult',
+        backref='campaign',
+        lazy=True,
+        cascade='all, delete-orphan',
+        order_by='SOC2PhishingResult.employee_name.asc()',
+    )
+
+
+class SOC2PhishingResult(db.Model):
+    __tablename__ = 'soc2_phishing_result'
+
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey('soc2_phishing_campaign.id', ondelete='CASCADE'), nullable=False)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id', ondelete='SET NULL'))
+    result_key = db.Column(db.String(120), unique=True, nullable=False)
+    employee_name = db.Column(db.String(200), nullable=False)
+    employee_email = db.Column(db.String(200))
+    department = db.Column(db.String(100))
+    delivered = db.Column(db.Boolean, default=True)
+    opened = db.Column(db.Boolean, default=True)
+    clicked = db.Column(db.Boolean, default=False)
+    reported = db.Column(db.Boolean, default=False)
+    training_completed = db.Column(db.Boolean, default=False)
+    training_completed_on = db.Column(db.Date)
+    outcome = db.Column(db.String(100), default='Completed Follow-up Training', index=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
+
 
 class Control(db.Model):
     __tablename__ = 'control'
@@ -705,6 +1108,75 @@ def _log_audit(entity_type, entity_id, action, changes=None):
         # Don't commit here — will be committed with the parent transaction
     except Exception:
         pass  # Never break the main operation due to audit logging
+
+# ─── Exchange Online Quarantine Models ───────────────────────────────────────
+
+class QuarantineMessage(db.Model):
+    __tablename__ = 'quarantine_message'
+    id                   = db.Column(db.BigInteger, primary_key=True)
+    message_id           = db.Column(db.Text, nullable=False, unique=True)
+    internet_message_id  = db.Column(db.Text)
+    sender_address       = db.Column(db.Text)
+    sender_display_name  = db.Column(db.Text)
+    sender_domain        = db.Column(db.Text)
+    recipient_address    = db.Column(db.Text)
+    subject              = db.Column(db.Text)
+    received_time        = db.Column(db.DateTime(timezone=True))
+    expiry_time          = db.Column(db.DateTime(timezone=True))
+    quarantine_reason    = db.Column(db.Text)
+    policy_type          = db.Column(db.Text)
+    threat_type          = db.Column(db.Text)           # Phish, Malware, Spam, Bulk, Unknown
+    spf_result           = db.Column(db.Text)
+    dkim_result          = db.Column(db.Text)
+    dmarc_result         = db.Column(db.Text)
+    sender_ip            = db.Column(db.Text)           # SenderIPv4/IPv6 from Advanced Hunting
+    email_direction      = db.Column(db.Text)           # Inbound | IntraOrg | OutboundToExternal
+    release_status       = db.Column(db.Text, nullable=False, default='Quarantined')  # Quarantined | Released | Deleted
+    released_by          = db.Column(db.Text)
+    released_at          = db.Column(db.DateTime(timezone=True))
+    url_count            = db.Column(db.Integer, default=0)
+    attachment_count     = db.Column(db.Integer, default=0)
+    urls_json            = db.Column(db.Text)           # JSON array of extracted URLs
+    attachments_json     = db.Column(db.Text)           # JSON array of attachment names/hashes
+    raw_headers          = db.Column(db.Text)
+    campaign_id          = db.Column(db.Text)           # sender_domain used as campaign key
+    last_synced          = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at           = db.Column(db.DateTime, default=datetime.utcnow)
+    iocs = db.relationship('QuarantineIOC', backref='message', lazy=True, cascade='all, delete-orphan',
+                           primaryjoin='QuarantineMessage.message_id == foreign(QuarantineIOC.message_id)')
+
+    @property
+    def risk_score(self):
+        score = 0
+        tt = (self.threat_type or "").lower()
+        if tt == "phish":     score += 40
+        elif tt == "malware": score += 50
+        elif tt == "spam":    score += 10
+        if (self.spf_result or "").lower()  in ("fail", "softfail"): score += 20
+        if (self.dkim_result or "").lower() == "fail":               score += 20
+        if (self.dmarc_result or "").lower() == "fail":              score += 15
+        if (self.url_count or 0)        > 3: score += 5
+        if (self.attachment_count or 0) > 0: score += 5
+        return min(score, 100)
+
+    @property
+    def risk_label(self):
+        s = self.risk_score
+        if s >= 75: return "Critical"
+        if s >= 50: return "High"
+        if s >= 25: return "Medium"
+        return "Low"
+
+
+class QuarantineIOC(db.Model):
+    __tablename__ = 'quarantine_ioc'
+    id           = db.Column(db.BigInteger, primary_key=True)
+    message_id   = db.Column(db.Text, db.ForeignKey('quarantine_message.message_id', ondelete='CASCADE'), nullable=False)
+    ioc_type     = db.Column(db.Text, nullable=False)   # url, domain, email, ip, hash
+    ioc_value    = db.Column(db.Text, nullable=False)
+    threat_label = db.Column(db.Text)
+    first_seen   = db.Column(db.DateTime, default=datetime.utcnow)
+    seen_count   = db.Column(db.Integer, default=1)
 
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -34,6 +34,10 @@ DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tm
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+VULN_EMAIL_LOCK_PATH = os.environ.get('TRACKER_VULN_EMAIL_LOCK_PATH', '/tmp/tracker_vuln_email.lock')
+VULN_EMAIL_HOUR = int(os.environ.get('VULN_EMAIL_HOUR', '7'))  # 7 AM local time (after 2 AM Defender sync)
+DISABLE_VULN_EMAIL = os.environ.get('DISABLE_VULN_EMAIL', '').strip() in ('1', 'true', 'yes', 'on')
+
 PROXMOX_SYNC_LOCK_PATH = os.environ.get('TRACKER_PROXMOX_SYNC_LOCK_PATH', '/tmp/tracker_proxmox_sync.lock')
 PROXMOX_SYNC_INTERVAL_MINUTES = int(os.environ.get('PROXMOX_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_PROXMOX_SYNC = os.environ.get('DISABLE_PROXMOX_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -42,6 +46,10 @@ BACKUP_SCHEDULER_LOCK_PATH = os.environ.get('TRACKER_BACKUP_SCHEDULER_LOCK_PATH'
 BACKUP_SCHEDULER_INTERVAL_MINUTES = int(os.environ.get('BACKUP_SCHEDULER_INTERVAL_MINUTES', '60'))
 BACKUP_INCREMENTAL_INTERVAL_HOURS = int(os.environ.get('BACKUP_INCREMENTAL_INTERVAL_HOURS', '24'))
 DISABLE_BACKUP_SCHEDULER = os.environ.get('DISABLE_BACKUP_SCHEDULER', '').strip() in ('1', 'true', 'yes', 'on')
+
+QUARANTINE_SYNC_LOCK_PATH = os.environ.get('TRACKER_QUARANTINE_SYNC_LOCK_PATH', '/tmp/tracker_quarantine_sync.lock')
+QUARANTINE_SYNC_INTERVAL_MINUTES = int(os.environ.get('QUARANTINE_SYNC_INTERVAL_MINUTES', '15'))
+DISABLE_QUARANTINE_SYNC = os.environ.get('DISABLE_QUARANTINE_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
 # Throttle: max new *initial* (never-backed-up) full jobs triggered per scheduler cycle.
 # Prevents a fresh bulk policy assignment from flooding the NAS.
@@ -141,6 +149,20 @@ def start_sync_scheduler(flask_app):
             misfire_grace_time=600,
         )
 
+    if not DISABLE_VULN_EMAIL:
+        _scheduler.add_job(
+            func=lambda: run_daily_vuln_email_job(flask_app),
+            trigger='cron',
+            hour=VULN_EMAIL_HOUR,
+            minute=0,
+            id='daily_vuln_email',
+            name='Daily vulnerability email digest',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
     if not DISABLE_PROXMOX_SYNC:
         _scheduler.add_job(
             func=lambda: run_proxmox_sync_job(flask_app),
@@ -167,10 +189,71 @@ def start_sync_scheduler(flask_app):
             misfire_grace_time=300,
         )
 
+    if not DISABLE_QUARANTINE_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_quarantine_sync_job(flask_app),
+            trigger='interval',
+            minutes=max(QUARANTINE_SYNC_INTERVAL_MINUTES, 1),
+            id='quarantine_sync',
+            name='Periodic Exchange quarantine sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
+        )
+
+    _scheduler.add_job(
+        func=lambda: run_auto_approve_patches_job(flask_app),
+        trigger='cron',
+        hour=3,
+        minute=30,
+        id='patch_auto_approve',
+        name='Daily auto-approve patch deployment',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
     _scheduler.start()
     logger.info('Started sync scheduler')
 
     return _scheduler
+
+
+def run_auto_approve_patches_job(flask_app):
+    """Run auto-approve patch deployment for matching pending updates."""
+    logger.info('Starting scheduled auto-approve patch deployment')
+    with flask_app.app_context():
+        try:
+            from blueprints.patch_mgmt import _run_auto_approve
+            deployed, skipped = _run_auto_approve()
+            logger.info(f'Auto-approve patches: deployed={deployed} skipped/offline={skipped}')
+        except Exception as exc:
+            logger.error(f'Auto-approve patches error: {exc}')
+
+
+def run_quarantine_sync_job(flask_app):
+    """Run the Exchange quarantine sync with a cross-process lock."""
+    with _file_lock(QUARANTINE_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.info('Quarantine sync skipped (lock held by another process)')
+            return
+
+        logger.info('Starting scheduled quarantine sync')
+        with flask_app.app_context():
+            try:
+                from blueprints.quarantine import perform_quarantine_sync
+
+                result = perform_quarantine_sync(flask_app)
+                logger.info(
+                    'Scheduled quarantine sync complete: added=%s updated=%s message=%s',
+                    result.get('added', 0),
+                    result.get('updated', 0),
+                    result.get('message', ''),
+                )
+            except Exception:
+                logger.exception('Scheduled quarantine sync crashed')
 
 
 def run_intune_asset_sync_job(flask_app):
@@ -184,7 +267,8 @@ def run_intune_asset_sync_job(flask_app):
         logger.info('Starting scheduled Intune asset sync')
 
         with flask_app.app_context():
-            from app import db, Setting, perform_intune_asset_sync
+            from app import db, Setting
+            from blueprints.assets import perform_intune_asset_sync
 
             def set_setting(key: str, value: str):
                 row = Setting.query.filter_by(key=key).first()
@@ -260,9 +344,8 @@ def run_m365_employee_photo_refresh_job(flask_app):
                 set_setting('m365_employee_photo_refresh_last_status', 'running')
                 db.session.commit()
 
-                tenant = Setting.query.filter_by(key='m365_tenant_id').first()
-                client_id = Setting.query.filter_by(key='m365_client_id').first()
-                client_secret = Setting.query.filter_by(key='m365_client_secret').first()
+                from m365_config import get_m365_credentials
+                tenant, client_id, client_secret = get_m365_credentials()
 
                 if not (tenant and client_id and client_secret):
                     set_setting('m365_employee_photo_refresh_last_status', 'skipped')
@@ -272,7 +355,7 @@ def run_m365_employee_photo_refresh_job(flask_app):
                     logger.warning('M365 employee photo refresh skipped (credentials not configured)')
                     return
 
-                m365 = M365Service(tenant.value, client_id.value, client_secret.value)
+                m365 = M365Service(tenant, client_id, client_secret)
                 photo_dir = os.path.join(flask_app_instance.config['UPLOAD_FOLDER'], 'employee_photos')
                 os.makedirs(photo_dir, exist_ok=True)
 
@@ -574,6 +657,136 @@ def run_defender_vuln_sync_job(flask_app):
                     logger.info('Scheduled Defender vuln sync complete: %d CVEs, %d device exposures', vc, dc)
             except Exception:
                 logger.exception('Scheduled Defender vuln sync crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_daily_vuln_email_job(flask_app):
+    """Send a daily vulnerability and remediation digest email to all admin users."""
+    with _file_lock(VULN_EMAIL_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.info('Daily vuln email skipped (lock held by another process)')
+            return
+
+        logger.info('Starting daily vulnerability email digest')
+        with flask_app.app_context():
+            try:
+                from extensions import db
+                from sqlalchemy import text
+                from utils import send_admin_notification
+                from datetime import date
+
+                # Active Critical/High CVEs with exposed devices
+                cves = db.session.execute(text("""
+                    SELECT cve_id, name, severity, cvss, exposed_machines
+                    FROM vulnerability_cache
+                    WHERE severity IN ('Critical', 'High') AND exposed_machines > 0
+                    ORDER BY
+                        CASE severity WHEN 'Critical' THEN 1 ELSE 2 END,
+                        cvss DESC NULLS LAST
+                    LIMIT 20
+                """)).fetchall()
+
+                # Open device-level remediations
+                remediations = db.session.execute(text("""
+                    SELECT dv.cve_id, dv.severity, a.name AS asset_name, a.asset_tag,
+                           dv.synced_at
+                    FROM device_vulnerability dv
+                    LEFT JOIN asset a ON a.id = dv.asset_id
+                    WHERE dv.status = 'Open'
+                    ORDER BY
+                        CASE dv.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 ELSE 3 END,
+                        dv.synced_at ASC NULLS LAST
+                    LIMIT 30
+                """)).fetchall()
+
+                if not cves and not remediations:
+                    logger.info('Daily vuln email: no active vulnerabilities, skipping')
+                    return
+
+                crit_count = sum(1 for r in cves if r[2] == 'Critical')
+                high_count = sum(1 for r in cves if r[2] == 'High')
+                today_str = date.today().strftime('%B %d, %Y')
+
+                cve_rows_html = ''
+                for r in cves:
+                    color = '#dc3545' if r[2] == 'Critical' else '#fd7e14'
+                    cve_rows_html += (
+                        f'<tr>'
+                        f'<td style="padding:6px;font-family:monospace;">{r[0]}</td>'
+                        f'<td style="padding:6px;">{r[1] or "N/A"}</td>'
+                        f'<td style="padding:6px;color:{color};font-weight:bold;">{r[2]}</td>'
+                        f'<td style="padding:6px;">{r[3] or "N/A"}</td>'
+                        f'<td style="padding:6px;">{r[4] or 0}</td>'
+                        f'</tr>'
+                    )
+
+                rem_rows_html = ''
+                for r in remediations:
+                    color = '#dc3545' if r[1] == 'Critical' else ('#fd7e14' if r[1] == 'High' else '#6c757d')
+                    since = str(r[4])[:10] if r[4] else 'N/A'
+                    rem_rows_html += (
+                        f'<tr>'
+                        f'<td style="padding:6px;font-family:monospace;">{r[0]}</td>'
+                        f'<td style="padding:6px;color:{color};font-weight:bold;">{r[1]}</td>'
+                        f'<td style="padding:6px;">{r[2] or "Unknown"}</td>'
+                        f'<td style="padding:6px;">{r[3] or ""}</td>'
+                        f'<td style="padding:6px;">{since}</td>'
+                        f'</tr>'
+                    )
+
+                th_style = 'padding:6px;text-align:left;background:#f0f0f0;'
+                body_html = f"""
+                <h3 style="margin-bottom:8px;">Vulnerability Digest — {today_str}</h3>
+                <p>
+                    <span style="background:#dc3545;color:#fff;padding:3px 10px;border-radius:4px;margin-right:6px;">{crit_count} Critical</span>
+                    <span style="background:#fd7e14;color:#fff;padding:3px 10px;border-radius:4px;">{high_count} High</span>
+                    &nbsp;active CVEs with exposed devices.
+                </p>
+
+                <h4 style="margin-top:20px;">Active CVEs (Critical &amp; High)</h4>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead><tr>
+                        <th style="{th_style}">CVE ID</th>
+                        <th style="{th_style}">Name</th>
+                        <th style="{th_style}">Severity</th>
+                        <th style="{th_style}">CVSS</th>
+                        <th style="{th_style}">Exposed Devices</th>
+                    </tr></thead>
+                    <tbody>{cve_rows_html}</tbody>
+                </table>
+
+                <h4 style="margin-top:20px;">Open Remediations Needed</h4>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead><tr>
+                        <th style="{th_style}">CVE ID</th>
+                        <th style="{th_style}">Severity</th>
+                        <th style="{th_style}">Asset</th>
+                        <th style="{th_style}">Tag</th>
+                        <th style="{th_style}">Open Since</th>
+                    </tr></thead>
+                    <tbody>{rem_rows_html}</tbody>
+                </table>
+
+                <p style="margin-top:16px;">
+                    <a href="https://tracker.corp.cirque.com/vulnerabilities"
+                       style="background:#0d6efd;color:#fff;padding:8px 16px;text-decoration:none;border-radius:4px;">
+                        View Full Vulnerability Dashboard
+                    </a>
+                </p>
+                """
+
+                send_admin_notification(
+                    f'[Daily Vuln Digest] {crit_count} Critical, {high_count} High — {today_str}',
+                    body_html
+                )
+                logger.info('Daily vuln email sent: %d CVEs, %d open remediations',
+                            len(cves), len(remediations))
+            except Exception:
+                logger.exception('Daily vuln email job crashed')
             finally:
                 try:
                     db.session.remove()

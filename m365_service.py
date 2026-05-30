@@ -73,6 +73,65 @@ class M365Service:
             logger.error(f"Request failed for {endpoint}: {e}")
             raise
 
+    def send_mail(self, mailbox_email, recipients, subject, text_body=None, html_body=None, from_email=None):
+        """Send mail through Microsoft Graph using the specified mailbox endpoint."""
+        if not mailbox_email:
+            raise ValueError("Mailbox email is required")
+
+        to_recipients = [
+            {'emailAddress': {'address': recipient}}
+            for recipient in recipients
+            if recipient
+        ]
+        if not to_recipients:
+            raise ValueError("At least one recipient is required")
+
+        token = self.get_access_token()
+        encoded_mailbox = quote(mailbox_email, safe='')
+        url = f"{self.base_url}/users/{encoded_mailbox}/sendMail"
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        graph_from_email = from_email or mailbox_email
+        payload = {
+            'message': {
+                'subject': subject,
+                'from': {
+                    'emailAddress': {
+                        'address': graph_from_email
+                    }
+                },
+                'body': {
+                    'contentType': 'HTML' if html_body else 'Text',
+                    'content': html_body or text_body or ''
+                },
+                'toRecipients': to_recipients,
+            },
+            'saveToSentItems': True,
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            logger.info(
+                "Sent Graph email through %s as %s to %d recipient(s)",
+                mailbox_email,
+                graph_from_email,
+                len(to_recipients),
+            )
+            return True
+        except requests.exceptions.RequestException as e:
+            body = getattr(e.response, 'text', '') if hasattr(e, 'response') else ''
+            logger.error(
+                "Graph sendMail failed through %s as %s: %s %s",
+                mailbox_email,
+                graph_from_email,
+                e,
+                body,
+            )
+            raise
+
     def get_user_photo_bytes(self, user_principal_name: str):
         """Fetch a user's profile photo as raw bytes.
 

@@ -6,12 +6,18 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-shield-check"></i> SOC2 Compliance Dashboard</h2>
     <div>
-        <a href="/soc2/strikegraph" class="btn btn-outline-primary me-2">
-            <i class="bi bi-diagram-3"></i> StrikeGraph Evidence
+        <a href="{{ url_for('readiness.readiness_dashboard') }}" class="btn btn-outline-dark me-2">
+            <i class="bi bi-list-task"></i> SOC2 Readiness
         </a>
-        <button class="btn btn-info me-2" onclick="runAzureSync()">
-            <i class="bi bi-cloud"></i> Azure Security Sync
-        </button>
+        <a href="{{ url_for('readiness.automation_status_dashboard') }}" class="btn btn-outline-secondary me-2">
+            <i class="bi bi-activity"></i> Automation Status
+        </a>
+        <a href="{{ url_for('internal_audit.internal_audit_dashboard') }}" class="btn btn-outline-primary me-2">
+            <i class="bi bi-clipboard-check"></i> Internal Audits
+        </a>
+        <a href="{{ url_for('soc2.soc2_defender_diagnostics') }}" class="btn btn-outline-danger me-2">
+            <i class="bi bi-bug"></i> Defender Diagnostics
+        </a>
         <button class="btn btn-primary me-2" onclick="runSync()">
             <i class="bi bi-arrow-repeat"></i> M365 Sync
         </button>
@@ -21,6 +27,16 @@
     </div>
 </div>
 {% set ai_context = "compliance" %}{% include '_ai_search_bar.html' %}
+
+{% if readiness_summary.total %}
+<div class="alert alert-warning border-0 shadow-sm d-flex justify-content-between align-items-center mb-4" role="alert">
+    <div>
+        <strong>{{ readiness_summary.open }}</strong> readiness items are still open, including
+        <strong>{{ readiness_summary.critical }}</strong> critical items.
+    </div>
+    <a href="{{ url_for('readiness.readiness_dashboard') }}" class="btn btn-sm btn-dark">Review Readiness Queue</a>
+</div>
+{% endif %}
 
 
 <!-- Sync Status Cards -->
@@ -85,6 +101,100 @@
     </div>
 </div>
 
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Automated Evidence Items</h6>
+                <h3>{{ automated_evidence_summary.total }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-cpu"></i> Configured export definitions
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Artifacts Present</h6>
+                <h3>{{ automated_evidence_summary.exported }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-file-earmark-check"></i> Cached/generated evidence files found
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Artifacts Missing</h6>
+                <h3>{{ automated_evidence_summary.missing }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-file-earmark-x"></i> Items still needing generation or repair
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Linked Control Mappings</h6>
+                <h3>{{ automated_evidence_summary.linked_controls }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-diagram-3"></i> Control links across the automated set
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Linked Evidence Items</h6>
+                <h3>{{ evidence_summary.linked_total }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-link-45deg"></i> Control-to-evidence mappings
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Evidence Gathered</h6>
+                <h3>{{ evidence_summary.gathered_total }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-folder-check"></i> Files or cached artifacts found
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Controls With Evidence</h6>
+                <h3>{{ evidence_summary.controls_with_gathered }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-shield-check"></i> Controls with artifacts or snapshots
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Controls Missing Evidence</h6>
+                <h3>{{ evidence_summary.controls_missing_artifacts }}</h3>
+                <small class="text-muted">
+                    <i class="bi bi-exclamation-triangle"></i> Controls with mapped items still missing artifacts
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Control Summary -->
 <div class="card mb-4">
     <div class="card-header">
@@ -126,9 +236,12 @@
                             Progress <i class="bi bi-arrow-down-up"></i>
                         </th>
                         <th onclick="sortTable(3)" style="cursor: pointer;">
-                            Automation <i class="bi bi-arrow-down-up"></i>
+                            Evidence <i class="bi bi-arrow-down-up"></i>
                         </th>
                         <th onclick="sortTable(4)" style="cursor: pointer;">
+                            Automation <i class="bi bi-arrow-down-up"></i>
+                        </th>
+                        <th onclick="sortTable(5)" style="cursor: pointer;">
                             Last Evidence <i class="bi bi-arrow-down-up"></i>
                         </th>
                         <th>Actions</th>
@@ -154,6 +267,17 @@
                             {% endif %}
                         </td>
                         <td>
+                            {% set evidence = control_evidence[control.id] %}
+                            <div class="fw-semibold">{{ evidence.gathered_count }}/{{ evidence.linked_count }} gathered</div>
+                            {% if evidence.missing_count %}
+                                <small class="text-muted">Missing: {{ evidence.missing_names|join(', ') }}</small>
+                            {% elif evidence.gathered_names %}
+                                <small class="text-muted">Ready: {{ evidence.gathered_names|join(', ') }}</small>
+                            {% else %}
+                                <small class="text-muted">No linked evidence yet</small>
+                            {% endif %}
+                        </td>
+                        <td>
                             {% if control.automation_enabled %}
                                 <i class="bi bi-robot text-primary" title="Automated"></i> Automated
                             {% else %}
@@ -164,6 +288,8 @@
                             {% if latest_evidence[control.id] %}
                                 <small>{{ latest_evidence[control.id].snapshot_date.strftime('%Y-%m-%d %H:%M') }}</small>
                                 <br><small class="text-muted">{{ latest_evidence[control.id].record_count }} records</small>
+                            {% elif control_evidence[control.id].gathered_count %}
+                                <small class="text-muted">Artifacts available</small>
                             {% else %}
                                 <small class="text-muted">No evidence yet</small>
                             {% endif %}
@@ -181,10 +307,67 @@
     </div>
 </div>
 
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-cpu"></i> Automated Evidence Coverage</h5>
+        <small class="text-muted">All configured automated evidence exports</small>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm">
+                <thead>
+                    <tr>
+                        <th>Evidence</th>
+                        <th>Category</th>
+                        <th>Artifact</th>
+                        <th>Last Generated</th>
+                        <th>Linked Controls</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in automated_evidence %}
+                    <tr>
+                        <td>
+                            <strong>{{ item.evidence_name }}</strong>
+                            <br><small class="text-muted">{{ item.zip_path }}</small>
+                        </td>
+                        <td><span class="badge bg-secondary">{{ item.category }}</span></td>
+                        <td>
+                            {% if item.has_artifact %}
+                                <span class="badge bg-success">Present</span>
+                                {% if item.artifact_name %}
+                                <br><small class="text-muted">{{ item.artifact_name }}</small>
+                                {% endif %}
+                            {% else %}
+                                <span class="badge bg-danger">Missing</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.artifact_time %}
+                                <small>{{ item.artifact_time.strftime('%Y-%m-%d %H:%M') }}</small>
+                            {% else %}
+                                <small class="text-muted">Not generated yet</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.linked_controls %}
+                                <span class="badge bg-info text-dark">{{ item.linked_controls }}</span>
+                            {% else %}
+                                <small class="text-muted">Unlinked</small>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 <!-- Recent Activity -->
 <div class="card">
     <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-activity"></i> Recent Activity</h5>
+        <h5 class="mb-0"><i class="bi bi-activity"></i> Recent SOC 2 Activity</h5>
     </div>
     <div class="card-body">
         <div class="table-responsive">

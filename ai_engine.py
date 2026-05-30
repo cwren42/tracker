@@ -20,10 +20,11 @@ def _now():
 
 
 def _get_api_key() -> str | None:
+    from secret_store import decrypt_secret
     db = _db()
     row = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
     db.close()
-    return row["value"] if row and row["value"] else None
+    return decrypt_secret(row["value"]) if row and row["value"] else None
 
 
 def _get_setting(key: str, default: str = "") -> str:
@@ -394,9 +395,9 @@ def ask_ai(question: str) -> dict:
         "CAST(hardware_storage_free_gb AS REAL) / CAST(hardware_storage_total_gb AS REAL) < 0.20"
     ).fetchone()[0]
     low_storage_hosts = [r[0] for r in db.execute(
-        "SELECT hostname FROM asset WHERE hardware_storage_total_gb > 0 AND "
+        "SELECT name FROM asset WHERE hardware_storage_total_gb > 0 AND "
         "CAST(hardware_storage_free_gb AS REAL) / CAST(hardware_storage_total_gb AS REAL) < 0.20 "
-        "AND hostname IS NOT NULL LIMIT 10"
+        "AND name IS NOT NULL LIMIT 10"
     ).fetchall()]
 
     # --- Employees ---
@@ -450,7 +451,8 @@ def ask_ai(question: str) -> dict:
         "SELECT COUNT(*) FROM proxmox_zfs_pool WHERE health != 'ONLINE'"
     ).fetchone()[0]
     vms_stale = db.execute(
-        "SELECT COUNT(*) FROM proxmox_backup_job WHERE is_stale=1"
+        "SELECT COUNT(*) FROM proxmox_backup_job WHERE "
+        "last_snapshot_time IS NULL OR last_snapshot_time < NOW() - INTERVAL '25 hours'"
     ).fetchone()[0]
 
     db.close()

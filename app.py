@@ -113,15 +113,18 @@ app.config['REMEMBER_COOKIE_HTTPONLY'] = True
 app.config['PREFERRED_URL_SCHEME'] = 'https'
 app.config['UPLOAD_FOLDER'] = '/var/www/tracker/static/uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
+app.config['MAX_FORM_MEMORY_SIZE'] = 16 * 1024 * 1024  # 16 MB for large markdown/manual edits
+app.request_class.max_form_memory_size = app.config['MAX_FORM_MEMORY_SIZE']
 
 # ── Email config ──────────────────────────────────────────────────────────
-app.config['MAIL_SERVER'] = '10.15.0.4'
+app.config['MAIL_SERVER'] = 'cirque-com.mail.protection.outlook.com'
 app.config['MAIL_PORT'] = 25
-app.config['MAIL_USE_TLS'] = False
+app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USE_SSL'] = False
 app.config['MAIL_USERNAME'] = None
 app.config['MAIL_PASSWORD'] = None
-app.config['MAIL_DEFAULT_SENDER'] = 'assettracker@cirque.com'
+app.config['MAIL_DEFAULT_SENDER'] = ('Tracker', 'tracker@cirque.com')
+app.config['MAIL_DELIVERY_METHOD'] = 'smtp'
 app.config['SEND_EMPLOYEE_EMAILS'] = False
 
 # ── Linux Agent key ───────────────────────────────────────────────────────
@@ -213,10 +216,10 @@ def _photo_url(photo_rel):
 
 
 # ── Register Blueprints ───────────────────────────────────────────────────
-from blueprints import auth, assets, dashboard, employees, licenses
-from blueprints import monitoring, reports, rmm, settings, soc2
+from blueprints import auth, assets, dashboard, employees, internal_audit, licenses, management_review, phishing, policy_acknowledgements, security_training, system_description, vendor_management
+from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
-from blueprints import backup
+from blueprints import backup, quarantine, patch_mgmt
 
 app.register_blueprint(auth.bp)
 app.register_blueprint(assets.bp)
@@ -228,11 +231,22 @@ app.register_blueprint(reports.bp)
 app.register_blueprint(rmm.bp)
 app.register_blueprint(settings.bp)
 app.register_blueprint(soc2.bp)
+app.register_blueprint(isms.bp)
+app.register_blueprint(readiness.bp)
+app.register_blueprint(internal_audit.bp)
+app.register_blueprint(vendor_management.bp)
+app.register_blueprint(management_review.bp)
+app.register_blueprint(phishing.bp)
+app.register_blueprint(policy_acknowledgements.bp)
+app.register_blueprint(security_training.bp)
+app.register_blueprint(system_description.bp)
 app.register_blueprint(tickets.bp)
 app.register_blueprint(vulnerabilities.bp)
 app.register_blueprint(ai.bp)
 app.register_blueprint(misc.bp)
 app.register_blueprint(backup.bp)
+app.register_blueprint(quarantine.bp)
+app.register_blueprint(patch_mgmt.bp)
 
 # ── CSRF exemptions for non-browser endpoints ──────────────────────────────
 # Agents and external API consumers authenticate via agent token / API key, not
@@ -266,3 +280,9 @@ for _rule in app.url_map.iter_rules():
             csrf.exempt(_vf)
             _csrf_exempted += 1
 logger.info('CSRF: enforcement=%s, exempted %d agent/API endpoints', CSRF_ENABLED, _csrf_exempted)
+
+# ── Start background threads ───────────────────────────────────────────────
+_sla_thread = threading.Thread(
+    target=tickets._ticket_sla_check, args=(app,), daemon=True
+)
+_sla_thread.start()

@@ -7,6 +7,7 @@ Compatible with both SQLite and PostgreSQL.
 
 import sys
 import os
+import email.errors
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

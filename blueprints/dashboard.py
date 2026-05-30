@@ -316,9 +316,18 @@ def get_dashboard_data():
 
     # License utilization by software
     active_licenses_list = License.query.filter_by(status='Active').all()
+    # One grouped query for active assignment counts per license (avoids an
+    # N+1: previously this issued one COUNT query per active license).
+    assigned_counts = dict(
+        db.session.query(
+            LicenseAssignment.license_id,
+            db.func.count(LicenseAssignment.id)
+        ).filter(LicenseAssignment.status == 'Active')
+         .group_by(LicenseAssignment.license_id).all()
+    )
     license_utilization = []
     for lic in active_licenses_list:
-        assigned = LicenseAssignment.query.filter_by(license_id=lic.id, status='Active').count()
+        assigned = assigned_counts.get(lic.id, 0)
         available = (lic.total_licenses or 0) - assigned
         utilization_pct = (assigned / lic.total_licenses * 100) if lic.total_licenses else 0
         license_utilization.append({

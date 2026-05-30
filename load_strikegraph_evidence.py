@@ -11,7 +11,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app import app, db
-from soc2_models import SOC2Control, StrikeGraphEvidence
+from soc2_models import SOC2Control, StrikeGraphEvidence, sync_control_automation_flags
 
 def parse_date(date_str):
     """Parse date from MM/DD/YYYY format"""
@@ -248,7 +248,11 @@ def load_evidence(csv_path):
                     print(f"  Loaded {count} items...")
             
             db.session.commit()
+
+            updated_controls = sync_control_automation_flags(db.session)
+            db.session.commit()
             print(f"\n✓ Successfully loaded {count} evidence items")
+            print(f"✓ Recomputed automation flags for {len(updated_controls)} controls")
             
             # Show statistics
             print("\nStatistics:")

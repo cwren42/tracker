@@ -220,7 +220,7 @@
                 <strong><span id="selectedCount">0</span> assets selected</strong>
             </div>
             <div class="col-md-9 text-end">
-                <div class="btn-group" role="group">
+                <div class="d-flex flex-wrap justify-content-end gap-1" role="group">
                     <button type="button" class="btn btn-sm btn-primary" onclick="bulkEdit()">
                         <i class="bi bi-pencil-square"></i> Bulk Edit
                     </button>
@@ -236,6 +236,9 @@
                     <button type="button" class="btn btn-sm btn-outline-warning" onclick="bulkEagleEyes(true)">
                         <i class="bi bi-eye-fill"></i> Enable Eagle Eyes
                     </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="bulkEagleEyes(false)">
+                            <i class="bi bi-eye-slash"></i> Disable Eagle Eyes
+                        </button>
                     <button type="button" class="btn btn-sm btn-outline-info" onclick="bulkUpdateAgent()">
                         <i class="bi bi-arrow-up-circle"></i> Update Agent
                     </button>

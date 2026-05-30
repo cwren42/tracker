@@ -957,29 +957,5 @@ def api_alert_log():
         con.close()
 
 
-@bp.route('/api/notifications/bell')
-@login_required
-def api_notifications_bell():
-    con = _alert_svc._get_db()
-    try:
-        unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=false").fetchone()[0]
-        recent = con.execute("SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20").fetchall()
-        return jsonify(ok=True, unread=unread, items=[dict(r) for r in recent])
-    finally:
-        con.close()
-
-
-@bp.route('/api/notifications/mark-read', methods=['POST'])
-@login_required
-def api_notifications_mark_read():
-    con = _alert_svc._get_db()
-    try:
-        ids = (request.get_json(force=True) or {}).get('ids')
-        if ids:
-            con.execute(f"UPDATE notification_bell SET read_flag=true WHERE id IN ({','.join('?'*len(ids))})", ids)
-        else:
-            con.execute("UPDATE notification_bell SET read_flag=true")
-        con.commit()
-        return jsonify(ok=True)
-    finally:
-        con.close()
+# NOTE: /api/notifications/bell and /api/notifications/mark-read are defined
+# in blueprints/misc.py — do not duplicate them here.

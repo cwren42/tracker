@@ -1,6 +1,7 @@
 (function(){
-  const labels = window.TICKETSCFG.chart_labels;
-  const data   = window.TICKETSCFG.chart_data;
+  const cfg    = window.TICKETS_CFG || {};
+  const labels = cfg.chart_labels || [];
+  const data   = cfg.chart_data   || [];
   const short  = labels.map(d => { const p = d.split('-'); return p[1]+'/'+p[2]; });
   const ctx = document.getElementById('ticketChart');
   if (!ctx) return;

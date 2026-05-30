@@ -2,9 +2,17 @@
 Alert Evaluation Service
 Runs as a background thread; evaluates all alert_rule rows and fires
 alert_log entries, creates tickets, sends email/Teams notifications.
+
+State-based alerting (enterprise RMM pattern):
+  Each continuous-condition alert (CPU high, offline, disk critical, etc.)
+  is tracked as an active "alert state" row.  When the condition clears the
+  associated ticket is automatically closed with a resolution note — exactly
+  how NinjaRMM / ConnectWise / Datto handle alert lifecycle.
 """
+import fcntl
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -16,6 +24,21 @@ logger = logging.getLogger(__name__)
 
 # How often to run the evaluator (seconds)
 EVAL_INTERVAL_S = 300   # 5 minutes
+
+# Only one Gunicorn worker should run the evaluator per cycle
+ALERT_EVAL_LOCK_PATH = '/tmp/tracker_alert_eval.lock'
+
+# Alert types that represent a CONTINUOUS condition (on/off state).
+# When the condition clears, the open ticket is auto-closed with a note.
+# Event-based types (new_local_admin, cve_critical, cve_high) are intentionally
+# excluded — they fire once and the ticket needs human review.
+_AUTO_RESOLVE_TYPES = frozenset({
+    'offline', 'cpu_high', 'ram_high',
+    'disk_critical', 'disk_low',
+    'battery_low', 'battery_not_chg',
+    'av_disabled', 'firewall_off', 'pending_reboot',
+    'failed_logins', 'not_seen', 'cve_unpatched',
+})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -37,13 +60,39 @@ def _get_db():
 
 
 def _send_email(subject, body_html):
-    """Send via the app's configured SMTP – import lazily to avoid circular."""
+    """Send alert email.
+
+    If the 'alert_notify_email' setting contains one or more comma-separated
+    addresses, only those addresses receive alert emails.  This keeps system
+    alert noise out of the main admin inbox so ticket notifications are not
+    buried.  When the setting is absent or empty the function falls back to
+    send_admin_notification (all admin-role users).
+    """
     try:
-        from app import app, send_admin_notification
+        from app import app
         with app.app_context():
-            send_admin_notification(subject, body_html)
+            con = _get_db()
+            alert_addrs = _get_setting(con, 'alert_notify_email', '').strip()
+            con.close()
+            if alert_addrs:
+                from utils import send_email as _util_email
+                recipients = [a.strip() for a in alert_addrs.split(',') if a.strip()]
+                if recipients:
+                    result = _util_email(subject, recipients, subject, body_html)
+                    if result:
+                        logger.info(f'Alert email sent to {recipients}: {subject}')
+                    else:
+                        logger.warning(f'Alert email failed (SMTP): {subject}')
+                    return
+            # Fallback: send to all admin users
+            from utils import send_admin_notification
+            result = send_admin_notification(subject, body_html)
+            if result:
+                logger.info(f'Alert email sent: {subject}')
+            else:
+                logger.warning(f'Alert email returned False: {subject}')
     except Exception as e:
-        logger.warning(f'Alert email failed: {e}')
+        logger.warning(f'Alert email failed: {e}', exc_info=True)
 
 
 def _send_teams(webhook_url, title, body):
@@ -87,6 +136,99 @@ def _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown_minutes):
     return row is None
 
 
+def _ensure_alert_state_table(con):
+    """Create alert_state table if it doesn't exist yet."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS alert_state (
+            id           SERIAL PRIMARY KEY,
+            rule_id      INTEGER NOT NULL,
+            category     VARCHAR(50),
+            alert_type   VARCHAR(50) NOT NULL,
+            alert_key    VARCHAR(255) NOT NULL UNIQUE,
+            agent_id     VARCHAR(100),
+            asset_id     INTEGER,
+            hostname     VARCHAR(200),
+            ticket_id    INTEGER,
+            fired_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            resolved_at  TIMESTAMP
+        )
+    """)
+    con.commit()
+
+
+def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id):
+    """
+    Track that this alert condition is currently active.
+    Upserts: insert on first fire, update last_seen_at on subsequent fires.
+    The alert_key uniquely identifies one alert condition on one target.
+    """
+    alert_type = rule['alert_type']
+    if alert_type not in _AUTO_RESOLVE_TYPES:
+        return
+    alert_key = f"{rule['id']}:{agent_id or ''}:{asset_id or 0}"
+    con.execute("""
+        INSERT INTO alert_state
+            (rule_id, category, alert_type, alert_key, agent_id, asset_id, hostname, ticket_id, fired_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+        ON CONFLICT (alert_key) DO UPDATE
+            SET last_seen_at = NOW(),
+                ticket_id    = COALESCE(alert_state.ticket_id, EXCLUDED.ticket_id),
+                resolved_at  = NULL
+    """, (rule['id'], rule['category'], alert_type, alert_key,
+          agent_id or '', asset_id or 0, hostname, ticket_id))
+
+
+def _resolve_cleared_alerts(con, eval_started_at):
+    """
+    After each evaluation cycle, find alert_state rows whose condition was NOT
+    seen this cycle (last_seen_at < eval_started_at) and auto-close their tickets.
+    This is the core of state-based alerting: ticket lifecycle follows the
+    alert condition lifecycle.
+    """
+    stale = con.execute("""
+        SELECT id, rule_id, category, alert_type, alert_key,
+               agent_id, hostname, ticket_id
+        FROM alert_state
+        WHERE resolved_at IS NULL
+          AND last_seen_at < ?
+    """, (eval_started_at.strftime('%Y-%m-%d %H:%M:%S'),)).fetchall()
+
+    for s in stale:
+        # Mark state as resolved
+        con.execute(
+            "UPDATE alert_state SET resolved_at = NOW() WHERE id = ?",
+            (s['id'],)
+        )
+        # Auto-close the linked ticket if it's still open
+        if s['ticket_id']:
+            open_ticket = con.execute(
+                "SELECT id, status FROM support_ticket WHERE id = ? AND status NOT IN ('Closed','Merged')",
+                (s['ticket_id'],)
+            ).fetchone()
+            if open_ticket:
+                con.execute(
+                    """UPDATE support_ticket
+                       SET status='Closed', closed_at=NOW(), updated_at=NOW()
+                       WHERE id=?""",
+                    (s['ticket_id'],)
+                )
+                # Add resolution note
+                label = s['alert_type'].replace('_', ' ').title()
+                host  = s['hostname'] or s['agent_id'] or 'unknown'
+                con.execute(
+                    """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+                       VALUES (?, NULL, ?, NOW())""",
+                    (s['ticket_id'],
+                     f'[Auto-resolved] Alert condition "{label}" cleared on {host}. '
+                     f'Ticket closed automatically by alert engine.')
+                )
+                logger.info(f'Auto-resolved ticket #{s["ticket_id"]} — '
+                            f'{s["alert_type"]} cleared on {host}')
+    if stale:
+        con.commit()
+
+
 def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
                 hostname=None, extra_html=''):
     """
@@ -106,6 +248,12 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     label         = rule['label'] or alert_type
 
     if not _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown):
+        # Condition still active — refresh last_seen_at so state doesn't get
+        # auto-resolved while we're in the cooldown window
+        try:
+            _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id=None)
+        except Exception:
+            pass
         return  # already fired recently
 
     # Create ticket
@@ -118,18 +266,53 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
                 'vulnerability': 'Security', 'eagle_eyes': 'General'
             }
             cat = cat_map.get(category, 'General')
-            cur = con.execute(
-                """INSERT INTO support_ticket
-                   (status, priority, category, source, subject, description,
-                    hostname, asset_id, assigned_to_user_id, csat_token, created_at, updated_at)
-                   VALUES ('Open', ?, ?, 'alert', ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                (priority, cat, f'[ALERT] {label}',
-                 f'{message}\n\nAuto-created by alert rule #{rule_id}.',
-                 hostname or '', asset_id, assigned_uid, csat_token)
-            )
-            ticket_id = cur.lastrowid
+
+            # Deduplication: skip if ANY open auto-ticket for this alert+host already
+            # exists (no time limit).  The ticket stays open until someone closes it,
+            # which prevents the 24h window from regenerating tickets indefinitely.
+            existing = None
+            if asset_id:
+                existing = con.execute(
+                    """SELECT id FROM support_ticket
+                       WHERE source = 'alert' AND status != 'Closed'
+                         AND asset_id = ?
+                         AND subject = ?
+                       LIMIT 1""",
+                    (asset_id, f'[ALERT] {label}')
+                ).fetchone()
+            elif hostname:
+                existing = con.execute(
+                    """SELECT id FROM support_ticket
+                       WHERE source = 'alert' AND status != 'Closed'
+                         AND hostname = ?
+                         AND subject = ?
+                       LIMIT 1""",
+                    (hostname, f'[ALERT] {label}')
+                ).fetchone()
+
+            if existing:
+                logger.debug(f'Dedup: skipping auto-ticket for [{category}] {alert_type} — '
+                             f'open ticket #{existing["id"]} already exists.')
+                ticket_id = existing['id']  # keep reference for state tracking
+            else:
+                cur = con.execute(
+                    """INSERT INTO support_ticket
+                       (status, priority, category, source, subject, description,
+                        hostname, asset_id, assigned_to_user_id, csat_token, created_at, updated_at)
+                       VALUES ('Open', ?, ?, 'alert', ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+                    (priority, cat, f'[ALERT] {label}',
+                     f'{message}\n\nAuto-created by alert rule #{rule_id}.',
+                     hostname or '', asset_id, assigned_uid, csat_token)
+                )
+                ticket_id = cur.lastrowid
         except Exception as e:
             logger.error(f'Auto-ticket creation failed: {e}')
+
+    # Track alert state for continuous-condition auto-resolution
+    try:
+        _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id)
+    except Exception as e:
+        logger.debug(f'alert_state upsert failed (table may not exist yet): {e}')
 
     # Insert alert log
     con.execute(
@@ -151,7 +334,7 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
         link = f'/tickets/{ticket_id}'
     con.execute(
         """INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at)
-           VALUES (?, ?, ?, ?, ?, 0, datetime('now'))""",
+           VALUES (?, ?, ?, ?, ?, false, NOW())""",
         (label, message, icon_map.get(category, 'bi-bell'),
          color_map.get(priority, 'warning'), link)
     )
@@ -242,6 +425,13 @@ def _eval_agent_alerts(con, rules_by_type):
             try:
                 disks = json.loads(disk_json)
                 for d in (disks if isinstance(disks, list) else []):
+                    # Only alert on the OS drive: C:\ on Windows, / on Linux/macOS.
+                    # Skip secondary, USB, virtual, and network drives.
+                    mp = (d.get('mountpoint') or '').strip()
+                    is_windows_os = mp.upper().rstrip('\\').rstrip('/') == 'C:'
+                    is_linux_os   = mp == '/'
+                    if not is_windows_os and not is_linux_os:
+                        continue
                     pct_free = 100 - (d.get('percent', 100))
                     drive    = d.get('device', '?')
                     for rtype in ('disk_critical', 'disk_low'):
@@ -483,19 +673,61 @@ def _eval_vulnerability_alerts(con, rules_by_type):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_evaluator():
-    """Blocking loop – run in a daemon thread."""
+    """Blocking loop – run in a daemon thread.
+    Uses a timestamp file + exclusive lock so only ONE of the Gunicorn workers
+    actually fires alerts per cycle. The lock is held only briefly to read/write
+    the timestamp; the timestamp prevents subsequent workers from re-running
+    within the same cycle even after the lock is released.
+    """
     logger.info('Alert evaluator started.')
     while True:
         try:
-            _run_once()
+            _try_run_once()
         except Exception as e:
             logger.error(f'Alert evaluator error: {e}', exc_info=True)
         time.sleep(EVAL_INTERVAL_S)
 
 
+def _try_run_once():
+    """Acquire lock, check timestamp, run only if this cycle hasn't been handled yet."""
+    try:
+        with open(ALERT_EVAL_LOCK_PATH, 'a+') as lf:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return  # Another worker is actively writing the timestamp right now
+
+            # Read last-run timestamp
+            lf.seek(0)
+            content = lf.read().strip()
+            if content:
+                try:
+                    if time.time() - float(content) < (EVAL_INTERVAL_S - 30):
+                        fcntl.flock(lf, fcntl.LOCK_UN)
+                        return  # Another worker already ran this cycle
+                except ValueError:
+                    pass
+
+            # Stamp now and release lock before the slow DB work
+            lf.seek(0)
+            lf.truncate()
+            lf.write(str(time.time()))
+            lf.flush()
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+    except Exception as e:
+        logger.warning(f'Alert eval lock error: {e}')
+
+    _run_once()
+
+
 def _run_once():
+    eval_started_at = _now()
     con = _get_db()
     try:
+        # Ensure alert_state table exists (idempotent)
+        _ensure_alert_state_table(con)
+
         # Load enabled rules, keyed by alert_type
         rows = con.execute("SELECT * FROM alert_rule").fetchall()
         rules_by_type = {r['alert_type']: r for r in rows}
@@ -503,6 +735,9 @@ def _run_once():
         _eval_agent_alerts(con, rules_by_type)
         _eval_asset_alerts(con, rules_by_type)
         _eval_vulnerability_alerts(con, rules_by_type)
+
+        # State-based auto-resolution: close tickets for conditions that cleared
+        _resolve_cleared_alerts(con, eval_started_at)
     except Exception:
         try:
             con.rollback()
@@ -701,6 +936,8 @@ def sync_defender_vulnerabilities():
 
         # Bulk-fetch ALL machine-CVE pairs in one API call (much faster than per-machine calls)
         all_machine_vulns = svc.get_all_machine_vulnerabilities()
+        import datetime as _dt
+        sync_start = _dt.datetime.utcnow()
         dev_count = 0
         filtered_count = 0
         for mv in all_machine_vulns:
@@ -732,6 +969,27 @@ def sync_defender_vulnerabilities():
 
         if filtered_count:
             logger.info(f'Defender sync: filtered {filtered_count} CVEs where software not found in device inventory')
+
+        # Close-by-absence: if Defender no longer reports a CVE for an asset it
+        # monitors, the vulnerability has been resolved — mark it Remediated.
+        defender_asset_ids = list(set(machine_asset_map.values()))
+        if defender_asset_ids:
+            cur = con.execute(
+                """
+                UPDATE device_vulnerability
+                SET status = 'Remediated',
+                    remediation_note = 'Cleared by Defender re-assessment: no longer flagged as vulnerable',
+                    updated_at = NOW()
+                WHERE asset_id = ANY(%s)
+                  AND status IN ('Open', 'Exception')
+                  AND synced_at < %s
+                """,
+                (defender_asset_ids, sync_start)
+            )
+            cleared = cur._c.rowcount
+            if cleared:
+                logger.info(f'Defender sync: auto-closed {cleared} CVEs no longer reported by Defender')
+
         con.commit()
         con.close()
         return vuln_count, dev_count, None

@@ -827,6 +827,9 @@ def api_alert_log():
 def api_notifications_bell():
     con = _alert_svc._get_db()
     try:
+        # Auto-trim: remove entries older than 30 days and keep table manageable
+        con.execute("DELETE FROM notification_bell WHERE created_at < NOW() - INTERVAL '30 days'")
+        con.commit()
         unread = con.execute("SELECT COUNT(*) FROM notification_bell WHERE read_flag=false").fetchone()[0]
         recent = con.execute("SELECT * FROM notification_bell ORDER BY created_at DESC LIMIT 20").fetchall()
         return jsonify(ok=True, unread=unread, items=[dict(r) for r in recent])

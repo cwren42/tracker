@@ -83,6 +83,68 @@
     </div>
 </div>
 
+<!-- Linked Evidence -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-link-45deg"></i> Linked Evidence Artifacts</h5>
+    </div>
+    <div class="card-body">
+        {% if linked_evidence %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Evidence</th>
+                        <th>Source</th>
+                        <th>Type</th>
+                        <th>Artifact</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in linked_evidence %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ item.evidence.evidence_name }}</div>
+                            {% if item.evidence.evidence_description %}
+                            <div class="small text-muted">{{ item.evidence.evidence_description }}</div>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.evidence.automation_source or 'Unknown' }}</td>
+                        <td>{{ item.evidence.evidence_type or 'Unspecified' }}</td>
+                        <td>
+                            {% if item.has_artifact and item.artifact_url %}
+                            <a href="{{ item.artifact_url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-box-arrow-up-right"></i> Open Artifact
+                            </a>
+                            <div class="small text-muted mt-1">{{ item.artifact_path }}</div>
+                            {% elif item.has_artifact %}
+                            <span class="badge bg-success">Artifact Found</span>
+                            <div class="small text-muted mt-1">{{ item.artifact_path }}</div>
+                            {% else %}
+                            <span class="text-muted">No artifact linked yet</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.has_artifact %}
+                            <span class="badge bg-success">Gathered</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Needs Upload</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-warning mb-0">
+            <i class="bi bi-exclamation-triangle"></i> No linked evidence records exist for this control yet.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 <!-- Evidence History -->
 <div class="card">
     <div class="card-header">
@@ -129,6 +191,16 @@
             </table>
         </div>
         {% else %}
+        {% set gathered_count = linked_evidence | selectattr('has_artifact') | list | length %}
+        {% if gathered_count > 0 %}
+        <div class="alert alert-info mb-0">
+            <h6 class="alert-heading"><i class="bi bi-info-circle"></i> No Historical Snapshots Yet</h6>
+            <p class="mb-0">
+                This control already has <strong>{{ gathered_count }}</strong> linked evidence artifact{% if gathered_count != 1 %}s{% endif %} above.
+                The section below is only for historical technical snapshot records, and none have been collected yet.
+            </p>
+        </div>
+        {% else %}
         <div class="alert alert-warning">
             <h6 class="alert-heading"><i class="bi bi-exclamation-triangle"></i> No Technical Evidence Snapshots Yet</h6>
             <p>
@@ -152,6 +224,7 @@
             {% endif %}
             </p>
         </div>
+        {% endif %}
         {% endif %}
     </div>
 </div>

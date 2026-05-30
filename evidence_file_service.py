@@ -46,9 +46,12 @@ class EvidenceFileService:
         dirs = [
             self.evidence_dir,
             f'{self.evidence_dir}/m365',
+            f'{self.evidence_dir}/M365',
+            f'{self.evidence_dir}/M365/Defender',
             f'{self.evidence_dir}/azure',
             f'{self.evidence_dir}/isms',
-            f'{self.evidence_dir}/manual'
+            f'{self.evidence_dir}/manual',
+            f'{self.evidence_dir}/teamviewer',
         ]
         for dir_path in dirs:
             os.makedirs(dir_path, exist_ok=True)
@@ -73,6 +76,8 @@ class EvidenceFileService:
             return f'{self.evidence_dir}/azure/{filename}'
         elif automation_source == 'ISMS':
             return f'{self.evidence_dir}/isms/{filename}'
+        elif automation_source == 'TeamViewer':
+            return f'{self.evidence_dir}/teamviewer/{filename}'
         else:
             return f'{self.evidence_dir}/manual/{filename}'
     
@@ -274,19 +279,25 @@ class EvidenceFileService:
     def generate_azure_databases_file(self, evidence_name):
         """Generate Azure SQL Databases file"""
         databases = AzureDatabase.query.filter_by(is_current=True).all()
+        if not databases:
+            from azure_security_service import AzureSecurityService
+
+            azure_service = AzureSecurityService()
+            databases = azure_service.get_sql_databases()
         
         wb, ws = self.create_styled_workbook('SQL Databases')
         headers = ['Database Name', 'Server Name', 'Resource Group', 'Location', 'TDE Enabled', 'Firewall Rules', 'Last Sync']
         self.style_header_row(ws, headers)
         
         for row_idx, db in enumerate(databases, 2):
-            ws.cell(row_idx, 1, db.database_name or '')
-            ws.cell(row_idx, 2, db.server_name or '')
-            ws.cell(row_idx, 3, db.resource_group or '')
-            ws.cell(row_idx, 4, db.location or '')
-            ws.cell(row_idx, 5, 'Yes' if db.tde_enabled else 'No')
-            ws.cell(row_idx, 6, db.firewall_rules or '')
-            ws.cell(row_idx, 7, db.sync_date.strftime('%Y-%m-%d %H:%M') if db.sync_date else '')
+            ws.cell(row_idx, 1, getattr(db, 'database_name', None) or db.get('database_name', ''))
+            ws.cell(row_idx, 2, getattr(db, 'server_name', None) or db.get('server_name', ''))
+            ws.cell(row_idx, 3, getattr(db, 'resource_group', None) or db.get('resource_group', ''))
+            ws.cell(row_idx, 4, getattr(db, 'location', None) or db.get('location', ''))
+            ws.cell(row_idx, 5, 'Yes' if (getattr(db, 'tde_enabled', None) if not isinstance(db, dict) else db.get('tde_enabled')) else 'No')
+            ws.cell(row_idx, 6, getattr(db, 'firewall_rules', None) or db.get('firewall_rules', ''))
+            sync_date = getattr(db, 'sync_date', None) if not isinstance(db, dict) else None
+            ws.cell(row_idx, 7, sync_date.strftime('%Y-%m-%d %H:%M') if sync_date else datetime.utcnow().strftime('%Y-%m-%d %H:%M'))
         
         file_path = self.get_file_path(evidence_name, 'Azure')
         wb.save(file_path)
@@ -295,19 +306,25 @@ class EvidenceFileService:
     def generate_azure_storage_file(self, evidence_name):
         """Generate Azure Storage Accounts file"""
         storage = AzureStorageAccount.query.filter_by(is_current=True).all()
+        if not storage:
+            from azure_security_service import AzureSecurityService
+
+            azure_service = AzureSecurityService()
+            storage = azure_service.get_storage_accounts()
         
         wb, ws = self.create_styled_workbook('Storage Accounts')
         headers = ['Storage Account', 'Resource Group', 'Location', 'Encryption Enabled', 'HTTPS Only', 'Min TLS Version', 'Last Sync']
         self.style_header_row(ws, headers)
         
         for row_idx, account in enumerate(storage, 2):
-            ws.cell(row_idx, 1, account.storage_account_name or '')
-            ws.cell(row_idx, 2, account.resource_group or '')
-            ws.cell(row_idx, 3, account.location or '')
-            ws.cell(row_idx, 4, 'Yes' if account.encryption_enabled else 'No')
-            ws.cell(row_idx, 5, 'Yes' if account.https_only else 'No')
-            ws.cell(row_idx, 6, account.min_tls_version or '')
-            ws.cell(row_idx, 7, account.sync_date.strftime('%Y-%m-%d %H:%M') if account.sync_date else '')
+            ws.cell(row_idx, 1, getattr(account, 'storage_account_name', None) or account.get('name', ''))
+            ws.cell(row_idx, 2, getattr(account, 'resource_group', None) or account.get('resource_group', ''))
+            ws.cell(row_idx, 3, getattr(account, 'location', None) or account.get('location', ''))
+            ws.cell(row_idx, 4, 'Yes' if (getattr(account, 'encryption_enabled', None) if not isinstance(account, dict) else account.get('encryption_enabled')) else 'No')
+            ws.cell(row_idx, 5, 'Yes' if (getattr(account, 'https_only', None) if not isinstance(account, dict) else account.get('https_only')) else 'No')
+            ws.cell(row_idx, 6, getattr(account, 'min_tls_version', None) or account.get('tls_version', ''))
+            sync_date = getattr(account, 'sync_date', None) if not isinstance(account, dict) else None
+            ws.cell(row_idx, 7, sync_date.strftime('%Y-%m-%d %H:%M') if sync_date else datetime.utcnow().strftime('%Y-%m-%d %H:%M'))
         
         file_path = self.get_file_path(evidence_name, 'Azure')
         wb.save(file_path)
@@ -369,22 +386,38 @@ class EvidenceFileService:
     def generate_azure_monitor_alerts_file(self, evidence_name):
         """Generate Azure Monitor Alerts file"""
         alerts = AzureMonitorAlert.query.filter_by(is_current=True).all()
+        if not alerts:
+            from azure_security_service import AzureSecurityService
+
+            azure_service = AzureSecurityService()
+            alerts = azure_service.get_monitor_alerts()
         
         wb, ws = self.create_styled_workbook('Monitor Alerts')
         headers = ['Alert Name', 'Resource Group', 'Target Resource', 'Condition', 'Severity', 'Enabled', 'Last Sync']
         self.style_header_row(ws, headers)
         
         for row_idx, alert in enumerate(alerts, 2):
-            criteria_data = json.loads(alert.criteria) if alert.criteria else {}
-            condition = criteria_data.get('allOf', [{}])[0].get('metricName', '') if criteria_data else ''
+            if isinstance(alert, dict):
+                criteria_data = alert.get('criteria') or {}
+                all_of = criteria_data.get('allOf') or []
+                condition = all_of[0].get('metricName', '') if all_of else criteria_data.get('odata.type', '')
+                resource_group = alert.get('resource_group', '')
+                target_resource = alert.get('target_resource', '')
+                sync_date = None
+            else:
+                criteria_data = json.loads(alert.criteria) if alert.criteria else {}
+                condition = criteria_data.get('allOf', [{}])[0].get('metricName', '') if criteria_data else ''
+                resource_group = alert.resource_group or ''
+                target_resource = alert.target_resource or ''
+                sync_date = alert.sync_date
             
-            ws.cell(row_idx, 1, alert.alert_name or '')
-            ws.cell(row_idx, 2, alert.resource_group or '')
-            ws.cell(row_idx, 3, alert.target_resource or '')
+            ws.cell(row_idx, 1, getattr(alert, 'alert_name', None) or alert.get('name', ''))
+            ws.cell(row_idx, 2, resource_group)
+            ws.cell(row_idx, 3, target_resource)
             ws.cell(row_idx, 4, condition)
-            ws.cell(row_idx, 5, alert.severity or '')
-            ws.cell(row_idx, 6, 'Yes' if alert.enabled else 'No')
-            ws.cell(row_idx, 7, alert.sync_date.strftime('%Y-%m-%d %H:%M') if alert.sync_date else '')
+            ws.cell(row_idx, 5, getattr(alert, 'severity', None) or alert.get('severity', ''))
+            ws.cell(row_idx, 6, 'Yes' if (getattr(alert, 'enabled', None) if not isinstance(alert, dict) else alert.get('enabled')) else 'No')
+            ws.cell(row_idx, 7, sync_date.strftime('%Y-%m-%d %H:%M') if sync_date else datetime.utcnow().strftime('%Y-%m-%d %H:%M'))
         
         file_path = self.get_file_path(evidence_name, 'Azure')
         wb.save(file_path)
@@ -1042,10 +1075,9 @@ class EvidenceFileService:
             from m365_service import M365Service
             from app import Setting
             
-            tenant_id = Setting.query.filter_by(key='m365_tenant_id').first().value
-            client_id = Setting.query.filter_by(key='m365_client_id').first().value
-            client_secret = Setting.query.filter_by(key='m365_client_secret').first().value
-            
+            from m365_config import get_m365_credentials
+            tenant_id, client_id, client_secret = get_m365_credentials()
+
             m365_service = M365Service(tenant_id, client_id, client_secret)
             mfa_data = m365_service.get_users_mfa_status()
             
@@ -1276,10 +1308,9 @@ class EvidenceFileService:
             from m365_service import M365Service
             from app import Setting
             
-            tenant_id = Setting.query.filter_by(key='m365_tenant_id').first().value
-            client_id = Setting.query.filter_by(key='m365_client_id').first().value
-            client_secret = Setting.query.filter_by(key='m365_client_secret').first().value
-            
+            from m365_config import get_m365_credentials
+            tenant_id, client_id, client_secret = get_m365_credentials()
+
             m365_service = M365Service(tenant_id, client_id, client_secret)
             policies = m365_service.get_conditional_access_policies()
             
@@ -1738,6 +1769,10 @@ class EvidenceFileService:
         generator_func = evidence_map.get(evidence_name)
         if generator_func:
             return generator_func(evidence_name)
+
+        evidence_item = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).first()
+        if evidence_item and evidence_item.automation_source == 'ISMS':
+            return self.generate_isms_policy_pdf(evidence_name)
         return None
     
     def generate_all_automated_evidence_files(self):
@@ -1752,7 +1787,7 @@ class EvidenceFileService:
                 file_path = self.generate_evidence_file_by_name(item.evidence_name)
                 if file_path:
                     # Update StrikeGraphEvidence with file path
-                    item.file_path = file_path.replace('/var/www/tracker/static/', '')
+                    item.file_path = file_path
                     item.updated_at = datetime.utcnow()
                     results.append({
                         'evidence_name': item.evidence_name,

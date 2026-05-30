@@ -59,6 +59,13 @@
         </a>
         {% endif %}
 
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer'] %}
+        <a class="sidebar-link {% if request.endpoint and 'quarantine' in request.endpoint %}active{% endif %}"
+           href="{{ url_for('quarantine.quarantine_list') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Email Security">
+            <i class="bi bi-envelope-exclamation-fill" style="color:#74c0fc"></i><span class="link-label">Email</span>
+        </a>
+        {% endif %}
+
         {% if current_user.role in ['admin', 'eagle_eyes'] %}
         <a class="sidebar-link {% if request.endpoint == 'rmm.rmm_eagle_eyes_fleet' %}active{% endif %}"
            href="{{ url_for('rmm.rmm_eagle_eyes_fleet') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eyes">
@@ -89,17 +96,19 @@
         <div class="nav-section-label">Operations</div>
 
         <!-- Monitoring group -->
-        <a class="sidebar-link sidebar-parent {% if request.endpoint and request.endpoint.startswith('monitoring') %}active{% endif %}"
+        <a class="sidebar-link sidebar-parent {% if (request.endpoint and request.endpoint.startswith('monitoring')) or (request.endpoint and 'quarantine' in request.endpoint) %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-monitoring" role="button"
-           aria-expanded="{% if request.endpoint and request.endpoint.startswith('monitoring') %}true{% else %}false{% endif %}">
+           aria-expanded="{% if (request.endpoint and request.endpoint.startswith('monitoring')) or (request.endpoint and 'quarantine' in request.endpoint) %}true{% else %}false{% endif %}">
             <i class="bi bi-activity"></i><span class="link-label">Monitoring</span>
             <i class="bi bi-chevron-down sidebar-chevron"></i>
         </a>
-        <ul class="sidebar-submenu collapse {% if request.endpoint and request.endpoint.startswith('monitoring') %}show{% endif %}" id="sub-monitoring">
+        <ul class="sidebar-submenu collapse {% if (request.endpoint and request.endpoint.startswith('monitoring')) or (request.endpoint and 'quarantine' in request.endpoint) %}show{% endif %}" id="sub-monitoring">
             <li><a class="sidebar-link {% if request.endpoint == 'monitoring.monitoring_dashboard' %}active{% endif %}" href="{{ url_for('monitoring.monitoring_dashboard') }}"><i class="bi bi-speedometer2"></i><span class="link-label">Dashboard</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'monitoring.monitoring_profiles' %}active{% endif %}" href="{{ url_for('monitoring.monitoring_profiles') }}"><i class="bi bi-list-check"></i><span class="link-label">Profiles</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'monitoring.monitoring_alerts' %}active{% endif %}" href="{{ url_for('monitoring.monitoring_alerts') }}"><i class="bi bi-exclamation-triangle"></i><span class="link-label">Alerts</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'monitoring.monitoring_maintenance_windows' %}active{% endif %}" href="{{ url_for('monitoring.monitoring_maintenance_windows') }}"><i class="bi bi-calendar-week"></i><span class="link-label">Maintenance</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint and 'quarantine' in request.endpoint and request.endpoint != 'quarantine.quarantine_report' %}active{% endif %}" href="{{ url_for('quarantine.quarantine_list') }}"><i class="bi bi-envelope-exclamation-fill" style="color:#74c0fc"></i><span class="link-label">Email</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'quarantine.quarantine_report' %}active{% endif %}" href="{{ url_for('quarantine.quarantine_report') }}"><i class="bi bi-bar-chart-fill" style="color:#ffc107"></i><span class="link-label">Email Report</span></a></li>
         </ul>
 
         <a class="sidebar-link {% if request.endpoint == 'monitoring.backups' %}active{% endif %}"
@@ -122,33 +131,38 @@
         <div class="nav-section-label">Security &amp; Compliance</div>
 
         <!-- Security group -->
-        <a class="sidebar-link sidebar-parent {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}active{% endif %}"
+        {% set _sec_eps = ['vulnerability_dashboard','alert_center','workflows','patch_mgmt.patch_dashboard'] %}
+        <a class="sidebar-link sidebar-parent {% if request.endpoint in _sec_eps %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-security" role="button"
-           aria-expanded="{% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}true{% else %}false{% endif %}">
+           aria-expanded="{% if request.endpoint in _sec_eps %}true{% else %}false{% endif %}">
             <i class="bi bi-shield-exclamation"></i><span class="link-label">Security</span>
             <i class="bi bi-chevron-down sidebar-chevron"></i>
         </a>
-        <ul class="sidebar-submenu collapse {% if request.endpoint in ['vulnerability_dashboard','alert_center','workflows'] %}show{% endif %}" id="sub-security">
+        <ul class="sidebar-submenu collapse {% if request.endpoint in _sec_eps %}show{% endif %}" id="sub-security">
             <li><a class="sidebar-link {% if request.endpoint == 'vulnerabilities.vulnerability_dashboard' %}active{% endif %}" href="{{ url_for('vulnerabilities.vulnerability_dashboard') }}"><i class="bi bi-bug"></i><span class="link-label">Vulnerabilities</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'patch_mgmt.patch_dashboard' %}active{% endif %}" href="{{ url_for('patch_mgmt.patch_dashboard') }}"><i class="bi bi-patch-check-fill text-warning"></i><span class="link-label">Patch Management</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'monitoring.alert_center' %}active{% endif %}" href="{{ url_for('misc.alert_center') }}"><i class="bi bi-bell-fill"></i><span class="link-label">Alert Center</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'ai.workflows' %}active{% endif %}" href="{{ url_for('ai.workflows') }}"><i class="bi bi-diagram-3"></i><span class="link-label">Workflows</span></a></li>
         </ul>
 
         <!-- Compliance group -->
-        <a class="sidebar-link sidebar-parent {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}active{% endif %}"
+          <a class="sidebar-link sidebar-parent {% if request.endpoint in ['soc2.soc2_dashboard','readiness.readiness_dashboard','readiness.readiness_item_detail','readiness.update_readiness_item','readiness.export_type1_pack','internal_audit.internal_audit_dashboard','internal_audit.internal_audit_detail','internal_audit.create_internal_audit','internal_audit.create_internal_audit_finding','vendor_management.vendors_dashboard','vendor_management.vendor_detail','vendor_management.create_vendor','vendor_management.create_vendor_review','management_review.management_reviews_dashboard','management_review.management_review_detail','management_review.create_management_review','management_review.create_management_review_action','phishing.phishing_dashboard','phishing.create_phishing_campaign','phishing.phishing_campaign_detail','phishing.create_phishing_result','isms.documents','isms.document_detail','isms.edit_document','isms.document_history','isms.document_diff','isms.export_document'] %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-compliance" role="button"
-           aria-expanded="{% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}true{% else %}false{% endif %}">
+              aria-expanded="{% if request.endpoint in ['soc2.soc2_dashboard','readiness.readiness_dashboard','readiness.readiness_item_detail','readiness.update_readiness_item','readiness.export_type1_pack','internal_audit.internal_audit_dashboard','internal_audit.internal_audit_detail','internal_audit.create_internal_audit','internal_audit.create_internal_audit_finding','vendor_management.vendors_dashboard','vendor_management.vendor_detail','vendor_management.create_vendor','vendor_management.create_vendor_review','management_review.management_reviews_dashboard','management_review.management_review_detail','management_review.create_management_review','management_review.create_management_review_action','phishing.phishing_dashboard','phishing.create_phishing_campaign','phishing.phishing_campaign_detail','phishing.create_phishing_result','policy_acknowledgements.acknowledgements_dashboard','policy_acknowledgements.create_acknowledgement','policy_acknowledgements.acknowledgement_detail','policy_acknowledgements.update_acknowledgement','security_training.security_training_dashboard','security_training.create_security_training_record','security_training.security_training_record_detail','security_training.update_security_training_record','system_description.system_description_dashboard','system_description.import_incoming_system_description','system_description.auto_fill_system_description','system_description.system_description_section_detail','system_description.update_system_description_section','system_description.export_system_description','isms.documents','isms.document_detail','isms.edit_document','isms.document_history','isms.document_diff','isms.export_document'] %}true{% else %}false{% endif %}">
             <i class="bi bi-patch-check-fill"></i><span class="link-label">Compliance</span>
             <i class="bi bi-chevron-down sidebar-chevron"></i>
         </a>
-        <ul class="sidebar-submenu collapse {% if request.endpoint in ['soc2_dashboard','soc2_strikegraph','management_risk_review','system_description','policies','controls','risks'] %}show{% endif %}" id="sub-compliance">
+        <ul class="sidebar-submenu collapse {% if request.endpoint in ['soc2.soc2_dashboard','readiness.readiness_dashboard','readiness.readiness_item_detail','readiness.update_readiness_item','readiness.export_type1_pack','internal_audit.internal_audit_dashboard','internal_audit.internal_audit_detail','internal_audit.create_internal_audit','internal_audit.create_internal_audit_finding','vendor_management.vendors_dashboard','vendor_management.vendor_detail','vendor_management.create_vendor','vendor_management.create_vendor_review','management_review.management_reviews_dashboard','management_review.management_review_detail','management_review.create_management_review','management_review.create_management_review_action','phishing.phishing_dashboard','phishing.create_phishing_campaign','phishing.phishing_campaign_detail','phishing.create_phishing_result','policy_acknowledgements.acknowledgements_dashboard','policy_acknowledgements.create_acknowledgement','policy_acknowledgements.acknowledgement_detail','policy_acknowledgements.update_acknowledgement','security_training.security_training_dashboard','security_training.create_security_training_record','security_training.security_training_record_detail','security_training.update_security_training_record','system_description.system_description_dashboard','system_description.import_incoming_system_description','system_description.auto_fill_system_description','system_description.system_description_section_detail','system_description.update_system_description_section','system_description.export_system_description','isms.documents','isms.document_detail','isms.edit_document','isms.document_history','isms.document_diff','isms.export_document'] %}show{% endif %}" id="sub-compliance">
             <li><a class="sidebar-link {% if request.endpoint == 'soc2.soc2_dashboard' %}active{% endif %}" href="{{ url_for('soc2.soc2_dashboard') }}"><i class="bi bi-speedometer2"></i><span class="link-label">SOC2 Dashboard</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.soc2_strikegraph' %}active{% endif %}" href="{{ url_for('soc2.soc2_strikegraph') }}"><i class="bi bi-diagram-3"></i><span class="link-label">StrikeGraph</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.management_risk_review' %}active{% endif %}" href="{{ url_for('soc2.management_risk_review') }}"><i class="bi bi-clipboard-check"></i><span class="link-label">Risk Assessment</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.system_description' %}active{% endif %}" href="{{ url_for('soc2.system_description') }}"><i class="bi bi-file-earmark-text"></i><span class="link-label">System Desc.</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.policies' %}active{% endif %}" href="{{ url_for('soc2.policies') }}"><i class="bi bi-book"></i><span class="link-label">Policies</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.controls' %}active{% endif %}" href="{{ url_for('soc2.controls') }}"><i class="bi bi-shield-fill"></i><span class="link-label">Controls</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'soc2.risks' %}active{% endif %}" href="{{ url_for('soc2.risks') }}"><i class="bi bi-exclamation-triangle-fill"></i><span class="link-label">Risks</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['readiness.readiness_dashboard', 'readiness.readiness_item_detail', 'readiness.update_readiness_item'] %}active{% endif %}" href="{{ url_for('readiness.readiness_dashboard') }}"><i class="bi bi-list-task"></i><span class="link-label">SOC2 Readiness</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['internal_audit.internal_audit_dashboard', 'internal_audit.internal_audit_detail', 'internal_audit.create_internal_audit', 'internal_audit.create_internal_audit_finding'] %}active{% endif %}" href="{{ url_for('internal_audit.internal_audit_dashboard') }}"><i class="bi bi-clipboard-check"></i><span class="link-label">Internal Audits</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['vendor_management.vendors_dashboard', 'vendor_management.vendor_detail', 'vendor_management.create_vendor', 'vendor_management.create_vendor_review'] %}active{% endif %}" href="{{ url_for('vendor_management.vendors_dashboard') }}"><i class="bi bi-building"></i><span class="link-label">Vendors</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['management_review.management_reviews_dashboard', 'management_review.management_review_detail', 'management_review.create_management_review', 'management_review.create_management_review_action'] %}active{% endif %}" href="{{ url_for('management_review.management_reviews_dashboard') }}"><i class="bi bi-people"></i><span class="link-label">Management Reviews</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['phishing.phishing_dashboard', 'phishing.create_phishing_campaign', 'phishing.phishing_campaign_detail', 'phishing.create_phishing_result'] %}active{% endif %}" href="{{ url_for('phishing.phishing_dashboard') }}"><i class="bi bi-envelope-paper"></i><span class="link-label">Phishing</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['policy_acknowledgements.acknowledgements_dashboard', 'policy_acknowledgements.create_acknowledgement', 'policy_acknowledgements.acknowledgement_detail', 'policy_acknowledgements.update_acknowledgement'] %}active{% endif %}" href="{{ url_for('policy_acknowledgements.acknowledgements_dashboard') }}"><i class="bi bi-check2-square"></i><span class="link-label">Policy Acknowledgements</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['security_training.security_training_dashboard', 'security_training.create_security_training_record', 'security_training.security_training_record_detail', 'security_training.update_security_training_record'] %}active{% endif %}" href="{{ url_for('security_training.security_training_dashboard') }}"><i class="bi bi-mortarboard"></i><span class="link-label">Security Training</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['system_description.system_description_dashboard', 'system_description.import_incoming_system_description', 'system_description.auto_fill_system_description', 'system_description.system_description_section_detail', 'system_description.update_system_description_section', 'system_description.export_system_description'] %}active{% endif %}" href="{{ url_for('system_description.system_description_dashboard') }}"><i class="bi bi-diagram-3"></i><span class="link-label">System Description</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['isms.documents', 'isms.document_detail', 'isms.edit_document', 'isms.document_history', 'isms.document_diff', 'isms.export_document'] %}active{% endif %}" href="{{ url_for('isms.documents') }}"><i class="bi bi-journal-text"></i><span class="link-label">ISMS Manual</span></a></li>
         </ul>
 
         <div class="nav-section-label">Admin</div>
@@ -221,7 +235,7 @@
         <!-- Notification Bell -->
         <div class="dropdown" id="bell-nav">
             <a class="topbar-link position-relative" href="#" id="bellDropdown"
-               data-bs-toggle="dropdown" aria-expanded="false" onclick="bellMarkRead(event)">
+               data-bs-toggle="dropdown" aria-expanded="false">
                 <i class="bi bi-bell-fill"></i>
                 <span id="bell-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
                       style="display:none;font-size:.6rem;"></span>
@@ -546,14 +560,19 @@
           }).join('');
         }).catch(()=>{});
       }
-      function bellMarkRead(e) {
-        // Mark all read when opening the dropdown
+      function bellMarkRead() {
         fetch('/api/notifications/mark-read', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-          .then(()=>{ setTimeout(bellLoad, 500); });
+          .then(()=>{ setTimeout(bellLoad, 300); });
       }
-      window.bellMarkRead = bellMarkRead;
       // Load on page ready and every 60 s
-      document.addEventListener('DOMContentLoaded', bellLoad);
+      document.addEventListener('DOMContentLoaded', function() {
+        bellLoad();
+        // Mark all read after the dropdown is closed (not before it opens)
+        var bellEl = document.getElementById('bellDropdown');
+        if (bellEl) {
+          bellEl.addEventListener('hidden.bs.dropdown', bellMarkRead);
+        }
+      });
       setInterval(bellLoad, 60000);
     })();
     </script>

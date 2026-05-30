@@ -45,8 +45,9 @@ document.addEventListener('mousemove', e => {
     edgeDragLine.setAttribute('d', bezier(from.x, from.y, e.clientX - cr.left, e.clientY - cr.top));
   }
   if (nodeMoveNd) {
-    nodeMoveNd.x = e.clientX - nodeMoveOx;
-    nodeMoveNd.y = e.clientY - nodeMoveOy;
+    const cr=canvas.getBoundingClientRect();
+    nodeMoveNd.x = Math.max(0, e.clientX - cr.left - nodeMoveOx);
+    nodeMoveNd.y = Math.max(0, e.clientY - cr.top  - nodeMoveOy);
     nodeMoveEl.style.left = Math.round(nodeMoveNd.x) + 'px';
     nodeMoveEl.style.top  = Math.round(nodeMoveNd.y) + 'px';
     refreshEdges();
@@ -191,7 +192,8 @@ function makeNodeDraggable(el, nd) {
     if(e.button!==0||e.target.classList.contains('port')||e.target.closest('button')) return;
     e.preventDefault();
     nodeMoveEl=el; nodeMoveNd=nd;
-    nodeMoveOx=e.clientX-nd.x; nodeMoveOy=e.clientY-nd.y;
+    const cr=canvas.getBoundingClientRect();
+    nodeMoveOx=e.clientX-cr.left-nd.x; nodeMoveOy=e.clientY-cr.top-nd.y;
     el.style.zIndex=100;
   });
 }
@@ -245,6 +247,8 @@ function refreshEdges() {
     <marker id="arr-true"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5fcf8b"/></marker>
     <marker id="arr-false" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f87171"/></marker>
   </defs>`;
+  const btnLayer=document.getElementById('wf-edge-btns');
+  if(btnLayer) btnLayer.innerHTML='';
   edges.forEach(ed=>{
     const from=portPos(ed.fromNode,ed.fromPort), to=portPos(ed.toNode,'in'), col=eCol(ed.fromPort);
     const mid=[(from.x+to.x)/2,(from.y+to.y)/2];
@@ -254,19 +258,19 @@ function refreshEdges() {
     path.setAttribute('d',bezier(from.x,from.y,to.x,to.y)); path.setAttribute('stroke',col);
     path.setAttribute('stroke-width','2'); path.setAttribute('fill','none'); path.setAttribute('marker-end','url(#'+mId+')');
     const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
-    txt.setAttribute('x',mid[0]); txt.setAttribute('y',mid[1]-6); txt.setAttribute('fill',col);
+    txt.setAttribute('x',mid[0]); txt.setAttribute('y',mid[1]-12); txt.setAttribute('fill',col);
     txt.setAttribute('font-size','11'); txt.setAttribute('text-anchor','middle'); txt.textContent=ed.label||'';
-    const dc=document.createElementNS('http://www.w3.org/2000/svg','circle');
-    dc.setAttribute('cx',mid[0]); dc.setAttribute('cy',mid[1]); dc.setAttribute('r','8');
-    dc.setAttribute('fill',cssVar('--card-bg')); dc.setAttribute('stroke',col); dc.setAttribute('stroke-width','1.5');
-    dc.classList.add('conn-delete'); dc.setAttribute('cursor','pointer');
-    const dx=document.createElementNS('http://www.w3.org/2000/svg','text');
-    dx.setAttribute('x',mid[0]); dx.setAttribute('y',mid[1]+4); dx.setAttribute('fill',col);
-    dx.setAttribute('font-size','10'); dx.setAttribute('text-anchor','middle'); dx.textContent='✕';
-    dx.classList.add('conn-delete'); dx.setAttribute('cursor','pointer');
-    [dc,dx].forEach(el2=>el2.addEventListener('click',()=>{edges=edges.filter(e2=>e2.id!==ed.id);refreshEdges();}));
-    g.appendChild(path); g.appendChild(txt); g.appendChild(dc); g.appendChild(dx);
+    g.appendChild(path); g.appendChild(txt);
     svgEl.appendChild(g);
+    // HTML delete button — lives outside SVG so pointer-events work regardless
+    const btn=document.createElement('button');
+    btn.className='edge-del-btn';
+    btn.style.left=mid[0]+'px'; btn.style.top=mid[1]+'px';
+    btn.style.borderColor=col; btn.style.color=col;
+    btn.title='Delete connection';
+    btn.innerHTML='&times;';
+    btn.addEventListener('click', e=>{ e.stopPropagation(); edges=edges.filter(e2=>e2.id!==ed.id); refreshEdges(); });
+    if(btnLayer) btnLayer.appendChild(btn);
   });
 }
 
@@ -482,7 +486,9 @@ function deleteNode(nid){
 function clearCanvas(){
   if(nodes.length&&!confirm('Clear canvas?')) return;
   nodes=[]; edges=[]; selectedNode=null; nodeIdSeq=1; edgeIdSeq=1;
-  nodesDiv.innerHTML=''; svgEl.innerHTML=''; updateDropHint(); resetCfgPanel();
+  nodesDiv.innerHTML=''; svgEl.innerHTML='';
+  const bl=document.getElementById('wf-edge-btns'); if(bl) bl.innerHTML='';
+  updateDropHint(); resetCfgPanel();
 }
 
 function resetCfgPanel(){document.getElementById('wf-config-inner').innerHTML='<div class="text-center text-secondary py-4" style="font-size:.8rem"><i class="bi bi-cursor-fill" style="font-size:1.5rem"></i><br>Click a node to configure</div>';}

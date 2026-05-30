@@ -278,18 +278,17 @@ def bulk_update_employees():
 def sync_employees_from_m365():
     """Sync employees from Microsoft 365 users and refresh profile photos."""
     try:
-        tenant_id_setting = Setting.query.filter_by(key='m365_tenant_id').first()
-        client_id_setting = Setting.query.filter_by(key='m365_client_id').first()
-        client_secret_setting = Setting.query.filter_by(key='m365_client_secret').first()
+        from m365_config import get_m365_credentials
+        tenant_id, client_id, client_secret = get_m365_credentials()
 
-        if not all([tenant_id_setting, client_id_setting, client_secret_setting]):
+        if not all([tenant_id, client_id, client_secret]):
             flash('M365 credentials not configured. Please configure in Settings.', 'danger')
             return redirect(url_for('employees.employees'))
 
         m365 = M365Service(
-            tenant_id=tenant_id_setting.value,
-            client_id=client_id_setting.value,
-            client_secret=client_secret_setting.value
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
         )
 
         users = m365.get_all_users() or []
@@ -408,11 +407,10 @@ def sync_employees_from_ad():
         m365 = None
         m365_by_upn = {}
         try:
-            t = Setting.query.filter_by(key='m365_tenant_id').first()
-            c = Setting.query.filter_by(key='m365_client_id').first()
-            s = Setting.query.filter_by(key='m365_client_secret').first()
-            if t and c and s and t.value and c.value and s.value:
-                m365 = M365Service(tenant_id=t.value, client_id=c.value, client_secret=s.value)
+            from m365_config import get_m365_credentials
+            _t, _c, _s = get_m365_credentials()
+            if _t and _c and _s:
+                m365 = M365Service(tenant_id=_t, client_id=_c, client_secret=_s)
                 m365_users_raw = m365.get_all_users() or []
                 m365_by_upn = {(u.get('userPrincipalName') or '').strip().lower(): u
                                for u in m365_users_raw}

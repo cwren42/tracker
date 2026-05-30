@@ -17,6 +17,9 @@
       {% elif ticket.status == 'In Progress' %}<span class="badge bg-primary me-2">In Progress</span>
       {% else %}<span class="badge bg-secondary me-2">Closed</span>{% endif %}
       #{{ ticket.id }} — {{ ticket.subject }}
+      {% for tag in ticket.tags %}
+      <span class="badge ms-1" style="background:{{ tag.color }};font-size:.7rem;vertical-align:middle;">{{ tag.name }}</span>
+      {% endfor %}
     </h1>
     <div class="text-muted small">
       Opened {{ ticket.created_at.strftime('%B %d, %Y at %H:%M') if ticket.created_at else '—' }}
@@ -54,8 +57,36 @@
       <i class="bi bi-robot me-1"></i>AI Triage
     </button>
     {% endif %}
+    {% if current_user.role == 'admin' %}
+    <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteTicketModal">
+      <i class="bi bi-trash me-1"></i>Delete
+    </button>
+    {% endif %}
   </div>
 </div>
+
+{# ── Delete confirmation modal ─────────────────────────────── #}
+{% if current_user.role == 'admin' %}
+<div class="modal fade" id="deleteTicketModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header border-0">
+        <h6 class="modal-title text-danger"><i class="bi bi-trash me-2"></i>Delete Ticket?</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body small text-muted">
+        Permanently delete <strong>#{{ ticket.id }} — {{ ticket.subject }}</strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <form method="POST" action="{{ url_for('tickets.delete_ticket', ticket_id=ticket.id) }}">
+          <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-trash me-1"></i>Delete</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 <div id="aiTriageResult" class="alert alert-info mt-2 d-none"></div>
 
 <div class="row g-4">
@@ -99,11 +130,17 @@
         <ul class="list-group list-group-flush">
           {% for item in timeline %}
           {% set obj = item.obj %}
-          <li class="list-group-item d-flex gap-3 py-3">
+          <li class="list-group-item d-flex gap-3 py-3{% if item.type == 'note' and obj.is_internal %} border-start border-4 border-warning{% elif item.type == 'note' and obj.is_reply %} border-start border-4 border-primary{% endif %}">
             {# Icon #}
             <div class="flex-shrink-0 mt-1">
               {% if item.type == 'note' %}
+                {% if obj.is_internal %}
+                <span class="badge bg-warning rounded-circle p-2" title="Internal — tech only"><i class="bi bi-lock-fill text-dark"></i></span>
+                {% elif obj.is_reply %}
+                <span class="badge bg-primary rounded-circle p-2" title="Reply sent to {{ obj.reply_to }}"><i class="bi bi-reply-fill"></i></span>
+                {% else %}
                 <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>
+                {% endif %}
               {% elif obj.action == 'created' %}
                 <span class="badge bg-success rounded-circle p-2"><i class="bi bi-plus-lg"></i></span>
               {% elif obj.action == 'closed' %}
@@ -124,9 +161,17 @@
             <div class="flex-grow-1">
               {% if item.type == 'note' %}
                 <div class="fw-semibold small mb-1">
-                  Note by {{ obj.author.display_name if obj.author else '—' }}
+                  {% if obj.is_internal %}
+                  <span class="badge bg-warning text-dark me-1" style="font-size:10px;"><i class="bi bi-lock-fill me-1"></i>Internal</span>
+                  {% elif obj.is_reply %}
+                  <span class="badge bg-primary me-1" style="font-size:10px;"><i class="bi bi-reply me-1"></i>Reply</span>
+                  {% endif %}
+                  {{ 'Reply by' if obj.is_reply else 'Note by' }} {{ obj.author.display_name if obj.author else '—' }}
+                  {% if obj.is_reply and obj.reply_to %}
+                  <span class="fw-normal opacity-75">→ {{ obj.reply_to }}</span>
+                  {% endif %}
                 </div>
-                <div class="small border-start border-2 border-primary ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
+                <div class="small border-start border-2 {% if obj.is_internal %}border-warning{% elif obj.is_reply %}border-primary{% else %}border-primary{% endif %} ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
               {% else %}
                 <div class="small">{{ obj.detail or obj.action }}</div>
               {% endif %}
@@ -143,14 +188,82 @@
       </div>
     </div>
 
-    {# Add note #}
+    {# Add note / reply #}
     <div class="card">
-      <div class="card-header fw-semibold"><i class="bi bi-chat-left-dots me-2"></i>Add Internal Note</div>
-      <div class="card-body">
-        <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
-          <textarea name="content" class="form-control mb-2" rows="3" placeholder="Internal note — not visible to the reporter…" required></textarea>
-          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-send me-1"></i>Add Note</button>
-        </form>
+      <div class="card-header p-0">
+        <ul class="nav nav-tabs card-header-tabs px-3" id="noteTabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="tab-note" data-bs-toggle="tab"
+                    data-bs-target="#pane-note" type="button">Note</button>
+          </li>
+          {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-reply" data-bs-toggle="tab"
+                    data-bs-target="#pane-reply" type="button">
+              <i class="bi bi-reply me-1"></i>Reply to Reporter
+            </button>
+          </li>
+          {% endif %}
+          {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-internal" data-bs-toggle="tab"
+                    data-bs-target="#pane-internal" type="button">
+              <i class="bi bi-lock me-1"></i>Internal
+            </button>
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+      <div class="card-body tab-content pt-3">
+
+        {# ── Note tab ── #}
+        <div class="tab-pane fade show active" id="pane-note" role="tabpanel">
+          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
+            <textarea name="content" class="form-control mb-2" rows="3"
+                      placeholder="Add a note…" required></textarea>
+            <button type="submit" class="btn btn-primary btn-sm">
+              <i class="bi bi-send me-1"></i>Add Note
+            </button>
+          </form>
+        </div>
+
+        {# ── Reply to Reporter tab ── #}
+        {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
+        <div class="tab-pane fade" id="pane-reply" role="tabpanel">
+          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
+            <input type="hidden" name="is_reply" value="1">
+            <div class="mb-2">
+              <label class="form-label small fw-semibold text-muted mb-1">To</label>
+              <input type="email" name="reply_to" class="form-control form-control-sm"
+                     value="{{ ticket.reporter_email }}" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-semibold text-muted mb-1">Message</label>
+              <textarea name="content" class="form-control" rows="4"
+                        placeholder="Write your reply to the reporter…" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">
+              <i class="bi bi-envelope me-1"></i>Send Reply
+            </button>
+            <span class="text-muted small ms-2">Will be emailed and logged in the timeline.</span>
+          </form>
+        </div>
+        {% endif %}
+
+        {# ── Internal note tab ── #}
+        {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+        <div class="tab-pane fade" id="pane-internal" role="tabpanel">
+          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
+            <input type="hidden" name="is_internal" value="1">
+            <textarea name="content" class="form-control mb-2" rows="3"
+                      placeholder="Internal note — only visible to technicians…" required></textarea>
+            <button type="submit" class="btn btn-warning btn-sm text-dark">
+              <i class="bi bi-lock me-1"></i>Add Internal Note
+            </button>
+          </form>
+        </div>
+        {% endif %}
+
       </div>
     </div>
 
@@ -186,6 +299,20 @@
           <div class="col-5 text-muted">Resolution</div>
           <div class="col-7">{% if hrs < 1 %}&lt;1h{% elif hrs < 24 %}{{ hrs }}h{% else %}{{ (hrs/24)|round(1) }}d{% endif %}</div>
           {% endif %}
+          <div class="col-5 text-muted">Due Date</div>
+          <div class="col-7">
+            {% if ticket.due_date %}
+              {% if ticket.status not in ('Closed','Merged') and ticket.due_date < today %}
+                <span class="text-danger fw-semibold"><i class="bi bi-calendar-x me-1"></i>{{ ticket.due_date.strftime('%m/%d/%Y') }} <small>(overdue)</small></span>
+              {% elif ticket.status not in ('Closed','Merged') and ticket.due_date == today %}
+                <span class="text-warning fw-semibold"><i class="bi bi-calendar-check me-1"></i>{{ ticket.due_date.strftime('%m/%d/%Y') }} <small>(today)</small></span>
+              {% else %}
+                <span>{{ ticket.due_date.strftime('%m/%d/%Y') }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>
@@ -220,6 +347,26 @@
         </form>
       </div>
     </div>
+
+    {# Due Date #}
+    {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-calendar-event me-2"></i>Due Date</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}" class="d-flex gap-2">
+          <input type="date" name="due_date" class="form-control form-control-sm"
+                 value="{{ ticket.due_date.isoformat() if ticket.due_date else '' }}">
+          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
+        </form>
+        {% if ticket.due_date %}
+        <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}" class="mt-1">
+          <input type="hidden" name="due_date" value="">
+          <button type="submit" class="btn btn-sm btn-link text-muted p-0 small"><i class="bi bi-x me-1"></i>Clear date</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     {# Assign #}
     <div class="card mb-3">
@@ -315,6 +462,138 @@
         {% endif %}
       </div>
     </div>
+
+    {# Tags #}
+    {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-tags me-2"></i>Tags</span>
+        <a href="{{ url_for('tickets.manage_tags') }}" class="btn btn-sm btn-link text-muted p-0" title="Manage tags">
+          <i class="bi bi-gear"></i>
+        </a>
+      </div>
+      <div class="card-body">
+        {% if ticket.tags %}
+        <div class="mb-2 d-flex flex-wrap gap-1">
+          {% for tag in ticket.tags %}
+          <span class="badge" style="background:{{ tag.color }};font-size:.8rem;">{{ tag.name }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('tickets.update_ticket_tags', ticket_id=ticket.id) }}">
+          <div class="d-flex flex-wrap gap-1 mb-2">
+            {% for tag in all_tags %}
+            <div class="form-check form-check-inline me-0">
+              <input class="form-check-input" type="checkbox" name="tag_ids" value="{{ tag.id }}"
+                     id="tag_{{ tag.id }}" {% if tag in ticket.tags %}checked{% endif %}>
+              <label class="form-check-label small" for="tag_{{ tag.id }}"
+                     style="color:{{ tag.color }};">{{ tag.name }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          {% if all_tags %}
+          <button type="submit" class="btn btn-sm btn-outline-primary">Update Tags</button>
+          {% else %}
+          <a href="{{ url_for('tickets.manage_tags') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-plus me-1"></i>Create tags
+          </a>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+    {% else %}
+    {% if ticket.tags %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-tags me-2"></i>Tags</div>
+      <div class="card-body d-flex flex-wrap gap-1">
+        {% for tag in ticket.tags %}
+        <span class="badge" style="background:{{ tag.color }};font-size:.8rem;">{{ tag.name }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# Watchers #}
+    {% if current_user.role not in ['base_user'] %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-eye me-2"></i>Watchers</div>
+      <div class="card-body">
+        {% set wlist = ticket.watchers.all() %}
+        {% if wlist %}
+        <div class="mb-2">
+          {% for w in wlist %}
+          <div class="d-flex align-items-center justify-content-between small py-1">
+            <span><i class="bi bi-person-fill me-1 text-muted"></i>{{ w.user.display_name if w.user else '—' }}</span>
+            {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+            <form method="POST" action="{{ url_for('tickets.update_ticket_watchers', ticket_id=ticket.id) }}" class="d-inline">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="user_id" value="{{ w.user_id }}">
+              <button class="btn btn-link btn-sm text-danger p-0" title="Remove watcher"><i class="bi bi-x"></i></button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+        <form method="POST" action="{{ url_for('tickets.update_ticket_watchers', ticket_id=ticket.id) }}" class="d-flex gap-2 mt-1">
+          <input type="hidden" name="action" value="add">
+          <select name="user_id" class="form-select form-select-sm">
+            <option value="0">Add watcher…</option>
+            {% for u in all_users %}
+            {% if u.id not in watcher_ids %}
+            <option value="{{ u.id }}">{{ u.display_name }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Related Tickets #}
+    {% if current_user.role not in ['base_user'] %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-link-45deg me-2"></i>Related Tickets</div>
+      <div class="card-body">
+        {% if linked %}
+        <div class="mb-2">
+          {% for lnk in linked %}
+          <div class="d-flex align-items-center justify-content-between small py-1">
+            <a href="{{ url_for('tickets.view_ticket', ticket_id=lnk.linked_ticket_id) }}" class="text-decoration-none">
+              #{{ lnk.linked_ticket_id }}
+              {% if lnk.linked_ticket %}
+              — <span class="text-truncate" style="max-width:150px;display:inline-block;vertical-align:bottom;">{{ lnk.linked_ticket.subject }}</span>
+              <span class="badge {% if lnk.linked_ticket.status == 'Open' %}bg-success{% elif lnk.linked_ticket.status == 'In Progress' %}bg-primary{% else %}bg-secondary{% endif %} ms-1" style="font-size:10px;">{{ lnk.linked_ticket.status }}</span>
+              {% endif %}
+            </a>
+            {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+            <form method="POST" action="{{ url_for('tickets.update_ticket_links', ticket_id=ticket.id) }}" class="d-inline">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="link_id" value="{{ lnk.id }}">
+              <button class="btn btn-link btn-sm text-danger p-0" title="Remove link"><i class="bi bi-x"></i></button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+        <form method="POST" action="{{ url_for('tickets.update_ticket_links', ticket_id=ticket.id) }}" class="d-flex gap-2 mt-1">
+          <input type="hidden" name="action" value="add">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text">#</span>
+            <input type="number" name="linked_ticket_id" class="form-control" placeholder="Ticket ID" min="1">
+          </div>
+          <button type="submit" class="btn btn-sm btn-outline-secondary">Link</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     {# Merge Ticket #}
     {% if ticket.status not in ('Closed','Merged') %}

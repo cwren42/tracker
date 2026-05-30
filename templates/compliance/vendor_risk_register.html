@@ -53,7 +53,7 @@
                                 {% for vendor in vendors %}
                                 <tr>
                                     <td><strong>{{ vendor.vendor_name }}</strong></td>
-                                    <td>{{ vendor.service }}</td>
+                                    <td>{{ vendor.service_description }}</td>
                                     <td>
                                         {% if vendor.criticality == 'Critical' %}
                                         <span class="badge bg-danger">{{ vendor.criticality }}</span>
@@ -63,7 +63,7 @@
                                         <span class="badge bg-info">{{ vendor.criticality }}</span>
                                         {% endif %}
                                     </td>
-                                    <td><small>{{ vendor.data_access }}</small></td>
+                                    <td><small>{{ vendor.data_access_scope }}</small></td>
                                     <td>
                                         {% if vendor.risk_level == 'Low' %}
                                         <span class="badge bg-success">{{ vendor.risk_level }}</span>
@@ -73,8 +73,8 @@
                                         <span class="badge bg-danger">{{ vendor.risk_level }}</span>
                                         {% endif %}
                                     </td>
-                                    <td><small>{{ vendor.soc2_status }}</small></td>
-                                    <td>{{ vendor.last_review }}</td>
+                                    <td><small>{{ vendor.assurance_status or '-' }}</small></td>
+                                    <td>{{ vendor.last_review_date.strftime('%Y-%m-%d') if vendor.last_review_date else '-' }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

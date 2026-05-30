@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import os
 import re
@@ -5,6 +7,7 @@ import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
 
+import requests
 from flask import (Blueprint, abort, current_app, flash, g, jsonify,
                    redirect, render_template, request, send_file, session,
                    url_for)
@@ -19,8 +22,12 @@ from models import (
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
+    SOC2ReadinessItem, SOC2Vendor,
 )
-from soc2_models import SOC2Control, EvidenceSnapshot, M365User, IntuneDevice, StrikeGraphEvidence, AuditLog
+from soc2_models import (
+    SOC2Control, EvidenceSnapshot, M365User, IntuneDevice, StrikeGraphEvidence,
+    AuditLog, summarize_control_evidence, is_progress_relevant_evidence,
+)
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -38,6 +45,252 @@ logger = logging.getLogger(__name__)
 
 
 bp = Blueprint('soc2', __name__)
+
+
+EVIDENCE_CACHE_DIRS = {
+    'M365': '/var/www/tracker/static/evidence/m365',
+    'M365/Intune': '/var/www/tracker/static/evidence/m365',
+    'Intune': '/var/www/tracker/static/evidence/m365',
+    'M365/Defender': '/var/www/tracker/static/evidence/M365/Defender',
+    'ISMS': '/var/www/tracker/static/evidence/isms',
+    'TeamViewer': '/var/www/tracker/static/evidence/teamviewer',
+}
+
+
+def _resolve_evidence_file_path(file_path):
+    if not file_path:
+        return None
+
+    candidates = [file_path]
+    if not os.path.isabs(file_path):
+        candidates.extend([
+            os.path.join('/var/www/tracker', file_path),
+            os.path.join('/var/www/tracker/static', file_path),
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _evidence_file_to_static_url(file_path):
+    resolved_path = _resolve_evidence_file_path(file_path)
+    if not resolved_path:
+        return None
+
+    static_prefix = '/var/www/tracker/static/'
+    if resolved_path.startswith(static_prefix):
+        return '/static/' + resolved_path[len(static_prefix):]
+    return None
+
+
+def _sanitize_evidence_name(evidence_name):
+    safe_name = ''.join(character for character in (evidence_name or '') if character.isalnum() or character in (' ', '-', '_')).rstrip()
+    return safe_name.replace(' ', '_')
+
+
+def _find_cached_evidence_file(evidence_item):
+    cache_dir = EVIDENCE_CACHE_DIRS.get(evidence_item.automation_source)
+    if not cache_dir or not os.path.isdir(cache_dir):
+        return None
+
+    prefix = f"{_sanitize_evidence_name(evidence_item.evidence_name)}_"
+    candidates = [
+        os.path.join(cache_dir, name)
+        for name in os.listdir(cache_dir)
+        if name.startswith(prefix)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def _evidence_item_has_artifact(evidence_item):
+    resolved_path = _resolve_evidence_file_path(evidence_item.file_path)
+    if resolved_path:
+        return True
+    cached_file = _find_cached_evidence_file(evidence_item)
+    return bool(cached_file and os.path.exists(cached_file))
+
+
+def _build_control_evidence_summary(controls, latest_evidence):
+    evidence_items = StrikeGraphEvidence.query.filter(StrikeGraphEvidence.control_id.isnot(None)).all()
+    evidence_by_control = {}
+    for evidence_item in evidence_items:
+        evidence_by_control.setdefault(evidence_item.control_id, []).append(evidence_item)
+
+    control_evidence = {}
+    total_linked = 0
+    total_gathered = 0
+    controls_with_gathered = 0
+    controls_missing_artifacts = 0
+
+    for control in controls:
+        linked_items = evidence_by_control.get(control.id, [])
+        evidence_summary = summarize_control_evidence(control.control_name, linked_items)
+        required_items = evidence_summary['relevant_items']
+        gathered_items = [item for item in required_items if _evidence_item_has_artifact(item)]
+        missing_items = [
+            item for item in required_items
+            if is_progress_relevant_evidence(control.control_name, item) and item not in gathered_items
+        ]
+        snapshot = latest_evidence.get(control.id)
+
+        summary = {
+            'linked_count': evidence_summary['total_count'],
+            'gathered_count': evidence_summary['gathered_count'],
+            'missing_count': evidence_summary['missing_count'],
+            'gathered_names': [item.evidence_name for item in gathered_items[:3]],
+            'missing_names': [item.evidence_name for item in missing_items[:3]],
+            'snapshot': snapshot,
+            'has_snapshot': bool(snapshot),
+        }
+        control_evidence[control.id] = summary
+
+        total_linked += summary['linked_count']
+        total_gathered += summary['gathered_count']
+        if summary['gathered_count'] > 0 or summary['has_snapshot']:
+            controls_with_gathered += 1
+        if summary['linked_count'] > summary['gathered_count']:
+            controls_missing_artifacts += 1
+
+    return control_evidence, {
+        'linked_total': total_linked,
+        'gathered_total': total_gathered,
+        'controls_with_gathered': controls_with_gathered,
+        'controls_missing_artifacts': controls_missing_artifacts,
+    }
+
+
+def _decode_jwt_claims(token):
+    payload = token.split('.')[1]
+    payload += '=' * (-len(payload) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+
+
+def _build_automated_evidence_status():
+    from blueprints.readiness import AUTOMATED_EVIDENCE_EXPORTS
+
+    evidence_rows = []
+    exported_count = 0
+    linked_controls_total = 0
+    for item in AUTOMATED_EVIDENCE_EXPORTS:
+        evidence_name = item['evidence_name']
+        linked_controls = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).count()
+        linked_controls_total += linked_controls
+
+        cache_file = None
+        snapshot_time = None
+        evidence_record = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).first()
+        if evidence_record is not None:
+            cache_file = _find_cached_evidence_file(evidence_record)
+            if cache_file and os.path.exists(cache_file):
+                snapshot_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
+
+        has_artifact = bool(cache_file and os.path.exists(cache_file))
+        if has_artifact:
+            exported_count += 1
+
+        evidence_rows.append({
+            'category': item['category'],
+            'evidence_name': evidence_name,
+            'zip_path': item['zip_path'],
+            'linked_controls': linked_controls,
+            'has_artifact': has_artifact,
+            'artifact_time': snapshot_time,
+            'artifact_name': os.path.basename(cache_file) if cache_file else None,
+        })
+
+    return evidence_rows, {
+        'total': len(evidence_rows),
+        'exported': exported_count,
+        'missing': len(evidence_rows) - exported_count,
+        'linked_controls': linked_controls_total,
+    }
+
+
+def _run_defender_endpoint_check(service, endpoint, use_xdr=False):
+    try:
+        data = service._get(endpoint, use_xdr=use_xdr)
+        items = data.get('value', []) if isinstance(data, dict) else []
+        return {
+            'status': 'ok',
+            'http_status': 200,
+            'count': len(items),
+            'message': None,
+        }
+    except requests.exceptions.HTTPError as exc:
+        response = exc.response
+        message = None
+        if response is not None:
+            try:
+                message = response.json().get('error', {}).get('message')
+            except Exception:
+                message = response.text[:300]
+        return {
+            'status': 'error',
+            'http_status': response.status_code if response is not None else None,
+            'count': None,
+            'message': message or str(exc),
+        }
+    except Exception as exc:
+        return {
+            'status': 'error',
+            'http_status': None,
+            'count': None,
+            'message': str(exc),
+        }
+
+
+def _build_defender_diagnostics():
+    from defender_service import DefenderService
+
+    service = DefenderService()
+    claims = _decode_jwt_claims(service.token) if service.token else {}
+    endpoint_checks = {
+        'machines': _run_defender_endpoint_check(service, 'machines'),
+        'alerts': _run_defender_endpoint_check(service, 'alerts'),
+        'incidents': _run_defender_endpoint_check(service, 'incidents', use_xdr=True),
+    }
+
+    return {
+        'base_url': service.base_url,
+        'audience': claims.get('aud'),
+        'roles': claims.get('roles', []),
+        'endpoint_checks': endpoint_checks,
+    }
+
+
+def _build_recent_soc2_activity(limit=10):
+    activity_rows = []
+
+    recent_controls = (
+        SOC2Control.query
+        .filter_by(is_active=True)
+        .order_by(SOC2Control.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for control in recent_controls:
+        activity_rows.append({
+            'timestamp': control.updated_at,
+            'action': 'control_progress_sync',
+            'entity_type': f"{control.control_name} ({control.control_progress})",
+            'user_email': 'system',
+        })
+
+    recent_audit_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(limit).all()
+    for log in recent_audit_logs:
+        activity_rows.append({
+            'timestamp': log.timestamp,
+            'action': log.action,
+            'entity_type': log.entity_type,
+            'user_email': log.user_email,
+        })
+
+    activity_rows.sort(key=lambda row: row['timestamp'] or datetime.min, reverse=True)
+    return activity_rows[:limit]
 
 
 # ==================== SOC2 COMPLIANCE ====================
@@ -60,13 +313,16 @@ def soc2_dashboard():
     from sqlalchemy import func
     
     # Get all controls with evidence counts
-    controls = SOC2Control.query.order_by(SOC2Control.control_frequency, SOC2Control.control_name).all()
+    controls = SOC2Control.query.filter_by(is_active=True).order_by(SOC2Control.control_frequency, SOC2Control.control_name).all()
     
     # Get latest evidence snapshots for each control
     latest_evidence = {}
     for control in controls:
         latest = EvidenceSnapshot.query.filter_by(control_id=control.id).order_by(EvidenceSnapshot.snapshot_date.desc()).first()
         latest_evidence[control.id] = latest
+
+    control_evidence, evidence_summary = _build_control_evidence_summary(controls, latest_evidence)
+    automated_evidence, automated_evidence_summary = _build_automated_evidence_status()
     
     # Get sync statistics
     m365_user_count = M365User.query.filter_by(is_current=True).count()
@@ -80,9 +336,18 @@ def soc2_dashboard():
     
     # Count total evidence snapshots
     total_snapshots = EvidenceSnapshot.query.count()
+
+    readiness_summary = {
+        'total': SOC2ReadinessItem.query.filter_by(is_active=True).count(),
+        'open': SOC2ReadinessItem.query.filter(
+            SOC2ReadinessItem.is_active.is_(True),
+            SOC2ReadinessItem.status.in_(['Not In Place', 'Partially In Place', 'Open', 'Blocked'])
+        ).count(),
+        'critical': SOC2ReadinessItem.query.filter_by(is_active=True, priority='P1-Critical').count(),
+    }
     
-    # Get recent audit log entries
-    recent_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(10).all()
+    # Get recent SOC2 activity entries
+    recent_logs = _build_recent_soc2_activity(limit=10)
     
     # Calculate control status summary
     control_summary = {
@@ -96,6 +361,10 @@ def soc2_dashboard():
     return render_template('soc2_dashboard.html',
                          controls=controls,
                          latest_evidence=latest_evidence,
+                         control_evidence=control_evidence,
+                         evidence_summary=evidence_summary,
+                         automated_evidence=automated_evidence,
+                         automated_evidence_summary=automated_evidence_summary,
                          m365_user_count=m365_user_count,
                          m365_admin_count=m365_admin_count,
                          intune_device_count=intune_device_count,
@@ -103,8 +372,17 @@ def soc2_dashboard():
                          latest_user_sync=latest_user_sync,
                          latest_device_sync=latest_device_sync,
                          total_snapshots=total_snapshots,
+                         readiness_summary=readiness_summary,
                          recent_logs=recent_logs,
                          control_summary=control_summary)
+
+
+@bp.route('/soc2/defender-diagnostics')
+@login_required
+@admin_required
+def soc2_defender_diagnostics():
+    diagnostics = _build_defender_diagnostics()
+    return render_template('soc2_defender_diagnostics.html', diagnostics=diagnostics)
 
 
 @bp.route('/soc2/evidence/<int:control_id>')
@@ -113,12 +391,25 @@ def soc2_dashboard():
 def soc2_evidence(control_id):
     """View evidence history for a specific control"""
     control = SOC2Control.query.get_or_404(control_id)
-    
+
+    linked_evidence = []
+    for evidence_item in StrikeGraphEvidence.query.filter_by(control_id=control_id).order_by(StrikeGraphEvidence.evidence_name.asc()).all():
+        resolved_path = _resolve_evidence_file_path(evidence_item.file_path)
+        cached_path = _find_cached_evidence_file(evidence_item)
+        artifact_path = resolved_path or cached_path
+        linked_evidence.append({
+            'evidence': evidence_item,
+            'artifact_path': artifact_path,
+            'artifact_url': _evidence_file_to_static_url(artifact_path),
+            'has_artifact': bool(artifact_path),
+        })
+
     # Get all snapshots for this control, newest first
     snapshots = EvidenceSnapshot.query.filter_by(control_id=control_id).order_by(EvidenceSnapshot.snapshot_date.desc()).all()
     
     return render_template('soc2_evidence.html',
                          control=control,
+                         linked_evidence=linked_evidence,
                          snapshots=snapshots)
 
 
@@ -146,92 +437,6 @@ def api_soc2_snapshot(snapshot_id):
     except Exception as e:
         logger.error(f'Error fetching snapshot: {str(e)}')
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@bp.route('/soc2/strikegraph')
-@login_required
-@admin_required
-def soc2_strikegraph():
-    """View StrikeGraph evidence repository"""
-    # Get all evidence items
-    evidence_items = StrikeGraphEvidence.query.order_by(StrikeGraphEvidence.evidence_name).all()
-    
-    # Statistics
-    total_items = len(evidence_items)
-    mapped_items = len([e for e in evidence_items if e.control_id])
-    automated_items = len([e for e in evidence_items if e.automation_source == 'M365/Intune'])
-    isms_items = len([e for e in evidence_items if e.automation_source == 'ISMS'])
-    manual_items = len([e for e in evidence_items if e.automation_source == 'Manual'])
-    
-    # Group by evidence type
-    by_type = {}
-    for item in evidence_items:
-        if item.evidence_type not in by_type:
-            by_type[item.evidence_type] = []
-        by_type[item.evidence_type].append(item)
-    
-    # Get controls for mapping
-    controls = SOC2Control.query.all()
-    
-    # Items expiring soon (next 30 days)
-    from datetime import timedelta
-    soon = datetime.utcnow().date() + timedelta(days=30)
-    expiring_soon = [e for e in evidence_items 
-                     if e.expiration_date and e.expiration_date <= soon and e.is_active]
-    
-    return render_template('soc2_strikegraph.html',
-                         evidence_items=evidence_items,
-                         by_type=by_type,
-                         controls=controls,
-                         total_items=total_items,
-                         mapped_items=mapped_items,
-                         automated_items=automated_items,
-                         isms_items=isms_items,
-                         manual_items=manual_items,
-                         expiring_soon=expiring_soon)
-
-
-@bp.route('/compliance/management-risk-review')
-@login_required
-@admin_required
-def management_risk_review():
-    """Generate Management Review of Risk Assessment Report"""
-    from datetime import datetime
-    
-    # Get all active risks
-    risks = Risk.query.filter_by(risk_status=True).order_by(Risk.risk_combined_score.desc(), Risk.risk_name).all()
-    
-    # Get control mappings for risks
-    risk_controls = {}
-    for risk in risks:
-        controls = db.session.query(Control).join(
-            ControlRiskMapping, ControlRiskMapping.control_id == Control.id
-        ).filter(
-            ControlRiskMapping.risk_id == risk.id,
-            Control.is_active == True
-        ).all()
-        risk_controls[risk.id] = controls
-    
-    # Get recent incidents (if incident tracking is enabled)
-    recent_incidents = []
-    
-    # Get SOC 2 control status for risk-related controls
-    risk_controls_status = SOC2Control.query.filter(
-        SOC2Control.control_name.like('%Risk%')
-    ).order_by(SOC2Control.control_name).all()
-    
-    review_date = datetime.now()
-    reviewer = session.get('username', 'Unknown')
-    reviewer_email = session.get('email', '')
-    
-    return render_template('management_risk_review.html',
-                         risks=risks,
-                         risk_controls=risk_controls,
-                         recent_incidents=recent_incidents,
-                         risk_controls_status=risk_controls_status,
-                         review_date=review_date,
-                         reviewer=reviewer,
-                         reviewer_email=reviewer_email)
 
 
 @bp.route('/compliance/user-access-review')
@@ -304,40 +509,9 @@ def user_access_review_report():
 @admin_required
 def vendor_risk_register_report():
     """Generate Vendor Risk Register Report"""
-    from datetime import datetime, timedelta
-    import random
-    
-    # Sample IT vendors with risk assessment data
-    vendors = [
-        {
-            'vendor_name': 'Microsoft Corporation',
-            'service': 'Microsoft 365, Azure AD, Intune',
-            'risk_level': 'Low',
-            'last_review': (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d'),
-            'soc2_status': 'Type II Available',
-            'criticality': 'Critical',
-            'data_access': 'Email, Files, User Data'
-        },
-        {
-            'vendor_name': 'GitHub Inc.',
-            'service': 'Code Repository',
-            'risk_level': 'Low',
-            'last_review': (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d'),
-            'soc2_status': 'Type II Available',
-            'criticality': 'High',
-            'data_access': 'Source Code'
-        },
-        {
-            'vendor_name': 'AWS (Amazon Web Services)',
-            'service': 'Cloud Infrastructure',
-            'risk_level': 'Low',
-            'last_review': (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d'),
-            'soc2_status': 'Type II Available',
-            'criticality': 'Critical',
-            'data_access': 'Application Data, Infrastructure'
-        }
-    ]
-    
+    from datetime import datetime
+
+    vendors = SOC2Vendor.query.filter_by(is_active=True).order_by(SOC2Vendor.vendor_name.asc()).all()
     review_date = datetime.now()
     return render_template('compliance/vendor_risk_register.html',
                          vendors=vendors,
@@ -565,7 +739,7 @@ def soc2_export_control(control_id):
 def soc2_export_all():
     """Export all SOC2 controls and evidence to Excel"""
     try:
-        controls = SOC2Control.query.order_by(SOC2Control.control_frequency, SOC2Control.control_name).all()
+        controls = SOC2Control.query.filter_by(is_active=True).order_by(SOC2Control.control_frequency, SOC2Control.control_name).all()
         
         # Create workbook
         wb = Workbook()
@@ -716,160 +890,6 @@ def soc2_export_all():
         return redirect(url_for('soc2.soc2_dashboard'))
 
 
-@bp.route('/api/soc2/generate-evidence-files', methods=['POST'])
-@login_required
-@license_required
-def api_generate_evidence_files():
-    """Generate evidence files for StrikeGraph upload"""
-    try:
-        from evidence_file_service import EvidenceFileService
-        
-        service = EvidenceFileService()
-        results = service.generate_all_automated_evidence_files()
-        
-        success_count = len([r for r in results if r['status'] == 'success'])
-        error_count = len([r for r in results if r['status'] == 'error'])
-        
-        return jsonify({
-            'success': True,
-            'message': f'Generated {success_count} evidence files',
-            'results': results,
-            'stats': {
-                'success': success_count,
-                'errors': error_count,
-                'total': len(results)
-            }
-        })
-    except Exception as e:
-        logger.error(f'Error generating evidence files: {str(e)}')
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-@bp.route('/api/soc2/download-evidence/<int:evidence_id>')
-@login_required
-@license_required
-def api_download_evidence(evidence_id):
-    """Download a specific evidence file"""
-    try:
-        evidence = StrikeGraphEvidence.query.get_or_404(evidence_id)
-        
-        if not evidence.file_path:
-            flash('Evidence file not yet generated. Click "Generate Evidence Files" first.', 'warning')
-            return redirect(url_for('soc2.soc2_strikegraph'))
-        
-        full_path = f'/var/www/tracker/static/{evidence.file_path}'
-        
-        if not os.path.exists(full_path):
-            flash('Evidence file not found. It may need to be regenerated.', 'danger')
-            return redirect(url_for('soc2.soc2_strikegraph'))
-        
-        return send_file(
-            full_path,
-            as_attachment=True,
-            download_name=os.path.basename(full_path)
-        )
-    except Exception as e:
-        logger.error(f'Error downloading evidence: {str(e)}')
-        flash(f'Error downloading evidence: {str(e)}', 'danger')
-        return redirect(url_for('soc2.soc2_strikegraph'))
-
-
-@bp.route('/api/soc2/download-control-evidence/<int:control_id>')
-@login_required
-@license_required
-def api_download_control_evidence(control_id):
-    """Download all evidence files for a specific control as a ZIP"""
-    try:
-        import zipfile
-        from io import BytesIO
-        
-        control = SOC2Control.query.get_or_404(control_id)
-        
-        # Get all evidence items linked to this control that have files
-        evidence_items = StrikeGraphEvidence.query.filter(
-            StrikeGraphEvidence.control_id == control_id,
-            StrikeGraphEvidence.file_path.isnot(None)
-        ).all()
-        
-        if not evidence_items:
-            flash(f'No evidence files available for {control.control_name}. Generate files first.', 'warning')
-            return redirect(url_for('soc2.soc2_strikegraph'))
-        
-        # Create ZIP file in memory
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for evidence in evidence_items:
-                if evidence.file_path:
-                    full_path = f'/var/www/tracker/static/{evidence.file_path}'
-                    if os.path.exists(full_path):
-                        # Add file to ZIP with descriptive name
-                        filename = os.path.basename(full_path)
-                        zip_file.write(full_path, filename)
-        
-        zip_buffer.seek(0)
-        
-        # Create filename with control ID and name
-        safe_control_name = control.control_id.replace(' ', '_').replace('/', '_')
-        filename = f"{safe_control_name}_Evidence_{datetime.utcnow().strftime('%Y%m%d')}.zip"
-        
-        return send_file(
-            zip_buffer,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        logger.error(f'Error creating control evidence ZIP: {str(e)}')
-        flash(f'Error creating evidence archive: {str(e)}', 'danger')
-        return redirect(url_for('soc2.soc2_strikegraph'))
-
-
-@bp.route('/api/soc2/download-all-evidence')
-@login_required
-@license_required
-def api_download_all_evidence():
-    """Download all evidence files as a ZIP"""
-    try:
-        import zipfile
-        from io import BytesIO
-        
-        evidence_items = StrikeGraphEvidence.query.filter(
-            StrikeGraphEvidence.file_path.isnot(None)
-        ).all()
-        
-        if not evidence_items:
-            flash('No evidence files available. Generate files first.', 'warning')
-            return redirect(url_for('soc2.soc2_strikegraph'))
-        
-        # Create ZIP file in memory
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for evidence in evidence_items:
-                if evidence.file_path:
-                    full_path = f'/var/www/tracker/static/{evidence.file_path}'
-                    if os.path.exists(full_path):
-                        # Add file to ZIP with organized folder structure
-                        zip_file.write(full_path, os.path.basename(full_path))
-        
-        zip_buffer.seek(0)
-        
-        filename = f"StrikeGraph_Evidence_{datetime.utcnow().strftime('%Y%m%d')}.zip"
-        
-        return send_file(
-            zip_buffer,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        logger.error(f'Error creating evidence ZIP: {str(e)}')
-        flash(f'Error creating evidence archive: {str(e)}', 'danger')
-        return redirect(url_for('soc2.soc2_strikegraph'))
-
-
 @bp.route('/api/soc2/generate-software-inventory', methods=['POST'])
 @login_required
 @license_required
@@ -917,266 +937,6 @@ def api_generate_software_inventory():
             'success': False,
             'error': str(e)
         }), 500
-
-
-@bp.route('/system-description')
-@login_required
-@admin_required
-@license_required
-def system_description():
-    """View and edit System Description for SOC 2"""
-    sections = SystemDescription.query.order_by(SystemDescription.section_order).all()
-    
-    # Group sections by category for easier navigation
-    sections_by_category = {}
-    for section in sections:
-        if section.category not in sections_by_category:
-            sections_by_category[section.category] = []
-        sections_by_category[section.category].append(section)
-    
-    return render_template('system_description.html', 
-                         sections=sections,
-                         sections_by_category=sections_by_category)
-
-
-@bp.route('/system-description/<int:section_id>', methods=['GET', 'POST'])
-@login_required
-@admin_required
-@license_required
-def edit_system_description_section(section_id):
-    """Edit a specific System Description section"""
-    section = SystemDescription.query.get_or_404(section_id)
-    
-    if request.method == 'POST':
-        section.content = request.form.get('content')
-        section.updated_by = current_user.username
-        section.updated_at = datetime.utcnow()
-        db.session.commit()
-        flash(f'Section "{section.section_title}" updated successfully', 'success')
-        return redirect(url_for('soc2.system_description'))
-    
-    return render_template('edit_system_description_section.html', section=section)
-
-
-@bp.route('/system-description/export')
-@login_required
-@admin_required
-@license_required
-def export_system_description():
-    """Export System Description to Word document"""
-    from docx import Document
-    from docx.shared import Pt, Inches
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-    
-    sections = SystemDescription.query.order_by(SystemDescription.section_order).all()
-    
-    # Create document
-    doc = Document()
-    
-    # Add title
-    title = doc.add_heading('System Description', 0)
-    title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    
-    doc.add_paragraph(f"Cirque Corporation")
-    doc.add_paragraph(f"Generated: {datetime.utcnow().strftime('%B %d, %Y')}")
-    doc.add_page_break()
-    
-    # Add sections
-    for section in sections:
-        # Add section heading
-        heading = doc.add_heading(section.section_title, section.section_level)
-        
-        # Add content
-        if section.content:
-            # Split by newlines and add paragraphs
-            for line in section.content.split('\n'):
-                if line.strip():
-                    if line.startswith('**') and line.endswith('**'):
-                        # Bold text
-                        p = doc.add_paragraph()
-                        p.add_run(line.strip('*')).bold = True
-                    elif line.startswith('- '):
-                        # Bullet point
-                        doc.add_paragraph(line[2:], style='List Bullet')
-                    else:
-                        doc.add_paragraph(line)
-    
-    # Save to bytes
-    import io
-    doc_io = io.BytesIO()
-    doc.save(doc_io)
-    doc_io.seek(0)
-    
-    return send_file(
-        doc_io,
-        as_attachment=True,
-        download_name=f'System_Description_{datetime.utcnow().strftime("%Y%m%d")}.docx',
-        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    )
-
-
-@bp.route('/policies')
-@login_required
-@admin_required
-@license_required
-def policies():
-    """View all policies and procedures"""
-    # Get filter parameters
-    category_filter = request.args.get('category', '')
-    division_filter = request.args.get('division', '')
-    search_query = request.args.get('search', '')
-    
-    # Base query
-    query = Policy.query
-    
-    # Apply filters
-    if category_filter:
-        query = query.filter(Policy.category.ilike(f'%{category_filter}%'))
-    if division_filter:
-        query = query.filter(Policy.division == division_filter)
-    if search_query:
-        query = query.filter(
-            db.or_(
-                Policy.title.ilike(f'%{search_query}%'),
-                Policy.document_id.ilike(f'%{search_query}%')
-            )
-        )
-    
-    # Get all policies ordered by document_id
-    all_policies = query.order_by(Policy.document_id).all()
-    
-    # Get unique categories and divisions for filters
-    categories = db.session.query(Policy.category).distinct().order_by(Policy.category).all()
-    categories = [c[0] for c in categories if c[0]]
-    divisions = db.session.query(Policy.division).distinct().order_by(Policy.division).all()
-    divisions = [d[0] for d in divisions if d[0]]
-    
-    return render_template('policies.html', 
-                         policies=all_policies,
-                         categories=categories,
-                         divisions=divisions,
-                         category_filter=category_filter,
-                         division_filter=division_filter,
-                         search_query=search_query)
-
-
-@bp.route('/policies/<int:policy_id>')
-@login_required
-@admin_required
-@license_required
-def view_policy(policy_id):
-    """View individual policy details with sections"""
-    policy = Policy.query.get_or_404(policy_id)
-    sections = PolicySection.query.filter_by(policy_id=policy_id).order_by(PolicySection.section_order).all()
-    
-    return render_template('view_policy.html', policy=policy, sections=sections)
-
-
-@bp.route('/controls')
-@login_required
-@admin_required
-@license_required
-def controls():
-    """View all SOC2 controls"""
-    progress_filter = request.args.get('progress', '')
-    owner_filter = request.args.get('owner', '')
-    search_query = request.args.get('search', '')
-    
-    query = Control.query.filter_by(is_active=True)
-    
-    if progress_filter:
-        query = query.filter(Control.control_progress == progress_filter)
-    if owner_filter:
-        query = query.filter(Control.control_owner == owner_filter)
-    if search_query:
-        query = query.filter(
-            db.or_(
-                Control.control_name.ilike(f'%{search_query}%'),
-                Control.control_description.ilike(f'%{search_query}%')
-            )
-        )
-    
-    all_controls = query.order_by(Control.control_name).all()
-    
-    # Get filter options
-    progress_options = db.session.query(Control.control_progress).distinct().all()
-    progress_options = sorted([p[0] for p in progress_options if p[0]])
-    owner_options = db.session.query(Control.control_owner).distinct().all()
-    owner_options = sorted([o[0] for o in owner_options if o[0]])
-    
-    return render_template('controls.html',
-                         controls=all_controls,
-                         progress_options=progress_options,
-                         owner_options=owner_options,
-                         progress_filter=progress_filter,
-                         owner_filter=owner_filter,
-                         search_query=search_query)
-
-
-@bp.route('/controls/<int:control_id>')
-@login_required
-@admin_required
-@license_required
-def view_control(control_id):
-    """View individual control details with mapped policies"""
-    control = Control.query.get_or_404(control_id)
-    
-    # Get mapped policies using raw SQL
-    mapped_policies = db.session.execute(
-        db.text("""
-            SELECT p.* FROM policy p
-            JOIN policy_control_mapping pcm ON p.id = pcm.policy_id
-            WHERE pcm.control_id = :control_id
-            ORDER BY p.document_id
-        """),
-        {'control_id': control_id}
-    ).fetchall()
-    
-    # Convert to Policy objects
-    policy_objects = [Policy.query.get(row[0]) for row in mapped_policies]
-    
-    return render_template('view_control.html', control=control, policies=policy_objects)
-
-
-@bp.route('/risks')
-@login_required
-@admin_required
-@license_required
-def risks():
-    """View all SOC2 risks"""
-    category_filter = request.args.get('category', '')
-    score_filter = request.args.get('score', '')
-    search_query = request.args.get('search', '')
-    
-    query = Risk.query.filter_by(risk_status=True)
-    
-    if category_filter:
-        query = query.filter(Risk.risk_category == category_filter)
-    if score_filter:
-        query = query.filter(Risk.risk_combined_score == score_filter)
-    if search_query:
-        query = query.filter(
-            db.or_(
-                Risk.risk_name.ilike(f'%{search_query}%'),
-                Risk.risk_description.ilike(f'%{search_query}%')
-            )
-        )
-    
-    all_risks = query.order_by(Risk.risk_category, Risk.risk_name).all()
-    
-    # Get filter options
-    category_options = db.session.query(Risk.risk_category).distinct().order_by(Risk.risk_category).all()
-    category_options = [c[0] for c in category_options if c[0]]
-    score_options = db.session.query(Risk.risk_combined_score).distinct().all()
-    score_options = sorted([s[0] for s in score_options if s[0] and s[0] != 'NA'])
-    
-    return render_template('risks.html',
-                         risks=all_risks,
-                         category_options=category_options,
-                         score_options=score_options,
-                         category_filter=category_filter,
-                         score_filter=score_filter,
-                         search_query=search_query)
 
 
 @bp.route('/api/soc2/sync', methods=['POST'])

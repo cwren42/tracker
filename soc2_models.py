@@ -2,8 +2,162 @@
 SOC2 Compliance Models for Evidence Collection and Audit Trail
 Integrates with Microsoft 365 and Intune for automated compliance reporting
 """
+import os
 from datetime import datetime
 from extensions import db
+
+
+MANUAL_AUTOMATION_SOURCES = {'Manual', 'None', '', None}
+
+REQUIRED_PROGRESS_EVIDENCE_BY_CONTROL = {
+    'Job Descriptions': {'Employee Job Descriptions', 'Organizational Chart'},
+}
+
+OPTIONAL_PROGRESS_EVIDENCE_TYPES = {'Sample', 'General'}
+
+EVIDENCE_CACHE_DIRS = {
+    'M365': '/var/www/tracker/static/evidence/m365',
+    'M365/Intune': '/var/www/tracker/static/evidence/m365',
+    'Intune': '/var/www/tracker/static/evidence/m365',
+    'M365/Defender': '/var/www/tracker/static/evidence/M365/Defender',
+    'ISMS': '/var/www/tracker/static/evidence/isms',
+    'TeamViewer': '/var/www/tracker/static/evidence/teamviewer',
+}
+
+
+def is_automated_evidence_source(source):
+    return source not in MANUAL_AUTOMATION_SOURCES
+
+
+def summarize_control_automation(evidence_items):
+    total = len(evidence_items)
+    automated_count = sum(1 for item in evidence_items if is_automated_evidence_source(item.automation_source))
+    manual_count = total - automated_count
+    automated_ratio = (automated_count / total) if total else 0
+    return {
+        'total_count': total,
+        'automated_count': automated_count,
+        'manual_count': manual_count,
+        'automated_ratio': automated_ratio,
+    }
+
+
+def should_enable_control_automation(evidence_items, threshold=0.5, min_automated_items=1):
+    summary = summarize_control_automation(evidence_items)
+    if summary['automated_count'] < min_automated_items:
+        return False
+    return summary['automated_ratio'] >= threshold
+
+
+def _sanitize_evidence_name(evidence_name):
+    safe_name = ''.join(character for character in (evidence_name or '') if character.isalnum() or character in (' ', '-', '_')).rstrip()
+    return safe_name.replace(' ', '_')
+
+
+def resolve_evidence_file_path(file_path):
+    if not file_path:
+        return None
+
+    candidates = [file_path]
+    if not os.path.isabs(file_path):
+        candidates.extend([
+            os.path.join('/var/www/tracker', file_path),
+            os.path.join('/var/www/tracker/static', file_path),
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def find_cached_evidence_file(evidence_item):
+    cache_dir = EVIDENCE_CACHE_DIRS.get(evidence_item.automation_source)
+    if not cache_dir or not os.path.isdir(cache_dir):
+        return None
+
+    prefix = f"{_sanitize_evidence_name(evidence_item.evidence_name)}_"
+    candidates = [
+        os.path.join(cache_dir, name)
+        for name in os.listdir(cache_dir)
+        if name.startswith(prefix)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def has_evidence_artifact(evidence_item):
+    return bool(resolve_evidence_file_path(evidence_item.file_path) or find_cached_evidence_file(evidence_item))
+
+
+def is_progress_relevant_evidence(control_name, evidence_item):
+    required_evidence = REQUIRED_PROGRESS_EVIDENCE_BY_CONTROL.get(control_name, set())
+    if evidence_item.evidence_name in required_evidence:
+        return True
+    if evidence_item.evidence_type in OPTIONAL_PROGRESS_EVIDENCE_TYPES:
+        return False
+    if is_automated_evidence_source(evidence_item.automation_source):
+        return True
+    return False
+
+
+def summarize_control_evidence(control_name, evidence_items):
+    relevant_items = [
+        item for item in evidence_items
+        if is_progress_relevant_evidence(control_name, item)
+    ]
+    if not relevant_items:
+        relevant_items = [item for item in evidence_items if has_evidence_artifact(item)]
+
+    total = len(relevant_items)
+    gathered_count = sum(1 for item in relevant_items if has_evidence_artifact(item))
+    missing_count = total - gathered_count
+    return {
+        'total_count': total,
+        'gathered_count': gathered_count,
+        'missing_count': missing_count,
+        'relevant_items': relevant_items,
+    }
+
+
+def derive_control_progress(control_name, evidence_items):
+    summary = summarize_control_evidence(control_name, evidence_items)
+    if summary['total_count'] == 0:
+        return 'Not In Place'
+    if summary['gathered_count'] == summary['total_count']:
+        return 'In Place'
+    if summary['gathered_count'] > 0:
+        return 'Partially In Place'
+    return 'Not In Place'
+
+
+def sync_control_automation_flags(session, threshold=0.5):
+    controls = session.query(SOC2Control).all()
+    updated_controls = []
+
+    for control in controls:
+        evidence_items = session.query(StrikeGraphEvidence).filter_by(control_id=control.id).all()
+        enabled = should_enable_control_automation(evidence_items, threshold=threshold)
+        if control.automation_enabled != enabled:
+            control.automation_enabled = enabled
+            updated_controls.append(control.control_name)
+
+    return updated_controls
+
+
+def sync_control_progress_flags(session):
+    controls = session.query(SOC2Control).all()
+    updated_controls = []
+
+    for control in controls:
+        evidence_items = session.query(StrikeGraphEvidence).filter_by(control_id=control.id).all()
+        progress = derive_control_progress(control.control_name, evidence_items)
+        if control.control_progress != progress:
+            control.control_progress = progress
+            updated_controls.append(control.control_name)
+
+    return updated_controls
 
 class SOC2Control(db.Model):
     """SOC2 Control definitions from StrikeGraph"""
@@ -192,18 +346,7 @@ class StrikeGraphEvidence(db.Model):
     
     def is_automated(self):
         """Check if this evidence can be automatically collected"""
-        automated_items = [
-            'Administrator Access to Application',
-            'Administrator Access to Database',
-            'Administrator Access to Network/Cloud',
-            'Administrator Access to Operating System',
-            'Application User List',
-            'Database User List',
-            'Antivirus Configuration - Server',
-            'Antivirus Configuration - Workstation',
-            'Asset Inventory'
-        ]
-        return self.evidence_name in automated_items
+        return is_automated_evidence_source(self.automation_source)
     
     def days_until_expiration(self):
         """Calculate days until expiration"""

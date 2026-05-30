@@ -117,6 +117,18 @@ def eagle_eyes_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def email_access_required(f):
+    """Allow any authenticated user to access email security pages.
+    Admins see all mail; everyone else sees only their own."""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            flash('Please log in.', 'warning')
+            return redirect(url_for('auth.login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 def ticket_access_required(f):
     """Decorator to allow admin, manager, eagle_eyes, viewer, or base_user access to tickets"""
     from functools import wraps
@@ -166,8 +178,23 @@ def license_required(f):
 
 # ==================== EMAIL FUNCTIONS ====================
 
+def _get_setting_value(key, default=None):
+    from models import Setting
+
+    setting = Setting.query.filter_by(key=key).first()
+    if not setting or setting.value is None or setting.value == '':
+        return default
+    return setting.value
+
+
+def _normalize_sender_email(sender):
+    if isinstance(sender, (tuple, list)) and len(sender) >= 2:
+        return sender[1]
+    return sender
+
+
 def send_email(subject, recipients, text_body, html_body=None):
-    """Send email via configured SMTP server"""
+    """Send email via SMTP direct send."""
     try:
         msg = Message(subject, recipients=recipients)
         msg.body = text_body
@@ -182,6 +209,7 @@ def send_email(subject, recipients, text_body, html_body=None):
 def send_admin_notification(subject, message):
     """Send notification to all admin users"""
     try:
+        from models import User
         admins = User.query.filter_by(role='admin').all()
         admin_emails = [admin.email for admin in admins if admin.email]
         

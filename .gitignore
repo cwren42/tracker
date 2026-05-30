@@ -10,6 +10,10 @@ backups/
 *.sql
 *.sql.gz
 
+# Generated artifacts (regenerated on demand; not source)
+static/evidence/
+static/agent/
+
 # Logs
 *.log
 access.log

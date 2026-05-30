@@ -538,7 +538,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                                 close_note   = 'Auto-closed: patch confirmed by RMM'
                             else:
                                 close_status = 'Exception'
-                                close_note   = 'No patch available: no Windows Update KB or package manager update found for this CVE as of auto-scan'
+                                close_note   = 'No automated patch found (no Windows Update KB or package manager update matched this CVE). Device remains exposed — manual update required.'
                             # Look up product_name for this CVE to close all related CVEs
                             cur.execute(
                                 "SELECT product_name FROM device_vulnerability "

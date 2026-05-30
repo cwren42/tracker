@@ -15,28 +15,29 @@ class DefenderService:
     
     def __init__(self):
         self.base_url = 'https://api.securitycenter.microsoft.com/api'
+        self.xdr_base_url = 'https://api.security.microsoft.com/api'
         self.token = None
+        self.xdr_token = None
         self._authenticate()
+        self._authenticate_xdr()
     
-    def _authenticate(self):
-        """Authenticate with Microsoft Defender API"""
+    def _acquire_token(self, scope):
+        """Acquire an application token for the requested Defender resource."""
         try:
-            tenant_id = Setting.query.filter_by(key='m365_tenant_id').first().value
-            client_id = Setting.query.filter_by(key='m365_client_id').first().value
-            client_secret = Setting.query.filter_by(key='m365_client_secret').first().value
-            
+            from m365_config import get_m365_credentials
+            tenant_id, client_id, client_secret = get_m365_credentials()
+
             authority = f"https://login.microsoftonline.com/{tenant_id}"
             app = msal.ConfidentialClientApplication(
                 client_id,
                 authority=authority,
                 client_credential=client_secret
             )
-            
-            scopes = ['https://api.securitycenter.microsoft.com/.default']
-            result = app.acquire_token_for_client(scopes=scopes)
-            
+
+            result = app.acquire_token_for_client(scopes=[scope])
+
             if 'access_token' in result:
-                self.token = result['access_token']
+                return result['access_token']
             else:
                 error = result.get('error_description', 'Unknown error')
                 logger.error(f'Defender authentication failed: {error}')
@@ -45,14 +46,29 @@ class DefenderService:
         except Exception as e:
             logger.error(f'Error authenticating with Defender API: {str(e)}')
             raise
+
+    def _authenticate(self):
+        """Authenticate with the legacy Defender for Endpoint resource."""
+        self.token = self._acquire_token('https://api.securitycenter.microsoft.com/.default')
+
+    def _authenticate_xdr(self):
+        """Authenticate with the Defender XDR resource used by incidents APIs."""
+        self.xdr_token = self._acquire_token('https://api.security.microsoft.com/.default')
     
-    def _get(self, endpoint, params=None):
-        """Make GET request to Defender API"""
-        if not self.token:
-            self._authenticate()
-        
-        url = f"{self.base_url}/{endpoint}"
-        headers = {'Authorization': f'Bearer {self.token}'}
+    def _get(self, endpoint, params=None, use_xdr=False):
+        """Make GET request to the requested Defender API resource."""
+        token = self.xdr_token if use_xdr else self.token
+        if not token:
+            if use_xdr:
+                self._authenticate_xdr()
+                token = self.xdr_token
+            else:
+                self._authenticate()
+                token = self.token
+
+        base_url = self.xdr_base_url if use_xdr else self.base_url
+        url = f"{base_url}/{endpoint}"
+        headers = {'Authorization': f'Bearer {token}'}
         
         try:
             response = requests.get(url, headers=headers, params=params, timeout=30)
@@ -135,7 +151,7 @@ class DefenderService:
     def get_incidents(self):
         """Get all security incidents"""
         try:
-            data = self._get('incidents')
+            data = self._get('incidents', use_xdr=True)
             incidents = data.get('value', [])
             logger.info(f'Fetched {len(incidents)} incidents from Defender')
             return incidents

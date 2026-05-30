@@ -25,15 +25,18 @@
   #wf-main { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg-primary); }
   #wf-toolbar { padding:7px 12px; background:var(--card-bg); border-bottom:1px solid var(--border-color); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .wf-title-input { background:transparent; border:none; color:var(--text-primary); font-size:.93rem; font-weight:600; outline:none; flex:1; min-width:130px; }
-  #wf-canvas-wrap { flex:1; overflow:hidden; position:relative; }
+  #wf-canvas-wrap { flex:1; overflow:auto; position:relative; }
   #wf-canvas-wrap.drag-over #wf-canvas { outline:2px dashed var(--button-primary); }
-  #wf-canvas { width:100%; height:100%; position:relative; overflow:hidden; cursor:default; }
+  #wf-canvas { width:2400px; height:1600px; position:relative; cursor:default; }
   #wf-svg { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:1; }
   #wf-nodes { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; }
-  .wf-node { position:absolute; min-width:160px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:8px; cursor:move; user-select:none; box-shadow:0 2px 10px #0004; transition:border-color .15s, box-shadow .15s; }
+  #wf-edge-btns { position:absolute; top:0; left:0; width:100%; height:100%; z-index:3; pointer-events:none; }
+  .edge-del-btn { position:absolute; transform:translate(-50%,-50%); width:18px; height:18px; border-radius:50%; background:var(--card-bg); border:1.5px solid; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; pointer-events:all; opacity:0.35; transition:opacity .15s, transform .15s; line-height:1; }
+  .edge-del-btn:hover { opacity:1; transform:translate(-50%,-50%) scale(1.3); }
+  .wf-node { position:absolute; min-width:160px; max-width:260px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:8px; cursor:move; user-select:none; box-shadow:0 2px 10px #0004; transition:border-color .15s, box-shadow .15s; }
   .wf-node:hover, .wf-node.selected { border-color:var(--button-primary); box-shadow:0 0 0 2px color-mix(in srgb, var(--button-primary) 25%, transparent); }
-  .wf-node .node-header { padding:8px 12px; border-radius:6px 6px 0 0; display:flex; align-items:center; gap:7px; font-size:.82rem; font-weight:600; }
-  .wf-node .node-body { padding:7px 12px; font-size:.77rem; color:var(--text-secondary); min-height:18px; }
+  .wf-node .node-header { padding:8px 12px; border-radius:6px 6px 0 0; display:flex; align-items:center; gap:7px; font-size:.82rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .wf-node .node-body { padding:7px 12px; font-size:.77rem; color:var(--text-secondary); min-height:18px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .node-trigger .node-header   { background:rgba(95,207,139,0.18); color:#5fcf8b; }
   .node-action .node-header    { background:color-mix(in srgb, var(--button-primary) 18%, transparent); color:var(--button-primary); }
   .node-condition .node-header { background:rgba(248,168,74,0.18); color:#f8a84a; }
@@ -53,8 +56,8 @@
   .cfg-input:focus { border-color:var(--button-primary); }
   .cfg-select { appearance:none; }
   .run-row { display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border-color); font-size:.78rem; }
-  .conn-delete { cursor:pointer; opacity:0; transition:.15s; }
-  svg:hover .conn-group:hover .conn-delete { opacity:1; }
+  .conn-delete { pointer-events:all; opacity:0.3; cursor:pointer; transition:opacity .15s; }
+  .conn-delete:hover { opacity:1; }
   #aiWfModal .modal-content { background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-primary); }
   #aiWfModal .modal-header { border-color:var(--border-color); }
   #ai-prompt-input { background:var(--bg-primary); border-color:var(--border-color); color:var(--text-primary); min-height:110px; resize:vertical; }

@@ -1918,20 +1918,19 @@ def perform_intune_asset_sync():
 
         from m365_service import M365Service
 
-        tenant_id_setting = Setting.query.filter_by(key='m365_tenant_id').first()
-        client_id_setting = Setting.query.filter_by(key='m365_client_id').first()
-        client_secret_setting = Setting.query.filter_by(key='m365_client_secret').first()
+        from m365_config import get_m365_credentials
+        tenant_id, client_id, client_secret = get_m365_credentials()
 
-        if not all([tenant_id_setting, client_id_setting, client_secret_setting]):
+        if not all([tenant_id, client_id, client_secret]):
             return {
                 'success': False,
                 'error': 'M365 credentials not configured. Please configure in Settings.'
             }
 
         m365 = M365Service(
-            tenant_id=tenant_id_setting.value,
-            client_id=client_id_setting.value,
-            client_secret=client_secret_setting.value
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
         )
 
         devices = m365.get_all_devices_with_hardware()
@@ -2254,8 +2253,8 @@ def global_search():
     from sqlalchemy import or_
     assets = Asset.query.filter(or_(
         Asset.asset_tag.ilike(like),
-        Asset.hostname.ilike(like),
-        Asset.make.ilike(like),
+        Asset.name.ilike(like),
+        Asset.manufacturer.ilike(like),
         Asset.model.ilike(like),
         Asset.serial_number.ilike(like),
     )).limit(20).all()

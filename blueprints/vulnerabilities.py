@@ -77,7 +77,7 @@ def vulnerability_dashboard():
                 _dt = datetime.fromisoformat(str(last_sync_raw).replace('Z', '+00:00'))
                 if _dt.tzinfo is None:
                     _dt = _dt.replace(tzinfo=timezone.utc)
-            last_sync = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
+            last_sync = _dt.astimezone(_MST).strftime('%Y-%m-%d %I:%M %p') + ' MST'
         except Exception:
             last_sync = str(last_sync_raw)[:16]
     return render_template('vulnerability_dashboard.html',
@@ -110,12 +110,13 @@ def api_vuln_stats():
         for row in con.execute("""
             SELECT vc.severity, COUNT(DISTINCT vc.cve_id) as c
             FROM vulnerability_cache vc
-            INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id AND dv.status='Open'
+            INNER JOIN device_vulnerability dv ON dv.cve_id = vc.cve_id
+                AND dv.status NOT IN ('Remediated','Closed')
             GROUP BY vc.severity
         """).fetchall():
             counts[row['severity']] = row['c']
-        devices = con.execute("SELECT COUNT(DISTINCT asset_id) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
-        open_exp = con.execute("SELECT COUNT(*) FROM device_vulnerability WHERE status='Open'").fetchone()[0]
+        devices = con.execute("SELECT COUNT(DISTINCT asset_id) FROM device_vulnerability WHERE status NOT IN ('Remediated','Closed')").fetchone()[0]
+        open_exp = con.execute("SELECT COUNT(*) FROM device_vulnerability WHERE status NOT IN ('Remediated','Closed')").fetchone()[0]
         last_sync_raw = con.execute("SELECT MAX(synced_at) FROM vulnerability_cache").fetchone()[0]
         last_sync_mst = None
         if last_sync_raw:
@@ -127,7 +128,7 @@ def api_vuln_stats():
                     _dt = datetime.fromisoformat(str(last_sync_raw).replace('Z', '+00:00'))
                     if _dt.tzinfo is None:
                         _dt = _dt.replace(tzinfo=timezone.utc)
-                last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %H:%M') + ' MST'
+                last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %I:%M %p') + ' MST'
             except Exception:
                 last_sync_mst = str(last_sync_raw)[:16]
         return jsonify(Critical=counts.get('Critical', 0), High=counts.get('High', 0),
@@ -149,7 +150,8 @@ def api_vulnerabilities():
                 """SELECT vc.*, dc.device_count
                    FROM vulnerability_cache vc
                    JOIN (SELECT cve_id, COUNT(DISTINCT asset_id) AS device_count
-                         FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
+                         FROM device_vulnerability
+                         WHERE status NOT IN ('Remediated','Closed') GROUP BY cve_id) dc
                      ON dc.cve_id = vc.cve_id
                    WHERE vc.severity=%s
                    ORDER BY vc.cvss DESC LIMIT %s""",
@@ -160,7 +162,8 @@ def api_vulnerabilities():
                 """SELECT vc.*, dc.device_count
                    FROM vulnerability_cache vc
                    JOIN (SELECT cve_id, COUNT(DISTINCT asset_id) AS device_count
-                         FROM device_vulnerability WHERE status='Open' GROUP BY cve_id) dc
+                         FROM device_vulnerability
+                         WHERE status NOT IN ('Remediated','Closed') GROUP BY cve_id) dc
                      ON dc.cve_id = vc.cve_id
                    ORDER BY CASE vc.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
                              WHEN 'Medium' THEN 3 ELSE 4 END, vc.cvss DESC LIMIT %s""",
@@ -418,25 +421,22 @@ def api_vuln_by_app():
                 vc.severity,
                 COUNT(DISTINCT dv.cve_id)   AS cve_count,
                 COUNT(DISTINCT dv.asset_id) AS device_count,
-                MAX(vc.cvss)                AS max_cvss,
-                STRING_AGG(dv.cve_id, ',') AS cve_ids
+                MAX(vc.cvss)                AS max_cvss
             FROM device_vulnerability dv
             LEFT JOIN vulnerability_cache vc ON vc.cve_id = dv.cve_id
-            WHERE dv.status = 'Open' AND dv.product_name IS NOT NULL AND dv.product_name != ''
+            WHERE dv.status NOT IN ('Remediated','Closed') AND dv.product_name IS NOT NULL AND dv.product_name != ''
             GROUP BY dv.product_name, vc.severity
-            ORDER BY max_cvss DESC, cve_count DESC
-            LIMIT 200
+            LIMIT 400
         """).fetchall()
         result = {}
         for r in rows:
             pname = r['product_name']
             if pname not in result:
-                result[pname] = {'product_name': pname, 'severities': {}, 'total_cves': 0, 'total_devices': 0, 'max_cvss': 0, 'all_cve_ids': []}
-            result[pname]['severities'][r['severity']] = r['cve_count']
+                result[pname] = {'product_name': pname, 'severities': {}, 'total_cves': 0, 'total_devices': 0, 'max_cvss': 0}
+            result[pname]['severities'][r['severity'] or 'Unknown'] = r['cve_count']
             result[pname]['total_cves'] += r['cve_count']
             result[pname]['total_devices'] = max(result[pname]['total_devices'], r['device_count'])
             result[pname]['max_cvss'] = max(result[pname]['max_cvss'], r['max_cvss'] or 0)
-            result[pname]['all_cve_ids'] += (r['cve_ids'] or '').split(',')
         apps = sorted(result.values(), key=lambda x: (-x['max_cvss'], -x['total_cves']))
         return jsonify(ok=True, apps=apps)
     finally:

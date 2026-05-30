@@ -22,10 +22,11 @@ class TeamViewerEvidenceService:
     
     def _get_token(self):
         """Get TeamViewer API token from settings"""
+        from secret_store import decrypt_secret
         token_setting = Setting.query.filter_by(key='teamviewer_token').first()
         if not token_setting or not token_setting.value:
             raise ValueError("TeamViewer API token not configured")
-        return token_setting.value
+        return decrypt_secret(token_setting.value)
     
     def get_all_devices(self):
         """Get all managed devices from TeamViewer"""

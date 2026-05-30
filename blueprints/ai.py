@@ -101,7 +101,8 @@ def api_ai_test():
         row = db_conn.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
         model_row = db_conn.execute("SELECT value FROM setting WHERE key='openai_model'").fetchone()
         db_conn.close()
-        api_key = row['value'] if row else None
+        from secret_store import decrypt_secret
+        api_key = decrypt_secret(row['value']) if row else None
         model   = (model_row['value'] if model_row else None) or 'gpt-4o'
         if not api_key:
             return jsonify({'ok': False, 'error': 'No API key saved. Add your key and hit Save first.'}), 400
@@ -424,6 +425,8 @@ def api_ai_settings_get():
         row = db_conn.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
         val = row['value'] if row else ''
         if key == 'openai_api_key' and val:
+            from secret_store import decrypt_secret
+            val = decrypt_secret(val)
             val = val[:8] + '…' + val[-4:]
         result[key] = val
     db_conn.close()
@@ -443,10 +446,12 @@ def api_ai_settings_save():
         if key in data:
             if key == 'openai_api_key' and '…' in str(data[key]):
                 continue
+            from secret_store import encrypt_if_secret
+            _val = encrypt_if_secret(key, data[key])
             existing = db_conn.execute("SELECT id FROM setting WHERE key=?", (key,)).fetchone()
             if existing:
-                db_conn.execute("UPDATE setting SET value=? WHERE key=?", (data[key], key))
+                db_conn.execute("UPDATE setting SET value=? WHERE key=?", (_val, key))
             else:
-                db_conn.execute("INSERT INTO setting (key, value) VALUES (?,?)", (key, data[key]))
+                db_conn.execute("INSERT INTO setting (key, value) VALUES (?,?)", (key, _val))
     db_conn.commit(); db_conn.close()
     return jsonify({'ok': True})

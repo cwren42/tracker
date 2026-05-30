@@ -55,7 +55,8 @@ def load_ad_config(Setting):
     use_ssl = _setting_bool(get('ad_use_ssl'))
     base_dn = (get('ad_base_dn') or '').strip()
     bind_username = (get('ad_bind_username') or '').strip()
-    bind_password = get('ad_bind_password') or ''
+    from secret_store import decrypt_secret
+    bind_password = decrypt_secret(get('ad_bind_password')) or ''
     user_ou_dn = (get('ad_user_ou_dn') or base_dn).strip()
     computer_ou_dn = (get('ad_computer_ou_dn') or '').strip()
     ou_as_department = _setting_bool(get('ad_ou_as_department') or 'true')

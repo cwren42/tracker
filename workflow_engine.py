@@ -110,7 +110,8 @@ def _action_disable_ad_user(config: dict, ctx: dict) -> tuple:
         server = ldap3.Server(ad["ad_server"], port=int(ad.get("ad_port", 636)),
                               use_ssl=ad.get("ad_use_ssl") == "1",
                               get_info=ldap3.ALL)
-        conn = ldap3.Connection(server, ad["ad_bind_username"], ad["ad_bind_password"], auto_bind=True)
+        from secret_store import decrypt_secret
+        conn = ldap3.Connection(server, ad["ad_bind_username"], decrypt_secret(ad["ad_bind_password"]), auto_bind=True)
         conn.search(ad["ad_base_dn"], f"(sAMAccountName={username})",
                     attributes=["distinguishedName", "userAccountControl"])
         if not conn.entries:
@@ -255,7 +256,7 @@ def _action_ai_suggest(config: dict, ctx: dict) -> tuple:
             "https://api.openai.com/v1/chat/completions",
             data=payload,
             headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {api_key['value']}"},
+                     "Authorization": f"Bearer {__import__('secret_store').decrypt_secret(api_key['value'])}"},
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -287,7 +288,8 @@ def _ad_connect(ad):
         use_ssl=ad.get("ad_use_ssl") == "1",
         get_info=ldap3.ALL,
     )
-    return ldap3.Connection(server, ad["ad_bind_username"], ad["ad_bind_password"], auto_bind=True)
+    from secret_store import decrypt_secret
+    return ldap3.Connection(server, ad["ad_bind_username"], decrypt_secret(ad["ad_bind_password"]), auto_bind=True)
 
 
 def _queue_rmm(agent_id: str, cmd_type: str, payload: dict) -> bool:

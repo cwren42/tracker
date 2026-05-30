@@ -453,9 +453,10 @@ def load_unifi_config(Setting) -> dict | None:
         s = Setting.query.filter_by(key=key).first()
         return s.value if s and s.value else ''
 
+    from secret_store import decrypt_secret
     host = get('unifi_host')
     username = get('unifi_username')
-    password = get('unifi_password')
+    password = decrypt_secret(get('unifi_password'))
     site = get('unifi_site') or 'default'
 
     if not (host and username and password):

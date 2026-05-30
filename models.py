@@ -1181,79 +1181,10 @@ class QuarantineIOC(db.Model):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def admin_required(f):
-    """Decorator to require admin role"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != 'admin':
-            flash('Access denied. Admin privileges required.', 'danger')
-            return redirect(url_for('dashboard.index'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def manager_required(f):
-    """Decorator to require manager or admin role"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager']:
-            flash('Access denied. Manager or Admin privileges required.', 'danger')
-            return redirect(url_for('dashboard.index'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def eagle_eyes_required(f):
-    """Decorator to require admin or eagle_eyes role"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role not in ['admin', 'eagle_eyes']:
-            flash('Access denied. Eagle Eyes access required.', 'danger')
-            return redirect(url_for('dashboard.index'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def ticket_access_required(f):
-    """Decorator to allow admin, manager, eagle_eyes, viewer, or base_user access to tickets"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager', 'eagle_eyes', 'viewer', 'base_user']:
-            flash('Access denied.', 'danger')
-            return redirect(url_for('dashboard.index'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def license_required(f):
-    """Decorator to check license validity before allowing access"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Allow license management endpoints
-        if request.endpoint in ['get_license', 'save_license', 'verify_license', 'remove_license_key', 'settings']:
-            return f(*args, **kwargs)
-        
-        # Import license_service here to avoid circular imports
-        from license_service import license_service
-        
-        # Check license validity
-        status = license_service.is_license_valid()
-        
-        if not status['valid']:
-            if request.is_json or request.path.startswith('/api/'):
-                return jsonify({
-                    'error': 'License expired or invalid',
-                    'message': status['message'],
-                    'licenseExpired': True
-                }), 403
-            else:
-                flash(f'❌ LICENSE EXPIRED: {status["message"]} - Please update your license to continue using the system.', 'danger')
-                return redirect(url_for('settings.settings') + '#license-tab')
-        
-        return f(*args, **kwargs)
-    
-    return decorated_function
+# NOTE: the auth decorators (admin_required, manager_required, eagle_eyes_required,
+# ticket_access_required, license_required) used to be defined here too, but they
+# were dead duplicates — the live versions live in utils.py and everything imports
+# them from there. Removed to avoid the confusing duplicate.
 
 @login_manager.user_loader
 def load_user(user_id):

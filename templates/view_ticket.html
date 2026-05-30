@@ -317,73 +317,64 @@
       </div>
     </div>
 
-    {# Category #}
+    {# Properties — assignee / priority / category / due date (auto-save on change) #}
     <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-tag me-2"></i>Category</div>
-      <div class="card-body">
-        <form method="POST" action="{{ url_for('tickets.set_ticket_category', ticket_id=ticket.id) }}" class="d-flex gap-2">
-          <select name="category" class="form-select form-select-sm">
-            {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
-            <option value="{{ cat }}" {% if (ticket.category or 'General') == cat %}selected{% endif %}>{{ cat }}</option>
-            {% endfor %}
-          </select>
-          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
-        </form>
-      </div>
-    </div>
+      <div class="card-header fw-semibold"><i class="bi bi-sliders me-2"></i>Properties</div>
+      <div class="card-body vstack gap-3">
 
-    {# Change Priority #}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-exclamation-triangle me-2"></i>Priority</div>
-      <div class="card-body">
-        <form method="POST" action="{{ url_for('tickets.set_ticket_priority', ticket_id=ticket.id) }}" class="d-flex gap-2">
-          <select name="priority" class="form-select form-select-sm">
-            <option value="Low" {% if ticket.priority=='Low' %}selected{% endif %}>Low</option>
-            <option value="Normal" {% if ticket.priority=='Normal' %}selected{% endif %}>Normal</option>
-            <option value="High" {% if ticket.priority=='High' %}selected{% endif %}>High</option>
-            <option value="Urgent" {% if ticket.priority=='Urgent' %}selected{% endif %}>Urgent</option>
-          </select>
-          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
-        </form>
-      </div>
-    </div>
+        <div>
+          <label class="form-label small text-muted mb-1">Assignee</label>
+          <form method="POST" action="{{ url_for('tickets.assign_ticket', ticket_id=ticket.id) }}">
+            <select name="assignee_id" class="form-select form-select-sm" onchange="this.form.submit()">
+              <option value="0">— Unassigned —</option>
+              {% for tech in techs %}
+              <option value="{{ tech.id }}" {% if ticket.assigned_to_user_id == tech.id %}selected{% endif %}>{{ tech.display_name }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
 
-    {# Due Date #}
-    {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-calendar-event me-2"></i>Due Date</div>
-      <div class="card-body">
-        <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}" class="d-flex gap-2">
-          <input type="date" name="due_date" class="form-control form-control-sm"
-                 value="{{ ticket.due_date.isoformat() if ticket.due_date else '' }}">
-          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
-        </form>
-        {% if ticket.due_date %}
-        <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}" class="mt-1">
-          <input type="hidden" name="due_date" value="">
-          <button type="submit" class="btn btn-sm btn-link text-muted p-0 small"><i class="bi bi-x me-1"></i>Clear date</button>
-        </form>
+        <div>
+          <label class="form-label small text-muted mb-1">Priority</label>
+          <form method="POST" action="{{ url_for('tickets.set_ticket_priority', ticket_id=ticket.id) }}">
+            <select name="priority" class="form-select form-select-sm" onchange="this.form.submit()">
+              <option value="Low" {% if ticket.priority=='Low' %}selected{% endif %}>Low</option>
+              <option value="Normal" {% if ticket.priority=='Normal' %}selected{% endif %}>Normal</option>
+              <option value="High" {% if ticket.priority=='High' %}selected{% endif %}>High</option>
+              <option value="Urgent" {% if ticket.priority=='Urgent' %}selected{% endif %}>Urgent</option>
+            </select>
+          </form>
+        </div>
+
+        <div>
+          <label class="form-label small text-muted mb-1">Category</label>
+          <form method="POST" action="{{ url_for('tickets.set_ticket_category', ticket_id=ticket.id) }}">
+            <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
+              {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
+              <option value="{{ cat }}" {% if (ticket.category or 'General') == cat %}selected{% endif %}>{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
+
+        {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+        <div>
+          <label class="form-label small text-muted mb-1">Due Date</label>
+          <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}">
+            <input type="date" name="due_date" class="form-control form-control-sm"
+                   value="{{ ticket.due_date.isoformat() if ticket.due_date else '' }}" onchange="this.form.submit()">
+          </form>
+          {% if ticket.due_date %}
+          <form method="POST" action="{{ url_for('tickets.set_ticket_due_date', ticket_id=ticket.id) }}" class="mt-1">
+            <input type="hidden" name="due_date" value="">
+            <button type="submit" class="btn btn-sm btn-link text-muted p-0 small"><i class="bi bi-x me-1"></i>Clear date</button>
+          </form>
+          {% endif %}
+        </div>
         {% endif %}
+
       </div>
     </div>
-    {% endif %}
-
-    {# Assign #}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-person-check me-2"></i>Assignee</div>
-      <div class="card-body">
-        <form method="POST" action="{{ url_for('tickets.assign_ticket', ticket_id=ticket.id) }}" class="d-flex gap-2">
-          <select name="assignee_id" class="form-select form-select-sm">
-            <option value="0">— Unassigned —</option>
-            {% for tech in techs %}
-            <option value="{{ tech.id }}" {% if ticket.assigned_to_user_id == tech.id %}selected{% endif %}>{{ tech.display_name }}</option>
-            {% endfor %}
-          </select>
-          <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
-        </form>
-      </div>
-    </div>
-
     {# SLA Status #}
     <div class="card mb-3">
       <div class="card-header fw-semibold"><i class="bi bi-clock me-2"></i>SLA</div>

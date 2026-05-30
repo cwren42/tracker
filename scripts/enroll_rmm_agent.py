@@ -19,6 +19,12 @@ import sqlite3
 from datetime import datetime
 
 DB_PATH = "/var/www/tracker/assets.db"
+if not os.path.exists(DB_PATH):
+    raise SystemExit(
+        "DEPRECATED: this helper targets the pre-migration SQLite DB (assets.db), "
+        "which has been retired. RMM agent enrollment now goes through Postgres via "
+        "the app (POST /api/rmm/enroll)."
+    )
 
 
 def sha256_hex(value: str) -> str:

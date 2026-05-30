@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}{{ campaign.title }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('phishing.phishing_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to phishing campaigns</a>
+    <h2 class="mt-2 mb-1">{{ campaign.title }}</h2>
+    <div class="text-muted">{{ campaign.campaign_key }} · {{ campaign.campaign_date.strftime('%Y-%m-%d') }}</div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Campaign Summary</h5></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Provider</dt><dd class="col-sm-8">{{ campaign.provider or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Scope</dt><dd class="col-sm-8">{{ campaign.scope or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{{ campaign.status }}</dd>
+                    <dt class="col-sm-4">Scenario</dt><dd class="col-sm-8">{{ campaign.scenario or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Follow-up</dt><dd class="col-sm-8">{{ campaign.follow_up_training_topic or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Summary</dt><dd class="col-sm-8">{{ campaign.summary or 'Not set' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Result</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('phishing.create_phishing_result', campaign_id=campaign.id) }}" class="row g-3">
+                    <div class="col-12"><label class="form-label" for="employee_id">Employee</label><select class="form-select" id="employee_id" name="employee_id"><option value="">Manual entry</option>{% for employee in employees %}<option value="{{ employee.id }}">{{ employee.name }}{% if employee.department %} · {{ employee.department }}{% endif %}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="employee_name">Employee Name</label><input class="form-control" id="employee_name" name="employee_name"></div>
+                    <div class="col-md-6"><label class="form-label" for="employee_email">Email</label><input class="form-control" id="employee_email" name="employee_email"></div>
+                    <div class="col-md-6"><label class="form-label" for="department">Department</label><input class="form-control" id="department" name="department"></div>
+                    <div class="col-md-6"><label class="form-label" for="outcome">Outcome</label><select class="form-select" id="outcome" name="outcome">{% for option in outcome_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="training_completed_on">Training Completed On</label><input class="form-control" type="date" id="training_completed_on" name="training_completed_on"></div>
+                    <div class="col-md-6 d-flex flex-wrap gap-3 align-items-end">
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="delivered" name="delivered" checked><label class="form-check-label" for="delivered">Delivered</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="opened" name="opened"><label class="form-check-label" for="opened">Opened</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="clicked" name="clicked"><label class="form-check-label" for="clicked">Clicked</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="reported" name="reported"><label class="form-check-label" for="reported">Reported</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="training_completed" name="training_completed"><label class="form-check-label" for="training_completed">Training Completed</label></div>
+                    </div>
+                    <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="3"></textarea></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Add Result</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>User</th><th>Outcome</th><th>Interaction</th><th>Training</th></tr></thead>
+                    <tbody>
+                        {% for result in campaign.results %}
+                        <tr>
+                            <td><div class="fw-semibold">{{ result.employee_name }}</div><div class="small text-muted">{{ result.department or 'Unassigned' }}</div></td>
+                            <td>{{ result.outcome }}</td>
+                            <td><span class="small">Opened: {{ 'Yes' if result.opened else 'No' }} · Clicked: {{ 'Yes' if result.clicked else 'No' }} · Reported: {{ 'Yes' if result.reported else 'No' }}</span></td>
+                            <td>{{ result.training_completed_on.strftime('%Y-%m-%d') if result.training_completed_on else 'Not completed' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-5">No phishing results recorded yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

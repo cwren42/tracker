@@ -1,0 +1,769 @@
+{% extends "base.html" %}
+{% block title %}Quarantine Report{% endblock %}
+{% block styles %}
+<style>
+/* ── layout ────────────────────────────────────────────────────── */
+.qr-card   { border-radius:10px; border:1px solid var(--border-color,#2a2f3a); background:var(--card-bg,#1a1f2e); padding:1.1rem 1.25rem; }
+.qr-stat   { font-size:2rem; font-weight:800; line-height:1.1; }
+.qr-label  { font-size:.72rem; color:var(--text-muted,#8892a0); text-transform:uppercase; letter-spacing:.06em; }
+
+/* ── threat badges ─────────────────────────────────────────────── */
+.tb-Phish    { background:rgba(220,53,69,.15);  color:#ff6b6b; border:1px solid rgba(220,53,69,.3); }
+.tb-Malware  { background:rgba(111,66,193,.15); color:#b07bff; border:1px solid rgba(111,66,193,.3); }
+.tb-Spam     { background:rgba(255,193,7,.12);  color:#ffc107; border:1px solid rgba(255,193,7,.3); }
+.tb-Bulk     { background:rgba(13,202,240,.1);  color:#0dcaf0; border:1px solid rgba(13,202,240,.3); }
+.tb-Unknown  { background:rgba(108,117,125,.1); color:#6c757d; border:1px solid rgba(108,117,125,.3); }
+.tb          { border-radius:5px; padding:2px 7px; font-size:.72rem; font-weight:600; display:inline-block; }
+
+/* ── bar ───────────────────────────────────────────────────────── */
+.vol-track { background:rgba(255,255,255,.07); border-radius:4px; height:7px; }
+.vol-fill  { border-radius:4px; height:7px; transition:width .4s; }
+
+/* ── PowerShell panel ──────────────────────────────────────────── */
+.ps-panel  { font-family: 'Consolas','Courier New',monospace; font-size:.8rem;
+             background:#0d0f17; border:1px solid #2a2f3a; border-radius:8px;
+             padding:1rem 1.2rem; white-space:pre-wrap; word-break:break-all;
+             color:#c3e88d; line-height:1.65; max-height:420px; overflow-y:auto; }
+.ps-comment { color:#546e7a; }
+.ps-kw      { color:#89ddff; }
+.ps-str     { color:#f07178; }
+.copy-btn   { font-size:.75rem; padding:3px 10px; }
+
+/* ── nav pills ─────────────────────────────────────────────────── */
+.ps-nav .nav-link          { color:var(--text-muted,#8892a0); border-radius:6px; padding:.35rem .8rem; }
+.ps-nav .nav-link.active   { background:rgba(255,193,7,.18); color:#ffc107; }
+.ps-nav .nav-link:hover    { background:rgba(255,255,255,.05); }
+
+/* ── auth bar ──────────────────────────────────────────────────── */
+.auth-bar-pass { background:#20c997; }
+.auth-bar-fail { background:#dc3545; }
+.auth-bar-none { background:#495057; }
+
+/* ── risk colours ──────────────────────────────────────────────── */
+.risk-Critical { color:#ff6b6b; }
+.risk-High     { color:#ff8c42; }
+.risk-Medium   { color:#ffc107; }
+.risk-Low      { color:#6c757d; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1500px;">
+
+  <!-- ── Header ───────────────────────────────────────────────────── -->
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+    <div>
+      <h5 class="mb-0 fw-bold"><i class="bi bi-bar-chart-fill me-2" style="color:#ffc107"></i>Quarantine Report</h5>
+      <span class="text-muted small">Threat analytics &amp; PowerShell remediation playbook — {{ total_in_period }} messages in last {{ days }} days</span>
+    </div>
+    <div class="ms-auto d-flex align-items-center gap-2 flex-wrap">
+      <a href="{{ url_for('quarantine.quarantine_list') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Back to Quarantine
+      </a>
+      <a href="{{ url_for('quarantine.quarantine_campaigns') }}" class="btn btn-sm btn-outline-warning">
+        <i class="bi bi-diagram-3 me-1"></i>Campaigns
+      </a>
+      {% for d in ['7','14','30','60','90'] %}
+      <a href="{{ url_for('quarantine.quarantine_report', days=d) }}"
+         class="btn btn-sm {{ 'btn-warning' if days == d else 'btn-outline-secondary' }}">{{ d }}d</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ── Top stat cards ───────────────────────────────────────────── -->
+  {% set phish_n   = threat_dist | selectattr('0','equalto','Phish')   | map(attribute='1') | first | default(0) %}
+  {% set malware_n = threat_dist | selectattr('0','equalto','Malware') | map(attribute='1') | first | default(0) %}
+  {% set spam_n    = (threat_dist | selectattr('0','in',['Spam','Bulk']) | map(attribute='1') | sum) %}
+  {% set auth_fail_pct = ((spf_fail_total + dkim_fail_total + dmarc_fail_total) / (total_in_period * 3 + 1) * 100) | int %}
+
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="qr-card">
+        <div class="qr-label mb-1">Total Quarantined</div>
+        <div class="qr-stat">{{ total_in_period }}</div>
+        <div class="text-muted" style="font-size:.72rem;">last {{ days }} days</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="qr-card" style="border-color:rgba(220,53,69,.3)">
+        <div class="qr-label mb-1">Phishing / Malware</div>
+        <div class="qr-stat text-danger">{{ phish_n + malware_n }}</div>
+        <div class="text-muted" style="font-size:.72rem;">{{ phish_n }} phish · {{ malware_n }} malware</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="qr-card" style="border-color:rgba(255,193,7,.3)">
+        <div class="qr-label mb-1">Unique Attacker Domains</div>
+        <div class="qr-stat" style="color:#ffc107">{{ top_domains | length }}</div>
+        <div class="text-muted" style="font-size:.72rem;">top 20 shown</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="qr-card" style="border-color:rgba(220,53,69,.3)">
+        <div class="qr-label mb-1">Auth Failure Rate</div>
+        <div class="qr-stat text-danger">{{ auth_fail_pct }}%</div>
+        <div class="text-muted" style="font-size:.72rem;">SPF/DKIM/DMARC combined</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Charts row ───────────────────────────────────────────────── -->
+  <div class="row g-3 mb-4">
+
+    <!-- Daily volume stacked bar -->
+    <div class="col-lg-8">
+      <div class="qr-card h-100">
+        <div class="fw-semibold mb-2 small"><i class="bi bi-bar-chart me-2 text-warning"></i>Daily Quarantine Volume by Threat Type</div>
+        <canvas id="dailyChart" style="max-height:250px;"></canvas>
+      </div>
+    </div>
+
+    <!-- Threat donut -->
+    <div class="col-lg-4">
+      <div class="qr-card h-100">
+        <div class="fw-semibold mb-2 small"><i class="bi bi-pie-chart me-2 text-warning"></i>Threat Distribution</div>
+        <canvas id="threatDonut" style="max-height:200px;"></canvas>
+        <div class="mt-3">
+          {% for row in threat_dist %}
+          <div class="d-flex justify-content-between align-items-center mb-1" style="font-size:.78rem;">
+            <span class="tb tb-{{ row[0] or 'Unknown' }}">{{ row[0] or 'Unknown' }}</span>
+            <span class="fw-semibold">{{ row[1] }}</span>
+            <span class="text-muted">{{ ((row[1] / (total_in_period or 1)) * 100) | int }}%</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Auth & Risk & Policy row ─────────────────────────────────── -->
+  <div class="row g-3 mb-4">
+
+    <!-- Email auth summary -->
+    <div class="col-md-4">
+      <div class="qr-card h-100">
+        <div class="fw-semibold small mb-3"><i class="bi bi-shield-check me-2 text-info"></i>Email Authentication Failures</div>
+        {% set base = total_in_period or 1 %}
+        {% for proto, fail_n, color in [
+            ('SPF',   spf_fail_total,   '#dc3545'),
+            ('DKIM',  dkim_fail_total,  '#ff8c42'),
+            ('DMARC', dmarc_fail_total, '#b07bff')
+        ] %}
+        {% set pct = ((fail_n / base) * 100) | int %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between" style="font-size:.8rem;">
+            <span class="fw-semibold">{{ proto }} Fail</span>
+            <span style="color:{{ color }}">{{ fail_n }} ({{ pct }}%)</span>
+          </div>
+          <div class="vol-track mt-1">
+            <div class="vol-fill" style="width:{{ pct }}%;background:{{ color }};"></div>
+          </div>
+        </div>
+        {% endfor %}
+        <div class="text-muted mt-2" style="font-size:.72rem;">
+          Failures indicate spoofed or misconfigured senders. High rates suggest active spoofing campaigns.
+        </div>
+      </div>
+    </div>
+
+    <!-- Risk distribution -->
+    <div class="col-md-4">
+      <div class="qr-card h-100">
+        <div class="fw-semibold small mb-3"><i class="bi bi-exclamation-triangle me-2 text-warning"></i>Risk Score Distribution</div>
+        {% set risk_total = risk_dist.values() | sum or 1 %}
+        {% for level, color in [('Critical','#ff6b6b'),('High','#ff8c42'),('Medium','#ffc107'),('Low','#6c757d')] %}
+        {% set cnt = risk_dist[level] %}
+        {% set pct = ((cnt / risk_total) * 100) | int %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between" style="font-size:.8rem;">
+            <span class="fw-semibold risk-{{ level }}">{{ level }}</span>
+            <span style="color:{{ color }}">{{ cnt }} ({{ pct }}%)</span>
+          </div>
+          <div class="vol-track mt-1">
+            <div class="vol-fill" style="width:{{ pct }}%;background:{{ color }};"></div>
+          </div>
+        </div>
+        {% endfor %}
+        <div class="text-muted mt-2" style="font-size:.72rem;">
+          Score = threat type + auth failures + URL/attachment count.
+          Critical (≥75) and High (≥50) warrant immediate review.
+        </div>
+      </div>
+    </div>
+
+    <!-- Policy type breakdown -->
+    <div class="col-md-4">
+      <div class="qr-card h-100">
+        <div class="fw-semibold small mb-3"><i class="bi bi-funnel me-2 text-warning"></i>Policy Type Breakdown</div>
+        {% if policy_dist %}
+        {% set max_pol = policy_dist[0][1] or 1 %}
+        {% for row in policy_dist %}
+        {% set pct = ((row[1] / (total_in_period or 1)) * 100) | int %}
+        <div class="mb-2">
+          <div class="d-flex justify-content-between" style="font-size:.8rem;">
+            <span class="fw-semibold">{{ row[0] or 'Unknown' }}</span>
+            <span class="text-muted">{{ row[1] }} ({{ pct }}%)</span>
+          </div>
+          <div class="vol-track mt-1">
+            <div class="vol-fill" style="width:{{ ((row[1] / max_pol) * 100) | int }}%;background:rgba(255,193,7,.7);"></div>
+          </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-muted small">No data for this period.</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Top sender domains ────────────────────────────────────────── -->
+  <div class="qr-card mb-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <div class="fw-semibold small"><i class="bi bi-globe me-2 text-danger"></i>Top Sender Domains (Last {{ days }} days)</div>
+      <span class="text-muted" style="font-size:.72rem;">Showing top {{ top_domains | length }}</span>
+    </div>
+    {% if top_domains %}
+    {% set max_dom = top_domains[0]['total'] or 1 %}
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem;">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Domain</th>
+            <th style="width:90px">Threat</th>
+            <th style="width:80px">Messages</th>
+            <th style="width:160px">Volume</th>
+            <th style="width:90px">SPF Fail</th>
+            <th style="width:90px">DMARC Fail</th>
+            <th style="width:80px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in top_domains %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td>
+              <span style="font-family:monospace;font-weight:600;">{{ d.domain }}</span>
+            </td>
+            <td><span class="tb tb-{{ d.dominant_threat }}">{{ d.dominant_threat }}</span></td>
+            <td class="fw-bold">{{ d.total }}</td>
+            <td>
+              <div class="vol-track">
+                <div class="vol-fill"
+                     style="width:{{ ((d.total / max_dom) * 100) | int }}%;
+                            background:{{ '#ff6b6b' if d.dominant_threat == 'Phish' else ('#b07bff' if d.dominant_threat == 'Malware' else '#ffc107') }};">
+                </div>
+              </div>
+            </td>
+            <td>
+              {% if d.spf_fails > 0 %}
+              <span class="text-danger">{{ d.spf_fails }} ({{ ((d.spf_fails / d.total) * 100) | int }}%)</span>
+              {% else %}
+              <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if d.dmarc_fails > 0 %}
+              <span class="text-danger">{{ d.dmarc_fails }} ({{ ((d.dmarc_fails / d.total) * 100) | int }}%)</span>
+              {% else %}
+              <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('quarantine.quarantine_list', q=d.domain) }}"
+                 class="btn btn-xs btn-outline-secondary" style="padding:2px 7px;font-size:.72rem;">
+                View
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-muted small text-center py-3">No domain data for this period.</div>
+    {% endif %}
+  </div>
+
+  <!-- ── Top targeted recipients ───────────────────────────────────── -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-6">
+      <div class="qr-card h-100">
+        <div class="fw-semibold small mb-3"><i class="bi bi-person-fill me-2 text-warning"></i>Most Targeted Recipients</div>
+        {% if top_recipients %}
+        {% set max_rcpt = top_recipients[0][1] or 1 %}
+        {% for rcpt, cnt in top_recipients %}
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div style="min-width:32px;text-align:right;font-weight:700;font-size:.85rem;">{{ cnt }}</div>
+          <div style="flex:1;">
+            <div style="font-size:.78rem;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rcpt }}">{{ rcpt }}</div>
+            <div class="vol-track mt-1">
+              <div class="vol-fill" style="width:{{ ((cnt / max_rcpt) * 100) | int }}%;background:rgba(255,193,7,.6);"></div>
+            </div>
+          </div>
+          <a href="{{ url_for('quarantine.quarantine_list', q=rcpt) }}"
+             class="btn btn-xs btn-outline-secondary" style="padding:1px 6px;font-size:.7rem;">View</a>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-muted small text-center py-3">No recipient data.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- IOC top types placeholder -->
+    <div class="col-md-6">
+      <div class="qr-card h-100">
+        <div class="fw-semibold small mb-3"><i class="bi bi-bug me-2 text-danger"></i>Quick Actions</div>
+        <div class="d-flex flex-column gap-2">
+          <button class="btn btn-sm btn-danger fw-semibold" onclick="openPhishBlock('{{ days }}')"
+                  title="Generate PowerShell to block all active phishing senders">
+            <i class="bi bi-shield-fill-x me-2"></i>Block Phish Now — PS Script
+          </button>
+          <a href="{{ url_for('quarantine.quarantine_export_iocs', days=days) }}"
+             class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-download me-2"></i>Export all IOCs (CSV)
+          </a>
+          <a href="{{ url_for('quarantine.quarantine_campaigns', days=days) }}"
+             class="btn btn-sm btn-outline-warning">
+            <i class="bi bi-diagram-3 me-2"></i>View Campaign Groups
+          </a>
+          <a href="{{ url_for('quarantine.quarantine_list', threat='Phish', days=days) }}"
+             class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-fish me-2"></i>Review Phishing Messages
+          </a>
+          <a href="{{ url_for('quarantine.quarantine_list', threat='Malware', days=days) }}"
+             class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-bug-fill me-2"></i>Review Malware Messages
+          </a>
+          <a href="{{ url_for('quarantine.quarantine_list', status='Quarantined', days=days) }}"
+             class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-lock me-2"></i>View All Quarantined Messages
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PowerShell Remediation Runbook ───────────────────────────── -->
+  <div class="qr-card mb-4">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <i class="bi bi-terminal-fill" style="color:#89ddff;font-size:1.1rem;"></i>
+      <div>
+        <div class="fw-bold">PowerShell Remediation Runbook</div>
+        <div class="text-muted" style="font-size:.75rem;">Auto-generated from live quarantine data · Copy and run in Exchange Online PowerShell (EXO V3 module)</div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav ps-nav mb-3 flex-wrap gap-1" id="psTabs" role="tablist">
+      <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#ps-block-tabl">Tenant Block List</a></li>
+      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#ps-transport">Transport Rules</a></li>
+      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#ps-antispam">Anti-Spam Tuning</a></li>
+      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#ps-review">Bulk Review</a></li>
+      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#ps-antiphish">Anti-Phish Policy</a></li>
+    </ul>
+
+    <div class="tab-content">
+
+      <!-- ── Tab 1: Tenant Allow/Block List ─────────────────────── -->
+      <div class="tab-pane fade show active" id="ps-block-tabl">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">Adds attacker domains to the Tenant Allow/Block List (TABL). Blocks delivery globally, no per-rule maintenance.</span>
+          <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-block-tabl-code')">
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+        </div>
+        <pre id="ps-block-tabl-code" class="ps-panel"><span class="ps-comment"># ─────────────────────────────────────────────────────────────
+# QUARANTINE REPORT — Block Threat Sender Domains
+# Generated: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC  |  Period: Last {{ days }} days
+# Source: {{ phish_malware_domains | length }} phishing/malware domains from quarantine data
+# ─────────────────────────────────────────────────────────────
+# Prerequisites: ExchangeOnlineManagement module v3+
+# Requires role: Security Administrator or Exchange Administrator
+# ─────────────────────────────────────────────────────────────</span>
+
+<span class="ps-kw">Connect-IPPSSession</span> -UserPrincipalName admin@cirque.com
+
+<span class="ps-comment"># Block phishing/malware sender domains in Tenant Allow/Block List</span>
+<span class="ps-comment"># These domains sent {{ phish_malware_domains | length }} messages classified as Phish or Malware</span>
+<span class="ps-kw">New-TenantAllowBlockListItems</span> `
+    -ListType Sender `
+    -Block `
+    -Entries @(
+{% for d in phish_malware_domains %}        <span class="ps-str">"{{ d }}"</span>{{ "," if not loop.last }}
+{% endfor %}    ) `
+    -NoExpiration `
+    -Notes <span class="ps-str">"Phish/Malware campaign — blocked {{ now.strftime('%Y-%m-%d') }} by SOC ({{ total_in_period }} msgs in {{ days }}d)"</span>
+
+<span class="ps-comment"># Verify the entries were added</span>
+<span class="ps-kw">Get-TenantAllowBlockListItems</span> -ListType Sender -Block | `
+    <span class="ps-kw">Where-Object</span> { $_.Value -in @({{ phish_malware_domains | map('tojson') | join(', ') }}) } | `
+    <span class="ps-kw">Select-Object</span> Value, ExpirationDate, Notes</pre>
+      </div>
+
+      <!-- ── Tab 2: Transport Rules ──────────────────────────────── -->
+      <div class="tab-pane fade" id="ps-transport">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">Creates transport rules for persistent blocking with custom rejection messages. Use alongside TABL for defence-in-depth.</span>
+          <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-transport-code')">
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+        </div>
+        <pre id="ps-transport-code" class="ps-panel"><span class="ps-comment"># ─────────────────────────────────────────────────────────────
+# QUARANTINE REPORT — Create Transport Rule Blocks
+# Generated: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC  |  Period: Last {{ days }} days
+# ─────────────────────────────────────────────────────────────</span>
+
+<span class="ps-kw">Connect-ExchangeOnline</span> -UserPrincipalName admin@cirque.com
+
+<span class="ps-comment"># Block top phishing/malware domains with hard-reject transport rule</span>
+<span class="ps-kw">New-TransportRule</span> `
+    -Name <span class="ps-str">"SECURITY: Block Known Phish/Malware Senders — SOC {{ now.strftime('%Y%m%d') }}"</span> `
+    -Enabled $true `
+    -SenderDomainIs @(
+{% for d in phish_malware_domains %}        <span class="ps-str">"{{ d }}"</span>{{ "," if not loop.last }}
+{% endfor %}    ) `
+    -RejectMessageReasonText <span class="ps-str">"This message was blocked by Cirque Corporation security policy. Contact helpdesk@cirque.com if you believe this is an error."</span> `
+    -RejectMessageEnhancedStatusCode <span class="ps-str">"5.7.1"</span> `
+    -Mode Enforce `
+    -Comments <span class="ps-str">"Created by SOC {{ now.strftime('%Y-%m-%d') }} — {{ total_in_period }} quarantined messages in {{ days }}d period"</span>
+
+<span class="ps-comment"># Review existing transport rules (look for conflicts)</span>
+<span class="ps-kw">Get-TransportRule</span> | <span class="ps-kw">Where-Object</span> { $_.Name -like <span class="ps-str">"*SECURITY*"</span> } | `
+    <span class="ps-kw">Select-Object</span> Name, Priority, Enabled, Mode | <span class="ps-kw">Sort-Object</span> Priority
+
+<span class="ps-comment"># To disable a rule (test before deleting):</span>
+<span class="ps-comment"># Disable-TransportRule -Identity "SECURITY: Block Known Phish/Malware Senders — SOC {{ now.strftime('%Y%m%d') }}"</span>
+
+<span class="ps-comment"># To permanently remove:</span>
+<span class="ps-comment"># Remove-TransportRule -Identity "SECURITY: Block Known Phish/Malware Senders — SOC {{ now.strftime('%Y%m%d') }}"</span></pre>
+      </div>
+
+      <!-- ── Tab 3: Anti-Spam Tuning ─────────────────────────────── -->
+      <div class="tab-pane fade" id="ps-antispam">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">Tighten bulk/spam quarantine thresholds and optionally block top spam domains.</span>
+          <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-antispam-code')">
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+        </div>
+        <pre id="ps-antispam-code" class="ps-panel"><span class="ps-comment"># ─────────────────────────────────────────────────────────────
+# QUARANTINE REPORT — Anti-Spam Policy Tuning
+# Generated: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC  |  Period: Last {{ days }} days
+# Top spam/bulk domains: {{ spam_bulk_domains | join(', ') or 'none in this period' }}
+# ─────────────────────────────────────────────────────────────</span>
+
+<span class="ps-kw">Connect-ExchangeOnline</span> -UserPrincipalName admin@cirque.com
+
+<span class="ps-comment"># View current anti-spam policy settings</span>
+<span class="ps-kw">Get-HostedContentFilterPolicy</span> -Identity Default | `
+    <span class="ps-kw">Select-Object</span> BulkThreshold, BulkSpamAction, SpamAction, `
+                  HighConfidenceSpamAction, PhishSpamAction, HighConfidencePhishAction
+
+<span class="ps-comment"># Recommended: tighten BulkThreshold to 5 (default 7) and force quarantine</span>
+<span class="ps-kw">Set-HostedContentFilterPolicy</span> -Identity Default `
+    -BulkThreshold 5 `
+    -BulkSpamAction Quarantine `
+    -BulkQuarantineTag DefaultFullAccessPolicy `
+    -SpamAction Quarantine `
+    -HighConfidenceSpamAction Quarantine `
+    -PhishSpamAction Quarantine `
+    -HighConfidencePhishAction Quarantine
+
+{% if spam_bulk_domains %}
+<span class="ps-comment"># Add top spam/bulk domains to TABL (safer than transport rules for bulk)</span>
+<span class="ps-kw">New-TenantAllowBlockListItems</span> `
+    -ListType Sender `
+    -Block `
+    -Entries @(
+{% for d in spam_bulk_domains %}        <span class="ps-str">"{{ d }}"</span>{{ "," if not loop.last }}
+{% endfor %}    ) `
+    -ExpirationDate (Get-Date).AddDays(90) `
+    -Notes <span class="ps-str">"Bulk/Spam campaign — {{ now.strftime('%Y-%m-%d') }} 90-day block"</span>
+{% endif %}
+
+<span class="ps-comment"># Review current content filter rules</span>
+<span class="ps-kw">Get-HostedContentFilterRule</span> | <span class="ps-kw">Select-Object</span> Name, Priority, Enabled</pre>
+      </div>
+
+      <!-- ── Tab 4: Bulk Review ──────────────────────────────────── -->
+      <div class="tab-pane fade" id="ps-review">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">PowerShell quarantine review and bulk release/delete commands for Exchange Online administrators.</span>
+          <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-review-code')">
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+        </div>
+        <pre id="ps-review-code" class="ps-panel"><span class="ps-comment"># ─────────────────────────────────────────────────────────────
+# QUARANTINE REPORT — Review &amp; Manage Quarantined Messages
+# Generated: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC  |  Period: Last {{ days }} days
+# ─────────────────────────────────────────────────────────────</span>
+
+<span class="ps-kw">Connect-ExchangeOnline</span> -UserPrincipalName admin@cirque.com
+
+<span class="ps-comment"># List all quarantined messages from the last {{ days }} days</span>
+<span class="ps-kw">Get-QuarantineMessage</span> `
+    -StartReceivedDate (Get-Date).AddDays(-{{ days }}) `
+    -PageSize 200 | `
+    <span class="ps-kw">Select-Object</span> Identity, Subject, SenderAddress, RecipientAddress, ReceivedTime, Type, Expires | `
+    <span class="ps-kw">Sort-Object</span> ReceivedTime -Descending
+
+<span class="ps-comment"># Count by type</span>
+<span class="ps-kw">Get-QuarantineMessage</span> -StartReceivedDate (Get-Date).AddDays(-{{ days }}) -PageSize 1000 | `
+    <span class="ps-kw">Group-Object</span> Type | <span class="ps-kw">Select-Object</span> Name, Count | <span class="ps-kw">Sort-Object</span> Count -Descending
+
+<span class="ps-comment"># Export full quarantine report to CSV</span>
+<span class="ps-kw">Get-QuarantineMessage</span> -StartReceivedDate (Get-Date).AddDays(-{{ days }}) -PageSize 1000 | `
+    <span class="ps-kw">Export-Csv</span> -Path <span class="ps-str">"C:\Temp\QuarantineReport_{{ now.strftime('%Y%m%d') }}.csv"</span> -NoTypeInformation
+Write-Host <span class="ps-str">"Exported to C:\Temp\QuarantineReport_{{ now.strftime('%Y%m%d') }}.csv"</span>
+
+<span class="ps-comment"># Review high-confidence phish only</span>
+<span class="ps-kw">Get-QuarantineMessage</span> -Type HighConfPhish -StartReceivedDate (Get-Date).AddDays(-{{ days }}) | `
+    <span class="ps-kw">Select-Object</span> Identity, Subject, SenderAddress, RecipientAddress, ReceivedTime
+
+{% if all_top_domains %}
+<span class="ps-comment"># Review messages from top attacker domains</span>
+<span class="ps-kw">Get-QuarantineMessage</span> -StartReceivedDate (Get-Date).AddDays(-{{ days }}) -PageSize 1000 | `
+    <span class="ps-kw">Where-Object</span> { $_.SenderAddress -match <span class="ps-str">"({{ all_top_domains | join('|') | replace('.', '\\.') }})"</span> } | `
+    <span class="ps-kw">Select-Object</span> Identity, Subject, SenderAddress, RecipientAddress, ReceivedTime, Type
+{% endif %}
+
+<span class="ps-comment"># Release a specific message by Identity (run Get-QuarantineMessage first to get Identity)</span>
+<span class="ps-comment"># Release-QuarantineMessage -Identity "&lt;paste-identity-here&gt;" -ReleaseToAll</span>
+
+<span class="ps-comment"># Delete all high-confidence phish from known malicious domains (CAUTION: irreversible)</span>
+<span class="ps-comment"># Get-QuarantineMessage -Type HighConfPhish -PageSize 1000 |</span>
+<span class="ps-comment">#     Where-Object { $_.SenderAddress -like "*@phishdomain.com" } |</span>
+<span class="ps-comment">#     ForEach-Object { Delete-QuarantineMessage -Identity $_.Identity -Force }</span></pre>
+      </div>
+
+      <!-- ── Tab 5: Anti-Phish Policy ───────────────────────────── -->
+      <div class="tab-pane fade" id="ps-antiphish">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">Harden anti-phishing policy settings — impersonation protection, mailbox intelligence, and spoof protection.</span>
+          <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-antiphish-code')">
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+        </div>
+        <pre id="ps-antiphish-code" class="ps-panel"><span class="ps-comment"># ─────────────────────────────────────────────────────────────
+# QUARANTINE REPORT — Harden Anti-Phishing Policy
+# Generated: {{ now.strftime('%Y-%m-%d %H:%M') }} UTC  |  Period: Last {{ days }} days
+# This tenant had {{ (threat_dist | selectattr('0','equalto','Phish') | map(attribute='1') | first | default(0)) }} phishing messages quarantined in this period
+# ─────────────────────────────────────────────────────────────</span>
+
+<span class="ps-kw">Connect-ExchangeOnline</span> -UserPrincipalName admin@cirque.com
+
+<span class="ps-comment"># View current anti-phish policy</span>
+<span class="ps-kw">Get-AntiPhishPolicy</span> -Identity Default | `
+    <span class="ps-kw">Select-Object</span> EnableMailboxIntelligence, EnableMailboxIntelligenceProtection, `
+                  MailboxIntelligenceProtectionAction, EnableSpoofIntelligence, `
+                  EnableFirstContactSafetyTips, PhishThresholdLevel
+
+<span class="ps-comment"># Recommended hardening — quarantine instead of move-to-junk</span>
+<span class="ps-kw">Set-AntiPhishPolicy</span> -Identity Default `
+    -EnableMailboxIntelligence $true `
+    -EnableMailboxIntelligenceProtection $true `
+    -MailboxIntelligenceProtectionAction Quarantine `
+    -MailboxIntelligenceQuarantineTag DefaultFullAccessPolicy `
+    -EnableSpoofIntelligence $true `
+    -AuthenticationFailAction Quarantine `
+    -SpoofQuarantineTag DefaultFullAccessPolicy `
+    -EnableFirstContactSafetyTips $true `
+    -PhishThresholdLevel 2
+
+<span class="ps-comment"># Enable impersonation protection for specific high-value users (add as needed)</span>
+<span class="ps-comment"># $vips = @("ceo@cirque.com","cfo@cirque.com","it-admin@cirque.com")</span>
+<span class="ps-comment"># Set-AntiPhishPolicy -Identity Default -TargetedUsersToProtect $vips -EnableTargetedUserProtection $true -TargetedUserProtectionAction Quarantine</span>
+
+<span class="ps-comment"># Protect your own domain from spoofing (impersonation)</span>
+<span class="ps-comment"># Set-AntiPhishPolicy -Identity Default -EnableTargetedDomainsProtection $true -TargetedDomainsToProtect @("cirque.com") -TargetedDomainProtectionAction Quarantine</span>
+
+<span class="ps-comment"># Review DMARC override configuration (never override pass/fail)</span>
+<span class="ps-kw">Get-AntiPhishPolicy</span> | <span class="ps-kw">Select-Object</span> Name, HonorDmarcPolicy, DmarcRejectAction, DmarcQuarantineAction</pre>
+      </div>
+
+    </div><!-- /tab-content -->
+  </div><!-- /ps-panel card -->
+
+</div><!-- /container -->
+
+<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+<script>
+/* ── Chart.js defaults ──────────────────────────────────────────── */
+Chart.defaults.color = '#8892a0';
+Chart.defaults.borderColor = 'rgba(255,255,255,.06)';
+
+/* ── Daily stacked bar ──────────────────────────────────────────── */
+const chartData = {{ chart_json | safe }};
+new Chart(document.getElementById('dailyChart'), {
+  type: 'bar',
+  data: chartData,
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 12 } }, tooltip: { mode: 'index', intersect: false } },
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 14, maxRotation: 45 } },
+      y: { stacked: true, beginAtZero: true, ticks: { stepSize: 1 } },
+    },
+  },
+});
+
+/* ── Threat donut ───────────────────────────────────────────────── */
+const threatLabels = [{% for row in threat_dist %}"{{ row[0] or 'Unknown' }}"{{ "," if not loop.last }}{% endfor %}];
+const threatData   = [{% for row in threat_dist %}{{ row[1] }}{{ "," if not loop.last }}{% endfor %}];
+const threatColors = { Phish:'rgba(220,53,69,.8)', Malware:'rgba(111,66,193,.8)', Spam:'rgba(255,193,7,.8)', Bulk:'rgba(13,202,240,.8)', Unknown:'rgba(108,117,125,.8)' };
+new Chart(document.getElementById('threatDonut'), {
+  type: 'doughnut',
+  data: {
+    labels: threatLabels,
+    datasets: [{ data: threatData, backgroundColor: threatLabels.map(l => threatColors[l] || 'rgba(108,117,125,.8)'), borderWidth: 0 }],
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, cutout: '68%',
+    plugins: { legend: { display: false } },
+  },
+});
+
+/* ── Copy PowerShell ────────────────────────────────────────────── */
+function copyPS(id) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target.closest('button');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied!';
+    btn.classList.add('btn-success'); btn.classList.remove('btn-outline-secondary');
+    setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('btn-success'); btn.classList.add('btn-outline-secondary'); }, 2000);
+  });
+}
+
+/* ── Phishing Block Script Modal ────────────────────────────────── */
+let _phishScript = '';
+
+function openPhishBlock(days) {
+  const modal = new bootstrap.Modal(document.getElementById('phishBlockModal'));
+  modal.show();
+  document.getElementById('phish-loading').style.display = '';
+  document.getElementById('phish-error').style.display   = 'none';
+  document.getElementById('phish-script-wrap').style.display = 'none';
+  document.getElementById('ph-copy-btn').style.display     = 'none';
+  document.getElementById('ph-download-btn').style.display = 'none';
+  document.getElementById('phish-modal-subtitle').textContent = 'Loading…';
+  _phishScript = '';
+
+  fetch(`{{ url_for('quarantine.quarantine_ps_block_phish') }}?days=${days}`)
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('phish-loading').style.display = 'none';
+      if (data.error) {
+        document.getElementById('phish-error-msg').textContent = data.error;
+        document.getElementById('phish-error').style.display = '';
+        document.getElementById('phish-modal-subtitle').textContent = 'No phishing data found';
+        return;
+      }
+      _phishScript = data.script;
+      document.getElementById('phish-modal-subtitle').textContent =
+        `${data.phish_total} phishing messages · ${data.domain_count} domains · last ${data.days} days`;
+      document.getElementById('ph-msg-count').textContent  = data.phish_total;
+      document.getElementById('ph-dom-count').textContent  = data.domain_count;
+      document.getElementById('ph-addr-count').textContent = data.addr_count;
+      document.getElementById('ph-period').textContent     = `Last ${data.days} days`;
+      document.getElementById('ph-generated').textContent  = data.generated_at + ' UTC';
+      document.getElementById('phish-script-code').textContent = data.script;
+      document.getElementById('phish-script-wrap').style.display = '';
+      document.getElementById('ph-copy-btn').style.display     = '';
+      document.getElementById('ph-download-btn').style.display = '';
+    })
+    .catch(err => {
+      document.getElementById('phish-loading').style.display = 'none';
+      document.getElementById('phish-error-msg').textContent = 'Failed to load: ' + err;
+      document.getElementById('phish-error').style.display = '';
+    });
+}
+
+function copyPhishScript() {
+  if (!_phishScript) return;
+  navigator.clipboard.writeText(_phishScript).then(() => {
+    const btn = document.getElementById('ph-copy-btn');
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied!';
+    btn.classList.add('btn-success'); btn.classList.remove('btn-outline-secondary');
+    setTimeout(() => {
+      btn.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy Script';
+      btn.classList.remove('btn-success'); btn.classList.add('btn-outline-secondary');
+    }, 2000);
+  });
+}
+
+function downloadPhishScript() {
+  if (!_phishScript) return;
+  const date = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const blob = new Blob([_phishScript], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `Block_CredPhish_${date}.ps1`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+
+<!-- Phish Block Modal -->
+<div class="modal fade" id="phishBlockModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #dc3545;">
+      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;">
+        <div>
+          <h5 class="modal-title fw-bold"><i class="bi bi-shield-fill-x text-danger me-2"></i>Credential Phishing — Block Script</h5>
+          <div class="text-muted" style="font-size:.75rem;" id="phish-modal-subtitle">Loading…</div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" style="padding:0;">
+        <div id="phish-loading" class="text-center py-5">
+          <div class="spinner-border text-danger mb-3"></div>
+          <div class="text-muted">Querying phishing data…</div>
+        </div>
+        <div id="phish-error" class="p-4" style="display:none;">
+          <div class="alert alert-warning mb-0">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <span id="phish-error-msg">No data available.</span>
+            <div class="text-muted small mt-1">Run Sync Exchange first to populate phishing data.</div>
+          </div>
+        </div>
+        <div id="phish-script-wrap" style="display:none;">
+          <div class="d-flex flex-wrap gap-4 px-4 pt-3 pb-2" style="border-bottom:1px solid #1a2030;font-size:.8rem;">
+            <div><span class="text-muted">Phish messages: </span><span class="fw-bold text-danger" id="ph-msg-count">—</span></div>
+            <div><span class="text-muted">Sender domains: </span><span class="fw-bold text-warning" id="ph-dom-count">—</span></div>
+            <div><span class="text-muted">Sender addresses: </span><span class="fw-bold text-warning" id="ph-addr-count">—</span></div>
+            <div><span class="text-muted">Period: </span><span class="fw-bold" id="ph-period">—</span></div>
+            <div><span class="text-muted">Generated: </span><span class="fw-bold" id="ph-generated">—</span></div>
+          </div>
+          <div class="mx-4 mt-3 mb-2 p-2 rounded" style="background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.3);font-size:.78rem;">
+            <i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>
+            <strong>Review before running.</strong> Verify domains are genuine phishing sources. Rollback commands included at bottom. Run in Exchange Online PowerShell (EXO V3).
+          </div>
+          <pre id="phish-script-code"
+               style="font-family:'Consolas','Courier New',monospace;font-size:.78rem;
+                      background:#0d0f17;color:#c3e88d;line-height:1.65;
+                      margin:0 1rem 1rem 1rem;padding:1rem 1.2rem;
+                      border:1px solid #2a2f3a;border-radius:8px;
+                      white-space:pre-wrap;word-break:break-all;
+                      max-height:480px;overflow-y:auto;"></pre>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid #2a2f3a;gap:.5rem;">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-sm btn-outline-secondary" id="ph-copy-btn" onclick="copyPhishScript()" style="display:none;">
+          <i class="bi bi-clipboard me-1"></i>Copy Script
+        </button>
+        <button class="btn btn-sm btn-warning" id="ph-download-btn" onclick="downloadPhishScript()" style="display:none;">
+          <i class="bi bi-download me-1"></i>Download .ps1
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

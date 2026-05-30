@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Version History - {{ document.title }}{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('isms.document_detail', document_id=document.id) }}" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Back to Document
+    </a>
+    <a href="{{ url_for('isms.edit_document', document_id=document.id) }}" class="btn btn-primary btn-sm">
+        <i class="bi bi-pencil-square"></i> Edit
+    </a>
+</div>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-3">
+    <div>
+        <h1 class="mb-1">Version History</h1>
+        <div class="text-muted">{{ document.title }}</div>
+    </div>
+    <div class="badge bg-dark">Current: v{{ current_version.version_number }}</div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Versions</strong>
+        <span class="badge bg-secondary">{{ versions|length }}</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Version</th>
+                        <th>Created</th>
+                        <th>By</th>
+                        <th>Summary</th>
+                        <th>Type</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for version in versions %}
+                    <tr>
+                        <td>
+                            <span class="fw-semibold">v{{ version.version_number }}</span>
+                            {% if version.id == current_version.id %}
+                            <span class="badge bg-success ms-1">current</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ version.created_at.strftime('%Y-%m-%d %H:%M') if version.created_at else '—' }}</td>
+                        <td>{{ version.created_by or 'system' }}</td>
+                        <td>
+                            {{ version.change_summary or 'No summary provided' }}
+                            {% if version.is_restore and version.restored_from_version %}
+                            <div class="text-muted small">Restore source: v{{ version.restored_from_version.version_number }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if version.is_restore %}
+                            <span class="badge bg-warning text-dark">restore</span>
+                            {% else %}
+                            <span class="badge bg-secondary">edit</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if version.id != current_version.id %}
+                            <a href="{{ url_for('isms.document_diff', document_id=document.id, version_id=version.id) }}" class="btn btn-sm btn-outline-secondary">
+                                Compare
+                            </a>
+                            <form method="POST" action="{{ url_for('isms.restore_document_version', document_id=document.id, version_id=version.id) }}" class="d-inline" onsubmit="return confirm('Restore version v{{ version.version_number }} as the new current version?');">
+                                <button type="submit" class="btn btn-sm btn-outline-warning">
+                                    Restore
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

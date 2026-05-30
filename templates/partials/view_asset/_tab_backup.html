@@ -1,0 +1,177 @@
+<!-- ══ BACKUP TAB ══════════════════════════════════════════════ -->
+{% if rmm_agent_id %}
+<div class="tab-pane fade" id="tab-backup" role="tabpanel">
+    <div class="card section-card">
+        <div class="card-body p-3" style="font-size:.85rem;">
+
+            <!-- Header row -->
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong style="font-size:.82rem;"><i class="bi bi-hdd-network me-1"></i>Windows Backup</strong>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary py-0 me-1" id="backup-trigger-btn"
+                            onclick="backupTrigger('incremental')" title="Run incremental backup now">
+                        <i class="bi bi-play-fill me-1"></i>Run Incremental
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning py-0" id="backup-full-btn"
+                            onclick="backupTrigger('full')" title="Run full backup now">
+                        <i class="bi bi-play-fill me-1"></i>Full Backup
+                    </button>
+                </div>
+            </div>
+
+            <!-- Policy / assignment summary -->
+            <div id="backup-policy-info" class="mb-3 p-2 border rounded bg-dark bg-opacity-25">
+                <span class="text-muted">Loading policy…</span>
+            </div>
+
+            <!-- Last run summary -->
+            <div id="backup-last-run" class="mb-2"></div>
+
+            <!-- Job history table -->
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <strong style="font-size:.82rem;"><i class="bi bi-clock-history me-1"></i>Job History</strong>
+                <button class="btn btn-sm btn-link py-0 text-muted" onclick="backupLoadJobs()">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div id="backup-jobs-content" style="max-height:280px;overflow-y:auto;">
+                <span class="text-muted">Loading…</span>
+            </div>
+
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    const agentId = {{ rmm_agent_id | tojson }};
+    let _loaded = false;
+
+    // Load when tab is shown
+    document.addEventListener('shown.bs.tab', e => {
+        if (e.target.getAttribute('data-bs-target') === '#tab-backup' && !_loaded) {
+            _loaded = true;
+            backupLoadJobs();
+        }
+    });
+
+    window.backupLoadJobs = async function () {
+        const content = document.getElementById('backup-jobs-content');
+        const policyEl = document.getElementById('backup-policy-info');
+        const lastEl = document.getElementById('backup-last-run');
+        try {
+            const r = await fetch(`/api/rmm/backup-jobs/${agentId}`);
+            const d = await r.json();
+            if (!d.ok) { content.innerHTML = `<span class="text-danger">${d.error}</span>`; return; }
+
+            // Policy info
+            const a = d.assignment;
+            if (a && a.policy_id) {
+                policyEl.innerHTML = `
+                    <div class="d-flex flex-wrap gap-3">
+                        <span><i class="bi bi-shield-check text-success me-1"></i><strong>${a.policy_name || '—'}</strong></span>
+                        <span class="text-muted"><i class="bi bi-hdd me-1"></i>${a.nas_unc_path || '—'}</span>
+                        <span class="text-muted"><i class="bi bi-arrow-repeat me-1"></i>Full every ${a.full_backup_interval_days}d</span>
+                        <span class="text-muted"><i class="bi bi-calendar-check me-1"></i>Keep ${a.retention_days}d</span>
+                        ${a.enabled === false ? '<span class="badge bg-warning text-dark">Disabled</span>' : ''}
+                    </div>`;
+            } else {
+                policyEl.innerHTML = '<span class="text-muted"><i class="bi bi-dash-circle me-1"></i>No backup policy assigned — go to <a href="/settings/backup">Settings → Backup</a>.</span>';
+            }
+
+            // Last run
+            if (d.jobs && d.jobs.length) {
+                const j = d.jobs[0];
+                const badge = _statusBadge(j.status);
+                const ts = j.started_at ? new Date(j.started_at).toLocaleString() : '—';
+                lastEl.innerHTML = `<small class="text-muted">Last run: ${ts} — ${badge}
+                    — ${j.files_copied} files, ${j.bytes_human}
+                    — ${j.job_type}</small>`;
+            } else {
+                lastEl.innerHTML = '<small class="text-muted">No backup jobs recorded yet.</small>';
+            }
+
+            // History table
+            if (!d.jobs || !d.jobs.length) {
+                content.innerHTML = '<p class="text-muted text-center py-2">No jobs yet.</p>';
+                return;
+            }
+            let rows = d.jobs.map(j => {
+                const ts = j.started_at ? new Date(j.started_at).toLocaleString() : '—';
+                const dur = j.duration_s != null ? _fmtDur(j.duration_s) : '—';
+                const err = j.files_failed ? `<span class="text-danger ms-1">(${j.files_failed} failed)</span>` : '';
+                return `<tr>
+                    <td>${ts}</td>
+                    <td><span class="badge ${j.job_type === 'full' ? 'bg-primary' : 'bg-secondary'}">${j.job_type}</span></td>
+                    <td>${_statusBadge(j.status)}</td>
+                    <td>${j.files_copied}</td>
+                    <td>${j.bytes_human}${err}</td>
+                    <td>${dur}</td>
+                    <td class="text-muted" style="font-size:.77rem;">${j.triggered_by}</td>
+                </tr>`;
+            }).join('');
+            content.innerHTML = `<table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
+                <thead class="table-secondary"><tr>
+                    <th>Started</th><th>Type</th><th>Status</th>
+                    <th>Files</th><th>Size</th><th>Duration</th><th>Trigger</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        } catch (e) {
+            content.innerHTML = `<span class="text-danger">Error: ${e}</span>`;
+        }
+    };
+
+    window.backupTrigger = async function (type) {
+        const btn = type === 'full'
+            ? document.getElementById('backup-full-btn')
+            : document.getElementById('backup-trigger-btn');
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Queuing…`;
+        try {
+            const r = await fetch(`/api/rmm/backup-trigger/${agentId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({job_type: type})
+            });
+            const d = await r.json();
+            if (d.ok) {
+                btn.className = 'btn btn-sm btn-success py-0 me-1';
+                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Queued';
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = type === 'full'
+                        ? 'btn btn-sm btn-outline-warning py-0'
+                        : 'btn btn-sm btn-outline-primary py-0 me-1';
+                    btn.innerHTML = type === 'full'
+                        ? '<i class="bi bi-play-fill me-1"></i>Full Backup'
+                        : '<i class="bi bi-play-fill me-1"></i>Run Incremental';
+                }, 3000);
+            } else {
+                alert('Error: ' + d.error);
+                btn.disabled = false;
+            }
+        } catch (e) {
+            alert('Request failed: ' + e);
+            btn.disabled = false;
+        }
+    };
+
+    function _statusBadge(status) {
+        const map = {
+            success: 'bg-success',
+            partial: 'bg-warning text-dark',
+            failed: 'bg-danger',
+            running: 'bg-info text-dark',
+        };
+        const cls = map[status] || 'bg-secondary';
+        return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    function _fmtDur(s) {
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m/60)}h ${m%60}m`;
+    }
+})();
+</script>
+{% endif %}

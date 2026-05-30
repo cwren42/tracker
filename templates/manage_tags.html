@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Manage Ticket Tags{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-1">
+        <li class="breadcrumb-item"><a href="{{ url_for('tickets.tickets') }}">Tickets</a></li>
+        <li class="breadcrumb-item active">Manage Tags</li>
+      </ol>
+    </nav>
+    <h1 class="mb-0 h3"><i class="bi bi-tags me-2"></i>Manage Ticket Tags</h1>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="bi bi-plus-circle me-2"></i>Create New Tag</div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="action" value="create">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Tag Name</label>
+            <input type="text" name="name" class="form-control" maxlength="50" placeholder="e.g. VPN, Hardware, Password Reset" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Color</label>
+            <div class="d-flex align-items-center gap-3">
+              <input type="color" name="color" class="form-control form-control-color" value="#6c757d">
+              <div class="d-flex gap-2 flex-wrap">
+                {% for c in ['#6c757d','#0d6efd','#198754','#dc3545','#fd7e14','#6f42c1','#20c997','#0dcaf0'] %}
+                <button type="button" class="btn btn-sm rounded-circle p-0"
+                        style="width:24px;height:24px;background:{{ c }};border:2px solid #fff;box-shadow:0 0 0 1px {{ c }};"
+                        onclick="document.querySelector('[name=color]').value='{{ c }}'"></button>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-plus-circle me-1"></i>Create Tag</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="bi bi-list-ul me-2"></i>Existing Tags ({{ tags | length }})</div>
+      <div class="card-body p-0">
+        {% if tags %}
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3">Tag</th>
+              <th class="text-center">Tickets</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tag in tags %}
+            <tr>
+              <td class="ps-3">
+                <span class="badge" style="background:{{ tag.color }};font-size:.85rem;">{{ tag.name }}</span>
+              </td>
+              <td class="text-center text-muted small">{{ tag.tickets | length }}</td>
+              <td class="text-end pe-3">
+                <form method="POST" onsubmit="return confirm('Delete tag \'{{ tag.name }}\'? It will be removed from all tickets.')">
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                  <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-muted text-center py-5">
+          <i class="bi bi-tags fs-1 d-block mb-2 opacity-25"></i>
+          No tags yet. Create one to get started.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

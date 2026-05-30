@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}{{ audit.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <a href="{{ url_for('internal_audit.internal_audit_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to internal audits</a>
+        <h2 class="mt-2 mb-1">{{ audit.title }}</h2>
+        <div class="text-muted">{{ audit.audit_key }}{% if audit.owner %} · {{ audit.owner }}{% endif %}</div>
+    </div>
+    <span class="badge bg-secondary">{{ audit.status }}</span>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Audit Details</h5></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Scope</dt><dd class="col-sm-8">{{ audit.scope or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Audit Window</dt><dd class="col-sm-8">{{ audit.audit_period_start.strftime('%Y-%m-%d') if audit.audit_period_start else 'Not set' }} to {{ audit.audit_period_end.strftime('%Y-%m-%d') if audit.audit_period_end else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Planned Date</dt><dd class="col-sm-8">{{ audit.planned_date.strftime('%Y-%m-%d') if audit.planned_date else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Performed Date</dt><dd class="col-sm-8">{{ audit.performed_date.strftime('%Y-%m-%d') if audit.performed_date else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Evidence Reference</dt><dd class="col-sm-8">{{ audit.evidence_reference or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Summary</dt><dd class="col-sm-8">{{ audit.summary or 'Not set' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Finding</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('internal_audit.create_internal_audit_finding', audit_id=audit.id) }}" class="row g-3">
+                    <div class="col-12"><label class="form-label" for="title">Title</label><input class="form-control" id="title" name="title" required></div>
+                    <div class="col-md-6"><label class="form-label" for="severity">Severity</label><select class="form-select" id="severity" name="severity">{% for option in finding_severity_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in finding_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-12"><label class="form-label" for="readiness_item_id">Linked Readiness Item</label><select class="form-select" id="readiness_item_id" name="readiness_item_id"><option value="">None</option>{% for item in readiness_items %}<option value="{{ item.id }}">{{ item.title }}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="criteria_reference">Criteria Reference</label><input class="form-control" id="criteria_reference" name="criteria_reference" placeholder="CC4.1, CC4.2, A.5.36"></div>
+                    <div class="col-md-6"><label class="form-label" for="owner">Owner</label><input class="form-control" id="owner" name="owner"></div>
+                    <div class="col-md-6"><label class="form-label" for="due_date">Due Date</label><input class="form-control" type="date" id="due_date" name="due_date"></div>
+                    <div class="col-md-6"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference"></div>
+                    <div class="col-12"><label class="form-label" for="description">Description</label><textarea class="form-control" id="description" name="description" rows="4"></textarea></div>
+                    <div class="col-12"><label class="form-label" for="recommendation">Recommendation</label><textarea class="form-control" id="recommendation" name="recommendation" rows="3"></textarea></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Add Finding</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Findings</h5></div>
+            <div class="list-group list-group-flush">
+                {% for finding in audit.findings %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">{{ finding.title }}</div>
+                            <div class="small text-muted">{{ finding.finding_key }}{% if finding.criteria_reference %} · {{ finding.criteria_reference }}{% endif %}</div>
+                        </div>
+                        <div class="text-end">
+                            <div><span class="badge bg-warning text-dark">{{ finding.severity }}</span></div>
+                            <div class="small text-muted mt-1">{{ finding.status }}</div>
+                        </div>
+                    </div>
+                    <div class="mt-2">{{ finding.description or 'No description recorded.' }}</div>
+                    {% if finding.recommendation %}<div class="small mt-2"><strong>Recommendation:</strong> {{ finding.recommendation }}</div>{% endif %}
+                    <div class="small text-muted mt-2">Owner: {{ finding.owner or 'Unassigned' }}{% if finding.due_date %} · Due {{ finding.due_date.strftime('%Y-%m-%d') }}{% endif %}</div>
+                    {% if finding.readiness_item %}<div class="small mt-2">Linked readiness item: <a href="{{ url_for('readiness.readiness_item_detail', item_id=finding.readiness_item.id) }}">{{ finding.readiness_item.title }}</a></div>{% endif %}
+                    {% if finding.evidence_reference %}<div class="small mt-1 text-muted">Evidence: {{ finding.evidence_reference }}</div>{% endif %}
+                </div>
+                {% else %}
+                <div class="list-group-item py-4 text-muted">No findings recorded yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

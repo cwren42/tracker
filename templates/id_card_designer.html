@@ -1,0 +1,713 @@
+{% extends "base.html" %}
+
+{% block title %}ID Card Designer - Asset Tracker{% endblock %}
+
+{% block styles %}
+<style>
+/* ── Card Designer Layout ── */
+#id-card-page { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+
+/* Controls panel */
+#card-controls-sticky {
+    flex: 0 0 280px;
+    position: sticky;
+    top: 80px;
+    align-self: flex-start;
+}
+#card-controls {
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    padding: 1.25rem;
+}
+#card-controls h5 { margin-bottom: 1rem; font-weight: 700; color: #1e293b; }
+#card-controls label { font-size: .8125rem; font-weight: 600; color: #475569; margin-bottom: .25rem; display: block; }
+#card-controls input[type=text],
+#card-controls input[type=color],
+#card-controls select { width: 100%; margin-bottom: .75rem; }
+#card-controls input[type=range] { width: 100%; margin-bottom: .5rem; }
+#card-controls .ctrl-section { border-top: 1px solid #e2e8f0; padding-top: .75rem; margin-top: .75rem; }
+#emp-list { max-height: 260px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; padding: .5rem; margin-bottom: .75rem; }
+#emp-list label { font-weight: 400; color: #334155; display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; font-size: .8125rem; }
+#emp-list label:hover { color: #4f46e5; }
+
+/* Print zone */
+#print-zone {
+    flex: 1 1 500px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-content: flex-start;
+}
+#empty-msg { color: #94a3b8; font-style: italic; padding: 2rem; }
+
+/* ID Card base */
+.id-card {
+    position: relative;
+    box-sizing: border-box;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,.1);
+    margin: 4px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    flex-shrink: 0;
+}
+.id-card.vertical   { width: 54mm; height: 86mm; }
+.id-card.horizontal { width: 86mm; height: 54mm; }
+
+/* Card inner layers */
+.card-grid-bg {
+    position: absolute; inset: 0; z-index: 0;
+    background-image:
+        linear-gradient(#f1f5f9 1px, transparent 1px),
+        linear-gradient(90deg, #f1f5f9 1px, transparent 1px);
+    background-size: 3mm 3mm;
+}
+.card-logo-watermark {
+    position: absolute; z-index: 1;
+    pointer-events: none;
+}
+.card-logo-watermark img { object-fit: contain; opacity: .95; display: block; }
+
+/* Vertical – normal */
+.card-photo-box {
+    position: absolute; top: 8mm; right: 9.5mm;
+    width: 23.4mm; height: 29.3mm; z-index: 2;
+    background: #fff;
+    overflow: hidden;
+}
+.card-photo-box img { width: 100%; height: 100%; object-fit: cover; }
+.card-photo-placeholder { width: 100%; height: 100%; background: #e2e8f0; }
+
+.card-text-block {
+    position: absolute; bottom: 12mm; left: 6.5mm; right: 4mm;
+    z-index: 2; display: flex;
+}
+.card-red-line {
+    width: 2px; background: #9b1b26;
+    margin-right: 2mm; flex-shrink: 0;
+    margin-top: 1mm; margin-bottom: 0;
+}
+.card-text-content { flex: 1; padding-top: 1mm; }
+.card-name  { font-size: 19px; line-height: 1.1; font-weight: 700; font-family: 'Titillium Web', sans-serif; letter-spacing: -.5px; margin: 0; }
+.card-title { font-size: 12px; margin: 1.5mm 0 0; font-weight: 400; font-family: 'Titillium Web', sans-serif; line-height: 1.2; }
+.card-company-text { font-size: 12px; margin: 0; font-weight: 400; font-family: 'Titillium Web', sans-serif; line-height: 1.2; }
+.card-email { font-size: 10px; margin: 0; font-weight: 400; font-family: 'Titillium Web', sans-serif; line-height: 1.2; color: #444; }
+
+.card-number-badge {
+    position: absolute; bottom: 4mm; left: 6.5mm;
+    z-index: 2; font-size: 9px; font-family: monospace;
+    color: #94a3b8; letter-spacing: .5px;
+}
+
+/* Vertical – guest */
+.card-guest-content {
+    position: absolute; inset: 10mm; z-index: 2;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center; text-align: center;
+}
+.card-guest-content img { max-width: 40mm; max-height: 35mm; object-fit: contain; margin-bottom: 8mm; }
+.card-guest-label { font-size: 38px; line-height: 1.1; font-weight: 800; color: #000; font-family: 'Titillium Web', sans-serif; letter-spacing: -.5px; text-transform: uppercase; margin: 0; }
+.card-guest-company {
+    position: absolute; bottom: 10mm; left: 0; right: 0;
+    text-align: center; z-index: 2;
+    font-size: 15px; font-weight: 600; font-family: 'Titillium Web', sans-serif;
+    letter-spacing: .5px; text-transform: uppercase; margin: 0;
+    color: #111;
+}
+
+/* Horizontal – normal */
+.card-horiz-content {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; align-items: center; padding: 4mm;
+}
+.card-horiz-photo { width: 30mm; height: 38mm; object-fit: cover; flex-shrink: 0; background: #e2e8f0; }
+.card-horiz-photo img { width: 100%; height: 100%; object-fit: cover; }
+.card-horiz-text { padding-left: 6mm; flex: 1; }
+.card-horiz-name  { font-size: 20px; font-weight: 800; margin: 0; }
+.card-horiz-title { font-size: 14px; margin: 1mm 0; }
+.card-horiz-company { font-size: 14px; margin: 1mm 0; }
+.card-horiz-email { font-size: 12px; margin: 1mm 0; color: #444; }
+
+/* ── Print Media ── */
+@media print {
+    @page { margin: 0; }
+    body { background: white !important; margin: 0; }
+    .no-print { display: none !important; }
+    #print-zone { display: block !important; padding: 0; }
+    .id-card {
+        margin: 0 !important;
+        border: none !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        position: relative !important;
+        overflow: hidden !important;
+        page-break-after: always;
+        break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        display: block !important;
+    }
+    .id-card.vertical   { width: 54mm !important; height: 86mm !important; }
+    .id-card.horizontal { width: 86mm !important; height: 54mm !important; }
+    .id-card:last-of-type { page-break-after: auto; break-after: auto; }
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&display=swap" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+{% set company_name = "Cirque Corporation" %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 no-print flex-wrap gap-2">
+    <h1 class="mb-0">
+        <i class="bi bi-credit-card-2-front"></i>
+        {% if single %}{{ employees[0].name }} — ID Card{% else %}ID Card Designer{% endif %}
+    </h1>
+    <div class="d-flex gap-2">
+        {% if single %}
+        <button class="btn btn-primary btn-sm" onclick="printCards()">
+            <i class="bi bi-printer"></i> Print Card
+        </button>
+        {% endif %}
+        <a href="{% if single %}{{ url_for('employees.view_employee', employee_id=employees[0].id) }}{% else %}{{ url_for('employees.employees') }}{% endif %}" class="btn btn-secondary btn-sm no-print">
+            <i class="bi bi-arrow-left"></i> {% if single %}Back{% else %}Employees{% endif %}
+        </a>
+    </div>
+</div>
+
+<!-- Employee data for JS – photo paths resolved server-side -->
+<script>
+const EMPLOYEES = [
+    {% for emp in employees %}
+    {
+        id: {{ emp.id }},
+        name: {{ emp.name | tojson }},
+        position: {{ (emp.position or '') | tojson }},
+        department: {{ (emp.department or '') | tojson }},
+        email: {{ (emp.email or '') | tojson }},
+        cardNumber: {{ (emp.card_number or '') | tojson }},
+        location: {{ (emp.location or '') | tojson }},
+        isVisible: {{ (emp.is_visible != False) | tojson }},
+        photoUrl: {% if emp.photo %}{{ photo_url(emp.photo) | tojson }}{% else %}null{% endif %}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+];
+</script>
+
+<div id="id-card-page">
+
+    <!-- ══ Controls Panel ══ -->
+    {% if not single %}
+    <div id="card-controls-sticky" class="no-print">
+    <div id="card-controls">
+
+        <!-- Orientation -->
+        <h5><i class="bi bi-sliders"></i> Card Designer</h5>
+
+        <label>Orientation</label>
+        <select id="ctrl-orientation" onchange="applyConfig()">
+            <option value="vertical">Vertical (Portrait 54×86mm)</option>
+            <option value="horizontal">Horizontal (Landscape 86×54mm)</option>
+        </select>
+
+        <!-- Guest mode -->
+        <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="ctrl-guest" onchange="applyConfig()">
+            <label class="form-check-label fw-semibold" for="ctrl-guest" style="font-size:.8125rem">Guest Card Layout</label>
+        </div>
+        <p class="text-muted small mb-3" style="margin-top:-.25rem">Hides photo &amp; personal info. Shows logo + "GUEST".</p>
+
+        <!-- Background -->
+        <label>Background Color / Gradient</label>
+        <input type="text" id="ctrl-bgcolor" value="#ffffff" placeholder="#ffffff or linear-gradient(…)" onchange="applyConfig()" oninput="applyConfig()">
+
+        <!-- Text color -->
+        <label>Text Color</label>
+        <div class="d-flex gap-2 align-items-center mb-3">
+            <input type="color" id="ctrl-textcolor" value="#1a202c" onchange="applyConfig()" style="width:48px;height:36px;padding:2px;cursor:pointer">
+            <span class="text-muted small" id="ctrl-textcolor-val">#1a202c</span>
+        </div>
+
+        <!-- Company name -->
+        <label>Company Name</label>
+        <input type="text" id="ctrl-company" value="{{ company_name }}" onchange="applyConfig()" oninput="applyConfig()">
+
+        <!-- Logo watermark -->
+        <div class="ctrl-section">
+            <label>Background Logo / Watermark</label>
+            <input type="file" id="ctrl-logo" accept="image/*" onchange="handleLogoUpload(this)" class="form-control form-control-sm mb-2">
+            <div id="logo-controls" style="display:none">
+                <label>Scale (<span id="logo-scale-val">100</span>%)</label>
+                <input type="range" id="ctrl-logo-scale" min="0.5" max="3" step="0.1" value="1" oninput="applyConfig(); document.getElementById('logo-scale-val').textContent=Math.round(this.value*100)">
+                <label>X Position (<span id="logo-x-val">-10</span>mm)</label>
+                <input type="range" id="ctrl-logo-x" min="-50" max="50" step="1" value="-10" oninput="applyConfig(); document.getElementById('logo-x-val').textContent=this.value">
+                <label>Y Position (<span id="logo-y-val">2</span>mm)</label>
+                <input type="range" id="ctrl-logo-y" min="-50" max="80" step="1" value="2" oninput="applyConfig(); document.getElementById('logo-y-val').textContent=this.value">
+                <button type="button" class="btn btn-outline-secondary btn-sm mt-1 w-100" onclick="removeLogo()">
+                    <i class="bi bi-x-circle"></i> Remove Logo
+                </button>
+            </div>
+        </div>
+
+        <!-- Save / Reset -->
+        <div class="ctrl-section d-flex gap-2">
+            <button class="btn btn-primary btn-sm flex-fill" onclick="saveTemplate()">
+                <i class="bi bi-floppy"></i> Save Template
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="resetTemplate()" title="Reset to defaults">
+                <i class="bi bi-arrow-counterclockwise"></i>
+            </button>
+        </div>
+
+        <!-- Employee selector -->
+        {% if not single %}
+        <div class="ctrl-section">
+            <h5 class="mb-2">Print Batch</h5>
+
+            <div id="guest-qty-block" style="display:none">
+                <label>Guest Cards to Print</label>
+                <input type="number" id="ctrl-guest-qty" min="1" max="100" value="5" class="form-control form-control-sm mb-2" oninput="applyConfig()">
+            </div>
+
+            <div id="emp-selector-block">
+                <!-- Location filter -->
+                <div class="mb-2">
+                    <label class="form-label small fw-semibold mb-1">Location</label>
+                    <select id="ctrl-location" class="form-select form-select-sm" onchange="filterByLocation(true)">
+                        <option value="">— All locations —</option>
+                        {% for loc in locations %}
+                        <option value="{{ loc }}">{{ loc }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="text-muted small"><span id="sel-count">{{ employees|length }}</span> / <span id="emp-total">{{ employees|length }}</span> selected</span>
+                    <div class="d-flex gap-1">
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem" onclick="selectAll()">All</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem" onclick="deselectAll()">None</button>
+                    </div>
+                </div>
+                <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="ctrl-photo-only" onchange="filterByLocation(false)">
+                    <label class="form-check-label" for="ctrl-photo-only" style="font-size:.8rem">Only employees with photos</label>
+                </div>
+                <div id="emp-list">
+                    {% for emp in employees %}
+                    <label>
+                        <input type="checkbox" class="emp-checkbox" value="{{ emp.id }}" checked onchange="applyConfig()">
+                        {{ emp.name }}{% if emp.photo %} <i class="bi bi-image text-success" style="font-size:.7rem"></i>{% endif %}{% if emp.is_visible == False %} <span class="badge bg-secondary" style="font-size:.6rem;vertical-align:middle">hidden</span>{% endif %}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <button class="btn btn-primary w-100 mt-1" onclick="printCards()">
+                <i class="bi bi-printer"></i> Print <span id="print-count-label">{{ employees|length }}</span> Cards
+            </button>
+        </div>
+        {% endif %}
+    </div>
+    </div><!-- /#card-controls-sticky -->
+    {% endif %}
+
+    <!-- ══ Card Preview / Print Zone ══ -->
+    <div id="print-zone">
+        <p id="empty-msg" style="display:none">No employees selected.</p>
+        <!-- Cards are injected by JS -->
+    </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+// Default logo: use the server-side company logo URL so it works out-of-the-box.
+// If the user uploads their own via the file input, logoDataUrl becomes a data: URL.
+const DEFAULT_LOGO_URL = {{ company_logo_url | tojson }};
+let logoDataUrl = DEFAULT_LOGO_URL;
+
+let cfg = {
+    orientation: 'vertical',
+    bgColor: '#ffffff',
+    textColor: '#1a202c',
+    companyName: '{{ company_name }}',
+    logoScale: 1,
+    logoOffsetX: -10,
+    logoOffsetY: 2,
+    isGuest: false
+};
+
+// Load saved config
+try {
+    const saved = localStorage.getItem('idCardConfig');
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        cfg = { ...cfg, ...parsed };
+        // Restore user-uploaded logo (data: URL). If none, keep the default server logo.
+        const savedLogo = localStorage.getItem('idCardLogo');
+        if (savedLogo) logoDataUrl = savedLogo;
+    }
+} catch(e) {}
+
+// Apply loaded config to controls
+function syncControlsToState() {
+    const set = (id, prop) => { const e = document.getElementById(id); if (e) e[prop !== undefined ? prop : 'value'] = cfg[Object.keys(cfg).find(k => id.includes(k.replace('ctrl-','').replace('-','')))] };
+    const el = id => document.getElementById(id);
+    if (el('ctrl-orientation')) el('ctrl-orientation').value = cfg.orientation;
+    if (el('ctrl-guest')) el('ctrl-guest').checked = cfg.isGuest;
+    if (el('ctrl-bgcolor')) el('ctrl-bgcolor').value = cfg.bgColor;
+    if (el('ctrl-textcolor')) el('ctrl-textcolor').value = cfg.textColor.length === 7 ? cfg.textColor : '#1a202c';
+    if (el('ctrl-textcolor-val')) el('ctrl-textcolor-val').textContent = cfg.textColor;
+    if (el('ctrl-company')) el('ctrl-company').value = cfg.companyName;
+    if (el('ctrl-logo-scale')) el('ctrl-logo-scale').value = cfg.logoScale;
+    if (el('logo-scale-val')) el('logo-scale-val').textContent = Math.round(cfg.logoScale * 100);
+    if (el('ctrl-logo-x')) el('ctrl-logo-x').value = cfg.logoOffsetX;
+    if (el('logo-x-val')) el('logo-x-val').textContent = cfg.logoOffsetX;
+    if (el('ctrl-logo-y')) el('ctrl-logo-y').value = cfg.logoOffsetY;
+    if (el('logo-y-val')) el('logo-y-val').textContent = cfg.logoOffsetY;
+    if (logoDataUrl && el('logo-controls')) el('logo-controls').style.display = 'block';
+}
+
+// ── Card HTML builder ──────────────────────────────────────────────────────
+function buildCard(emp) {
+    const isV = cfg.orientation === 'vertical';
+    const orientClass = isV ? 'vertical' : 'horizontal';
+    const bgStyle = `background:${cfg.bgColor};color:${cfg.textColor};`;
+
+    // Grid background (exactly as original)
+    const gridBg = `<div style="position:absolute;inset:0;background-image:linear-gradient(#f1f5f9 1px,transparent 1px),linear-gradient(90deg,#f1f5f9 1px,transparent 1px);background-size:3mm 3mm;z-index:0;"></div>`;
+
+    // Name parts — split on first space
+    const spaceIdx = emp.name.indexOf(' ');
+    const firstName = spaceIdx > -1 ? emp.name.slice(0, spaceIdx) : emp.name;
+    const lastName  = spaceIdx > -1 ? emp.name.slice(spaceIdx + 1) : '';
+
+    let inner = '';
+
+    if (cfg.isGuest) {
+        // ── Guest layout (vertical only in original) ──
+        const logoImg = logoDataUrl
+            ? `<img src="${logoDataUrl}" alt="Company Logo" style="max-width:40mm;max-height:35mm;object-fit:contain;margin-bottom:8mm;">`
+            : '';
+        inner = `
+            <div style="position:absolute;inset:10mm;display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:2;text-align:center;">
+                ${logoImg}
+                <h2 style="margin:0;font-size:38px;line-height:1.1;font-weight:800;color:#000;font-family:'Titillium Web',sans-serif;letter-spacing:-0.5px;text-transform:uppercase;">GUEST</h2>
+            </div>
+            ${cfg.companyName ? `<div style="position:absolute;bottom:10mm;left:0;right:0;text-align:center;z-index:2;"><p style="margin:0;font-size:15px;color:#111;font-weight:600;font-family:'Titillium Web',sans-serif;letter-spacing:0.5px;text-transform:uppercase;">${escHtml(cfg.companyName)}</p></div>` : ''}`;
+
+    } else if (isV) {
+        // ── Vertical normal ──
+        // Logo watermark: direct <img> absolutely positioned (matches original exactly)
+        const logoWm = logoDataUrl
+            ? `<img src="${logoDataUrl}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+            : '';
+
+        const photoEl = emp.photoUrl
+            ? `<img src="${emp.photoUrl}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:top center;">`
+            : `<div style="width:100%;height:100%;background-color:#e2e8f0;"></div>`;
+
+        inner = `
+            ${logoWm}
+            <div style="position:absolute;top:8mm;left:21.1mm;width:23.4mm;height:29.3mm;z-index:2;background-color:#fff;">${photoEl}</div>
+            <div style="position:absolute;bottom:12mm;left:6.5mm;right:4mm;z-index:2;display:flex;">
+                <div style="width:2px;background-color:#9b1b26;margin-right:2mm;flex-shrink:0;margin-top:1mm;"></div>
+                <div style="flex:1;padding-top:1mm;">
+                    <h2 style="margin:0;font-size:19px;line-height:1.1;font-weight:700;color:#000;font-family:'Titillium Web',sans-serif;letter-spacing:-0.5px;">${escHtml(firstName)} ${escHtml(lastName)}</h2>
+                    ${emp.position ? `<p style="margin:1.5mm 0 0 0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(emp.position)}</p>` : ''}
+                    ${cfg.companyName ? `<p style="margin:0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(cfg.companyName)}</p>` : ''}
+                    ${emp.email ? `<p style="margin:0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(emp.email)}</p>` : ''}
+                </div>
+            </div>`;
+
+    } else {
+        // ── Horizontal normal ──
+        const logoWm = logoDataUrl
+            ? `<img src="${logoDataUrl}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+            : '';
+
+        const photoEl = emp.photoUrl
+            ? `<img src="${emp.photoUrl}" alt="" style="width:30mm;height:38mm;object-fit:cover;object-position:top center;z-index:2;flex-shrink:0;">`
+            : `<div style="width:30mm;height:38mm;background:#e2e8f0;flex-shrink:0;z-index:2;"></div>`;
+
+        inner = `
+            ${logoWm}
+            <div style="position:relative;z-index:2;display:flex;align-items:center;height:100%;padding:4mm;">
+                ${photoEl}
+                <div style="padding-left:6mm;flex:1;">
+                    <h2 style="margin:0;font-size:20px;font-weight:800;color:#000;font-family:'Titillium Web',sans-serif;">${escHtml(firstName)} ${escHtml(lastName)}</h2>
+                    ${emp.position ? `<p style="margin:1mm 0;font-size:14px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(emp.position)}</p>` : ''}
+                    ${cfg.companyName ? `<p style="margin:1mm 0;font-size:14px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(cfg.companyName)}</p>` : ''}
+                    ${emp.email ? `<p style="margin:1mm 0;font-size:12px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(emp.email)}</p>` : ''}
+                </div>
+            </div>`;
+    }
+
+    return `<div class="id-card ${orientClass}" style="${bgStyle}">${gridBg}${inner}</div>`;
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Apply config and re-render ─────────────────────────────────────────────
+function applyConfig() {
+    // Read controls (controls may not exist in single-employee view)
+    const el = id => document.getElementById(id);
+    cfg.orientation = el('ctrl-orientation')?.value ?? cfg.orientation;
+    cfg.isGuest     = el('ctrl-guest')?.checked ?? cfg.isGuest;
+    cfg.bgColor     = el('ctrl-bgcolor')?.value || cfg.bgColor;
+    cfg.textColor   = el('ctrl-textcolor')?.value ?? cfg.textColor;
+    cfg.companyName = el('ctrl-company')?.value ?? cfg.companyName;
+    cfg.logoScale   = parseFloat(el('ctrl-logo-scale')?.value) || cfg.logoScale;
+    cfg.logoOffsetX = parseInt(el('ctrl-logo-x')?.value) || cfg.logoOffsetX;
+    cfg.logoOffsetY = parseInt(el('ctrl-logo-y')?.value) || cfg.logoOffsetY;
+    if (el('ctrl-textcolor-val')) el('ctrl-textcolor-val').textContent = cfg.textColor;
+
+    // Show/hide sections
+    const isGuest = cfg.isGuest;
+    const guestQtyBlock = document.getElementById('guest-qty-block');
+    const empSelectorBlock = document.getElementById('emp-selector-block');
+    if (guestQtyBlock) guestQtyBlock.style.display = isGuest ? 'block' : 'none';
+    if (empSelectorBlock) empSelectorBlock.style.display = isGuest ? 'none' : 'block';
+
+    // Build cards
+    const zone = document.getElementById('print-zone');
+    let html = '';
+
+    if (isGuest) {
+        const qty = parseInt((document.getElementById('ctrl-guest-qty') || {value: '5'}).value) || 5;
+        const guestEmp = { id: 'guest', name: 'Guest', position: '', department: '', email: '', cardNumber: '', photoUrl: null };
+        for (let i = 0; i < qty; i++) html += buildCard(guestEmp);
+        updatePrintLabel(qty);
+    } else {
+        const checkboxes = document.querySelectorAll('.emp-checkbox:checked');
+        // In single-employee mode there are no checkboxes — just render all EMPLOYEES directly
+        const selected = checkboxes.length > 0
+            ? EMPLOYEES.filter(e => new Set([...checkboxes].map(c => parseInt(c.value))).has(e.id))
+            : EMPLOYEES;
+        selected.forEach(emp => { html += buildCard(emp); });
+        updatePrintLabel(selected.length);
+        updateSelCount(selected.length);
+    }
+
+    zone.innerHTML = html || '<p id="empty-msg">No employees selected.</p>';
+}
+
+function updatePrintLabel(n) {
+    const el = document.getElementById('print-count-label');
+    if (el) el.textContent = n;
+}
+function updateSelCount(n) {
+    const el = document.getElementById('sel-count');
+    if (el) el.textContent = n;
+}
+
+// ── Logo handling ──────────────────────────────────────────────────────────
+function handleLogoUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        logoDataUrl = e.target.result;
+        document.getElementById('logo-controls').style.display = 'block';
+        applyConfig();
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeLogo() {
+    logoDataUrl = DEFAULT_LOGO_URL;
+    document.getElementById('ctrl-logo').value = '';
+    if (!DEFAULT_LOGO_URL) {
+        document.getElementById('logo-controls').style.display = 'none';
+    }
+    document.getElementById('ctrl-logo-scale').value = 1;
+    document.getElementById('logo-scale-val').textContent = '100';
+    document.getElementById('ctrl-logo-x').value = -10;
+    document.getElementById('logo-x-val').textContent = '-10';
+    document.getElementById('ctrl-logo-y').value = 2;
+    document.getElementById('logo-y-val').textContent = '2';
+    cfg.logoScale = 1; cfg.logoOffsetX = -10; cfg.logoOffsetY = 2;
+    applyConfig();
+}
+
+// ── Template save/reset ────────────────────────────────────────────────────
+function saveTemplate() {
+    localStorage.setItem('idCardConfig', JSON.stringify(cfg));
+    // Only persist user-uploaded logos (data: URLs) — the default server logo always reloads automatically
+    if (logoDataUrl && logoDataUrl.startsWith('data:')) {
+        try { localStorage.setItem('idCardLogo', logoDataUrl); } catch(e) { /* quota */ }
+    } else {
+        localStorage.removeItem('idCardLogo');
+    }
+    // Bootstrap toast if available, otherwise simple alert
+    if (typeof bootstrap !== 'undefined') {
+        showToast('Template saved! Will auto-load next time.', 'success');
+    } else {
+        alert('Template saved!');
+    }
+}
+
+function resetTemplate() {
+    if (!confirm('Reset card designer to defaults? Saved template will be cleared.')) return;
+    localStorage.removeItem('idCardConfig');
+    localStorage.removeItem('idCardLogo');
+    logoDataUrl = null;
+    cfg = { orientation:'vertical', bgColor:'#ffffff', textColor:'#1a202c', companyName:'{{ company_name }}', logoScale:1, logoOffsetX:-10, logoOffsetY:2, isGuest:false };
+    syncControlsToState();
+    document.getElementById('logo-controls').style.display = 'none';
+    document.getElementById('ctrl-logo').value = '';
+    applyConfig();
+}
+
+// ── Employee filter / selection ────────────────────────────────────────────
+// filterByLocation — called when location dropdown or photo-only toggle changes.
+// autoSelectAll=true  → check every newly-visible employee (used on location change)
+// autoSelectAll=false → preserve existing checked state (used on photo-only toggle)
+function filterByLocation(autoSelectAll) {
+    const locFilter = (document.getElementById('ctrl-location')?.value || '').trim();
+    const photoOnly = document.getElementById('ctrl-photo-only')?.checked || false;
+    let visibleTotal = 0;
+    document.querySelectorAll('.emp-checkbox').forEach(cb => {
+        const id  = parseInt(cb.value);
+        const emp = EMPLOYEES.find(e => e.id === id);
+        if (!emp) return;
+        const matchLoc   = !locFilter || emp.location === locFilter;
+        const matchPhoto = !photoOnly || emp.photoUrl !== null;
+        const visible    = matchLoc && matchPhoto;
+        cb.closest('label').style.display = visible ? 'flex' : 'none';
+        if (!visible) {
+            cb.checked = false;
+        } else {
+            if (autoSelectAll) cb.checked = true;
+            visibleTotal++;
+        }
+    });
+    const totalEl = document.getElementById('emp-total');
+    if (totalEl) totalEl.textContent = visibleTotal;
+    applyConfig();
+}
+
+function applyPhotoFilter() {
+    filterByLocation(false);
+}
+
+function selectAll() {
+    document.querySelectorAll('.emp-checkbox').forEach(cb => {
+        if (cb.closest('label').style.display !== 'none') cb.checked = true;
+    });
+    applyConfig();
+}
+
+function deselectAll() {
+    document.querySelectorAll('.emp-checkbox').forEach(cb => cb.checked = false);
+    applyConfig();
+}
+
+// ── Toast helper (Bootstrap 5) ─────────────────────────────────────────────
+function showToast(msg, type) {
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast align-items-center text-bg-${type} border-0 position-fixed bottom-0 end-0 m-3`;
+    toastEl.setAttribute('role', 'alert');
+    toastEl.style.zIndex = 9999;
+    toastEl.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+    document.body.appendChild(toastEl);
+    const t = new bootstrap.Toast(toastEl, { delay: 3000 });
+    t.show();
+    toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+}
+
+// ── Sidebar height ────────────────────────────────────────────────────────
+function fitSidebar() {
+    const el = document.getElementById('card-controls');
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    el.style.maxHeight = (window.innerHeight - top - 12) + 'px';
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+    syncControlsToState();
+    applyConfig();
+    fitSidebar();
+});
+window.addEventListener('resize', fitSidebar);
+
+function printCards() {
+    const isH = cfg.orientation === 'horizontal';
+    const cardW = isH ? '86mm' : '54mm';
+    const cardH = isH ? '54mm' : '86mm';
+
+    const checkboxes = document.querySelectorAll('.emp-checkbox:checked');
+    const selected = checkboxes.length > 0
+        ? EMPLOYEES.filter(e => new Set([...checkboxes].map(c => parseInt(c.value))).has(e.id))
+        : EMPLOYEES;
+
+    if (!selected.length) { alert('No employees selected.'); return; }
+
+    const cardsHtml = selected.map(emp =>
+        `<div class="card-page">${buildCard(emp)}</div>`
+    ).join('');
+
+    // Remove any existing print iframe
+    const old = document.getElementById('id-card-print-frame');
+    if (old) old.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'id-card-print-frame';
+    iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open();
+    doc.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+@page { size: ${cardW} ${cardH}; margin: 0; }
+html, body { background: white; }
+.card-page {
+    width: ${cardW};
+    height: ${cardH};
+    display: block;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.card-page:last-child { page-break-after: auto; break-after: auto; }
+.id-card {
+    width: ${cardW};
+    height: ${cardH};
+    position: relative;
+    overflow: hidden;
+    display: block;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+</style>
+</head>
+<body>${cardsHtml}</body>
+</html>`);
+    doc.close();
+
+    // Print fires inside the iframe's own context after fonts/images load
+    iframe.onload = function() {
+        setTimeout(function() {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        }, 800);
+    };
+}
+</script>
+{% endblock %}

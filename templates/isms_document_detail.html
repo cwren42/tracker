@@ -1,0 +1,419 @@
+{% extends "base.html" %}
+
+{% block title %}{{ document.title }}{% endblock %}
+
+{% block styles %}
+<style>
+.isms-toc-sticky {
+    position: sticky;
+    top: 1rem;
+}
+
+.isms-toc-card {
+    border: 1px solid rgba(13, 110, 253, 0.14);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+
+.isms-toc-card .card-header {
+    background: linear-gradient(180deg, rgba(13, 110, 253, 0.08), rgba(13, 110, 253, 0.02));
+}
+
+.isms-search-results {
+    min-height: 1.25rem;
+}
+
+.isms-toc-nav {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+
+.isms-toc-link {
+    display: block;
+    padding: 0.45rem 0.65rem;
+    color: #344054;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+    border-radius: 0.5rem;
+    margin-bottom: 0.2rem;
+    font-size: 0.93rem;
+    line-height: 1.35;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.isms-toc-link:hover,
+.isms-toc-link.active {
+    color: #0d6efd;
+    border-left-color: var(--bs-primary);
+    background: rgba(13, 110, 253, 0.08);
+}
+
+.isms-toc-level-1 {
+    font-weight: 600;
+}
+
+.isms-toc-level-2 {
+    margin-left: 0.9rem;
+    font-size: 0.88rem;
+}
+
+.isms-toc-level-3 {
+    margin-left: 1.8rem;
+    font-size: 0.84rem;
+    color: #667085;
+}
+
+.isms-rendered-content {
+    line-height: 1.65;
+    font-size: 1rem;
+}
+
+.isms-rendered-content h2 {
+    margin-top: 2.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    font-size: 2rem;
+}
+
+.isms-rendered-content h3 {
+    margin-top: 1.75rem;
+    margin-bottom: 0.85rem;
+    font-size: 1.35rem;
+}
+
+.isms-rendered-content h4 {
+    margin-top: 1.25rem;
+    margin-bottom: 0.75rem;
+    font-size: 1.05rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #475467;
+}
+
+.isms-rendered-content mark {
+    background: #fff0a8;
+    color: inherit;
+    padding: 0 0.1rem;
+}
+
+.isms-rendered-content table {
+    width: 100%;
+    margin: 1rem 0 1.5rem;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.isms-rendered-content table th,
+.isms-rendered-content table td {
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    padding: 0.55rem 0.65rem;
+    vertical-align: top;
+}
+
+.isms-rendered-content table th {
+    background: rgba(15, 23, 42, 0.04);
+    font-weight: 600;
+}
+
+.isms-section-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+    margin: 1rem 0 1.5rem;
+    padding: 1rem;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 0.85rem;
+    background: linear-gradient(180deg, rgba(13, 110, 253, 0.05), rgba(15, 23, 42, 0.02));
+}
+
+.isms-section-meta-item {
+    min-width: 0;
+}
+
+.isms-section-meta-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #667085;
+    margin-bottom: 0.2rem;
+}
+
+.isms-section-meta-value {
+    color: #101828;
+    font-weight: 500;
+    word-break: break-word;
+}
+
+.isms-heading-anchor {
+    scroll-margin-top: 6rem;
+}
+
+@media (max-width: 1199.98px) {
+    .isms-toc-sticky {
+        position: static;
+    }
+
+    .isms-toc-nav {
+        max-height: 18rem;
+    }
+
+    .isms-section-meta {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('isms.documents') }}" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Back to ISMS Manual
+    </a>
+</div>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-3">
+    <div>
+        <h1 class="mb-1">{{ document.title }}</h1>
+        <div class="text-muted small">
+            {{ document.slug }}
+            {% if document.source_path %}
+            | source: {{ document.source_path }}
+            {% endif %}
+        </div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('isms.edit_document', document_id=document.id) }}" class="btn btn-primary btn-sm">
+            <i class="bi bi-pencil-square"></i> Edit
+        </a>
+        <a href="{{ url_for('isms.document_history', document_id=document.id) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-clock-history"></i> History
+        </a>
+        <a href="{{ url_for('isms.export_document', document_id=document.id, export_format='md') }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-download"></i> Markdown
+        </a>
+        <a href="{{ url_for('isms.export_document', document_id=document.id, export_format='docx') }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-word"></i> DOCX
+        </a>
+        <a href="{{ url_for('isms.export_document', document_id=document.id, export_format='pdf') }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-pdf"></i> PDF
+        </a>
+        {% if document.slug == 'isms-manual' %}
+        <a href="{{ url_for('isms.export_glocalization_survey', document_id=document.id) }}" class="btn btn-outline-success btn-sm">
+            <i class="bi bi-file-earmark-excel"></i> Glocalization Survey
+        </a>
+        {% endif %}
+        <span class="badge {% if document.status == 'published' %}bg-success{% else %}bg-secondary{% endif %}">{{ document.status or 'draft' }}</span>
+        <span class="badge bg-dark">v{{ version.version_number }}</span>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-xl-3">
+        <div class="card isms-toc-sticky isms-toc-card">
+            <div class="card-header">
+                <div class="fw-semibold">Table of Contents</div>
+                <div class="small text-muted">Jump through the manual by section.</div>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="isms-search-input" class="form-label small text-muted mb-1">Search This Manual</label>
+                    <div class="input-group input-group-sm">
+                        <input type="search" id="isms-search-input" class="form-control" placeholder="Find text or heading">
+                        <button type="button" id="isms-search-button" class="btn btn-outline-secondary">Find</button>
+                        <button type="button" id="isms-search-clear" class="btn btn-outline-secondary">Clear</button>
+                    </div>
+                    <div id="isms-search-results" class="isms-search-results text-muted small mt-2"></div>
+                </div>
+                <nav class="isms-toc-nav" id="isms-toc-nav">
+                    {% if toc_items %}
+                        {% for item in toc_items %}
+                        <a href="#{{ item.id }}" class="isms-toc-link isms-toc-level-{{ item.level }}" data-heading-id="{{ item.id }}">
+                            {{ item.title }}
+                        </a>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-muted small">No headings found.</div>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-9">
+        <div class="row g-3 mb-3">
+            <div class="col-lg-4">
+                <div class="d-flex flex-column gap-3 h-100">
+                    <div class="card">
+                        <div class="card-header"><strong>Metadata</strong></div>
+                        <div class="card-body small">
+                            <div class="mb-2"><strong>Type:</strong> {{ document.doc_type or 'document' }}</div>
+                            <div class="mb-2"><strong>Category:</strong> {{ document.category or 'Uncategorized' }}</div>
+                            <div class="mb-2"><strong>Current version:</strong> v{{ version.version_number }}</div>
+                            <div class="mb-2"><strong>Created by:</strong> {{ document.created_by or 'system' }}</div>
+                            <div class="mb-2"><strong>Updated by:</strong> {{ document.updated_by or 'system' }}</div>
+                            <div class="mb-2"><strong>Last updated:</strong>
+                                {% if document.updated_at %}{{ document.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+                            </div>
+                            <hr>
+                            <div class="mb-2"><strong>Version created by:</strong> {{ version.created_by or 'system' }}</div>
+                            <div class="mb-0"><strong>Change summary:</strong> {{ version.change_summary or 'Initial import' }}</div>
+                        </div>
+                    </div>
+                    {% if document.slug == 'isms-manual' %}
+                    <div class="card border-success-subtle">
+                        <div class="card-header bg-success-subtle"><strong>Manual Deliverables</strong></div>
+                        <div class="card-body small">
+                            <div class="fw-semibold mb-1">Glocalization Survey</div>
+                            <div class="text-muted mb-3">Download the Cirque-filled workbook generated from this master manual and Tracker asset data.</div>
+                            <a href="{{ url_for('isms.export_glocalization_survey', document_id=document.id) }}" class="btn btn-success btn-sm w-100">
+                                <i class="bi bi-file-earmark-excel"></i> Download Glocalization Survey
+                            </a>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-lg-8">
+                <div class="card h-100">
+                    <div class="card-header"><strong>Rendered Content</strong></div>
+                    <div class="card-body isms-rendered-content" id="isms-rendered-content">
+                        {{ rendered_html|safe }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const searchInput = document.getElementById('isms-search-input');
+const searchButton = document.getElementById('isms-search-button');
+const clearButton = document.getElementById('isms-search-clear');
+const searchResults = document.getElementById('isms-search-results');
+const contentRoot = document.getElementById('isms-rendered-content');
+const tocLinks = Array.from(document.querySelectorAll('.isms-toc-link'));
+
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function clearHighlights() {
+    contentRoot.querySelectorAll('mark[data-isms-highlight="1"]').forEach((mark) => {
+        const textNode = document.createTextNode(mark.textContent);
+        mark.replaceWith(textNode);
+    });
+    contentRoot.normalize();
+    tocLinks.forEach((link) => link.classList.remove('active'));
+}
+
+function highlightMatches(query) {
+    clearHighlights();
+    if (!query) {
+        searchResults.textContent = '';
+        tocLinks.forEach((link) => {
+            link.style.display = '';
+        });
+        return;
+    }
+
+    const matcher = new RegExp(escapeRegExp(query), 'gi');
+    const walker = document.createTreeWalker(contentRoot, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!node.nodeValue.trim()) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            if (node.parentElement && ['SCRIPT', 'STYLE', 'MARK'].includes(node.parentElement.tagName)) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        }
+    });
+
+    const textNodes = [];
+    while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+    }
+
+    let matchCount = 0;
+    let firstMark = null;
+    textNodes.forEach((node) => {
+        const text = node.nodeValue;
+        matcher.lastIndex = 0;
+        if (!matcher.test(text)) {
+            return;
+        }
+
+        matcher.lastIndex = 0;
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+        for (const match of text.matchAll(matcher)) {
+            const start = match.index;
+            const end = start + match[0].length;
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+            const mark = document.createElement('mark');
+            mark.dataset.ismsHighlight = '1';
+            mark.textContent = text.slice(start, end);
+            fragment.appendChild(mark);
+            if (!firstMark) {
+                firstMark = mark;
+            }
+            matchCount += 1;
+            lastIndex = end;
+        }
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+        node.parentNode.replaceChild(fragment, node);
+    });
+
+    const normalizedQuery = query.toLowerCase();
+    let visibleTocItems = 0;
+    tocLinks.forEach((link) => {
+        const isVisible = link.textContent.toLowerCase().includes(normalizedQuery);
+        link.style.display = isVisible ? '' : 'none';
+        if (isVisible) {
+            visibleTocItems += 1;
+        }
+    });
+
+    if (matchCount) {
+        searchResults.textContent = `${matchCount} match${matchCount === 1 ? '' : 'es'} in content, ${visibleTocItems} heading${visibleTocItems === 1 ? '' : 's'} in contents.`;
+        firstMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+        searchResults.textContent = visibleTocItems ? `No content matches. ${visibleTocItems} heading${visibleTocItems === 1 ? '' : 's'} matched in contents.` : 'No matches found.';
+    }
+}
+
+searchButton.addEventListener('click', () => {
+    highlightMatches(searchInput.value.trim());
+});
+
+clearButton.addEventListener('click', () => {
+    searchInput.value = '';
+    highlightMatches('');
+});
+
+searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        highlightMatches(searchInput.value.trim());
+    }
+});
+
+const headingObserver = new IntersectionObserver((entries) => {
+    const visibleEntry = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
+    if (!visibleEntry) {
+        return;
+    }
+    const headingId = visibleEntry.target.id;
+    tocLinks.forEach((link) => {
+        link.classList.toggle('active', link.dataset.headingId === headingId);
+    });
+}, { rootMargin: '0px 0px -70% 0px', threshold: 0.1 });
+
+document.querySelectorAll('.isms-heading-anchor').forEach((heading) => {
+    headingObserver.observe(heading);
+});
+</script>
+{% endblock %}

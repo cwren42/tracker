@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}{{ item.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <a href="{{ url_for('readiness.readiness_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to readiness</a>
+        <h2 class="mt-2 mb-1">{{ item.title }}</h2>
+        <div class="text-muted">{{ item.domain or 'Unassigned domain' }}{% if item.audit_alignment %} · {{ item.audit_alignment }}{% endif %}</div>
+    </div>
+    <div class="d-flex gap-2">
+        <span class="badge bg-dark-subtle text-dark border">{{ item.priority }}</span>
+        <span class="badge bg-secondary">{{ item.status }}</span>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Details</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Owner</dt>
+                    <dd class="col-sm-8">{{ item.owner or 'Unassigned' }}</dd>
+                    <dt class="col-sm-4">Frequency</dt>
+                    <dd class="col-sm-8">{{ item.frequency or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Source</dt>
+                    <dd class="col-sm-8 text-capitalize">{{ item.source_type.replace('_', ' ') }}</dd>
+                    <dt class="col-sm-4">Source Reference</dt>
+                    <dd class="col-sm-8">{{ item.source_reference or 'None' }}</dd>
+                    <dt class="col-sm-4">Manual Reference</dt>
+                    <dd class="col-sm-8">{{ item.manual_reference or 'None' }}</dd>
+                    <dt class="col-sm-4">Evidence Reference</dt>
+                    <dd class="col-sm-8">{{ item.evidence_reference or 'None' }}</dd>
+                    <dt class="col-sm-4">Due Date</dt>
+                    <dd class="col-sm-8">{{ item.due_date.strftime('%Y-%m-%d') if item.due_date else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Next Step</dt>
+                    <dd class="col-sm-8">{{ item.next_step or 'No next step recorded.' }}</dd>
+                    <dt class="col-sm-4">Notes</dt>
+                    <dd class="col-sm-8">{{ item.notes or 'No notes recorded.' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Linked Audit Findings</h5>
+                <a href="{{ url_for('internal_audit.internal_audit_dashboard') }}" class="btn btn-sm btn-outline-primary">Internal Audits</a>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for finding in item.audit_findings %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">{{ finding.title }}</div>
+                            <div class="small text-muted">{{ finding.finding_key }} · <a href="{{ url_for('internal_audit.internal_audit_detail', audit_id=finding.audit.id) }}">{{ finding.audit.title }}</a></div>
+                        </div>
+                        <div class="text-end">
+                            <div><span class="badge bg-warning text-dark">{{ finding.severity }}</span></div>
+                            <div class="small text-muted mt-1">{{ finding.status }}</div>
+                        </div>
+                    </div>
+                    {% if finding.description %}<div class="mt-2">{{ finding.description }}</div>{% endif %}
+                    {% if finding.recommendation %}<div class="small mt-2"><strong>Recommendation:</strong> {{ finding.recommendation }}</div>{% endif %}
+                    <div class="small text-muted mt-2">Owner: {{ finding.owner or 'Unassigned' }}{% if finding.due_date %} · Due {{ finding.due_date.strftime('%Y-%m-%d') }}{% endif %}</div>
+                </div>
+                {% else %}
+                <div class="list-group-item py-4 text-muted">No audit findings are linked to this readiness item yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Update History</h5>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for update in item.updates %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">{{ update.update_type.replace('_', ' ').title() }}</div>
+                            <div class="small text-muted">{{ update.created_by or 'unknown' }}</div>
+                        </div>
+                        <div class="small text-muted text-nowrap">{{ update.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+                    </div>
+                    {% if update.previous_status or update.new_status %}
+                    <div class="small mt-2">{{ update.previous_status or 'n/a' }} → {{ update.new_status or 'n/a' }}</div>
+                    {% endif %}
+                    <div class="mt-2">{{ update.note or 'No note provided.' }}</div>
+                </div>
+                {% else %}
+                <div class="list-group-item py-4 text-muted">No updates recorded yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Update Item</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('readiness.update_readiness_item', item_id=item.id) }}" class="row g-3">
+                    <div class="col-md-6">
+                        <label for="status" class="form-label">Status</label>
+                        <select id="status" name="status" class="form-select">
+                            {% for option in status_options %}
+                            <option value="{{ option }}" {% if item.status == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="due_date" class="form-label">Due Date</label>
+                        <input id="due_date" name="due_date" type="date" class="form-control" value="{{ item.due_date.strftime('%Y-%m-%d') if item.due_date else '' }}">
+                    </div>
+                    <div class="col-12">
+                        <label for="owner" class="form-label">Owner</label>
+                        <input id="owner" name="owner" class="form-control" value="{{ item.owner or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <label for="frequency" class="form-label">Frequency</label>
+                        <input id="frequency" name="frequency" class="form-control" value="{{ item.frequency or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <label for="evidence_reference" class="form-label">Evidence Reference</label>
+                        <input id="evidence_reference" name="evidence_reference" class="form-control" value="{{ item.evidence_reference or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <label for="next_step" class="form-label">Next Step</label>
+                        <textarea id="next_step" name="next_step" class="form-control" rows="3">{{ item.next_step or '' }}</textarea>
+                    </div>
+                    <div class="col-12">
+                        <label for="notes" class="form-label">Working Notes</label>
+                        <textarea id="notes" name="notes" class="form-control" rows="4">{{ item.notes or '' }}</textarea>
+                    </div>
+                    <div class="col-12">
+                        <label for="update_note" class="form-label">Progress Update</label>
+                        <textarea id="update_note" name="update_note" class="form-control" rows="3" placeholder="What changed in this update?"></textarea>
+                    </div>
+                    <div class="col-12 d-grid">
+                        <button class="btn btn-primary" type="submit">Save Update</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

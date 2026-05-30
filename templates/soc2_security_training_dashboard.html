@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Security Training{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-mortarboard"></i> Security Training</h2>
+        <p class="text-muted mb-0">Maintain the quarterly security training log and topic history required for the SOC 2 Type 1 evidence package.</p>
+    </div>
+    <a href="{{ url_for('readiness.export_type1_pack') }}" class="btn btn-primary">
+        <i class="bi bi-file-earmark-zip"></i> Export Type 1 Pack
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Active Personnel</div><div class="display-6 mb-0">{{ summary.active_employees }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Current Quarter Complete</div><div class="display-6 mb-0">{{ summary.completed_current_cycle }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Overdue Personnel</div><div class="display-6 mb-0">{{ summary.overdue_employees }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Training Records</div><div class="display-6 mb-0">{{ summary.records }}</div></div></div></div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Training Record</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('security_training.create_security_training_record') }}" class="row g-3">
+                    <div class="col-12"><label class="form-label" for="employee_id">Employee</label><select class="form-select" id="employee_id" name="employee_id"><option value="">Manual entry</option>{% for employee in employees %}<option value="{{ employee.id }}">{{ employee.name }}{% if employee.department %} · {{ employee.department }}{% endif %}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="trainee_name">Trainee Name</label><input class="form-control" id="trainee_name" name="trainee_name"></div>
+                    <div class="col-md-6"><label class="form-label" for="trainee_email">Trainee Email</label><input class="form-control" id="trainee_email" name="trainee_email"></div>
+                    <div class="col-md-6"><label class="form-label" for="department">Department</label><input class="form-control" id="department" name="department"></div>
+                    <div class="col-md-6"><label class="form-label" for="role_title">Role</label><input class="form-control" id="role_title" name="role_title"></div>
+                    <div class="col-md-6"><label class="form-label" for="training_date">Training Date</label><input class="form-control" type="date" id="training_date" name="training_date" required></div>
+                    <div class="col-md-6"><label class="form-label" for="completion_status">Completion Status</label><select class="form-select" id="completion_status" name="completion_status">{% for option in status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-12"><label class="form-label" for="training_topic">Training Topic / Course</label><input class="form-control" id="training_topic" name="training_topic" required></div>
+                    <div class="col-md-6"><label class="form-label" for="provider_method">Provider / Method</label><input class="form-control" id="provider_method" name="provider_method" placeholder="Internal, online module, workshop"></div>
+                    <div class="col-md-3"><label class="form-label" for="duration">Duration</label><input class="form-control" id="duration" name="duration" placeholder="45 min"></div>
+                    <div class="col-md-3"><label class="form-label" for="score">Score</label><input class="form-control" type="number" min="0" max="100" id="score" name="score"></div>
+                    <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="3"></textarea></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Create Record</button></div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Overdue Personnel</h5></div>
+            <div class="list-group list-group-flush">
+                {% for employee in overdue_employees %}
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-semibold">{{ employee.name }}</div>
+                        <div class="small text-muted">{{ employee.department or 'Unassigned' }}{% if employee.email %} · {{ employee.email }}{% endif %}</div>
+                    </div>
+                    <span class="badge bg-warning text-dark">Needs training</span>
+                </div>
+                {% else %}
+                <div class="list-group-item text-muted">No overdue personnel in the current cycle.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Training Records</h5>
+                <small class="text-muted">Current quarter started {{ summary.cutoff_date.strftime('%Y-%m-%d') }}</small>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Record</th><th>Date</th><th>Topic</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        {% for record in records %}
+                        <tr>
+                            <td><div class="fw-semibold">{{ record.trainee_name }}</div><div class="small text-muted">{{ record.record_key }}{% if record.department %} · {{ record.department }}{% endif %}</div></td>
+                            <td>{{ record.training_date.strftime('%Y-%m-%d') }}</td>
+                            <td><div>{{ record.training_topic }}</div><div class="small text-muted">{{ record.provider_method or 'Method not set' }}</div></td>
+                            <td><span class="badge {% if record.completion_status in qualifying_statuses %}bg-success{% elif record.completion_status == 'Overdue' %}bg-danger{% else %}bg-secondary{% endif %}">{{ record.completion_status }}</span></td>
+                            <td><a href="{{ url_for('security_training.security_training_record_detail', record_id=record.id) }}" class="btn btn-sm btn-outline-primary">Open</a></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted py-5">No training records logged yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

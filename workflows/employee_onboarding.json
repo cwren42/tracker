@@ -1,0 +1,241 @@
+{
+  "name": "Employee Onboarding",
+  "description": "Triggered when a signed offer letter and NDA are received. Fans out to HR, IT, and Finance lanes simultaneously.",
+  "trigger_type": "manual",
+  "trigger_config": {},
+  "enabled": true,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "trigger",
+      "action": "",
+      "label": "Offer Accepted",
+      "x": 30,
+      "y": 255,
+      "config": { "trigger_type": "manual" }
+    },
+
+    {
+      "id": "n2",
+      "type": "action",
+      "action": "send_notification",
+      "label": "Notify Hiring Manager",
+      "x": 250,
+      "y": 40,
+      "config": {
+        "message": "NEW HIRE — {{employee_name}} starts {{start_date}}. Please greet them on arrival, plan first-day lunch, and brief them on their role. HR will schedule an onboarding meeting."
+      }
+    },
+    {
+      "id": "n3",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Run E-Verify",
+      "x": 540,
+      "y": 40,
+      "config": {
+        "title": "Run E-Verify — {{employee_name}}",
+        "body": "E-Verify must be completed within 3 business days of {{employee_name}}'s start date ({{start_date}}). Log in to e-verify.uscis.gov and complete verification manually. Paylocity integration is not used.",
+        "priority": "high",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n4",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Assign UTA Card",
+      "x": 830,
+      "y": 40,
+      "config": {
+        "title": "Assign UTA card — {{employee_name}} (Utah employees only)",
+        "body": "If {{employee_name}} is a Utah-based employee, assign them a UTA transit card. Coordinate with HR for card issuance.",
+        "priority": "low",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n5",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Confirm Background Check",
+      "x": 1120,
+      "y": 40,
+      "config": {
+        "title": "Confirm background check cleared — {{employee_name}}",
+        "body": "Verify the background check authorization has been received and results are cleared before or by {{employee_name}}'s start date ({{start_date}}).",
+        "priority": "medium",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n6",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Reserve Conference Room",
+      "x": 1410,
+      "y": 40,
+      "config": {
+        "title": "Reserve conference room — {{employee_name}} onboarding on {{start_date}}",
+        "body": "Reserve a conference room for the new hire onboarding meeting for {{employee_name}}. Remind the hiring manager to take them to lunch on their first day.",
+        "priority": "low",
+        "category": "hr"
+      }
+    },
+
+    {
+      "id": "n7",
+      "type": "action",
+      "action": "send_notification",
+      "label": "Notify IT",
+      "x": 250,
+      "y": 260,
+      "config": {
+        "message": "NEW HIRE ONBOARDING — {{employee_name}} | Role: {{job_title}} | Start: {{start_date}}. Please complete IT setup: computer, M365 account, licenses, and workspace (desk if local / shipping if remote)."
+      }
+    },
+    {
+      "id": "n8",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "IT Computer Setup",
+      "x": 540,
+      "y": 260,
+      "config": {
+        "title": "IT Computer Setup — {{employee_name}} (start: {{start_date}})",
+        "body": "Set up laptop/workstation for {{employee_name}}. Install OS, company software, AV, MDM enrollment, and configure AD login. Have device ready before start date.",
+        "priority": "high",
+        "category": "it"
+      }
+    },
+    {
+      "id": "n9",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Create M365 Account",
+      "x": 830,
+      "y": 260,
+      "config": {
+        "title": "Create M365 account — {{employee_name}}",
+        "body": "Create Microsoft 365 account for {{employee_name}}. Set up email, Teams, SharePoint access. Username format per policy. Account must be ready before start date {{start_date}}.",
+        "priority": "high",
+        "category": "it"
+      }
+    },
+    {
+      "id": "n10",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Assign Licenses",
+      "x": 1120,
+      "y": 260,
+      "config": {
+        "title": "Assign software licenses — {{employee_name}}",
+        "body": "Assign M365 license tier and any role-specific software licenses for {{employee_name}}. Coordinate with hiring manager for software needed for the role.",
+        "priority": "medium",
+        "category": "it"
+      }
+    },
+    {
+      "id": "n11",
+      "type": "condition",
+      "action": "",
+      "label": "Local or Remote?",
+      "x": 1410,
+      "y": 260,
+      "config": {
+        "field": "work_type",
+        "operator": "==",
+        "value": "remote"
+      }
+    },
+    {
+      "id": "n12",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Assign Desk",
+      "x": 1630,
+      "y": 370,
+      "config": {
+        "title": "Assign desk/workspace — {{employee_name}} (local)",
+        "body": "Assign a desk and workspace to {{employee_name}} for start date {{start_date}}. Ensure chair, monitor, keyboard, and peripherals are in place. Notify hiring manager of desk location.",
+        "priority": "low",
+        "category": "it"
+      }
+    },
+    {
+      "id": "n13",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Ship Equipment",
+      "x": 1630,
+      "y": 155,
+      "config": {
+        "title": "Ship equipment — {{employee_name}} (remote)",
+        "body": "Generate a prepaid shipping label and ship the configured laptop and peripherals to {{employee_name}} at their home address. Confirm delivery before start date {{start_date}}.",
+        "priority": "medium",
+        "category": "it"
+      }
+    },
+
+    {
+      "id": "n14",
+      "type": "action",
+      "action": "send_notification",
+      "label": "Notify Finance",
+      "x": 250,
+      "y": 500,
+      "config": {
+        "message": "NEW HIRE — {{employee_name}} | Dept Code: {{department_code}} | Salary: {{salary}} | Start: {{start_date}}. Please order a Divvy card."
+      }
+    },
+    {
+      "id": "n15",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Order Divvy Card",
+      "x": 540,
+      "y": 500,
+      "config": {
+        "title": "Order Divvy card — {{employee_name}}",
+        "body": "Order a Divvy card for {{employee_name}}. Department code: {{department_code}}. Configure spending limits per company policy before start date {{start_date}}.",
+        "priority": "medium",
+        "category": "finance"
+      }
+    },
+    {
+      "id": "n16",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Paylocity Onboarding",
+      "x": 1700,
+      "y": 40,
+      "config": {
+        "title": "Complete Paylocity onboarding — {{employee_name}}",
+        "body": "Enter {{employee_name}} into Paylocity:\n- Personal info, address, SSN\n- Direct deposit / banking info\n- Salary/rate and department code: {{department_code}}\n- Tax withholding (W-4)\n- Benefits enrollment\n- Start date: {{start_date}}",
+        "priority": "high",
+        "category": "hr"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1",  "fromNode": "n1",  "fromPort": "out",   "toNode": "n2",  "source": "n1",  "target": "n2",  "label": "" },
+    { "id": "e2",  "fromNode": "n1",  "fromPort": "out",   "toNode": "n7",  "source": "n1",  "target": "n7",  "label": "" },
+    { "id": "e3",  "fromNode": "n1",  "fromPort": "out",   "toNode": "n14", "source": "n1",  "target": "n14", "label": "" },
+
+    { "id": "e4",  "fromNode": "n2",  "fromPort": "out",   "toNode": "n3",  "source": "n2",  "target": "n3",  "label": "" },
+    { "id": "e5",  "fromNode": "n3",  "fromPort": "out",   "toNode": "n4",  "source": "n3",  "target": "n4",  "label": "" },
+    { "id": "e6",  "fromNode": "n4",  "fromPort": "out",   "toNode": "n5",  "source": "n4",  "target": "n5",  "label": "" },
+    { "id": "e7",  "fromNode": "n5",  "fromPort": "out",   "toNode": "n6",  "source": "n5",  "target": "n6",  "label": "" },
+
+    { "id": "e8",  "fromNode": "n7",  "fromPort": "out",   "toNode": "n8",  "source": "n7",  "target": "n8",  "label": "" },
+    { "id": "e9",  "fromNode": "n8",  "fromPort": "out",   "toNode": "n9",  "source": "n8",  "target": "n9",  "label": "" },
+    { "id": "e10", "fromNode": "n9",  "fromPort": "out",   "toNode": "n10", "source": "n9",  "target": "n10", "label": "" },
+    { "id": "e11", "fromNode": "n10", "fromPort": "out",   "toNode": "n11", "source": "n10", "target": "n11", "label": "" },
+    { "id": "e12", "fromNode": "n11", "fromPort": "true",  "toNode": "n13", "source": "n11", "target": "n13", "label": "true" },
+    { "id": "e13", "fromNode": "n11", "fromPort": "false", "toNode": "n12", "source": "n11", "target": "n12", "label": "false" },
+
+    { "id": "e14", "fromNode": "n14", "fromPort": "out",   "toNode": "n15", "source": "n14", "target": "n15", "label": "" },
+    { "id": "e15", "fromNode": "n6",  "fromPort": "out",   "toNode": "n16", "source": "n6",  "target": "n16", "label": "" }
+  ]
+}

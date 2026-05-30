@@ -1,0 +1,18 @@
+<!-- ══ METRICS TAB ══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-metrics" role="tabpanel">
+{% if rmm_agent_id %}
+<div class="card section-card">
+    <div class="card-header"><i class="bi bi-graph-up me-2 text-info"></i>Performance Metrics</div>
+    <div class="card-body">
+        <div style="position:relative;height:180px;">
+            <canvas id="rmm-metrics-chart"></canvas>
+        </div>
+        <p class="text-muted mb-0 mt-2" style="font-size:.75rem;">CPU % and RAM % over the last 24 hours</p>
+    </div>
+</div>
+{% else %}
+<div class="text-center py-5 text-muted">
+    <i class="bi bi-graph-up fs-2 d-block mb-2 opacity-50"></i>No RMM agent linked to this asset.
+</div>
+{% endif %}
+</div>

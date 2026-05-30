@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Phishing Effectiveness{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-envelope-paper"></i> Phishing Effectiveness</h2>
+        <p class="text-muted mb-0">Track phishing simulations, follow-up training, and user outcomes as recurring audit evidence.</p>
+    </div>
+    <a href="{{ url_for('readiness.export_type1_pack') }}" class="btn btn-primary"><i class="bi bi-file-earmark-zip"></i> Export Type 1 Pack</a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Campaigns</div><div class="display-6 mb-0">{{ summary.campaigns|length }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Results</div><div class="display-6 mb-0">{{ summary.results|length }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Users Trained</div><div class="display-6 mb-0">{{ summary.employees_trained }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small text-uppercase">Reported Emails</div><div class="display-6 mb-0">{{ summary.reports }}</div></div></div></div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Campaign</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('phishing.create_phishing_campaign') }}" class="row g-3">
+                    <div class="col-12"><label class="form-label" for="title">Campaign Title</label><input class="form-control" id="title" name="title" required></div>
+                    <div class="col-md-6"><label class="form-label" for="campaign_date">Campaign Date</label><input class="form-control" type="date" id="campaign_date" name="campaign_date" required></div>
+                    <div class="col-md-6"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in campaign_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="provider">Provider</label><input class="form-control" id="provider" name="provider"></div>
+                    <div class="col-md-6"><label class="form-label" for="scope">Scope</label><input class="form-control" id="scope" name="scope"></div>
+                    <div class="col-12"><label class="form-label" for="follow_up_training_topic">Follow-up Training Topic</label><input class="form-control" id="follow_up_training_topic" name="follow_up_training_topic"></div>
+                    <div class="col-12"><label class="form-label" for="scenario">Scenario</label><textarea class="form-control" id="scenario" name="scenario" rows="3"></textarea></div>
+                    <div class="col-12"><label class="form-label" for="summary">Summary</label><textarea class="form-control" id="summary" name="summary" rows="3"></textarea></div>
+                    <div class="col-12"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference"></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Create Campaign</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Campaign</th><th>Date</th><th>Status</th><th>Users</th><th></th></tr></thead>
+                    <tbody>
+                        {% for campaign in campaigns %}
+                        <tr>
+                            <td><div class="fw-semibold">{{ campaign.title }}</div><div class="small text-muted">{{ campaign.campaign_key }}</div></td>
+                            <td>{{ campaign.campaign_date.strftime('%Y-%m-%d') }}</td>
+                            <td><span class="badge bg-secondary">{{ campaign.status }}</span></td>
+                            <td>{{ campaign.results|length }}</td>
+                            <td><a href="{{ url_for('phishing.phishing_campaign_detail', campaign_id=campaign.id) }}" class="btn btn-sm btn-outline-primary">Open</a></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted py-5">No phishing campaigns recorded yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

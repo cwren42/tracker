@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Quarantine Campaigns{% endblock %}
+{% block styles %}
+<style>
+.campaign-card { border-radius:10px; border:1px solid var(--border-color,#2a2f3a); background:var(--card-bg,#1a1f2e); padding:1rem 1.25rem; transition:border-color .2s; }
+.campaign-card:hover { border-color:rgba(255,193,7,.4); }
+.threat-badge-Phish    { background:rgba(220,53,69,.15);  color:#ff6b6b; border:1px solid rgba(220,53,69,.3); }
+.threat-badge-Malware  { background:rgba(111,66,193,.15); color:#b07bff; border:1px solid rgba(111,66,193,.3); }
+.threat-badge-Spam     { background:rgba(255,193,7,.12);  color:#ffc107; border:1px solid rgba(255,193,7,.3); }
+.threat-badge-Bulk     { background:rgba(13,202,240,.1);  color:#0dcaf0; border:1px solid rgba(13,202,240,.3); }
+.threat-badge-Unknown  { background:rgba(108,117,125,.1); color:#6c757d; border:1px solid rgba(108,117,125,.3); }
+.vol-bar { height:6px; border-radius:3px; background:rgba(255,193,7,.7); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1300px;">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+    <div>
+      <h5 class="mb-0 fw-bold"><i class="bi bi-diagram-3 me-2 text-warning"></i>Phishing Campaigns</h5>
+      <span class="text-muted small">Groups of quarantined messages sharing sender infrastructure — potential coordinated attacks</span>
+    </div>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <a href="{{ url_for('quarantine.quarantine_list') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Back to Quarantine
+      </a>
+      {% for d in ['7','14','30','60','90'] %}
+      <a href="{{ url_for('quarantine.quarantine_campaigns', days=d) }}"
+         class="btn btn-sm {{ 'btn-warning' if days == d else 'btn-outline-secondary' }}">{{ d }}d</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if campaigns %}
+  <!-- Summary bar -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="campaign-card text-center">
+        <div class="text-muted small mb-1">Campaigns Detected</div>
+        <div style="font-size:2rem;font-weight:700;">{{ campaigns|length }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="campaign-card text-center">
+        <div class="text-muted small mb-1">Total Messages</div>
+        <div style="font-size:2rem;font-weight:700;">{{ campaigns|sum(attribute='msg_count') }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="campaign-card text-center">
+        <div class="text-muted small mb-1">Unique Attacker Domains</div>
+        <div style="font-size:2rem;font-weight:700;">{{ campaigns|map(attribute='sender_domain')|list|unique|list|length }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="campaign-card text-center">
+        <div class="text-muted small mb-1">Phish Campaigns</div>
+        <div style="font-size:2rem;font-weight:700;color:#ff6b6b;">
+          {{ campaigns|selectattr('dominant_threat','eq','Phish')|list|length }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% set max_count = campaigns|map(attribute='msg_count')|max %}
+
+  <!-- Campaign cards -->
+  {% for c in campaigns %}
+  <div class="campaign-card mb-3">
+    <div class="d-flex flex-wrap align-items-start gap-3">
+
+      <!-- Volume bar -->
+      <div style="min-width:60px;text-align:center;">
+        <div style="font-size:1.6rem;font-weight:800;line-height:1;">{{ c.msg_count }}</div>
+        <div class="text-muted" style="font-size:.68rem;">msgs</div>
+        <div style="background:rgba(255,255,255,.08);border-radius:3px;height:6px;margin-top:4px;">
+          <div class="vol-bar" style="width:{{ (c.msg_count / max_count * 100)|int }}%"></div>
+        </div>
+      </div>
+
+      <!-- Campaign info -->
+      <div class="flex-grow-1">
+        <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+          <span style="font-family:monospace;font-size:.95rem;font-weight:700;">{{ c.sender_domain }}</span>
+          <span class="badge threat-badge-{{ c.dominant_threat }}" style="border-radius:5px;font-size:.72rem;">{{ c.dominant_threat }}</span>
+        </div>
+        <div class="d-flex flex-wrap gap-3 text-muted" style="font-size:.78rem;">
+          <span><i class="bi bi-calendar3 me-1"></i>First: {{ c.first_seen.strftime('%Y-%m-%d %H:%M') if c.first_seen else '—' }}</span>
+          <span><i class="bi bi-calendar-check me-1"></i>Last: {{ c.last_seen.strftime('%Y-%m-%d %H:%M') if c.last_seen else '—' }}</span>
+        </div>
+        {% if c.sample %}
+        <div class="mt-1 text-muted" style="font-size:.78rem;">
+          <i class="bi bi-envelope me-1"></i>Sample subject:
+          <em>{{ c.sample.subject or '(no subject)' }}</em>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Actions -->
+      <div class="d-flex flex-column gap-2" style="min-width:140px;">
+        <a href="{{ url_for('quarantine.quarantine_list', threat=c.dominant_threat, q=c.sender_domain) }}"
+           class="btn btn-sm btn-outline-warning">
+          <i class="bi bi-search me-1"></i>View Messages
+        </a>
+        <a href="{{ url_for('quarantine.quarantine_export_iocs') }}"
+           class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-download me-1"></i>Export IOCs
+        </a>
+      </div>
+
+    </div>
+
+    <!-- Auth summary for this domain -->
+    {% if c.sample %}
+    <div class="mt-2 d-flex flex-wrap gap-2" style="font-size:.75rem;">
+      {% set spf_c = 'text-success' if c.sample.spf_result == 'pass' else ('text-warning' if c.sample.spf_result == 'softfail' else 'text-danger') %}
+      {% set dkim_c = 'text-success' if c.sample.dkim_result == 'pass' else 'text-danger' %}
+      {% set dmarc_c = 'text-success' if c.sample.dmarc_result == 'pass' else 'text-danger' %}
+      <span class="{{ spf_c }}"><i class="bi bi-{{ 'check' if c.sample.spf_result == 'pass' else 'x' }}-circle me-1"></i>SPF: {{ c.sample.spf_result or 'none' }}</span>
+      <span class="{{ dkim_c }}"><i class="bi bi-{{ 'check' if c.sample.dkim_result == 'pass' else 'x' }}-circle me-1"></i>DKIM: {{ c.sample.dkim_result or 'none' }}</span>
+      <span class="{{ dmarc_c }}"><i class="bi bi-{{ 'check' if c.sample.dmarc_result == 'pass' else 'x' }}-circle me-1"></i>DMARC: {{ c.sample.dmarc_result or 'none' }}</span>
+    </div>
+    {% endif %}
+
+  </div>
+  {% endfor %}
+
+  {% else %}
+  <div class="text-center text-muted py-5">
+    <i class="bi bi-diagram-3 fs-1 d-block mb-3 opacity-25"></i>
+    <div class="fw-semibold">No campaigns detected in the last {{ days }} days</div>
+    <div class="small mt-1">Campaigns are groups of 2+ quarantined messages from the same sender domain.</div>
+    <div class="mt-3">
+      <a href="{{ url_for('quarantine.quarantine_list') }}" class="btn btn-outline-secondary btn-sm">View all quarantine messages</a>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

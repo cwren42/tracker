@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}System Description{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-diagram-3"></i> System Description</h2>
+        <p class="text-muted mb-0">Maintain the auditor-facing system narrative and export the compiled description from Tracker.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <form method="post" action="{{ url_for('system_description.import_incoming_system_description') }}">
+            <button class="btn btn-outline-secondary" type="submit">Import Incoming Markdown</button>
+        </form>
+        <form method="post" action="{{ url_for('system_description.auto_fill_system_description') }}">
+            <button class="btn btn-outline-secondary" type="submit">Auto-Fill From Tracker</button>
+        </form>
+        <a href="{{ url_for('system_description.export_system_description', file_format='md') }}" class="btn btn-outline-secondary">Markdown</a>
+        <a href="{{ url_for('system_description.export_system_description', file_format='docx') }}" class="btn btn-outline-secondary">DOCX</a>
+        <a href="{{ url_for('system_description.export_system_description', file_format='pdf') }}" class="btn btn-primary">PDF</a>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Sections</h5>
+                <small class="text-muted">{{ populated_sections }} of {{ sections|length }} populated</small>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Order</th><th>Section</th><th>Category</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        {% for section in sections %}
+                        <tr>
+                            <td>{{ section.section_order }}</td>
+                            <td><div class="fw-semibold">{{ section.section_title }}</div><div class="small text-muted">Heading level {{ section.section_level }}</div></td>
+                            <td>{{ section.category }}</td>
+                            <td>{% if section.content %}<span class="badge bg-success">Populated</span>{% elif section.template_content %}<span class="badge bg-warning text-dark">Template only</span>{% else %}<span class="badge bg-secondary">Empty</span>{% endif %}</td>
+                            <td><a href="{{ url_for('system_description.system_description_section_detail', section_id=section.id) }}" class="btn btn-sm btn-outline-primary">Edit</a></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted py-5">No system description sections available yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white"><h5 class="mb-0">Compiled Preview</h5></div>
+            <div class="card-body bg-light">
+                <pre class="small mb-0" style="white-space: pre-wrap;">{{ markdown_preview }}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

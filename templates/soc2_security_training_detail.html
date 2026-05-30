@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}{{ record.record_key }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('security_training.security_training_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to security training</a>
+    <h2 class="mt-2 mb-1">{{ record.trainee_name }}</h2>
+    <div class="text-muted">{{ record.record_key }} · {{ record.training_topic }}</div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white"><h5 class="mb-0">Update Training Record</h5></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('security_training.update_security_training_record', record_id=record.id) }}" class="row g-3">
+            <div class="col-12"><label class="form-label" for="employee_id">Employee</label><select class="form-select" id="employee_id" name="employee_id"><option value="">Manual entry</option>{% for employee in employees %}<option value="{{ employee.id }}" {% if record.employee_id == employee.id %}selected{% endif %}>{{ employee.name }}{% if employee.department %} · {{ employee.department }}{% endif %}</option>{% endfor %}</select></div>
+            <div class="col-md-6"><label class="form-label" for="trainee_name">Trainee Name</label><input class="form-control" id="trainee_name" name="trainee_name" value="{{ record.trainee_name }}"></div>
+            <div class="col-md-6"><label class="form-label" for="trainee_email">Trainee Email</label><input class="form-control" id="trainee_email" name="trainee_email" value="{{ record.trainee_email or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="department">Department</label><input class="form-control" id="department" name="department" value="{{ record.department or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="role_title">Role</label><input class="form-control" id="role_title" name="role_title" value="{{ record.role_title or '' }}"></div>
+            <div class="col-md-4"><label class="form-label" for="training_date">Training Date</label><input class="form-control" type="date" id="training_date" name="training_date" value="{{ record.training_date.strftime('%Y-%m-%d') if record.training_date else '' }}"></div>
+            <div class="col-md-4"><label class="form-label" for="completion_status">Completion Status</label><select class="form-select" id="completion_status" name="completion_status">{% for option in status_options %}<option value="{{ option }}" {% if record.completion_status == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></div>
+            <div class="col-md-4"><label class="form-label" for="score">Score</label><input class="form-control" type="number" min="0" max="100" id="score" name="score" value="{{ record.score if record.score is not none else '' }}"></div>
+            <div class="col-12"><label class="form-label" for="training_topic">Training Topic / Course</label><input class="form-control" id="training_topic" name="training_topic" value="{{ record.training_topic }}"></div>
+            <div class="col-md-6"><label class="form-label" for="provider_method">Provider / Method</label><input class="form-control" id="provider_method" name="provider_method" value="{{ record.provider_method or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="duration">Duration</label><input class="form-control" id="duration" name="duration" value="{{ record.duration or '' }}"></div>
+            <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="4">{{ record.notes or '' }}</textarea></div>
+            <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Save Changes</button></div>
+        </form>
+    </div>
+</div>
+{% endblock %}

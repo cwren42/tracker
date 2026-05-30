@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block title %}Compare Versions - {{ document.title }}{% endblock %}
+
+{% block styles %}
+<style>
+.isms-diff-wrap {
+    overflow-x: auto;
+}
+
+.diff {
+    width: 100%;
+    min-width: 980px;
+    border-collapse: collapse;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.diff th,
+.diff td {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #dee2e6;
+    vertical-align: top;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.diff_header {
+    background: #f8f9fa;
+    color: #495057;
+    font-weight: 600;
+}
+
+.diff_next {
+    background: #f8f9fa;
+    width: 1%;
+    white-space: nowrap;
+}
+
+.diff_add {
+    background: #e8fff0;
+}
+
+.diff_chg {
+    background: #fff6dd;
+}
+
+.diff_sub {
+    background: #ffe9e9;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('isms.document_history', document_id=document.id) }}" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Back to History
+    </a>
+    <a href="{{ url_for('isms.document_detail', document_id=document.id) }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-file-earmark-text"></i> Current Document
+    </a>
+    <form method="POST" action="{{ url_for('isms.restore_document_version', document_id=document.id, version_id=compare_version.id) }}" class="d-inline" onsubmit="return confirm('Restore version v{{ compare_version.version_number }} as the new current version?');">
+        <button type="submit" class="btn btn-outline-warning btn-sm">
+            <i class="bi bi-arrow-counterclockwise"></i> Restore v{{ compare_version.version_number }}
+        </button>
+    </form>
+</div>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-3">
+    <div>
+        <h1 class="mb-1">Compare Versions</h1>
+        <div class="text-muted">{{ document.title }}</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <span class="badge bg-secondary">Selected: v{{ compare_version.version_number }}</span>
+        <span class="badge {% if target_version.id == current_version.id %}bg-success{% else %}bg-dark{% endif %}">Target: v{{ target_version.version_number }}</span>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header"><strong>Choose Versions</strong></div>
+    <div class="card-body">
+        <form method="GET" action="{{ url_for('isms.document_diff', document_id=document.id) }}" class="row g-3 align-items-end">
+            <div class="col-lg-5">
+                <label for="from_version_id" class="form-label">Left Side</label>
+                <select class="form-select" id="from_version_id" name="from_version_id">
+                    {% for version in versions %}
+                    <option value="{{ version.id }}" {% if version.id == compare_version.id %}selected{% endif %}>v{{ version.version_number }}{% if version.id == current_version.id %} (current){% endif %} - {{ version.change_summary or 'No summary provided' }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-5">
+                <label for="to_version_id" class="form-label">Right Side</label>
+                <select class="form-select" id="to_version_id" name="to_version_id">
+                    {% for version in versions %}
+                    <option value="{{ version.id }}" {% if version.id == target_version.id %}selected{% endif %}>v{{ version.version_number }}{% if version.id == current_version.id %} (current){% endif %} - {{ version.change_summary or 'No summary provided' }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-2 d-grid">
+                <button type="submit" class="btn btn-primary">Compare</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Added Lines</div>
+                <div class="fs-4 fw-semibold text-success">{{ diff_summary.added }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Removed Lines</div>
+                <div class="fs-4 fw-semibold text-danger">{{ diff_summary.removed }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Changed Lines</div>
+                <div class="fs-4 fw-semibold text-warning">{{ diff_summary.changed }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header"><strong>Selected Version</strong></div>
+            <div class="card-body">
+                <div><span class="text-muted">Version:</span> v{{ compare_version.version_number }}</div>
+                <div><span class="text-muted">Created:</span> {{ compare_version.created_at.strftime('%Y-%m-%d %H:%M') if compare_version.created_at else '—' }}</div>
+                <div><span class="text-muted">By:</span> {{ compare_version.created_by or 'system' }}</div>
+                <div><span class="text-muted">Summary:</span> {{ compare_version.change_summary or 'No summary provided' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header"><strong>Target Version</strong></div>
+            <div class="card-body">
+                <div><span class="text-muted">Version:</span> v{{ target_version.version_number }}</div>
+                <div><span class="text-muted">Created:</span> {{ target_version.created_at.strftime('%Y-%m-%d %H:%M') if target_version.created_at else '—' }}</div>
+                <div><span class="text-muted">By:</span> {{ target_version.created_by or 'system' }}</div>
+                <div><span class="text-muted">Summary:</span> {{ target_version.change_summary or 'No summary provided' }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Side-by-Side Diff</strong>
+        <span class="text-muted small">Left is selected version, right is target version.</span>
+    </div>
+    <div class="card-body isms-diff-wrap">
+        {{ diff_table|safe }}
+    </div>
+</div>
+{% endblock %}

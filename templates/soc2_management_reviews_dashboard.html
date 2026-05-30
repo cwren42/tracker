@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Management Reviews{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-people"></i> Management Reviews</h2>
+        <p class="text-muted mb-0">Track executive oversight meetings, decisions, and action items for SOC 2 Type 1 evidence.</p>
+    </div>
+    <a href="{{ url_for('readiness.export_type1_pack') }}" class="btn btn-primary">
+        <i class="bi bi-file-earmark-zip"></i> Export Type 1 Pack
+    </a>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white"><h5 class="mb-0">Add Management Review</h5></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('management_review.create_management_review') }}" class="row g-3">
+            <div class="col-md-4"><label class="form-label" for="title">Title</label><input class="form-control" id="title" name="title" required></div>
+            <div class="col-md-2"><label class="form-label" for="review_date">Review Date</label><input class="form-control" type="date" id="review_date" name="review_date" required></div>
+            <div class="col-md-2"><label class="form-label" for="review_period_start">Period Start</label><input class="form-control" type="date" id="review_period_start" name="review_period_start"></div>
+            <div class="col-md-2"><label class="form-label" for="review_period_end">Period End</label><input class="form-control" type="date" id="review_period_end" name="review_period_end"></div>
+            <div class="col-md-2"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in review_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+            <div class="col-md-3"><label class="form-label" for="chairperson">Chairperson</label><input class="form-control" id="chairperson" name="chairperson"></div>
+            <div class="col-md-3"><label class="form-label" for="minute_taker">Minute Taker</label><input class="form-control" id="minute_taker" name="minute_taker"></div>
+            <div class="col-md-3"><label class="form-label" for="location">Location</label><input class="form-control" id="location" name="location"></div>
+            <div class="col-md-3"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference"></div>
+            <div class="col-12"><label class="form-label" for="attendees">Attendees</label><textarea class="form-control" id="attendees" name="attendees" rows="2"></textarea></div>
+            <div class="col-12"><label class="form-label" for="agenda_summary">Agenda Summary</label><textarea class="form-control" id="agenda_summary" name="agenda_summary" rows="3"></textarea></div>
+            <div class="col-md-6"><label class="form-label" for="decisions_summary">Decisions Summary</label><textarea class="form-control" id="decisions_summary" name="decisions_summary" rows="3"></textarea></div>
+            <div class="col-md-3"><label class="form-label" for="effectiveness_summary">Effectiveness Summary</label><textarea class="form-control" id="effectiveness_summary" name="effectiveness_summary" rows="3"></textarea></div>
+            <div class="col-md-3"><label class="form-label" for="resource_summary">Resource Summary</label><textarea class="form-control" id="resource_summary" name="resource_summary" rows="3"></textarea></div>
+            <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Create Management Review</button></div>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>Review</th><th>Status</th><th>Date</th><th>Chairperson</th><th>Actions</th><th></th></tr></thead>
+            <tbody>
+                {% for review in reviews %}
+                <tr>
+                    <td><div class="fw-semibold">{{ review.title }}</div><div class="small text-muted">{{ review.review_key }}</div></td>
+                    <td><span class="badge bg-secondary">{{ review.status }}</span></td>
+                    <td>{{ review.review_date.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ review.chairperson or 'Unassigned' }}</td>
+                    <td>{{ review.actions|length }}</td>
+                    <td><a href="{{ url_for('management_review.management_review_detail', review_id=review.id) }}" class="btn btn-sm btn-outline-primary">Open</a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-5">No management reviews recorded yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

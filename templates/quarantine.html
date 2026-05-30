@@ -1,0 +1,832 @@
+{% extends "base.html" %}
+{% block title %}Email Security Log{% endblock %}
+{% block styles %}
+<style>
+.qstat-card { border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid var(--border-color, #2a2f3a); background: var(--card-bg, #1a1f2e); }
+.qstat-val  { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+.threat-badge-Phish    { background: rgba(220,53,69,.15);  color: #ff6b6b; border: 1px solid rgba(220,53,69,.3); }
+.threat-badge-Malware  { background: rgba(111,66,193,.15); color: #b07bff; border: 1px solid rgba(111,66,193,.3); }
+.threat-badge-Spam     { background: rgba(255,193,7,.12);  color: #ffc107; border: 1px solid rgba(255,193,7,.3); }
+.threat-badge-Bulk     { background: rgba(13,202,240,.1);  color: #0dcaf0; border: 1px solid rgba(13,202,240,.3); }
+.threat-badge-Unknown  { background: rgba(108,117,125,.1); color: #6c757d; border: 1px solid rgba(108,117,125,.3); }
+.risk-Critical { color: #ff6b6b; font-weight: 700; }
+.risk-High     { color: #ff8c42; font-weight: 700; }
+.risk-Medium   { color: #ffc107; }
+.risk-Low      { color: #6c757d; }
+.auth-pass  { color: #20c997; }
+.auth-fail  { color: #ff6b6b; }
+.auth-none  { color: #6c757d; }
+.auth-chip  { display:inline-flex; align-items:center; gap:4px; border-radius:20px; padding:2px 9px; font-size:.72rem; font-weight:600; border:1px solid; }
+.auth-chip.auth-pass  { background:rgba(32,201,151,.12); color:#20c997; border-color:rgba(32,201,151,.3); }
+.auth-chip.auth-fail  { background:rgba(220,53,69,.12);  color:#ff6b6b; border-color:rgba(220,53,69,.3); }
+.auth-chip.auth-none  { background:rgba(108,117,125,.1); color:#6c757d; border-color:rgba(108,117,125,.3); }
+.table-hover tbody tr:hover { background: rgba(255,255,255,.04); }
+.row-actions { white-space:nowrap; }
+.row-actions .btn { padding:2px 8px; font-size:.72rem; }
+#bulk-bar { position:fixed; bottom:0; left:0; right:0; z-index:1050;
+            background:#1a1f2e; border-top:2px solid #4dabf7;
+            padding:10px 20px; display:none; align-items:center; gap:12px; }
+.preview-body-frame { width:100%; min-height:320px; background:white; border:1px solid #2a2f3a; border-radius:6px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1500px;">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+    <div>
+      <h5 class="mb-0 fw-bold"><i class="bi bi-shield-fill-exclamation me-2" style="color:#ff6b6b"></i>Email Security Log</h5>
+      <span class="text-muted small">Exchange Online — full mail flow visibility: delivered, quarantined, blocked &amp; threat intel</span>
+    </div>
+    <div class="ms-auto d-flex align-items-center gap-2 flex-wrap">
+      {% if last_sync %}
+      <span class="text-muted small">Last sync: {{ last_sync.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+      {% endif %}
+      <form method="POST" action="{{ url_for('quarantine.quarantine_sync') }}" class="d-inline">
+        <input type="hidden" name="days" value="{{ days_filter }}">
+        <button type="submit" class="btn btn-sm btn-outline-danger" id="sync-btn">
+          <i class="bi bi-arrow-clockwise me-1"></i>{{ 'Sync Email' if is_admin else 'Sync My Email' }}
+        </button>
+      </form>
+      {% if is_admin %}
+      <button class="btn btn-sm btn-danger fw-semibold" onclick="openPhishBlock('{{ days_filter }}')" title="Generate PowerShell to block all active phishing senders">
+        <i class="bi bi-shield-fill-x me-1"></i>Block Phish Now
+      </button>
+      <a href="{{ url_for('quarantine.quarantine_report', days=days_filter) }}" class="btn btn-sm btn-outline-warning">
+        <i class="bi bi-bar-chart-fill me-1"></i>Report
+      </a>
+      <a href="{{ url_for('quarantine.quarantine_campaigns') }}" class="btn btn-sm btn-outline-warning">
+        <i class="bi bi-diagram-3 me-1"></i>Campaigns
+      </a>
+      <a href="{{ url_for('quarantine.quarantine_export_iocs') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-download me-1"></i>Export IOCs
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="d-flex flex-wrap gap-1 mb-3" role="tablist">
+    {% set tabs = [
+      ('all',         'All',         'grid-3x3',              tab_counts.all,         '#6c757d'),
+      ('delivered',   'Delivered',   'inbox',                 tab_counts.delivered,   '#20c997'),
+      ('quarantined', 'Quarantined', 'shield-fill-exclamation',tab_counts.quarantined,'#ffc107'),
+      ('blocked',     'Blocked',     'slash-circle',          tab_counts.blocked,     '#ff6b6b'),
+      ('junk',        'Junk',        'trash2',                tab_counts.junk,        '#fd7e14'),
+      ('threats',     'Threats',     'bug',                   tab_counts.threats,     '#b07bff'),
+    ] %}
+    {% for key, label, icon, cnt, color in tabs %}
+    {% set active = (view_filter == key) %}
+    <a href="{{ url_for('quarantine.quarantine_list', view=key, days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}"
+       class="btn btn-sm {% if active %}fw-semibold{% else %}btn-outline-secondary{% endif %}"
+       style="{% if active %}background:rgba({{ color|replace('#','') }},0.15);border-color:{{ color }};color:{{ color }};{% endif %}">
+      <i class="bi bi-{{ icon }} me-1"></i>{{ label }}
+      <span class="badge ms-1" style="background:{% if active %}{{ color }}{% else %}rgba(108,117,125,.3){% endif %};color:{% if active %}#0d1117{% else %}#adb5bd{% endif %};font-size:.7rem;">{{ cnt }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  <!-- Stat cards -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-3">
+      <a href="{{ url_for('quarantine.quarantine_list', view='delivered', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
+        <div class="qstat-card" style="border-color:rgba(32,201,151,.3);cursor:pointer;">
+          <div class="text-muted small mb-1"><i class="bi bi-inbox me-1"></i>Delivered</div>
+          <div class="qstat-val text-success">{{ delivered_count }}</div>
+          <div class="text-muted" style="font-size:.7rem;">to inbox last {{ days_filter }}d</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-md-3">
+      <a href="{{ url_for('quarantine.quarantine_list', view='quarantined', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
+        <div class="qstat-card" style="border-color:rgba(255,193,7,.3);cursor:pointer;">
+          <div class="text-muted small mb-1"><i class="bi bi-shield-fill-exclamation me-1"></i>Quarantined</div>
+          <div class="qstat-val" style="color:#ffc107">{{ quarantine_count }}</div>
+          <div class="text-muted" style="font-size:.7rem;">held last {{ days_filter }}d</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-md-3">
+      <a href="{{ url_for('quarantine.quarantine_list', view='blocked', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
+        <div class="qstat-card" style="border-color:rgba(220,53,69,.3);cursor:pointer;">
+          <div class="text-muted small mb-1"><i class="bi bi-slash-circle me-1"></i>Blocked</div>
+          <div class="qstat-val text-danger">{{ blocked_count }}</div>
+          <div class="text-muted" style="font-size:.7rem;">rejected last {{ days_filter }}d</div>
+        </div>
+      </a>
+    </div>
+    <div class="col-6 col-md-3">
+      <a href="{{ url_for('quarantine.quarantine_list', view='threats', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
+        <div class="qstat-card" style="border-color:rgba(176,123,255,.3);cursor:pointer;">
+          <div class="text-muted small mb-1"><i class="bi bi-bug me-1"></i>Threats</div>
+          <div class="qstat-val" style="color:#b07bff">{{ threat_count }}</div>
+          <div class="text-muted" style="font-size:.7rem;">phish {{ phish_count }} · malware {{ malware_count }}</div>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <form method="GET" class="d-flex flex-wrap gap-2 mb-3" id="filter-form">
+    <input type="hidden" name="view" value="{{ view_filter }}">
+    <input type="text" name="q" value="{{ search }}" class="form-control form-control-sm" style="max-width:260px;" placeholder="Search sender, subject, recipient…">
+    <select name="threat" class="form-select form-select-sm" style="max-width:150px;" onchange="this.form.submit()">
+      <option value="">All Threats</option>
+      {% for t in ['Phish','Malware','Spam','Bulk','Unknown'] %}
+      <option value="{{ t }}" {% if threat_filter == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    <select name="policy" class="form-select form-select-sm" style="max-width:160px;" onchange="this.form.submit()">
+      <option value="">All Policies</option>
+      {% for p in ['Anti-Phish','Anti-Malware','Anti-Spam','Unknown'] %}
+      <option value="{{ p }}" {% if policy_filter == p %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+    <select name="status" class="form-select form-select-sm" style="max-width:150px;" onchange="this.form.submit()">
+      <option value="">All Statuses</option>
+      <option value="Delivered"   {% if status_filter == 'Delivered'   %}selected{% endif %}>Delivered</option>
+      <option value="Junk"        {% if status_filter == 'Junk'        %}selected{% endif %}>Junk</option>
+      <option value="Quarantined" {% if status_filter == 'Quarantined' %}selected{% endif %}>Quarantined</option>
+      <option value="Released"    {% if status_filter == 'Released'    %}selected{% endif %}>Released</option>
+      <option value="Blocked"     {% if status_filter == 'Blocked'     %}selected{% endif %}>Blocked</option>
+      <option value="Deleted"     {% if status_filter == 'Deleted'     %}selected{% endif %}>Deleted</option>
+    </select>
+    <select name="days" class="form-select form-select-sm" style="max-width:120px;" onchange="this.form.submit()">
+      {% for d in ['7','14','30','60','90'] %}
+      <option value="{{ d }}" {% if days_filter == d %}selected{% endif %}>Last {{ d }}d</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-search me-1"></i>Search</button>
+    {% if search or threat_filter or policy_filter or status_filter %}
+    <a href="{{ url_for('quarantine.quarantine_list', view=view_filter, days=days_filter) }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+    {% endif %}
+  </form>
+
+  <!-- Table -->
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem;" id="qTable">
+      <thead>
+        <tr>
+          <th style="width:32px;"><input type="checkbox" id="check-all" class="form-check-input" title="Select all"></th>
+          <th style="width:120px">Received</th>
+          <th>From</th>
+          <th>Subject</th>
+          <th style="width:160px">Recipient</th>
+          <th style="width:80px">Threat</th>
+          <th style="width:58px" title="SPF / DKIM / DMARC">Auth</th>
+          <th style="width:45px">Risk</th>
+          <th style="width:30px" title="Attachments"><i class="bi bi-paperclip"></i></th>
+          <th style="width:90px">Status</th>
+          <th style="width:175px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in messages %}
+        <tr id="row-{{ m.message_id | replace('-','_') }}" data-id="{{ m.message_id }}" data-status="{{ m.release_status }}">
+          <td><input type="checkbox" class="form-check-input row-check" value="{{ m.message_id }}"></td>
+          <td class="text-muted" style="white-space:nowrap;font-size:.75rem;">
+            {{ m.received_time.strftime('%m/%d %H:%M') if m.received_time else '—' }}
+          </td>
+          <td>
+            <div class="fw-semibold" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ m.sender_address }}">
+              {{ m.sender_display_name or m.sender_address or '—' }}
+            </div>
+            <div class="text-muted" style="font-size:.72rem;">{{ m.sender_domain or '' }}</div>
+          </td>
+          <td>
+            <span style="max-width:240px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ m.subject }}">
+              {{ m.subject or '(no subject)' }}
+            </span>
+          </td>
+          <td class="text-muted" style="font-size:.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ m.recipient_address }}">
+            {{ m.recipient_address or '—' }}
+          </td>
+          <td>
+            <span class="badge threat-badge-{{ m.threat_type or 'Unknown' }}" style="border-radius:5px;font-size:.7rem;">
+              {{ m.threat_type or 'Unknown' }}
+            </span>
+          </td>
+          <td>
+            {% set _sdom = m.sender_address.split('@')[1]|lower if m.sender_address and '@' in m.sender_address else '' %}
+            {% set _rdom = m.recipient_address.split('@')[1]|lower if m.recipient_address and '@' in m.recipient_address else '' %}
+            {% set _internal = m.email_direction in ('IntraOrg','OutboundToExternal') or (_sdom and _rdom and _sdom == _rdom) %}
+            {% if _internal and not m.spf_result and not m.dkim_result and not m.dmarc_result %}
+            <span class="text-muted" style="font-size:.7rem;" title="Internal / outbound — auth not applicable">—</span>
+            {% else %}
+            <span title="SPF: {{ m.spf_result or 'none' }}" class="auth-{{ 'pass' if m.spf_result == 'pass' else ('fail' if m.spf_result in ('fail','softfail') else 'none') }}">S</span>
+            <span title="DKIM: {{ m.dkim_result or 'none' }}" class="auth-{{ 'pass' if m.dkim_result == 'pass' else ('fail' if m.dkim_result == 'fail' else 'none') }}">D</span>
+            <span title="DMARC: {{ m.dmarc_result or 'none' }}" class="auth-{{ 'pass' if m.dmarc_result == 'pass' else ('fail' if m.dmarc_result == 'fail' else 'none') }}">M</span>
+            {% endif %}
+          </td>
+          <td class="risk-{{ m.risk_label }}">{{ m.risk_score }}</td>
+          <td class="text-muted" style="font-size:.75rem;">
+            {% if m.attachment_count %}
+            <i class="bi bi-paperclip" title="{{ m.attachment_count }} attachment(s)"></i>{{ m.attachment_count }}
+            {% endif %}
+          </td>
+          <td>
+            {% if m.release_status == 'Delivered' %}
+            <span class="badge bg-success"><i class="bi bi-inbox me-1"></i>Delivered</span>
+            {% elif m.release_status == 'Junk' %}
+            <span class="badge" style="background:#fd7e14;color:#fff;"><i class="bi bi-trash2 me-1"></i>Junk</span>
+            {% elif m.release_status == 'Quarantined' %}
+            <span class="badge bg-warning text-dark"><i class="bi bi-shield-fill-exclamation me-1"></i>Quarantined</span>
+            {% elif m.release_status == 'Released' %}
+            <span class="badge" style="background:#20c997;color:#0d1117;"><i class="bi bi-box-arrow-up me-1"></i>Released</span>
+            {% elif m.release_status == 'Blocked' %}
+            <span class="badge bg-danger"><i class="bi bi-slash-circle me-1"></i>Blocked</span>
+            {% elif m.release_status == 'Deleted' %}
+            <span class="badge bg-secondary"><i class="bi bi-trash3 me-1"></i>Deleted</span>
+            {% else %}
+            <span class="badge bg-secondary">{{ m.release_status or 'Unknown' }}</span>
+            {% endif %}
+          </td>
+          <td class="row-actions">
+              {% if is_admin %}
+            <button class="btn btn-outline-primary" onclick="openPreview('{{ m.message_id }}', '{{ m.release_status }}')" title="Preview message">
+              <i class="bi bi-eye"></i>
+            </button>
+              {% endif %}
+            <a href="{{ url_for('quarantine.quarantine_detail', message_id=m.message_id) }}" class="btn btn-outline-secondary" title="Full details">
+              <i class="bi bi-card-text"></i>
+            </a>
+            {% if is_admin and m.release_status == 'Quarantined' %}
+            <button class="btn btn-outline-success" onclick="rowAction('{{ m.message_id }}', 'release', this)" title="Release to inbox">
+              <i class="bi bi-box-arrow-up"></i>
+            </button>
+            <button class="btn btn-outline-danger" onclick="rowAction('{{ m.message_id }}', 'delete', this)" title="Delete from quarantine">
+              <i class="bi bi-trash3"></i>
+            </button>
+            {% elif is_admin and m.release_status in ['Delivered', 'Junk', 'Released'] %}
+            <button class="btn btn-outline-danger" onclick="rowAction('{{ m.message_id }}', 'delete', this)" title="Delete from mailbox">
+              <i class="bi bi-trash3"></i>
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="11" class="text-center text-muted py-5">
+            <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+            No quarantine messages found.
+            {% if not last_sync %}Click <strong>Sync Exchange</strong> to pull data.{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  {% if pagination and pagination.pages > 1 %}
+  <nav class="mt-3 d-flex justify-content-center">
+    <ul class="pagination pagination-sm mb-0">
+      {% if pagination.has_prev %}
+      <li class="page-item"><a class="page-link" href="{{ url_for('quarantine.quarantine_list', page=pagination.prev_num, view=view_filter, q=search, threat=threat_filter, policy=policy_filter, status=status_filter, days=days_filter) }}">‹</a></li>
+      {% endif %}
+      {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+        {% if p %}
+        <li class="page-item {% if p == pagination.page %}active{% endif %}">
+          <a class="page-link" href="{{ url_for('quarantine.quarantine_list', page=p, view=view_filter, q=search, threat=threat_filter, policy=policy_filter, status=status_filter, days=days_filter) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+      {% if pagination.has_next %}
+      <li class="page-item"><a class="page-link" href="{{ url_for('quarantine.quarantine_list', page=pagination.next_num, view=view_filter, q=search, threat=threat_filter, policy=policy_filter, status=status_filter, days=days_filter) }}">›</a></li>
+      {% endif %}
+    </ul>
+  </nav>
+  {% endif %}
+
+</div>
+
+{% if is_admin %}
+<!-- ── Bulk Action Bar ────────────────────────────────────────────────────── -->
+<div id="bulk-bar">
+  <i class="bi bi-check2-square text-info me-1"></i>
+  <span class="fw-semibold" id="bulk-count">0</span> <span class="text-muted">selected</span>
+  <button class="btn btn-sm btn-outline-primary ms-3" onclick="bulkAiAnalyze()">
+    <i class="bi bi-stars me-1"></i>AI Analyze Selected
+  </button>
+  <button class="btn btn-sm btn-success ms-3" onclick="bulkAction('release')">
+    <i class="bi bi-box-arrow-up me-1"></i>Release Selected
+  </button>
+  <button class="btn btn-sm btn-danger" onclick="bulkAction('delete')">
+    <i class="bi bi-trash3 me-1"></i>Delete Selected
+  </button>
+  <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="clearSelection()">Clear</button>
+</div>
+{% endif %}
+
+{% if is_admin %}
+<div class="modal fade" id="bulkAiModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #2a2f3a;">
+      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;">
+        <h5 class="modal-title fw-bold"><i class="bi bi-stars me-2" style="color:#a78bfa"></i>Bulk AI Analysis</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="bulk-ai-content" class="py-2"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Toast notification ──────────────────────────────────────────────────── -->
+<div id="qToast" style="position:fixed;top:20px;right:20px;z-index:9999;min-width:280px;display:none;border-radius:10px;padding:12px 16px;font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);"></div>
+
+<!-- ── Preview Modal ──────────────────────────────────────────────────────── -->
+<div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #2a2f3a;">
+
+      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;align-items:flex-start;">
+        <div class="flex-grow-1" style="min-width:0;">
+          <h5 class="modal-title fw-bold text-truncate" id="pv-subject" style="max-width:700px;">Loading…</h5>
+          <div class="d-flex flex-wrap gap-3 mt-1" style="font-size:.78rem;" id="pv-meta"></div>
+        </div>
+        <button type="button" class="btn-close btn-close-white ms-3 flex-shrink-0" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body p-0">
+        <div id="pv-loading" class="text-center py-5">
+          <div class="spinner-border text-primary mb-3"></div>
+          <div class="text-muted">Fetching message data from Defender…</div>
+        </div>
+        <div id="pv-content" style="display:none;">
+          <!-- Auth + IP bar -->
+          <div class="px-4 pt-3 pb-2 d-flex flex-wrap gap-2 align-items-center" style="border-bottom:1px solid #1a2030;">
+            <div id="pv-auth"></div>
+            <div class="ms-auto text-muted small" id="pv-ip"></div>
+            <div id="pv-risk" class="ms-2"></div>
+          </div>
+
+          <!-- Tabs -->
+          <ul class="nav nav-tabs px-4 mt-3 mb-0" id="pvTabs" role="tablist">
+            {% if is_admin %}
+            <li class="nav-item"><button class="nav-link active" data-bs-target="#pv-tab-body"    data-bs-toggle="tab">Body</button></li>
+            {% endif %}
+            <li class="nav-item"><button class="nav-link {% if not is_admin %}active{% endif %}"  data-bs-target="#pv-tab-urls"    data-bs-toggle="tab">URLs <span class="badge bg-secondary ms-1" id="pv-url-ct">0</span></button></li>
+            <li class="nav-item"><button class="nav-link"        data-bs-target="#pv-tab-attach"  data-bs-toggle="tab">Attachments <span class="badge bg-secondary ms-1" id="pv-att-ct">0</span></button></li>
+          </ul>
+          <div class="tab-content px-4 pb-3 pt-2">
+            {% if is_admin %}
+            <div class="tab-pane active" id="pv-tab-body">
+              <div id="pv-body-placeholder" class="text-center text-muted py-4">
+                <i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>
+                Body available only for threat-detected messages via Defender Advanced Hunting (EmailContent table).
+              </div>
+              <iframe id="pv-body-frame" sandbox="allow-same-origin allow-popups"
+                      style="width:100%;min-height:360px;background:white;border:1px solid #2a2f3a;border-radius:6px;display:none;"></iframe>
+            </div>
+            {% endif %}
+            <div class="tab-pane {% if not is_admin %}active{% endif %}" id="pv-tab-urls">
+              <div id="pv-urls"></div>
+            </div>
+            <div class="tab-pane" id="pv-tab-attach">
+              <div id="pv-attach"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="border-top:1px solid #2a2f3a;">
+        <span id="pv-threat-badge" class="me-auto"></span>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        {% if is_admin %}
+        <button class="btn btn-sm btn-success" id="pv-release-btn" style="display:none;" onclick="previewAction('release')">
+          <i class="bi bi-box-arrow-up me-1"></i>Release to Inbox
+        </button>
+        <button class="btn btn-sm btn-danger" id="pv-delete-btn" style="display:none;" onclick="previewAction('delete')">
+          <i class="bi bi-trash3 me-1"></i>Delete
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Block Phish Modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="phishBlockModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #dc3545;">
+      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;">
+        <div>
+          <h5 class="modal-title fw-bold"><i class="bi bi-shield-fill-x text-danger me-2"></i>Credential Phishing — Block Script</h5>
+          <div class="text-muted" style="font-size:.75rem;" id="phish-modal-subtitle">Loading…</div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="phish-loading" class="text-center py-5"><div class="spinner-border text-danger mb-3"></div><div class="text-muted">Querying phishing data…</div></div>
+        <div id="phish-error" class="p-4" style="display:none;"><div class="alert alert-warning mb-0"><i class="bi bi-exclamation-triangle me-2"></i><span id="phish-error-msg"></span></div></div>
+        <div id="phish-script-wrap" style="display:none;">
+          <div class="d-flex flex-wrap gap-4 px-4 pt-3 pb-2" style="border-bottom:1px solid #1a2030;font-size:.8rem;">
+            <div><span class="text-muted">Phish messages: </span><span class="fw-bold text-danger" id="ph-msg-count">—</span></div>
+            <div><span class="text-muted">Domains to block: </span><span class="fw-bold text-warning" id="ph-dom-count">—</span></div>
+            <div><span class="text-muted">Addresses to block: </span><span class="fw-bold text-warning" id="ph-addr-count">—</span></div>
+            <div><span class="text-muted">Period: </span><span class="fw-bold" id="ph-period">—</span></div>
+          </div>
+          <div class="mx-4 mt-3 mb-2 p-2 rounded" style="background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.3);font-size:.78rem;">
+            <i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>
+            <strong>Review before running.</strong> Script includes rollback commands. Run in EXO V3 PowerShell.
+          </div>
+          <pre id="phish-script-code" style="font-family:monospace;font-size:.78rem;background:#0d0f17;color:#c3e88d;line-height:1.65;margin:0 1rem;padding:1rem 1.2rem;border:1px solid #2a2f3a;border-radius:8px;white-space:pre-wrap;word-break:break-all;max-height:480px;overflow-y:auto;"></pre>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid #2a2f3a;">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-sm btn-outline-secondary" id="ph-copy-btn" onclick="copyPhishScript()" style="display:none;"><i class="bi bi-clipboard me-1"></i>Copy Script</button>
+        <button class="btn btn-sm btn-warning" id="ph-download-btn" onclick="downloadPhishScript()" style="display:none;"><i class="bi bi-download me-1"></i>Download .ps1</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtBytes(b) {
+  if (!b) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+function showToast(msg, level) {
+  const t = document.getElementById('qToast');
+  const colors = {success:{bg:'#1a3a2a',border:'#20c997',text:'#20c997'}, danger:{bg:'#3a1a1a',border:'#ff6b6b',text:'#ff6b6b'}, warning:{bg:'#3a2e10',border:'#ffc107',text:'#ffc107'}, info:{bg:'#1e3a5f',border:'#4dabf7',text:'#74c0fc'}};
+  const c = colors[level] || colors.info;
+  t.style.cssText = `position:fixed;top:20px;right:20px;z-index:9999;min-width:280px;border-radius:10px;padding:12px 16px;font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);background:${c.bg};border:1px solid ${c.border};color:${c.text};`;
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+function authChip(name, val) {
+  const cls = val === 'pass' ? 'auth-pass' : (val === 'fail' || val === 'softfail' ? 'auth-fail' : 'auth-none');
+  const icon = val === 'pass' ? 'check-circle' : (val === 'fail' || val === 'softfail' ? 'x-circle' : 'dash-circle');
+  return `<span class="auth-chip ${cls} me-1"><i class="bi bi-${icon}"></i> ${name}: ${escHtml(val||'none')}</span>`;
+}
+
+// ── Sync indicator ────────────────────────────────────────────────────────────
+const syncForm = document.querySelector('form[action*="quarantine/sync"]');
+const syncBtn  = document.getElementById('sync-btn');
+if (syncForm && syncBtn) {
+  syncForm.addEventListener('submit', () => {
+    syncBtn.disabled = true;
+    syncBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Starting…';
+  });
+}
+const statusUrl = "{{ url_for('quarantine.quarantine_sync_status') }}";
+function pollSyncStatus() {
+  fetch(statusUrl).then(r=>r.json()).then(data => {
+    if (data.running) {
+      showToast(data.message, 'info');
+      setTimeout(pollSyncStatus, 3000);
+    } else if (data.level === 'success' && data.added + data.updated > 0) {
+      showToast('✓ ' + data.message, 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else if (data.level === 'warning' || data.level === 'danger') {
+      showToast(data.message, data.level);
+    }
+  }).catch(()=>{});
+}
+const hasInfoFlash = document.querySelector('.alert-info');
+if (hasInfoFlash) { pollSyncStatus(); }
+else { fetch(statusUrl).then(r=>r.json()).then(d => { if(d.running) pollSyncStatus(); }).catch(()=>{}); }
+
+// ── Checkbox / bulk bar ───────────────────────────────────────────────────────
+const checkAll = document.getElementById('check-all');
+const bulkBar  = document.getElementById('bulk-bar');
+
+function getChecked() {
+  return [...document.querySelectorAll('.row-check:checked')].map(c => c.value);
+}
+function updateBulkBar() {
+  const ids = getChecked();
+  if (ids.length > 0) {
+    document.getElementById('bulk-count').textContent = ids.length;
+    bulkBar.style.display = 'flex';
+  } else {
+    bulkBar.style.display = 'none';
+  }
+}
+function clearSelection() {
+  document.querySelectorAll('.row-check').forEach(c => c.checked = false);
+  checkAll.checked = false;
+  updateBulkBar();
+}
+checkAll.addEventListener('change', function() {
+  document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked);
+  updateBulkBar();
+});
+document.querySelectorAll('.row-check').forEach(c => c.addEventListener('change', updateBulkBar));
+
+async function bulkAction(action) {
+  const ids = getChecked();
+  if (!ids.length) return;
+  const label = action === 'release' ? 'release' : 'delete';
+  if (!confirm(`${label.charAt(0).toUpperCase()+label.slice(1)} ${ids.length} selected message(s)?`)) return;
+
+  const res = await fetch("{{ url_for('quarantine.quarantine_bulk') }}", {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+    body: JSON.stringify({action, ids}),
+  }).then(r=>r.json());
+
+  const msg = `${action === 'release' ? 'Released' : 'Deleted'} ${res.ok_count} message(s)${res.fail_count ? ` (${res.fail_count} failed)` : ''}.`;
+  showToast(msg, res.fail_count ? 'warning' : 'success');
+  clearSelection();
+  setTimeout(() => location.reload(), 1500);
+}
+
+async function bulkAiAnalyze() {
+  const ids = getChecked();
+  if (!ids.length) return;
+  const modal = new bootstrap.Modal(document.getElementById('bulkAiModal'));
+  const content = document.getElementById('bulk-ai-content');
+  modal.show();
+  content.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary mb-2"></div><div class="text-muted small">Analyzing selected emails with GPT-4o…</div></div>';
+  try {
+    const r = await fetch("{{ url_for('quarantine.quarantine_bulk_ai_analyze') }}", {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+      body: JSON.stringify({ids}),
+    }).then(r => r.json());
+    if (r.error) {
+      content.innerHTML = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(r.error)}</div>`;
+    } else {
+      content.innerHTML =
+        `<div class="text-muted" style="font-size:.75rem;margin-bottom:.5rem;"><i class="bi bi-stars me-1" style="color:#a78bfa"></i>Analyzed ${Number(r.count||ids.length)} selected email(s) with ${escHtml(r.model||'GPT-4o')}</div>` +
+        renderMarkdown(r.analysis);
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="alert alert-danger">Failed: ${escHtml(String(e))}</div>`;
+  }
+}
+
+// ── Row-level inline actions ──────────────────────────────────────────────────
+async function rowAction(messageId, action, btn) {
+  const label = action === 'release' ? 'Release this message to inbox?' : 'Delete this message from quarantine?';
+  if (!confirm(label)) return;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  const res = await fetch(`{{ url_for('quarantine.quarantine_list') }}`.replace('/quarantine', `/quarantine/${encodeURIComponent(messageId)}`) + '/' + action, {
+    method: 'POST',
+    headers: {'X-Requested-With':'XMLHttpRequest'},
+  }).then(r=>r.json()).catch(e => ({success:false, error:String(e)}));
+
+  if (res.success) {
+    showToast(action === 'release' ? 'Released to inbox.' : 'Deleted from quarantine.', 'success');
+    const row = document.getElementById('row-' + messageId.replace(/-/g,'_'));
+    if (row) {
+      const statusCell = row.querySelector('td:nth-child(10)');
+      if (statusCell) statusCell.innerHTML = action === 'release'
+        ? '<span class="badge bg-success">Released</span>'
+        : '<span class="badge bg-secondary">Deleted</span>';
+      const actCell = row.querySelector('td:last-child');
+      if (actCell) { const btns = actCell.querySelectorAll('.btn-outline-success,.btn-outline-danger'); btns.forEach(b=>b.remove()); }
+    }
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    showToast('Action failed: ' + (res.error || 'Unknown error'), 'danger');
+  }
+}
+
+// ── Preview modal ─────────────────────────────────────────────────────────────
+let _pvId = null;
+
+function openPreview(messageId, status) {
+  _pvId = messageId;
+  const modal = new bootstrap.Modal(document.getElementById('previewModal'));
+  modal.show();
+
+  document.getElementById('pv-loading').style.display   = '';
+  document.getElementById('pv-content').style.display   = 'none';
+  document.getElementById('pv-subject').textContent     = 'Loading…';
+  document.getElementById('pv-meta').innerHTML          = '';
+  document.getElementById('pv-auth').innerHTML          = '';
+  document.getElementById('pv-ip').textContent          = '';
+  const _relBtn = document.getElementById('pv-release-btn');
+  const _delBtn = document.getElementById('pv-delete-btn');
+  if (_relBtn) _relBtn.style.display = 'none';
+  if (_delBtn) _delBtn.style.display  = 'none';
+  const _bodyFrame = document.getElementById('pv-body-frame');
+  const _bodyPh    = document.getElementById('pv-body-placeholder');
+  if (_bodyFrame) _bodyFrame.style.display  = 'none';
+  if (_bodyPh)    _bodyPh.style.display = '';
+
+  fetch(`/quarantine/${encodeURIComponent(messageId)}/preview`)
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('pv-loading').style.display = 'none';
+      document.getElementById('pv-content').style.display = '';
+
+      document.getElementById('pv-subject').textContent = d.subject || '(no subject)';
+      document.getElementById('pv-meta').innerHTML = `
+        <span class="text-muted"><i class="bi bi-person me-1"></i>${escHtml(d.sender_display_name||d.sender||'')}</span>
+        <span class="text-muted">‹${escHtml(d.sender||'')}›</span>
+        <span class="text-muted"><i class="bi bi-send me-1"></i>${escHtml(d.recipient||'')}</span>
+        <span class="text-muted"><i class="bi bi-calendar3 me-1"></i>${d.received ? new Date(d.received).toLocaleString() : '—'}</span>
+        ${d.email_direction ? `<span class="badge bg-secondary" style="font-size:.68rem;">${escHtml(d.email_direction)}</span>` : ''}`;
+
+      const _sdom = (d.sender||'').split('@')[1]||'';
+      const _rdom = (d.recipient||'').split('@')[1]||'';
+      const _isInternal = d.email_direction === 'IntraOrg' || d.email_direction === 'OutboundToExternal' || (_sdom && _rdom && _sdom === _rdom);
+      if (_isInternal && !d.spf && !d.dkim && !d.dmarc) {
+        document.getElementById('pv-auth').innerHTML = '<span class="text-muted small"><i class="bi bi-dash-circle me-1"></i>Internal mail — auth not applicable</span>';
+      } else {
+        document.getElementById('pv-auth').innerHTML =
+          authChip('SPF', d.spf) + authChip('DKIM', d.dkim) + authChip('DMARC', d.dmarc);
+      }
+
+      if (d.sender_ip) {
+        document.getElementById('pv-ip').innerHTML = `<i class="bi bi-hdd-network me-1"></i><code>${escHtml(d.sender_ip)}</code>`;
+      }
+      if (d.risk_label) {
+        const rColors = {Critical:'#ff6b6b',High:'#ff8c42',Medium:'#ffc107',Low:'#6c757d'};
+        document.getElementById('pv-risk').innerHTML =
+          `<span style="color:${rColors[d.risk_label]||'#6c757d'};font-size:.78rem;font-weight:600;">Risk ${d.risk_score} — ${d.risk_label}</span>`;
+      }
+      if (d.threat_type) {
+        document.getElementById('pv-threat-badge').innerHTML =
+          `<span class="badge threat-badge-${d.threat_type}">${d.threat_type}</span> ${escHtml(d.policy_type||'')}`;
+      }
+
+      // Body (admin only — elements may not exist in DOM for non-admins)
+      const bodyFrame = document.getElementById('pv-body-frame');
+      const bodyPlaceholder = document.getElementById('pv-body-placeholder');
+      if (bodyFrame && bodyPlaceholder) {
+      if (d.body_html) {
+        bodyFrame.srcdoc = d.body_html;
+        bodyFrame.style.display = '';
+        bodyPlaceholder.style.display = 'none';
+      } else if (d.body_preview) {
+        // bodyPreview only (plain text, ~255 chars)
+        bodyFrame.srcdoc = `<html><body style="font-family:sans-serif;padding:16px;color:#333;">${escHtml(d.body_preview)}<br><br><em style="color:#888;">[Preview truncated — grant Mail.Read for full body]</em></body></html>`;
+        bodyFrame.style.display = '';
+        bodyPlaceholder.style.display = 'none';
+      } else if (d.body_permission_needed) {
+        bodyPlaceholder.innerHTML = `<i class="bi bi-lock d-block fs-2 mb-2"></i>
+          <strong>Mail.Read permission required</strong>
+          <p class="text-muted small mt-2 mb-1">Add <code>Mail.Read</code> (Application) to your Azure app registration and grant admin consent.</p>
+          <p class="text-muted small">In Azure AD → App registrations → your app → API permissions → Add → Microsoft Graph → Application → Mail.Read → Grant admin consent.</p>`;
+        bodyPlaceholder.style.display = '';
+      } else if (['Quarantined','Blocked'].includes(d.release_status)) {
+        bodyPlaceholder.innerHTML = `<i class="bi bi-shield-fill-exclamation d-block fs-2 mb-2 text-warning"></i>
+          <strong>Body not available for ${escHtml(d.release_status || '')} messages</strong>
+          <p class="text-muted small mt-2">The email was never delivered to a mailbox, so no body can be read via Graph API.<br>
+          Release to inbox first, then preview — or check the URLs/Attachments tabs for threat evidence.</p>`;
+        bodyPlaceholder.style.display = '';
+      } else {
+        bodyPlaceholder.innerHTML = `<i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>Body not available.`;
+        bodyPlaceholder.style.display = '';
+      }
+      } // end if (bodyFrame && bodyPlaceholder)
+
+      // URLs tab
+      document.getElementById('pv-url-ct').textContent = (d.urls||[]).length;
+      document.getElementById('pv-urls').innerHTML = d.urls && d.urls.length
+        ? `<table class="table table-sm mt-2" style="font-size:.8rem;">
+             <thead><tr><th>URL</th><th style="width:90px">Location</th></tr></thead>
+             <tbody>${d.urls.map(u=>`<tr>
+               <td style="word-break:break-all;font-family:monospace;font-size:.75rem;">${escHtml(u.Url||'')}</td>
+               <td class="text-muted">${escHtml(u.UrlLocation||'')}</td>
+             </tr>`).join('')}</tbody>
+           </table>`
+        : '<div class="text-muted small py-3 text-center">No URLs extracted</div>';
+
+      // Attachments tab
+      document.getElementById('pv-att-ct').textContent = (d.attachments||[]).length;
+      document.getElementById('pv-attach').innerHTML = d.attachments && d.attachments.length
+        ? `<table class="table table-sm mt-2" style="font-size:.8rem;">
+             <thead><tr><th>File</th><th>Type</th><th>Size</th><th>SHA256</th><th>Threat</th></tr></thead>
+             <tbody>${d.attachments.map(a=>`<tr>
+               <td>${escHtml(a.FileName||'')}</td>
+               <td class="text-muted">${escHtml(a.FileType||'')}</td>
+               <td class="text-muted">${fmtBytes(a.FileSize)}</td>
+               <td style="font-family:monospace;font-size:.7rem;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(a.SHA256||'')}">${a.SHA256?a.SHA256.slice(0,12)+'…':'—'}</td>
+               <td class="text-danger">${escHtml(a.MalwareFamily||a.ThreatNames||'—')}</td>
+             </tr>`).join('')}</tbody>
+           </table>`
+        : '<div class="text-muted small py-3 text-center">No attachments found</div>';
+
+      // Action buttons (admin only — may not exist in DOM)
+      if (d.release_status === 'Quarantined') {
+        const _r = document.getElementById('pv-release-btn');
+        const _d = document.getElementById('pv-delete-btn');
+        if (_r) _r.style.display = '';
+        if (_d) _d.style.display  = '';
+      }
+    })
+    .catch(err => {
+      document.getElementById('pv-loading').innerHTML =
+        `<div class="alert alert-danger mx-4">Failed to load preview: ${escHtml(String(err))}</div>`;
+    });
+}
+
+async function previewAction(action) {
+  if (!_pvId) return;
+  if (!confirm(action === 'release' ? 'Release this message to inbox?' : 'Delete this message?')) return;
+  const btnId = action === 'release' ? 'pv-release-btn' : 'pv-delete-btn';
+  const btn = document.getElementById(btnId);
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  const res = await fetch(`/quarantine/${encodeURIComponent(_pvId)}/${action}`, {
+    method: 'POST',
+    headers: {'X-Requested-With':'XMLHttpRequest'},
+  }).then(r=>r.json()).catch(e=>({success:false,error:String(e)}));
+
+  if (res.success) {
+    bootstrap.Modal.getInstance(document.getElementById('previewModal')).hide();
+    showToast(action==='release' ? 'Message released to inbox.' : 'Message deleted.', 'success');
+    setTimeout(()=>location.reload(), 1200);
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    showToast('Action failed: ' + (res.error||'Unknown error'), 'danger');
+  }
+}
+function renderMarkdown(text) {
+  let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s
+    .replace(/^### (.+)$/gm, '<h6 class="fw-bold mt-3 mb-1" style="color:#a78bfa;">$1</h6>')
+    .replace(/^## (.+)$/gm, '<h5 class="fw-bold mt-3 mb-1">$1</h5>')
+    .replace(/^# (.+)$/gm, '<h4 class="fw-bold mt-3 mb-1">$1</h4>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`(.+?)`/g, '<code class="text-warning" style="font-size:.82em;">$1</code>')
+    .replace(/^[-\*] (.+)$/gm, '<li class="mb-1">$1</li>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+  s = s.replace(/(<li[^>]*>.*?<\/li><br>)+/g, m => '<ul class="mb-2 mt-1">' + m.replace(/<br>/g,'') + '</ul>');
+  return `<div style="font-size:.85rem;line-height:1.75;padding:.25rem 0;">${s}</div>`;
+}
+// ── Phishing Block Script ─────────────────────────────────────────────────────
+let _phishScript = '';
+function openPhishBlock(days) {
+  new bootstrap.Modal(document.getElementById('phishBlockModal')).show();
+  document.getElementById('phish-loading').style.display = '';
+  document.getElementById('phish-error').style.display   = 'none';
+  document.getElementById('phish-script-wrap').style.display = 'none';
+  document.getElementById('ph-copy-btn').style.display   = 'none';
+  document.getElementById('ph-download-btn').style.display = 'none';
+  _phishScript = '';
+  fetch(`{{ url_for('quarantine.quarantine_ps_block_phish') }}?days=${days}`)
+    .then(r=>r.json())
+    .then(data => {
+      document.getElementById('phish-loading').style.display = 'none';
+      if (data.error) {
+        document.getElementById('phish-error-msg').textContent = data.error;
+        document.getElementById('phish-error').style.display = '';
+        document.getElementById('phish-modal-subtitle').textContent = 'No phishing data found';
+        return;
+      }
+      _phishScript = data.script;
+      document.getElementById('phish-modal-subtitle').textContent = `${data.phish_total} phishing messages · ${data.domain_count} domains · last ${data.days} days`;
+      document.getElementById('ph-msg-count').textContent  = data.phish_total;
+      document.getElementById('ph-dom-count').textContent  = data.domain_count;
+      document.getElementById('ph-addr-count').textContent = data.addr_count;
+      document.getElementById('ph-period').textContent     = `Last ${data.days} days`;
+      document.getElementById('phish-script-code').textContent = data.script;
+      document.getElementById('phish-script-wrap').style.display = '';
+      document.getElementById('ph-copy-btn').style.display   = '';
+      document.getElementById('ph-download-btn').style.display = '';
+    })
+    .catch(err => {
+      document.getElementById('phish-loading').style.display = 'none';
+      document.getElementById('phish-error-msg').textContent = 'Failed: ' + err;
+      document.getElementById('phish-error').style.display = '';
+    });
+}
+function copyPhishScript() {
+  if (!_phishScript) return;
+  navigator.clipboard.writeText(_phishScript).then(() => {
+    const btn = document.getElementById('ph-copy-btn');
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied!';
+    btn.classList.replace('btn-outline-secondary','btn-success');
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy Script'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+  });
+}
+function downloadPhishScript() {
+  if (!_phishScript) return;
+  const date = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(new Blob([_phishScript],{type:'text/plain'})), download:`Block_CredPhish_${date}.ps1`});
+  a.click(); URL.revokeObjectURL(a.href);
+}
+</script>
+{% endblock %}

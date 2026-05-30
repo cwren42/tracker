@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}{{ record.acknowledgement_key }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('policy_acknowledgements.acknowledgements_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to policy acknowledgements</a>
+    <h2 class="mt-2 mb-1">{{ record.person_name }}</h2>
+    <div class="text-muted">{{ record.acknowledgement_key }} · {{ record.policy_name }}</div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white"><h5 class="mb-0">Update Acknowledgement</h5></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('policy_acknowledgements.update_acknowledgement', acknowledgement_id=record.id) }}" class="row g-3">
+            <div class="col-12"><label class="form-label" for="employee_id">Employee</label><select class="form-select" id="employee_id" name="employee_id"><option value="">Manual entry</option>{% for employee in employees %}<option value="{{ employee.id }}" {% if record.employee_id == employee.id %}selected{% endif %}>{{ employee.name }}{% if employee.department %} · {{ employee.department }}{% endif %}</option>{% endfor %}</select></div>
+            <div class="col-md-6"><label class="form-label" for="person_name">Person</label><input class="form-control" id="person_name" name="person_name" value="{{ record.person_name }}"></div>
+            <div class="col-md-6"><label class="form-label" for="person_email">Email</label><input class="form-control" id="person_email" name="person_email" value="{{ record.person_email or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="department">Department</label><input class="form-control" id="department" name="department" value="{{ record.department or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="acknowledgement_type">Type</label><select class="form-select" id="acknowledgement_type" name="acknowledgement_type">{% for option in type_options %}<option value="{{ option }}" {% if record.acknowledgement_type == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></div>
+            <div class="col-md-8"><label class="form-label" for="policy_name">Policy Name</label><input class="form-control" id="policy_name" name="policy_name" value="{{ record.policy_name }}"></div>
+            <div class="col-md-4"><label class="form-label" for="policy_version">Version</label><input class="form-control" id="policy_version" name="policy_version" value="{{ record.policy_version or '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="acknowledged_on">Acknowledged On</label><input class="form-control" type="date" id="acknowledged_on" name="acknowledged_on" value="{{ record.acknowledged_on.strftime('%Y-%m-%d') if record.acknowledged_on else '' }}"></div>
+            <div class="col-md-6"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in status_options %}<option value="{{ option }}" {% if record.status == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></div>
+            <div class="col-12"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference" value="{{ record.evidence_reference or '' }}"></div>
+            <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="4">{{ record.notes or '' }}</textarea></div>
+            <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Save Changes</button></div>
+        </form>
+    </div>
+</div>
+{% endblock %}

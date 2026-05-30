@@ -1,0 +1,705 @@
+{% extends "base.html" %}
+
+{% block title %}Windows Backup – Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+
+    <!-- ── Page header ──────────────────────────────────────────────────────── -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Windows Backup</h2>
+            <p class="text-muted mb-0 small">NAS-based file backup using isolated (non-domain) credentials</p>
+        </div>
+        <a href="{{ url_for('settings.settings') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i>Back to Settings
+        </a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}{% for category, message in messages %}
+    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+        {{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    {% endfor %}{% endif %}
+    {% endwith %}
+
+    <!-- ── Top row: 3 equal columns ─────────────────────────────────────────── -->
+    <div class="row g-3 mb-4">
+
+        <!-- Backup Policies -->
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-shield-check me-2"></i><strong>Backup Policies</strong></span>
+                    <button class="btn btn-primary btn-sm" onclick="openPolicyModal()">
+                        <i class="bi bi-plus-lg me-1"></i>New Policy
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    {% if policies %}
+                    <table class="table table-sm table-hover mb-0" style="font-size:.84rem;">
+                        <thead class="table-secondary">
+                            <tr>
+                                <th>Name</th>
+                                <th>NAS Path</th>
+                                <th class="text-center">Full</th>
+                                <th class="text-center">Keep</th>
+                                <th class="text-center">Agents</th>
+                                <th class="text-center">Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for p in policies %}
+                        <tr>
+                            <td class="fw-semibold">{{ p.name }}</td>
+                            <td class="text-muted font-monospace" style="font-size:.76rem; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ p.nas_unc_path }}">{{ p.nas_unc_path }}</td>
+                            <td class="text-center">{{ p.full_backup_interval_days }}d</td>
+                            <td class="text-center">{{ p.retention_days }}d</td>
+                            <td class="text-center"><span class="badge bg-secondary">{{ p.agent_count }}</span></td>
+                            <td class="text-center">
+                                {% if p.enabled %}<span class="badge bg-success">Active</span>
+                                {% else %}<span class="badge bg-warning text-dark">Disabled</span>{% endif %}
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary py-0"
+                                        onclick='editPolicy({{ {"id": p.id, "name": p.name, "description": p.description, "enabled": p.enabled, "nas_unc_path": p.nas_unc_path, "include_paths": p.include_paths, "exclude_extensions": p.exclude_extensions, "exclude_folders": p.exclude_folders, "max_file_size_mb": p.max_file_size_mb, "full_backup_interval_days": p.full_backup_interval_days, "retention_days": p.retention_days} | tojson }})'
+                                        title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="btn btn-sm btn-outline-danger py-0"
+                                        onclick="deletePolicy({{ p.id }}, '{{ p.name | e }}')"
+                                        title="Delete"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="text-center text-muted py-5">
+                        <i class="bi bi-shield-check display-6 d-block mb-2 opacity-25"></i>
+                        No policies yet. Create one to get started.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- NAS Appliances -->
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-server me-2"></i><strong>NAS Appliances</strong></span>
+                    <button class="btn btn-primary btn-sm" onclick="openNasModal()">
+                        <i class="bi bi-plus-lg me-1"></i>Add NAS
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    {% if nas_list %}
+                    <table class="table table-sm table-hover mb-0" style="font-size:.84rem;">
+                        <thead class="table-secondary">
+                            <tr>
+                                <th>Name</th>
+                                <th class="text-center">Auth</th>
+                                <th class="text-center">Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for n in nas_list %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ n.name }}</div>
+                                <div class="font-monospace text-muted" style="font-size:.74rem;">{{ n.unc_path }}</div>
+                            </td>
+                            <td class="text-center">
+                                {% if n.auth_method == 'sftp' %}
+                                <span class="badge bg-info text-dark">SFTP</span>
+                                {% elif n.auth_method == 'smb_direct' %}
+                                <span class="badge bg-primary">SMB Direct</span>
+                                {% else %}
+                                <span class="badge bg-secondary">SMB</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if n.enabled %}<span class="badge bg-success">Active</span>
+                                {% else %}<span class="badge bg-warning text-dark">Off</span>{% endif %}
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary py-0"
+                                        onclick='editNas({{ {"id": n.id, "name": n.name, "nas_type": n.nas_type, "unc_path": n.unc_path, "notes": n.notes, "enabled": n.enabled, "auth_method": n.auth_method, "nas_username": n.nas_username, "has_password": (n.nas_password_enc|length > 0) if n.nas_password_enc else false, "sftp_port": n.sftp_port, "sftp_remote_path": n.sftp_remote_path} | tojson }})'
+                                        title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="btn btn-sm btn-outline-danger py-0"
+                                        onclick="deleteNas({{ n.id }}, '{{ n.name | e }}')"
+                                        title="Delete"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="text-center text-muted py-5">
+                        <i class="bi bi-server display-6 d-block mb-2 opacity-25"></i>
+                        No NAS appliances added yet.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Info + Deploy stacked -->
+        <div class="col-lg-3 d-flex flex-column gap-3">
+            <div class="card shadow-sm border-info">
+                <div class="card-header bg-info bg-opacity-10 py-2">
+                    <strong class="small"><i class="bi bi-info-circle me-1"></i>How it works</strong>
+                </div>
+                <div class="card-body py-2" style="font-size:.82rem;">
+                    <ol class="ps-3 mb-2">
+                        <li>Add a <strong>NAS Appliance</strong> with a local account.</li>
+                        <li>Create a <strong>Backup Policy</strong> linked to that NAS.</li>
+                        <li>Assign the policy to agents below.</li>
+                        <li>Backups run automatically; trigger manually from the asset page.</li>
+                    </ol>
+                    <p class="mb-1 fw-semibold">NAS folder layout:</p>
+                    <pre class="bg-dark text-light p-2 rounded mb-1" style="font-size:.72rem;">\\NAS\Backups\
+  └─ BRIAN-MSI\
+       ├─ 2026-03-16\  ← FULL
+       └─ 2026-03-17\  ← INCR</pre>
+                    <p class="small text-muted mb-0">
+                        <i class="bi bi-shield-lock me-1"></i>Use a <em>local NAS account</em> — never domain credentials.
+                    </p>
+                </div>
+            </div>
+
+            <div class="card shadow-sm border-success">
+                <div class="card-header bg-success bg-opacity-10 py-2">
+                    <strong class="small"><i class="bi bi-download me-1"></i>Deploy agent</strong>
+                </div>
+                <div class="card-body py-2" style="font-size:.82rem;">
+                    <p class="mb-2">Backup is built into the RMM agent — no separate script needed. Update the agent on target machines to v2.5.8+ to enable backup support.</p>
+                    <p class="small text-muted mb-0">Trigger via the <strong>Backup</strong> tab on any asset page.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Agent assignments ─────────────────────────────────────────────────── -->
+    <div class="card shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-pc-display me-2"></i><strong>Agent Assignments</strong>
+            <span class="badge bg-secondary ms-2">{{ agents|length }}</span></span>
+            <input type="text" class="form-control form-control-sm w-auto"
+                   id="agentSearch" placeholder="Filter by hostname…" oninput="filterAgents()"
+                   style="min-width:200px;">
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" style="font-size:.85rem;">
+                <thead class="table-secondary">
+                    <tr>
+                        <th style="width:35%">Agent / Hostname</th>
+                        <th>Policy</th>
+                        <th class="text-center" style="width:90px">Status</th>
+                        <th class="text-end" style="width:100px">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="agentTableBody">
+                {% for a in agents %}
+                <tr class="agent-row">
+                    <td class="fw-semibold font-monospace" style="font-size:.82rem;">{{ a.hostname }}</td>
+                    <td>
+                        {% if a.policy_name %}
+                        <span class="badge bg-primary">{{ a.policy_name }}</span>
+                        {% else %}
+                        <span class="text-muted small">— not assigned —</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if a.agent_enabled %}
+                        <span class="badge bg-success">Enabled</span>
+                        {% elif a.policy_id %}
+                        <span class="badge bg-danger">Disabled</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-secondary py-0"
+                                onclick='openAssignModal({{ a | tojson }})'>
+                            <i class="bi bi-pencil me-1"></i>Assign
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<!-- ── Policy Create/Edit Modal ─────────────────────────────────────────────── -->
+<div class="modal fade" id="policyModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="policyModalTitle">New Backup Policy</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="policyId">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" id="policyName" placeholder="e.g. Standard Workstation">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">NAS Appliance *</label>
+                        <select class="form-select" id="policyNasId" onchange="onNasPick()">
+                            <option value="">— Select or enter manually —</option>
+                            {% for n in nas_list %}
+                            <option value="{{ n.id }}" data-path="{{ n.unc_path }}">{{ n.name }} ({{ n.unc_path }})</option>
+                            {% endfor %}
+                            <option value="__manual__">✎ Enter path manually…</option>
+                        </select>
+                        <input type="text" class="form-control font-monospace mt-1" id="policyNasPath"
+                               placeholder="\\\\NAS01\\Backups" style="display:none;">
+                        <small class="text-muted" id="policyNasPathPreview"></small>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Description</label>
+                        <input type="text" class="form-control" id="policyDesc">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Full backup every (days)</label>
+                        <input type="number" class="form-control" id="policyFullDays" value="7" min="1" max="90">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Keep snapshots (days)</label>
+                        <input type="number" class="form-control" id="policyRetain" value="30" min="1" max="365">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Max file size (MB)</label>
+                        <input type="number" class="form-control" id="policyMaxMB" value="500" min="1">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">
+                            Include paths
+                            <small class="text-muted">(env vars OK — e.g. <code>%USERPROFILE%\Documents</code>)</small>
+                        </label>
+                        <div id="includePaths"></div>
+                        <button class="btn btn-sm btn-outline-secondary mt-1"
+                                type="button" onclick="addPath('includePaths')">
+                            <i class="bi bi-plus me-1"></i>Add path
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Exclude extensions</label>
+                        <div id="excludeExts"></div>
+                        <button class="btn btn-sm btn-outline-secondary mt-1"
+                                type="button" onclick="addPath('excludeExts')">
+                            <i class="bi bi-plus me-1"></i>Add
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Exclude folders</label>
+                        <div id="excludeFolders"></div>
+                        <button class="btn btn-sm btn-outline-secondary mt-1"
+                                type="button" onclick="addPath('excludeFolders')">
+                            <i class="bi bi-plus me-1"></i>Add
+                        </button>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="policyEnabled" checked>
+                            <label class="form-check-label" for="policyEnabled">Policy enabled</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="savePolicy()">
+                    <i class="bi bi-check2 me-1"></i>Save Policy
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Agent Assign Modal ────────────────────────────────────────────────────── -->
+<div class="modal fade" id="assignModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Assign Policy</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="assignAgentId">
+                <p><strong id="assignHostname"></strong></p>
+                <div class="mb-3">
+                    <label class="form-label">Policy</label>
+                    <select class="form-select" id="assignPolicyId">
+                        <option value="">— No policy / disable backup —</option>
+                        {% for p in policies %}
+                        <option value="{{ p.id }}">{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" id="assignEnabled" checked>
+                    <label class="form-check-label" for="assignEnabled">Enable backup for this agent</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveAssign()">
+                    <i class="bi bi-check2 me-1"></i>Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const DEFAULT_PATHS = [
+    '%USERPROFILE%\\Documents',
+    '%USERPROFILE%\\Desktop',
+    '%USERPROFILE%\\Pictures',
+    '%APPDATA%\\Microsoft\\Outlook',
+];
+const DEFAULT_EXTS = ['.tmp', '.log', '.iso', '.vhd', '.vmdk', '.vhdx'];
+const DEFAULT_FOLDERS = ['node_modules', '.git', '$RECYCLE.BIN', 'Windows',
+                          'Program Files', 'Program Files (x86)'];
+
+function filterAgents() {
+    const q = document.getElementById('agentSearch').value.toLowerCase();
+    document.querySelectorAll('#agentTableBody .agent-row').forEach(row => {
+        row.style.display = row.querySelector('td').textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+}
+
+function addPath(containerId, val = '') {
+    const c = document.getElementById(containerId);
+    const g = document.createElement('div');
+    g.className = 'input-group mb-1';
+    g.innerHTML = `<input type="text" class="form-control form-control-sm font-monospace" value="${val.replace(/"/g, '&quot;')}" placeholder="${containerId === 'includePaths' ? '%USERPROFILE%\\Documents' : ''}">
+                   <button class="btn btn-sm btn-outline-danger" type="button" onclick="this.closest('.input-group').remove()"><i class="bi bi-x"></i></button>`;
+    c.appendChild(g);
+}
+
+function collectPaths(containerId) {
+    return Array.from(document.querySelectorAll(`#${containerId} input`))
+        .map(i => i.value.trim()).filter(Boolean);
+}
+
+function openPolicyModal(p = null) {
+    document.getElementById('policyId').value = p ? p.id : '';
+    document.getElementById('policyModalTitle').textContent = p ? 'Edit Policy' : 'New Backup Policy';
+    document.getElementById('policyName').value = p ? p.name : '';
+    document.getElementById('policyDesc').value = p ? (p.description || '') : '';
+    // Pre-select NAS dropdown or fall back to manual
+    const nasPath = p ? (p.nas_unc_path || '') : '';
+    const nasSelect = document.getElementById('policyNasId');
+    const manualInput = document.getElementById('policyNasPath');
+    const preview = document.getElementById('policyNasPathPreview');
+    let matched = false;
+    for (const opt of nasSelect.options) {
+        if (opt.dataset.path && opt.dataset.path === nasPath) {
+            nasSelect.value = opt.value;
+            preview.textContent = nasPath;
+            manualInput.style.display = 'none';
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) {
+        nasSelect.value = nasPath ? '__manual__' : '';
+        manualInput.value = nasPath;
+        manualInput.style.display = nasPath ? '' : 'none';
+        preview.textContent = '';
+    }
+    document.getElementById('policyFullDays').value = p ? p.full_backup_interval_days : 7;
+    document.getElementById('policyRetain').value = p ? p.retention_days : 30;
+    document.getElementById('policyMaxMB').value = p ? p.max_file_size_mb : 500;
+    document.getElementById('policyEnabled').checked = p ? p.enabled : true;
+
+    // include_paths / exclude_* come from tojson as native JS arrays already;
+    // guard against the value being a JSON string in case of legacy data.
+    function _parseArr(v, fallback) {
+        if (!p) return fallback;
+        if (Array.isArray(v)) return v;
+        try { return JSON.parse(v || '[]'); } catch(e) { return fallback; }
+    }
+    let paths = _parseArr(p ? p.include_paths : null, DEFAULT_PATHS);
+    let exts  = _parseArr(p ? p.exclude_extensions : null, DEFAULT_EXTS);
+    let dirs  = _parseArr(p ? p.exclude_folders : null, DEFAULT_FOLDERS);
+
+    ['includePaths', 'excludeExts', 'excludeFolders'].forEach(id => {
+        document.getElementById(id).innerHTML = '';
+    });
+    paths.forEach(v => addPath('includePaths', v));
+    exts.forEach(v => addPath('excludeExts', v));
+    dirs.forEach(v => addPath('excludeFolders', v));
+
+    new bootstrap.Modal(document.getElementById('policyModal')).show();
+}
+
+function editPolicy(p) {
+    openPolicyModal(p);
+}
+
+function onNasPick() {
+    const sel = document.getElementById('policyNasId');
+    const manualInput = document.getElementById('policyNasPath');
+    const preview = document.getElementById('policyNasPathPreview');
+    const opt = sel.options[sel.selectedIndex];
+    if (sel.value === '__manual__') {
+        manualInput.style.display = '';
+        preview.textContent = '';
+    } else if (sel.value) {
+        manualInput.style.display = 'none';
+        preview.textContent = opt.dataset.path;
+    } else {
+        manualInput.style.display = 'none';
+        preview.textContent = '';
+    }
+}
+
+async function savePolicy() {
+    const pid = document.getElementById('policyId').value;
+    const nasId = document.getElementById('policyNasId').value;
+    let nasPath = '';
+    if (nasId === '__manual__') {
+        nasPath = document.getElementById('policyNasPath').value.trim();
+    } else if (nasId) {
+        nasPath = document.getElementById('policyNasId').options[document.getElementById('policyNasId').selectedIndex].dataset.path;
+    }
+    const body = {
+        name: document.getElementById('policyName').value.trim(),
+        description: document.getElementById('policyDesc').value.trim(),
+        nas_unc_path: nasPath,
+        full_backup_interval_days: parseInt(document.getElementById('policyFullDays').value),
+        retention_days: parseInt(document.getElementById('policyRetain').value),
+        max_file_size_mb: parseInt(document.getElementById('policyMaxMB').value),
+        enabled: document.getElementById('policyEnabled').checked,
+        include_paths: collectPaths('includePaths'),
+        exclude_extensions: collectPaths('excludeExts'),
+        exclude_folders: collectPaths('excludeFolders'),
+    };
+    if (!body.name) { alert('Name is required'); return; }
+    if (!body.nas_unc_path) { alert('Select a NAS appliance or enter a UNC path'); return; }
+
+    const url = pid ? `/api/backup/policy/${pid}` : '/api/backup/policy';
+    const method = pid ? 'PUT' : 'POST';
+
+    try {
+        const r = await fetch(url, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const j = await r.json();
+        if (j.ok) { location.reload(); }
+        else { alert('Error: ' + j.error); }
+    } catch(e) { alert('Request failed: ' + e); }
+}
+
+async function deletePolicy(id, name) {
+    if (!confirm(`Delete policy "${name}"? Agents will lose their backup schedule.`)) return;
+    const r = await fetch(`/api/backup/policy/${id}`, {method: 'DELETE'});
+    const j = await r.json();
+    if (j.ok) location.reload();
+    else alert('Error: ' + j.error);
+}
+
+function openAssignModal(agent) {
+    document.getElementById('assignAgentId').value = agent.agent_id;
+    document.getElementById('assignHostname').textContent = agent.hostname;
+    const sel = document.getElementById('assignPolicyId');
+    sel.value = agent.policy_id || '';
+    document.getElementById('assignEnabled').checked = agent.agent_enabled !== false;
+    new bootstrap.Modal(document.getElementById('assignModal')).show();
+}
+
+async function saveAssign() {
+    const body = {
+        agent_id: document.getElementById('assignAgentId').value,
+        policy_id: document.getElementById('assignPolicyId').value || null,
+        enabled: document.getElementById('assignEnabled').checked,
+    };
+    const r = await fetch('/api/backup/assign', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (j.ok) location.reload();
+    else alert('Error: ' + j.error);
+}
+
+// ── NAS Appliance modal ────────────────────────────────────────────────────────
+function onNasAuthChange() {
+    const method = document.getElementById('nasAuthMethod').value;
+    document.getElementById('nasSmbCreds').style.display = (method === 'smb_local' || method === 'smb_direct') ? '' : 'none';
+    document.getElementById('nasSftpExtras').style.display = (method === 'sftp') ? '' : 'none';
+    document.getElementById('nasUncPathLabel').textContent =
+        method === 'sftp' ? 'NAS Hostname (e.g. \\\\IOSAFE)' : 'UNC Path *';
+    document.getElementById('nasUncPath').placeholder =
+        method === 'sftp' ? '\\\\IOSAFE' : '\\\\IOSAFE\\Backups';
+}
+
+function openNasModal(n = null) {
+    document.getElementById('nasId').value = n ? n.id : '';
+    document.getElementById('nasModalTitle').textContent = n ? 'Edit NAS Appliance' : 'Add NAS Appliance';
+    document.getElementById('nasName').value = n ? n.name : '';
+    document.getElementById('nasType').value = n ? n.nas_type : 'smb';
+    document.getElementById('nasUncPath').value = n ? n.unc_path : '';
+    document.getElementById('nasNotes').value = n ? (n.notes || '') : '';
+    document.getElementById('nasEnabled').checked = n ? n.enabled : true;
+    document.getElementById('nasAuthMethod').value = n ? (n.auth_method || 'smb_local') : 'smb_local';
+    document.getElementById('nasUsername').value = n ? (n.nas_username || '') : '';
+    document.getElementById('nasPassword').value = '';
+    const pwHint = document.getElementById('nasPasswordHint');
+    pwHint.style.display = (n && n.has_password) ? '' : 'none';
+    document.getElementById('nasSftpPort').value = n ? (n.sftp_port || 22) : 22;
+    document.getElementById('nasSftpRemotePath').value = n ? (n.sftp_remote_path || '') : '';
+    onNasAuthChange();
+    new bootstrap.Modal(document.getElementById('nasModal')).show();
+}
+
+function editNas(n) { openNasModal(n); }
+
+async function saveNas() {
+    const nid = document.getElementById('nasId').value;
+    const body = {
+        name: document.getElementById('nasName').value.trim(),
+        nas_type: document.getElementById('nasType').value,
+        unc_path: document.getElementById('nasUncPath').value.trim(),
+        notes: document.getElementById('nasNotes').value.trim(),
+        enabled: document.getElementById('nasEnabled').checked,
+        auth_method: document.getElementById('nasAuthMethod').value,
+        nas_username: document.getElementById('nasUsername').value.trim(),
+        nas_password: document.getElementById('nasPassword').value,
+        sftp_port: parseInt(document.getElementById('nasSftpPort').value) || 22,
+        sftp_remote_path: document.getElementById('nasSftpRemotePath').value.trim(),
+    };
+    if (!body.name) { alert('Name is required'); return; }
+    if (!body.unc_path) { alert('NAS host / UNC path is required'); return; }
+    if (!body.nas_username) { alert('A local NAS username is required for isolated auth'); return; }
+    if (!nid && !body.nas_password) { alert('Password is required when adding a new NAS appliance'); return; }
+    const url = nid ? `/api/backup/nas/${nid}` : '/api/backup/nas';
+    const method = nid ? 'PUT' : 'POST';
+    const r = await fetch(url, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (j.ok) location.reload();
+    else alert('Error: ' + j.error);
+}
+
+async function deleteNas(id, name) {
+    if (!confirm(`Delete NAS "${name}"? Policies using its path will keep the path but lose the NAS link.`)) return;
+    const r = await fetch(`/api/backup/nas/${id}`, {method: 'DELETE'});
+    const j = await r.json();
+    if (j.ok) location.reload();
+    else alert('Error: ' + j.error);
+}
+</script>
+
+<!-- ── NAS Appliance Modal ──────────────────────────────────────────────────── -->
+<div class="modal fade" id="nasModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="nasModalTitle">Add NAS Appliance</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info py-2 mb-3" style="font-size:.84rem;">
+                    <i class="bi bi-shield-lock me-1"></i>
+                    <strong>Isolated credentials</strong> — use a <em>local NAS account</em> (not domain-joined).
+                    This ensures a ransomware or AD compromise cannot reach the backup destination.
+                </div>
+                <input type="hidden" id="nasId">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Friendly Name *</label>
+                        <input type="text" class="form-control" id="nasName"
+                               placeholder="e.g. ioSafe NL Series, UniFi UNAS Pro">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Device Type</label>
+                        <select class="form-select" id="nasType">
+                            <option value="smb">Generic NAS</option>
+                            <option value="iosafe">ioSafe</option>
+                            <option value="unas">UniFi UNAS</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Connection Method</label>
+                        <select class="form-select" id="nasAuthMethod" onchange="onNasAuthChange()">
+                            <option value="smb_local">SMB — Local Account</option>
+                            <option value="smb_direct">SMB Direct — Pure Python (bypasses Windows auth)</option>
+                            <option value="sftp">SFTP — Local Account</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" id="nasUncPathLabel">UNC Path *</label>
+                        <input type="text" class="form-control font-monospace" id="nasUncPath"
+                               placeholder="\\IOSAFE\Backups">
+                    </div>
+
+                    <!-- SMB Local credentials -->
+                    <div id="nasSmbCreds" class="col-12">
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label">NAS Local Username *</label>
+                                <input type="text" class="form-control" id="nasUsername"
+                                       placeholder="backup_user" autocomplete="off">
+                                <div class="form-text">A dedicated read/write account created <em>on the NAS itself</em> — not a domain account.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Password *</label>
+                                <input type="password" class="form-control" id="nasPassword"
+                                       autocomplete="new-password" placeholder="Leave blank to keep existing">
+                                <div class="form-text text-success" id="nasPasswordHint" style="display:none;">
+                                    <i class="bi bi-check-circle me-1"></i>Password already set — leave blank to keep it.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SFTP extra fields -->
+                    <div id="nasSftpExtras" class="col-12" style="display:none;">
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <label class="form-label">SFTP Port</label>
+                                <input type="number" class="form-control" id="nasSftpPort" value="22" min="1" max="65535">
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label">Remote Path *</label>
+                                <input type="text" class="form-control font-monospace" id="nasSftpRemotePath"
+                                       placeholder="/volume1/Backups">
+                                <div class="form-text">Absolute path on the NAS filesystem (e.g. <code>/mnt/backups</code>).</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Notes</label>
+                        <input type="text" class="form-control" id="nasNotes"
+                               placeholder="Location, serial number, firmware version, etc.">
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="nasEnabled" checked>
+                            <label class="form-check-label" for="nasEnabled">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveNas()">
+                    <i class="bi bi-check2 me-1"></i>Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

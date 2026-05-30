@@ -1,0 +1,192 @@
+{
+  "name": "Employee Offboarding",
+  "description": "Initiated when an employee termination is confirmed. Notifies IT and Accounting, creates checklist tickets for Paylocity update, HR report updates, Divi card cancellation, and remote equipment return, then disables the AD account and triggers Azure AD sync.",
+  "trigger_type": "manual",
+  "trigger_config": {},
+  "enabled": true,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "trigger",
+      "action": "",
+      "label": "Termination Initiated",
+      "x": 80,
+      "y": 40,
+      "config": {
+        "trigger_type": "manual"
+      }
+    },
+    {
+      "id": "n2",
+      "type": "action",
+      "action": "send_notification",
+      "label": "Notify IT",
+      "x": 420,
+      "y": 40,
+      "config": {
+        "message": "OFFBOARDING — {{employee_name}} | Last day: {{last_day}}. Please prepare to disable all accounts (AD, M365, etc.) and arrange equipment collection. If remote, generate a shipping label for equipment return."
+      }
+    },
+    {
+      "id": "n3",
+      "type": "action",
+      "action": "send_notification",
+      "label": "Notify Accounting",
+      "x": 80,
+      "y": 180,
+      "config": {
+        "message": "OFFBOARDING — {{employee_name}} | Last day: {{last_day}}. Please cancel the employee's Divi card immediately on or before their last day. Process any final expense reports beforehand."
+      }
+    },
+    {
+      "id": "n4",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Update Paylocity",
+      "x": 420,
+      "y": 180,
+      "config": {
+        "title": "Update Paylocity — termination for {{employee_name}} (last day: {{last_day}})",
+        "body": "Enter the termination in Paylocity for {{employee_name}} with last day of {{last_day}}. Include reason code and final pay details.",
+        "priority": "high",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n5",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Update HR Reports",
+      "x": 80,
+      "y": 330,
+      "config": {
+        "title": "Update HR reports — remove {{employee_name}}",
+        "body": "Remove {{employee_name}} from the following reports:\n- Birthday listing\n- Anniversary awards report\n\nAlso update any other distribution lists or org charts as needed.",
+        "priority": "medium",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n6",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Severance Agreement",
+      "x": 420,
+      "y": 330,
+      "config": {
+        "title": "Severance agreement — {{employee_name}} (if applicable)",
+        "body": "If a severance agreement applies for {{employee_name}}, prepare and send the agreement for signature. File signed copy in the employee record.",
+        "priority": "medium",
+        "category": "hr"
+      }
+    },
+    {
+      "id": "n7",
+      "type": "action",
+      "action": "create_ticket",
+      "label": "Remote Equipment Return",
+      "x": 80,
+      "y": 480,
+      "config": {
+        "title": "Remote equipment return — {{employee_name}} (remote employees only)",
+        "body": "If {{employee_name}} is a remote employee, generate a prepaid shipping label and send it to them so they can return company equipment. Expect the return box and confirm receipt.",
+        "priority": "low",
+        "category": "it"
+      }
+    },
+    {
+      "id": "n8",
+      "type": "action",
+      "action": "disable_ad_user",
+      "label": "Disable AD Account",
+      "x": 420,
+      "y": 480,
+      "config": {
+        "username": "{{username}}"
+      }
+    },
+    {
+      "id": "n9",
+      "type": "action",
+      "action": "azure_sync",
+      "label": "Azure AD Sync",
+      "x": 250,
+      "y": 610,
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "fromNode": "n1",
+      "fromPort": "out",
+      "toNode": "n2",
+      "source": "n1",
+      "target": "n2",
+      "label": ""
+    },
+    {
+      "id": "e2",
+      "fromNode": "n2",
+      "fromPort": "out",
+      "toNode": "n3",
+      "source": "n2",
+      "target": "n3",
+      "label": ""
+    },
+    {
+      "id": "e3",
+      "fromNode": "n3",
+      "fromPort": "out",
+      "toNode": "n4",
+      "source": "n3",
+      "target": "n4",
+      "label": ""
+    },
+    {
+      "id": "e4",
+      "fromNode": "n4",
+      "fromPort": "out",
+      "toNode": "n5",
+      "source": "n4",
+      "target": "n5",
+      "label": ""
+    },
+    {
+      "id": "e5",
+      "fromNode": "n5",
+      "fromPort": "out",
+      "toNode": "n6",
+      "source": "n5",
+      "target": "n6",
+      "label": ""
+    },
+    {
+      "id": "e6",
+      "fromNode": "n6",
+      "fromPort": "out",
+      "toNode": "n7",
+      "source": "n6",
+      "target": "n7",
+      "label": ""
+    },
+    {
+      "id": "e7",
+      "fromNode": "n7",
+      "fromPort": "out",
+      "toNode": "n8",
+      "source": "n7",
+      "target": "n8",
+      "label": ""
+    },
+    {
+      "id": "e8",
+      "fromNode": "n8",
+      "fromPort": "out",
+      "toNode": "n9",
+      "source": "n8",
+      "target": "n9",
+      "label": ""
+    }
+  ]
+}

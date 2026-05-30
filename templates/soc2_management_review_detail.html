@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}{{ review.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <a href="{{ url_for('management_review.management_reviews_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to management reviews</a>
+        <h2 class="mt-2 mb-1">{{ review.title }}</h2>
+        <div class="text-muted">{{ review.review_key }}{% if review.review_date %} · {{ review.review_date.strftime('%Y-%m-%d') }}{% endif %}</div>
+    </div>
+    <span class="badge bg-secondary">{{ review.status }}</span>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Review Details</h5></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Period</dt><dd class="col-sm-8">{{ review.review_period_start.strftime('%Y-%m-%d') if review.review_period_start else 'Not set' }} to {{ review.review_period_end.strftime('%Y-%m-%d') if review.review_period_end else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Chairperson</dt><dd class="col-sm-8">{{ review.chairperson or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Minute Taker</dt><dd class="col-sm-8">{{ review.minute_taker or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Location</dt><dd class="col-sm-8">{{ review.location or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Attendees</dt><dd class="col-sm-8">{{ review.attendees or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Agenda</dt><dd class="col-sm-8">{{ review.agenda_summary or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Decisions</dt><dd class="col-sm-8">{{ review.decisions_summary or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Effectiveness</dt><dd class="col-sm-8">{{ review.effectiveness_summary or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Resources</dt><dd class="col-sm-8">{{ review.resource_summary or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Evidence</dt><dd class="col-sm-8">{{ review.evidence_reference or 'Not set' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Action Item</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('management_review.create_management_review_action', review_id=review.id) }}" class="row g-3">
+                    <div class="col-12"><label class="form-label" for="title">Action Title</label><input class="form-control" id="title" name="title" required></div>
+                    <div class="col-md-6"><label class="form-label" for="owner">Owner</label><input class="form-control" id="owner" name="owner"></div>
+                    <div class="col-md-3"><label class="form-label" for="due_date">Due Date</label><input class="form-control" type="date" id="due_date" name="due_date"></div>
+                    <div class="col-md-3"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in action_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="3"></textarea></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Add Action</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Action Items</h5></div>
+            <div class="list-group list-group-flush">
+                {% for action in review.actions %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">{{ action.title }}</div>
+                            <div class="small text-muted">{{ action.owner or 'Unassigned' }}</div>
+                        </div>
+                        <div class="text-end">
+                            <div class="small text-muted">{{ action.due_date.strftime('%Y-%m-%d') if action.due_date else 'No due date' }}</div>
+                            <div class="small mt-1">{{ action.status }}</div>
+                        </div>
+                    </div>
+                    {% if action.notes %}<div class="mt-2">{{ action.notes }}</div>{% endif %}
+                </div>
+                {% else %}
+                <div class="list-group-item py-4 text-muted">No action items recorded yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

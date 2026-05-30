@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}{{ vendor.vendor_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+        <a href="{{ url_for('vendor_management.vendors_dashboard') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to vendors</a>
+        <h2 class="mt-2 mb-1">{{ vendor.vendor_name }}</h2>
+        <div class="text-muted">{{ vendor.vendor_type or 'Vendor' }}{% if vendor.owner %} · {{ vendor.owner }}{% endif %}</div>
+    </div>
+    <div class="d-flex gap-2">
+        <span class="badge bg-dark">{{ vendor.criticality }}</span>
+        {% if vendor.risk_level == 'Low' %}<span class="badge bg-success">{{ vendor.risk_level }}</span>{% elif vendor.risk_level == 'Medium' %}<span class="badge bg-warning text-dark">{{ vendor.risk_level }}</span>{% else %}<span class="badge bg-danger">{{ vendor.risk_level }}</span>{% endif %}
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Vendor Details</h5></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Service</dt><dd class="col-sm-8">{{ vendor.service_description or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Data Scope</dt><dd class="col-sm-8">{{ vendor.data_access_scope or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Contract Status</dt><dd class="col-sm-8">{{ vendor.contract_status or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Assurance</dt><dd class="col-sm-8">{{ vendor.assurance_status or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Last Review</dt><dd class="col-sm-8">{{ vendor.last_review_date.strftime('%Y-%m-%d') if vendor.last_review_date else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Next Review</dt><dd class="col-sm-8">{{ vendor.next_review_date.strftime('%Y-%m-%d') if vendor.next_review_date else 'Not set' }}</dd>
+                    <dt class="col-sm-4">Evidence</dt><dd class="col-sm-8">{{ vendor.evidence_reference or 'Not set' }}</dd>
+                    <dt class="col-sm-4">Notes</dt><dd class="col-sm-8">{{ vendor.notes or 'No notes recorded.' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Add Review</h5></div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('vendor_management.create_vendor_review', vendor_id=vendor.id) }}" class="row g-3">
+                    <div class="col-md-6"><label class="form-label" for="review_date">Review Date</label><input class="form-control" type="date" id="review_date" name="review_date" required></div>
+                    <div class="col-md-6"><label class="form-label" for="review_type">Review Type</label><input class="form-control" id="review_type" name="review_type" value="Annual Review"></div>
+                    <div class="col-md-6"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in review_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="reviewer">Reviewer</label><input class="form-control" id="reviewer" name="reviewer"></div>
+                    <div class="col-12"><label class="form-label" for="summary">Summary</label><textarea class="form-control" id="summary" name="summary" rows="3"></textarea></div>
+                    <div class="col-12"><label class="form-label" for="findings">Findings</label><textarea class="form-control" id="findings" name="findings" rows="3"></textarea></div>
+                    <div class="col-12"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference"></div>
+                    <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Add Review</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white"><h5 class="mb-0">Review History</h5></div>
+            <div class="list-group list-group-flush">
+                {% for review in vendor.reviews %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="fw-semibold">{{ review.review_type }}</div>
+                            <div class="small text-muted">{{ review.reviewer or 'Unknown reviewer' }}</div>
+                        </div>
+                        <div class="text-end">
+                            <div class="small text-muted">{{ review.review_date.strftime('%Y-%m-%d') }}</div>
+                            <div class="small mt-1">{{ review.status }}</div>
+                        </div>
+                    </div>
+                    <div class="mt-2">{{ review.summary or 'No summary recorded.' }}</div>
+                    {% if review.findings %}<div class="small mt-2"><strong>Findings:</strong> {{ review.findings }}</div>{% endif %}
+                    {% if review.evidence_reference %}<div class="small mt-1 text-muted">Evidence: {{ review.evidence_reference }}</div>{% endif %}
+                </div>
+                {% else %}
+                <div class="list-group-item py-4 text-muted">No vendor reviews recorded yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

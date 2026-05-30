@@ -1,0 +1,689 @@
+{% extends "base.html" %}
+{% block title %}Patch Management{% endblock %}
+{% block content %}
+<div class="container-fluid px-3 py-3">
+
+  <!-- Header -->
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0"><i class="bi bi-patch-check-fill text-warning me-2"></i>Patch Management</h4>
+      <small class="text-muted">Fleet-wide Windows Update deployment &amp; auto-approval</small>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button class="btn btn-sm btn-outline-secondary" onclick="refreshAll()">
+        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+      </button>
+      <button class="btn btn-sm btn-outline-info" onclick="openAutoApprove()">
+        <i class="bi bi-robot me-1"></i>Auto-Approve Rules
+      </button>
+      <button class="btn btn-sm btn-warning" onclick="runAutoApproveNow()" id="autoApproveRunBtn">
+        <i class="bi bi-play-fill me-1"></i>Run Auto-Approve Now
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="row g-2 mb-3" id="summaryCards">
+    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+      <div class="fs-3 fw-bold" id="sumTotal">—</div><div class="text-muted small">Pending Updates</div>
+    </div></div>
+    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+      <div class="fs-3 fw-bold text-danger" id="sumCritical">—</div><div class="text-muted small">Critical</div>
+    </div></div>
+    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+      <div class="fs-3 fw-bold text-warning" id="sumImportant">—</div><div class="text-muted small">Important</div>
+    </div></div>
+    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+      <div class="fs-3 fw-bold text-info" id="sumDevices">—</div><div class="text-muted small">Devices Affected</div>
+    </div></div>
+  </div>
+
+  <!-- View tabs -->
+  <ul class="nav nav-tabs mb-3" id="viewTabs">
+    <li class="nav-item"><button class="nav-link active" data-view="byupdate" onclick="switchView('byupdate')">
+      <i class="bi bi-list-ul me-1"></i>By Update
+    </button></li>
+    <li class="nav-item"><button class="nav-link" data-view="bydevice" onclick="switchView('bydevice')">
+      <i class="bi bi-laptop me-1"></i>By Device
+    </button></li>
+  </ul>
+
+  <!-- ── BY UPDATE VIEW ────────────────────────────────────── -->
+  <div id="view-byupdate">
+    <!-- Toolbar -->
+    <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+      <input type="text" id="updateSearch" class="form-control form-control-sm" style="max-width:260px" placeholder="Search title / KB…" oninput="filterUpdates()">
+      <select id="updateSevFilter" class="form-select form-select-sm" style="max-width:150px" onchange="filterUpdates()">
+        <option value="">All Severities</option>
+        <option>Critical</option><option>Important</option><option>Moderate</option><option>Low</option><option>Unspecified</option>
+      </select>
+      <select id="updateCatFilter" class="form-select form-select-sm" style="max-width:180px" onchange="filterUpdates()">
+        <option value="">All Categories</option>
+      </select>
+      <label class="text-muted small ms-1 d-flex align-items-center gap-1">
+        <input type="checkbox" id="rebootFilter" onchange="filterUpdates()"> Reboot required only
+      </label>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" onclick="selectAllVisible(true)">Select All</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="selectAllVisible(false)">Clear</button>
+        <button class="btn btn-sm btn-primary" id="deploySelectedBtn" disabled onclick="deploySelected()">
+          <i class="bi bi-cloud-upload me-1"></i>Deploy Selected (<span id="selCount">0</span>)
+        </button>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-dark table-hover table-sm mb-0" id="updatesTable">
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="checkAll" onchange="checkAllVisible(this.checked)"></th>
+          <th>Title</th>
+          <th style="width:100px">Severity</th>
+          <th style="width:120px">Category</th>
+          <th style="width:60px">Devices</th>
+          <th style="width:70px">Size</th>
+          <th style="width:70px">Reboot</th>
+          <th style="width:115px">Deploy Status</th>
+          <th style="width:90px">Action</th>
+        </tr></thead>
+        <tbody id="updatesBody">
+          <tr><td colspan="9" class="text-center text-muted py-4">
+            <span class="spinner-border spinner-border-sm me-2"></span>Loading…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── BY DEVICE VIEW ────────────────────────────────────── -->
+  <div id="view-bydevice" style="display:none">
+    <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+      <input type="text" id="deviceSearch" class="form-control form-control-sm" style="max-width:260px" placeholder="Search device…" oninput="filterDevices()">
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" onclick="selectAllDevices(true)">Select All</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="selectAllDevices(false)">Clear</button>
+        <button class="btn btn-sm btn-primary" id="deployDevicesBtn" disabled onclick="deployAllForDevices()">
+          <i class="bi bi-cloud-upload me-1"></i>Deploy All Pending (<span id="devSelCount">0</span> devices)
+        </button>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-dark table-hover table-sm mb-0">
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="checkAllDev" onchange="checkAllDevices(this.checked)"></th>
+          <th>Device</th>
+          <th style="width:80px">Pending</th>
+          <th style="width:80px">Critical</th>
+          <th style="width:80px">Important</th>
+          <th style="width:90px">Reboot</th>
+          <th style="width:115px">Last Job</th>
+          <th style="width:100px">Last Seen</th>
+          <th style="width:90px">Action</th>
+        </tr></thead>
+        <tbody id="devicesBody">
+          <tr><td colspan="9" class="text-center text-muted py-4">
+            <span class="spinner-border spinner-border-sm me-2"></span>Loading…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── DEPLOY CONFIRM / PROGRESS MODAL ────────────────────────── -->
+<div class="modal fade" id="deployModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title" id="deployModalTitle">
+          <i class="bi bi-cloud-upload me-2"></i>Deploy Patches
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" id="deployModalClose"></button>
+      </div>
+      <div class="modal-body" id="deployModalBody"></div>
+      <div class="modal-footer border-secondary" id="deployModalFooter"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── AUTO-APPROVE RULES MODAL ────────────────────────────────── -->
+<div class="modal fade" id="autoApproveModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-robot me-2"></i>Auto-Approve Rules</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3">
+          When <strong>Auto-Deploy</strong> is on, matching updates are automatically pushed to all online devices when triggered by the scheduler (daily) or manually.
+        </p>
+        <div id="rulesContainer"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="saveRules()"><i class="bi bi-floppy me-1"></i>Save Rules</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── DEVICE LIST MODAL (for single update) ───────────────────── -->
+<div class="modal fade" id="deviceListModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title" id="deviceListTitle">Affected Devices</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="deviceListBody"></div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-primary" id="deployUpdateAllBtn" onclick="deployUpdateToAll()">
+          <i class="bi bi-cloud-upload me-1"></i>Deploy to All
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allUpdates = [];
+let allDevices = [];
+let currentUpdateId = null;
+let currentUpdateAgents = [];
+let rulesData = [];
+
+// ── Init ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  refreshAll();
+});
+
+function refreshAll() {
+  loadUpdates();
+  loadDevices();
+}
+
+// ── Deploy status badge helpers ───────────────────────────────────
+function updateJobBadge(jc) {
+  if (!jc) return '';
+  const {completed=0, failed=0, deploying=0, queued=0} = jc;
+  if (!completed && !failed && !deploying && !queued) return '';
+  if (deploying > 0)
+    return `<span class="badge bg-primary"><span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Deploying ${deploying}</span>`;
+  if (completed > 0 && failed === 0)
+    return `<span class="badge bg-success"><i class="bi bi-check-lg me-1"></i>Deployed ${completed}</span>`;
+  if (completed > 0 && failed > 0)
+    return `<span class="badge bg-success me-1"><i class="bi bi-check-lg me-1"></i>${completed}</span><span class="badge bg-danger"><i class="bi bi-x-lg me-1"></i>${failed}</span>`;
+  if (failed > 0)
+    return `<span class="badge bg-danger"><i class="bi bi-x-lg me-1"></i>Failed ${failed}</span>`;
+  if (queued > 0)
+    return `<span class="badge bg-secondary"><i class="bi bi-clock me-1"></i>Queued ${queued}</span>`;
+  return '';
+}
+
+function agentJobBadge(lastJob) {
+  if (!lastJob || !lastJob.status) return '';
+  const cfg = {
+    completed: ['bg-success',  'bi-check-lg',    'Completed'],
+    deploying: ['bg-primary',  'bi-arrow-repeat', 'Deploying'],
+    failed:    ['bg-danger',   'bi-x-lg',         'Failed'],
+    queued:    ['bg-secondary','bi-clock',         'Queued'],
+  }[lastJob.status] || ['bg-secondary', 'bi-circle', lastJob.status];
+  const ago = lastJob.updated_at ? relTime(lastJob.updated_at) : '';
+  return `<span class="badge ${cfg[0]}"><i class="bi ${cfg[1]} me-1"></i>${cfg[2]}</span>${ago ? `<span class="text-muted ms-1" style="font-size:.7rem;">${ago}</span>` : ''}`;
+}
+
+// ── View switch ──────────────────────────────────────────────────
+function switchView(v) {
+  document.getElementById('view-byupdate').style.display = v === 'byupdate' ? '' : 'none';
+  document.getElementById('view-bydevice').style.display = v === 'bydevice' ? '' : 'none';
+  document.querySelectorAll('#viewTabs .nav-link').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === v);
+  });
+}
+
+// ── Load updates ─────────────────────────────────────────────────
+async function loadUpdates() {
+  try {
+  const resp = await fetch('/api/patches/pending').then(r => r.json()).catch(e => ({ok:false, error:String(e)}));
+  if (!resp.ok) {
+    document.getElementById('updatesBody').innerHTML =
+      `<tr><td colspan="9" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle me-2"></i>Failed to load updates: ${escHtml(resp.error||'Unknown error')}</td></tr>`;
+    return;
+  }
+  allUpdates = resp.updates;
+
+  // Populate category filter
+  const cats = [...new Set(allUpdates.map(u => u.category))].sort();
+  const catSel = document.getElementById('updateCatFilter');
+  const prev = catSel.value;
+  catSel.innerHTML = '<option value="">All Categories</option>' +
+    cats.map(c => `<option ${c===prev?'selected':''}>${c}</option>`).join('');
+
+  // Summary cards
+  const devSet = new Set(allUpdates.flatMap(u => u.agents));
+  document.getElementById('sumTotal').textContent    = allUpdates.length;
+  document.getElementById('sumCritical').textContent = allUpdates.filter(u=>u.severity==='Critical').length;
+  document.getElementById('sumImportant').textContent= allUpdates.filter(u=>u.severity==='Important').length;
+  document.getElementById('sumDevices').textContent  = devSet.size;
+
+  filterUpdates();
+  } catch(e) {
+    document.getElementById('updatesBody').innerHTML =
+      `<tr><td colspan="9" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle me-2"></i>JS error: ${escHtml(String(e))}</td></tr>`;
+    console.error('loadUpdates error:', e);
+  }
+}
+
+function filterUpdates() {
+  const q   = document.getElementById('updateSearch').value.toLowerCase();
+  const sev = document.getElementById('updateSevFilter').value;
+  const cat = document.getElementById('updateCatFilter').value;
+  const rb  = document.getElementById('rebootFilter').checked;
+
+  const visible = allUpdates.filter(u => {
+    if (q && !u.title.toLowerCase().includes(q)) return false;
+    if (sev && u.severity !== sev) return false;
+    if (cat && u.category !== cat) return false;
+    if (rb && !u.reboot_required) return false;
+    return true;
+  });
+  renderUpdates(visible);
+}
+
+function renderUpdates(updates) {
+  const tbody = document.getElementById('updatesBody');
+  if (!updates.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No updates match the current filter.</td></tr>';
+    return;
+  }
+  // Build a lookup so onclick handlers don't embed raw JSON in HTML attributes
+  window._updateMap = {};
+  updates.forEach(u => { window._updateMap[u.update_id] = u; });
+
+  tbody.innerHTML = updates.map(u => {
+    const sevBadge = {Critical:'danger',Important:'warning',Moderate:'info',Low:'secondary'}[u.severity]||'secondary';
+    const names = u.asset_names.filter(Boolean).join(', ') || u.agents.join(', ');
+    const uid = escHtml(u.update_id);
+    return `<tr data-uid="${uid}" data-sev="${u.severity}" data-cat="${u.category}" data-rb="${u.reboot_required}">
+      <td><input type="checkbox" class="upd-check" value="${uid}" onchange="updateSelCount()"></td>
+      <td>
+        <div class="fw-semibold" style="font-size:.82rem;">${escHtml(u.title)}</div>
+        <div class="text-muted" style="font-size:.72rem;" title="${escHtml(names)}">${escHtml(names.length>80?names.substring(0,80)+'\u2026':names)}</div>
+      </td>
+      <td><span class="badge bg-${sevBadge}">${u.severity}</span></td>
+      <td style="font-size:.78rem;">${escHtml(u.category)}</td>
+      <td>
+        <a href="#" class="text-info" onclick="showDeviceListById('${uid}');return false;">${u.device_count}</a>
+      </td>
+      <td style="font-size:.78rem;">${u.size_mb?u.size_mb.toFixed(0)+' MB':'\u2014'}</td>
+      <td>${u.reboot_required?'<i class="bi bi-arrow-clockwise text-warning" title="Reboot required"></i> Yes':'\u2014'}</td>      <td>${updateJobBadge(u.job_counts)}</td>      <td>
+        <button class="btn btn-xs btn-primary py-0 px-2" style="font-size:.75rem;" onclick="deployOneUpdateById('${uid}')">
+          <i class="bi bi-cloud-upload"></i> Deploy
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Load devices ─────────────────────────────────────────────────
+async function loadDevices() {
+  try {
+  const resp = await fetch('/api/patches/by-device').then(r => r.json()).catch(e => ({ok:false, error:String(e)}));
+  if (!resp.ok) {
+    document.getElementById('devicesBody').innerHTML =
+      `<tr><td colspan="9" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle me-2"></i>Failed to load devices: ${escHtml(resp.error||'Unknown error')}</td></tr>`;
+    return;
+  }
+  allDevices = resp.devices;
+  filterDevices();
+  } catch(e) {
+    document.getElementById('devicesBody').innerHTML =
+      `<tr><td colspan="9" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle me-2"></i>JS error: ${escHtml(String(e))}</td></tr>`;
+    console.error('loadDevices error:', e);
+  }
+}
+
+function filterDevices() {
+  const q = document.getElementById('deviceSearch').value.toLowerCase();
+  const visible = allDevices.filter(d => !q || d.asset_name.toLowerCase().includes(q));
+  renderDevices(visible);
+}
+
+function renderDevices(devices) {
+  const tbody = document.getElementById('devicesBody');
+  if (!devices.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No devices with pending updates.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = devices.map(d => {
+    const ago = d.last_seen ? relTime(d.last_seen) : '—';
+    const assetLink = d.asset_id
+      ? `<a href="/assets/${d.asset_id}" class="text-info">${escHtml(d.asset_name)}</a>`
+      : escHtml(d.asset_name);
+    return `<tr>
+      <td><input type="checkbox" class="dev-check" value="${d.agent_id}" onchange="updateDevSelCount()"></td>
+      <td>${assetLink}<div class="text-muted" style="font-size:.72rem;">${escHtml(d.agent_id)}</div></td>
+      <td><span class="badge bg-secondary">${d.pending_count}</span></td>
+      <td>${d.critical?`<span class="badge bg-danger">${d.critical}</span>`:'—'}</td>
+      <td>${d.important?`<span class="badge bg-warning text-dark">${d.important}</span>`:'—'}</td>
+      <td>${d.reboot_count?`<span class="badge bg-warning text-dark"><i class="bi bi-arrow-clockwise"></i> ${d.reboot_count}</span>`:'—'}</td>
+      <td>${agentJobBadge(d.last_job)}</td>
+      <td style="font-size:.78rem;">${ago}</td>
+      <td>
+        <button class="btn btn-xs btn-primary py-0 px-2" style="font-size:.75rem;" onclick="deployAllForDevice('${d.agent_id}')">
+          <i class="bi bi-cloud-upload"></i> Deploy All
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Selection helpers ─────────────────────────────────────────────
+function updateSelCount() {
+  const n = document.querySelectorAll('.upd-check:checked').length;
+  document.getElementById('selCount').textContent = n;
+  document.getElementById('deploySelectedBtn').disabled = n === 0;
+}
+function updateDevSelCount() {
+  const n = document.querySelectorAll('.dev-check:checked').length;
+  document.getElementById('devSelCount').textContent = n;
+  document.getElementById('deployDevicesBtn').disabled = n === 0;
+}
+function selectAllVisible(on) {
+  document.querySelectorAll('.upd-check').forEach(c => c.checked = on);
+  updateSelCount();
+}
+function checkAllVisible(on) {
+  document.querySelectorAll('.upd-check').forEach(c => c.checked = on);
+  updateSelCount();
+}
+function selectAllDevices(on) {
+  document.querySelectorAll('.dev-check').forEach(c => c.checked = on);
+  updateDevSelCount();
+}
+function checkAllDevices(on) {
+  document.querySelectorAll('.dev-check').forEach(c => c.checked = on);
+  updateDevSelCount();
+}
+
+// ── _updateMap wrappers ───────────────────────────────────────────
+function deployOneUpdateById(updateId) {
+  const u = (window._updateMap || {})[updateId];
+  if (!u) return;
+  deployOneUpdate(updateId, u.agents);
+}
+
+function showDeviceListById(updateId) {
+  const u = (window._updateMap || {})[updateId];
+  if (!u) return;
+  showDeviceList(updateId, u.title, u.agents, u.asset_names);
+}
+
+// ── Asset name lookup helper ──────────────────────────────────────
+function getAssetName(agentId) {
+  const d = allDevices.find(x => x.agent_id === agentId);
+  return (d && d.asset_name) ? d.asset_name : agentId;
+}
+
+// ── Deploy confirm modal ──────────────────────────────────────────
+let _pendingDeployPayload = null;
+let _pendingDeployDevices = [];
+
+function showDeployConfirm(payload, devices) {
+  _pendingDeployPayload = payload;
+  _pendingDeployDevices = devices;
+
+  document.getElementById('deployModalBody').innerHTML = `
+    <p class="mb-2 text-muted small">Ready to dispatch to <strong class="text-white">${devices.length}</strong> device(s):</p>
+    <ul class="list-unstyled mb-0">
+      ${devices.map(d => `
+        <li class="d-flex align-items-center gap-2 py-1 border-bottom border-secondary" id="ddv-${CSS.escape(d.agent_id)}">
+          <i class="bi bi-laptop text-info"></i>
+          <span>${escHtml(d.asset_name !== d.agent_id ? d.asset_name : d.agent_id)}</span>
+          ${d.asset_name !== d.agent_id ? `<small class="text-muted">(${escHtml(d.agent_id)})</small>` : ''}
+          <span class="ms-auto" id="ddv-status-${CSS.escape(d.agent_id)}"></span>
+        </li>`).join('')}
+    </ul>`;
+
+  document.getElementById('deployModalFooter').innerHTML = `
+    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmAndDeploy()">
+      <i class="bi bi-cloud-upload me-1"></i>Deploy
+    </button>`;
+
+  document.getElementById('deployModalClose').disabled = false;
+  new bootstrap.Modal(document.getElementById('deployModal')).show();
+}
+
+async function confirmAndDeploy() {
+  if (!_pendingDeployPayload) return;
+
+  // Lock UI and show spinners
+  document.getElementById('deployModalClose').disabled = true;
+  document.getElementById('deployModalFooter').innerHTML =
+    `<span class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Dispatching…</span>`;
+
+  _pendingDeployDevices.forEach(d => {
+    const el = document.getElementById(`ddv-status-${CSS.escape(d.agent_id)}`);
+    if (el) el.innerHTML = `<span class="spinner-border spinner-border-sm text-info"></span>`;
+  });
+
+  const resp = await fetch('/api/patches/deploy', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(_pendingDeployPayload),
+  }).then(r => r.json()).catch(e => ({ok: false, error: String(e)}));
+
+  document.getElementById('deployModalClose').disabled = false;
+
+  if (!resp.ok) {
+    document.getElementById('deployModalBody').innerHTML =
+      `<div class="alert alert-danger mb-0"><i class="bi bi-x-circle me-2"></i>${escHtml(resp.error || 'Unknown error')}</div>`;
+    document.getElementById('deployModalFooter').innerHTML =
+      `<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>`;
+    return;
+  }
+
+  // Update per-device badges
+  const statusBadge = {
+    deploying: `<span class="badge bg-success"><i class="bi bi-check-lg me-1"></i>Sent</span>`,
+    offline:   `<span class="badge bg-danger"><i class="bi bi-wifi-off me-1"></i>Offline</span>`,
+    queued:    `<span class="badge bg-secondary"><i class="bi bi-clock me-1"></i>Queued</span>`,
+    no_updates:`<span class="badge bg-secondary">No updates</span>`,
+  };
+  (resp.results?.detail || []).forEach(d => {
+    const el = document.getElementById(`ddv-status-${CSS.escape(d.agent_id)}`);
+    if (el) el.innerHTML = statusBadge[d.status] || `<span class="badge bg-secondary">${escHtml(d.status)}</span>`;
+  });
+
+  const r = resp.results;
+  const parts = [];
+  if (r.deployed)    parts.push(`<span class="text-success fw-semibold">${r.deployed} sent</span>`);
+  if (r.offline)     parts.push(`<span class="text-danger">${r.offline} offline</span>`);
+  if (r.queued)      parts.push(`<span class="text-secondary">${r.queued} queued</span>`);
+  if (r.no_updates)  parts.push(`<span class="text-muted">${r.no_updates} no updates</span>`);
+
+  document.getElementById('deployModalFooter').innerHTML = `
+    <span class="me-auto small">${parts.join(' · ')}</span>
+    <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>`;
+
+  document.getElementById('deployModal').addEventListener('hidden.bs.modal', () => {
+    refreshAll();
+  }, {once: true});
+}
+
+// ── Deploy selected updates to all their affected agents ─────────
+function deploySelected() {
+  const updateIds = [...document.querySelectorAll('.upd-check:checked')].map(c => c.value);
+  if (!updateIds.length) return;
+  const agentSet = new Set();
+  allUpdates.filter(u => updateIds.includes(u.update_id)).forEach(u => u.agents.forEach(a => agentSet.add(a)));
+  const agentIds = [...agentSet];
+  const devices  = agentIds.map(a => ({agent_id: a, asset_name: getAssetName(a)}));
+  showDeployConfirm({agent_ids: agentIds, update_ids: updateIds}, devices);
+}
+
+// ── Deploy single update row to all its agents ────────────────────
+function deployOneUpdate(updateId, agents) {
+  const devices = agents.map(a => ({agent_id: a, asset_name: getAssetName(a)}));
+  showDeployConfirm({agent_ids: agents, update_ids: [updateId]}, devices);
+}
+
+// ── Deploy all pending for selected devices ───────────────────────
+function deployAllForDevices() {
+  const agentIds = [...document.querySelectorAll('.dev-check:checked')].map(c => c.value);
+  if (!agentIds.length) return;
+  const devices = agentIds.map(a => ({agent_id: a, asset_name: getAssetName(a)}));
+  showDeployConfirm({agent_ids: agentIds, all_pending: true}, devices);
+}
+
+// ── Deploy all pending for one device ────────────────────────────
+function deployAllForDevice(agentId) {
+  const devices = [{agent_id: agentId, asset_name: getAssetName(agentId)}];
+  showDeployConfirm({agent_ids: [agentId], all_pending: true}, devices);
+}
+
+// ── Deploy from device-list modal ────────────────────────────────
+async function deployUpdateToAll() {
+  if (!currentUpdateId) return;
+  bootstrap.Modal.getInstance(document.getElementById('deviceListModal'))?.hide();
+  const devices = currentUpdateAgents.map((a, i) => ({
+    agent_id: a,
+    asset_name: getAssetName(a),
+  }));
+  showDeployConfirm({agent_ids: currentUpdateAgents, update_ids: [currentUpdateId]}, devices);
+}
+
+
+
+// ── Device list modal ─────────────────────────────────────────────
+function showDeviceList(updateId, title, agents, names) {
+  currentUpdateId    = updateId;
+  currentUpdateAgents = agents;
+  document.getElementById('deviceListTitle').textContent = `Affected Devices — ${title.substring(0,60)}`;
+  document.getElementById('deviceListBody').innerHTML = agents.map((a, i) => {
+    const name = names[i] || a;
+    return `<div class="d-flex align-items-center gap-2 py-1 border-bottom border-secondary">
+      <i class="bi bi-laptop text-info"></i>
+      <span>${escHtml(name)}</span>
+      <small class="text-muted">(${escHtml(a)})</small>
+    </div>`;
+  }).join('');
+  new bootstrap.Modal(document.getElementById('deviceListModal')).show();
+}
+
+async function deployUpdateToAll() {
+  if (!currentUpdateId) return;
+  if (!confirm(`Deploy to ${currentUpdateAgents.length} device(s)?`)) return;
+  bootstrap.Modal.getInstance(document.getElementById('deviceListModal'))?.hide();
+  await doDeployApi({agent_ids: currentUpdateAgents, update_ids: [currentUpdateId]});
+}
+
+// ── Auto-approve rules modal ──────────────────────────────────────
+async function openAutoApprove() {
+  const resp = await fetch('/api/patches/auto-approve-rules').then(r => r.json()).catch(() => ({ok:false}));
+  rulesData = resp.rules || [];
+  renderRules();
+  new bootstrap.Modal(document.getElementById('autoApproveModal')).show();
+}
+
+function renderRules() {
+  const c = document.getElementById('rulesContainer');
+  c.innerHTML = rulesData.map((r, i) => `
+    <div class="card bg-secondary bg-opacity-10 border-secondary mb-2 p-2 px-3">
+      <div class="d-flex align-items-center gap-3 flex-wrap">
+        <div class="flex-grow-1">
+          <div class="fw-semibold" style="font-size:.88rem;">${escHtml(r.label)}</div>
+          <div class="text-muted" style="font-size:.75rem;">
+            ${r.match_title ? 'Title contains: <code>'+escHtml(r.match_title)+'</code>' : ''}
+            ${r.match_severity ? 'Severity: <code>'+escHtml(r.match_severity)+'</code>' : ''}
+            ${r.match_category ? 'Category: <code>'+escHtml(r.match_category)+'</code>' : ''}
+          </div>
+        </div>
+        <div class="d-flex gap-3 align-items-center">
+          <label class="d-flex align-items-center gap-1 small">
+            <input type="checkbox" ${r.enabled?'checked':''} onchange="rulesData[${i}].enabled=this.checked;toggleAutoDeploy(${i})">
+            Enabled
+          </label>
+          <label class="d-flex align-items-center gap-1 small" id="ad-label-${i}" style="${r.enabled ? '' : 'opacity:.4;pointer-events:none'}">
+            <input type="checkbox" id="ad-${i}" ${r.auto_deploy?'checked':''} onchange="rulesData[${i}].auto_deploy=this.checked">
+            Auto-Deploy
+          </label>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function toggleAutoDeploy(i) {
+  const lbl = document.getElementById(`ad-label-${i}`);
+  if (lbl) lbl.style.cssText = rulesData[i].enabled ? '' : 'opacity:.4;pointer-events:none';
+}
+
+async function saveRules() {
+  const resp = await fetch('/api/patches/auto-approve-rules', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({rules: rulesData}),
+  }).then(r => r.json()).catch(() => ({ok:false}));
+  if (resp.ok) {
+    bootstrap.Modal.getInstance(document.getElementById('autoApproveModal'))?.hide();
+    showToast('Auto-approve rules saved.', 'success');
+  } else {
+    alert('Save failed.');
+  }
+}
+
+async function runAutoApproveNow() {
+  const btn = document.getElementById('autoApproveRunBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running…';
+  const resp = await fetch('/api/patches/run-auto-approve', {method:'POST'})
+    .then(r => r.json()).catch(() => ({ok:false}));
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Run Auto-Approve Now';
+  if (resp.ok) {
+    showToast(`Auto-approve: ${resp.deployed} deployed, ${resp.skipped} skipped/offline.`,
+      resp.deployed > 0 ? 'success' : 'info');
+    setTimeout(refreshAll, 2000);
+  } else {
+    alert('Failed to run auto-approve.');
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function relTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff/60000);
+  if (m < 60)  return `${m}m ago`;
+  const h = Math.floor(m/60);
+  if (h < 24)  return `${h}h ago`;
+  return `${Math.floor(h/24)}d ago`;
+}
+
+function showToast(msg, type) {
+  const id = 'toast_' + Date.now();
+  const color = {success:'bg-success',warning:'bg-warning text-dark',info:'bg-info text-dark',danger:'bg-danger'}[type]||'bg-secondary';
+  const el = document.createElement('div');
+  el.innerHTML = `<div id="${id}" class="toast align-items-center text-white ${color} border-0 show mb-2" role="alert">
+    <div class="d-flex"><div class="toast-body">${escHtml(msg)}</div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.toast').remove()"></button>
+    </div></div>`;
+  let tc = document.getElementById('toastContainer');
+  if (!tc) {
+    tc = document.createElement('div');
+    tc.id = 'toastContainer';
+    tc.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:9999;';
+    document.body.appendChild(tc);
+  }
+  tc.appendChild(el.firstChild);
+  setTimeout(() => document.getElementById(id)?.remove(), 5000);
+}
+</script>
+{% endblock %}

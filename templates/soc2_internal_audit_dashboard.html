@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Internal Audits{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-clipboard-check"></i> Internal Audits</h2>
+        <p class="text-muted mb-0">Plan audits, record findings, and tie deficiencies back to readiness items.</p>
+    </div>
+    <a href="{{ url_for('readiness.readiness_dashboard') }}" class="btn btn-outline-primary">
+        <i class="bi bi-list-task"></i> Readiness Queue
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small mb-1">Audits</div><div class="display-6 fw-semibold">{{ audits|length }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small mb-1">Findings</div><div class="display-6 fw-semibold text-warning">{{ finding_count }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small mb-1">Open Findings</div><div class="display-6 fw-semibold text-danger">{{ open_finding_count }}</div></div></div></div>
+    <div class="col-md-3"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="text-muted small mb-1">Linked Readiness Items</div><div class="display-6 fw-semibold text-primary">{{ linked_readiness_items }}</div></div></div></div>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white"><h5 class="mb-0">New Internal Audit</h5></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('internal_audit.create_internal_audit') }}" class="row g-3">
+            <div class="col-md-6"><label class="form-label" for="title">Title</label><input class="form-control" id="title" name="title" required></div>
+            <div class="col-md-3"><label class="form-label" for="status">Status</label><select class="form-select" id="status" name="status">{% for option in audit_status_options %}<option value="{{ option }}">{{ option }}</option>{% endfor %}</select></div>
+            <div class="col-md-3"><label class="form-label" for="owner">Owner</label><input class="form-control" id="owner" name="owner"></div>
+            <div class="col-md-4"><label class="form-label" for="audit_period_start">Audit Period Start</label><input class="form-control" type="date" id="audit_period_start" name="audit_period_start"></div>
+            <div class="col-md-4"><label class="form-label" for="audit_period_end">Audit Period End</label><input class="form-control" type="date" id="audit_period_end" name="audit_period_end"></div>
+            <div class="col-md-4"><label class="form-label" for="planned_date">Planned Date</label><input class="form-control" type="date" id="planned_date" name="planned_date"></div>
+            <div class="col-12"><label class="form-label" for="scope">Scope</label><textarea class="form-control" id="scope" name="scope" rows="3" placeholder="Controls, teams, and systems included in this audit."></textarea></div>
+            <div class="col-md-6"><label class="form-label" for="evidence_reference">Evidence Reference</label><input class="form-control" id="evidence_reference" name="evidence_reference" placeholder="SharePoint path, folder, or report reference"></div>
+            <div class="col-md-6"><label class="form-label" for="summary">Summary</label><input class="form-control" id="summary" name="summary" placeholder="Short planning note or objective"></div>
+            <div class="col-12 d-grid"><button class="btn btn-primary" type="submit">Create Audit</button></div>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>Audit</th><th>Status</th><th>Owner</th><th>Planned</th><th>Findings</th><th></th></tr></thead>
+            <tbody>
+                {% for audit in audits %}
+                <tr>
+                    <td><div class="fw-semibold">{{ audit.title }}</div><div class="small text-muted">{{ audit.audit_key }}{% if audit.scope %} · {{ audit.scope[:100] }}{% if audit.scope|length > 100 %}...{% endif %}{% endif %}</div></td>
+                    <td><span class="badge bg-secondary">{{ audit.status }}</span></td>
+                    <td>{{ audit.owner or 'Unassigned' }}</td>
+                    <td>{{ audit.planned_date.strftime('%Y-%m-%d') if audit.planned_date else 'Not set' }}</td>
+                    <td>{{ audit.findings|length }}</td>
+                    <td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('internal_audit.internal_audit_detail', audit_id=audit.id) }}">Open</a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-5">No internal audits recorded yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

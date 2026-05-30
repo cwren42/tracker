@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}SOC2 Readiness{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-list-task"></i> SOC2 Readiness</h2>
+        <p class="text-muted mb-0">Defaulting to the active system-description control queue. Switch the source filter to view broader audit-pack and manual follow-up work.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('readiness.automation_status_dashboard') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-activity"></i> Automation Status
+        </a>
+        <a href="{{ url_for('readiness.export_type1_pack') }}" class="btn btn-primary">
+            <i class="bi bi-file-earmark-zip"></i> Export Type 1 Pack
+        </a>
+        <a href="{{ url_for('soc2.soc2_dashboard') }}" class="btn btn-outline-primary">
+            <i class="bi bi-speedometer2"></i> Back to Dashboard
+        </a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Tracked Items</div>
+                <div class="display-6 fw-semibold">{{ summary.total }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Open Work</div>
+                <div class="display-6 fw-semibold text-danger">{{ summary.open }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Critical</div>
+                <div class="display-6 fw-semibold text-warning">{{ summary.critical }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Manual-Sourced</div>
+                <div class="display-6 fw-semibold text-primary">{{ summary.manual }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="q" class="form-label">Search</label>
+                <input id="q" name="q" class="form-control" value="{{ search_term }}" placeholder="Control, owner, domain, criterion">
+            </div>
+            <div class="col-md-2">
+                <label for="status" class="form-label">Status</label>
+                <select id="status" name="status" class="form-select">
+                    <option value="">All</option>
+                    {% for option in status_options %}
+                    <option value="{{ option }}" {% if selected_status == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="priority" class="form-label">Priority</label>
+                <select id="priority" name="priority" class="form-select">
+                    <option value="">All</option>
+                    {% for option in priority_options %}
+                    <option value="{{ option }}" {% if selected_priority == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="source_type" class="form-label">Source</label>
+                <select id="source_type" name="source_type" class="form-select">
+                    <option value="type1_control" {% if selected_source_type == 'type1_control' %}selected{% endif %}>Current controls</option>
+                    <option value="soc2_type1" {% if selected_source_type == 'soc2_type1' %}selected{% endif %}>Type 1 pack tasks</option>
+                    <option value="manual" {% if selected_source_type == 'manual' %}selected{% endif %}>Manual follow-up</option>
+                    <option value="all" {% if selected_source_type == 'all' %}selected{% endif %}>All workstreams</option>
+                    {% for option in source_options %}
+                    {% if option not in ['type1_control', 'soc2_type1', 'manual', 'all'] %}
+                    <option value="{{ option }}" {% if selected_source_type == option %}selected{% endif %}>{{ option }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2 d-grid">
+                <button class="btn btn-primary" type="submit">Filter</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Item</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Owner</th>
+                    <th>Source</th>
+                    <th>Next Step</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('readiness.readiness_item_detail', item_id=item.id) }}" class="fw-semibold text-decoration-none">{{ item.title }}</a>
+                        <div class="small text-muted">{{ item.domain or 'Unassigned domain' }}{% if item.audit_alignment %} · {{ item.audit_alignment }}{% endif %}</div>
+                    </td>
+                    <td>
+                        {% if item.status in ['In Place', 'Closed'] %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">{{ item.status }}</span>
+                        {% elif item.status in ['Partially In Place', 'Open'] %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">{{ item.status }}</span>
+                        {% else %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">{{ item.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge bg-dark-subtle text-dark border">{{ item.priority }}</span></td>
+                    <td>{{ item.owner or 'Unassigned' }}</td>
+                    <td><span class="text-capitalize">{{ item.source_type.replace('_', ' ') }}</span></td>
+                    <td class="text-muted small">{{ item.next_step or 'No next step recorded yet.' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-5">No readiness items matched the current filters.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

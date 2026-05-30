@@ -1,0 +1,526 @@
+{% extends "base.html" %}
+{% block title %}Quarantine Detail — {{ msg.subject or 'No Subject' }}{% endblock %}
+{% block styles %}
+<style>
+.meta-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#6c757d; margin-bottom:2px; }
+.meta-val   { font-size:.9rem; font-weight:500; }
+.auth-chip  { display:inline-flex; align-items:center; gap:5px; border-radius:20px; padding:3px 10px; font-size:.75rem; font-weight:600; border:1px solid; }
+.auth-pass  { background:rgba(32,201,151,.12); color:#20c997; border-color:rgba(32,201,151,.3); }
+.auth-fail  { background:rgba(220,53,69,.12);  color:#ff6b6b; border-color:rgba(220,53,69,.3); }
+.auth-soft  { background:rgba(255,193,7,.1);   color:#ffc107; border-color:rgba(255,193,7,.3); }
+.auth-none  { background:rgba(108,117,125,.1); color:#6c757d; border-color:rgba(108,117,125,.3); }
+.risk-bar-fill { height:6px; border-radius:3px; transition:width .4s; }
+.ioc-row    { font-family: monospace; font-size:.82rem; }
+.header-name  { color:#7aa2f7; font-weight:600; min-width:200px; white-space:nowrap; }
+.header-value { color:#a9b1d6; word-break:break-all; }
+.threat-badge-Phish    { background: rgba(220,53,69,.15);  color: #ff6b6b; border: 1px solid rgba(220,53,69,.3); }
+.threat-badge-Malware  { background: rgba(111,66,193,.15); color: #b07bff; border: 1px solid rgba(111,66,193,.3); }
+.threat-badge-Spam     { background: rgba(255,193,7,.12);  color: #ffc107; border: 1px solid rgba(255,193,7,.3); }
+.threat-badge-Bulk     { background: rgba(13,202,240,.1);  color: #0dcaf0; border: 1px solid rgba(13,202,240,.3); }
+.threat-badge-Unknown  { background: rgba(108,117,125,.1); color: #6c757d; border: 1px solid rgba(108,117,125,.3); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width:1300px;">
+
+  <!-- Breadcrumb + back -->
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <a href="{{ url_for('quarantine.quarantine_list') }}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i>Back to Quarantine
+    </a>
+    <span class="text-muted small">›</span>
+    <span class="text-muted small text-truncate" style="max-width:400px;">{{ msg.subject or '(no subject)' }}</span>
+  </div>
+
+  <div class="row g-3">
+    <!-- ── LEFT COLUMN ── -->
+    <div class="col-lg-7">
+
+      <!-- Message header card -->
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-envelope-exclamation me-2"></i>Message Details</span>
+          <div class="d-flex gap-2">
+            <span class="badge threat-badge-{{ msg.threat_type or 'Unknown' }}" style="border-radius:6px;font-size:.78rem;padding:4px 10px;">
+              {{ msg.threat_type or 'Unknown' }}
+            </span>
+            {% if msg.release_status == 'Quarantined' %}
+            <span class="badge bg-warning text-dark">Quarantined</span>
+            {% elif msg.release_status == 'Released' %}
+            <span class="badge bg-success">Released</span>
+            {% elif msg.release_status == 'Deleted' %}
+            <span class="badge bg-secondary">Deleted</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <div class="meta-label">Subject</div>
+              <div class="meta-val">{{ msg.subject or '(no subject)' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Received</div>
+              <div class="meta-val">{{ msg.received_time.strftime('%Y-%m-%d %H:%M UTC') if msg.received_time else '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">From (Display)</div>
+              <div class="meta-val">{{ msg.sender_display_name or '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">From (Address)</div>
+              <div class="meta-val" style="font-family:monospace;font-size:.82rem;">{{ msg.sender_address or '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Sender Domain</div>
+              <div class="meta-val d-flex align-items-center gap-2">
+                <span style="font-family:monospace;font-size:.82rem;">{{ msg.sender_domain or '—' }}</span>
+                {% if domain_count > 1 %}
+                <span class="badge bg-danger" style="font-size:.7rem;">{{ domain_count }}x seen</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Sending IP</div>
+              <div class="meta-val" style="font-family:monospace;font-size:.82rem;">
+                {% if msg.sender_ip %}
+                {{ msg.sender_ip }}
+                {% else %}
+                <span class="text-muted">—</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Recipient</div>
+              <div class="meta-val" style="font-family:monospace;font-size:.82rem;">{{ msg.recipient_address or '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Policy</div>
+              <div class="meta-val">{{ msg.policy_type or '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">Quarantine Reason</div>
+              <div class="meta-val">{{ msg.quarantine_reason or '—' }}</div>
+            </div>
+            <div class="col-sm-6">
+              <div class="meta-label">URLs / Attachments</div>
+              <div class="meta-val">{{ msg.url_count or 0 }} URLs &bull; {{ msg.attachment_count or 0 }} attachments</div>
+            </div>
+            {% if msg.released_by %}
+            <div class="col-sm-6">
+              <div class="meta-label">Released By</div>
+              <div class="meta-val">{{ msg.released_by }} @ {{ msg.released_at.strftime('%Y-%m-%d %H:%M') if msg.released_at else '—' }}</div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Auth results -->
+      <div class="card mb-3">
+        <div class="card-header fw-semibold"><i class="bi bi-patch-check me-2"></i>Authentication Results</div>
+        <div class="card-body d-flex flex-wrap gap-3">
+          {% set spf_class = 'auth-pass' if msg.spf_result == 'pass' else ('auth-soft' if msg.spf_result == 'softfail' else ('auth-fail' if msg.spf_result in ('fail','permerror','temperror') else 'auth-none')) %}
+          {% set dkim_class = 'auth-pass' if msg.dkim_result == 'pass' else ('auth-fail' if msg.dkim_result == 'fail' else 'auth-none') %}
+          {% set dmarc_class = 'auth-pass' if msg.dmarc_result == 'pass' else ('auth-fail' if msg.dmarc_result == 'fail' else 'auth-none') %}
+
+          <div class="auth-chip {{ spf_class }}">
+            <i class="bi bi-{{ 'check-circle' if msg.spf_result == 'pass' else 'x-circle' if msg.spf_result in ('fail','softfail') else 'dash-circle' }}"></i>
+            SPF: {{ msg.spf_result or 'none' }}
+          </div>
+          <div class="auth-chip {{ dkim_class }}">
+            <i class="bi bi-{{ 'check-circle' if msg.dkim_result == 'pass' else 'x-circle' if msg.dkim_result == 'fail' else 'dash-circle' }}"></i>
+            DKIM: {{ msg.dkim_result or 'none' }}
+          </div>
+          <div class="auth-chip {{ dmarc_class }}">
+            <i class="bi bi-{{ 'check-circle' if msg.dmarc_result == 'pass' else 'x-circle' if msg.dmarc_result == 'fail' else 'dash-circle' }}"></i>
+            DMARC: {{ msg.dmarc_result or 'none' }}
+          </div>
+
+          {% if msg.spf_result not in ('pass',) and msg.dkim_result not in ('pass',) and msg.dmarc_result not in ('pass',) %}
+          <div class="ms-auto d-flex align-items-center gap-2">
+            <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+            <span class="text-danger small fw-semibold">All auth checks failed — high confidence phishing/spoofing</span>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- IOC Table -->
+      {% if iocs %}
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-radioactive me-2 text-warning"></i>Extracted Indicators (IOCs)</span>
+          <span class="badge bg-secondary">{{ iocs|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0 ioc-row">
+            <thead>
+              <tr>
+                <th style="padding-left:1rem;">Type</th>
+                <th>Value</th>
+                <th>Threat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ioc in iocs %}
+              <tr>
+                <td style="padding-left:1rem;">
+                  {% if ioc.ioc_type == 'url' %}
+                  <span class="badge bg-danger" style="font-size:.7rem;">URL</span>
+                  {% elif ioc.ioc_type == 'domain' %}
+                  <span class="badge" style="background:#7aa2f7;font-size:.7rem;">Domain</span>
+                  {% elif ioc.ioc_type == 'email' %}
+                  <span class="badge bg-warning text-dark" style="font-size:.7rem;">Email</span>
+                  {% elif ioc.ioc_type == 'ip' %}
+                  <span class="badge bg-secondary" style="font-size:.7rem;">IP</span>
+                  {% else %}
+                  <span class="badge bg-dark" style="font-size:.7rem;">{{ ioc.ioc_type }}</span>
+                  {% endif %}
+                </td>
+                <td style="word-break:break-all;max-width:380px;">{{ ioc.ioc_value }}</td>
+                <td class="text-muted">{{ ioc.threat_label or '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- ── RIGHT COLUMN ── -->
+    <div class="col-lg-5">
+
+      <!-- Risk Score Card -->
+      <div class="card mb-3">
+        <div class="card-header fw-semibold"><i class="bi bi-speedometer2 me-2"></i>Risk Assessment</div>
+        <div class="card-body">
+          <div class="d-flex align-items-end gap-3 mb-2">
+            <div>
+              <div class="meta-label">Risk Score</div>
+              <div style="font-size:2.5rem;font-weight:800;line-height:1;
+                color:{% if msg.risk_score >= 75 %}#ff6b6b{% elif msg.risk_score >= 50 %}#ff8c42{% elif msg.risk_score >= 25 %}#ffc107{% else %}#6c757d{% endif %}">
+                {{ msg.risk_score }}
+              </div>
+            </div>
+            <div class="flex-grow-1">
+              <div style="background:rgba(255,255,255,.08);border-radius:3px;height:8px;margin-bottom:6px;">
+                <div class="risk-bar-fill" style="width:{{ msg.risk_score }}%;background:{% if msg.risk_score >= 75 %}#ff6b6b{% elif msg.risk_score >= 50 %}#ff8c42{% elif msg.risk_score >= 25 %}#ffc107{% else %}#6c757d{% endif %}"></div>
+              </div>
+              <div class="fw-bold" style="color:{% if msg.risk_score >= 75 %}#ff6b6b{% elif msg.risk_score >= 50 %}#ff8c42{% elif msg.risk_score >= 25 %}#ffc107{% else %}#6c757d{% endif %}">
+                {{ msg.risk_label }} Risk
+              </div>
+            </div>
+          </div>
+          <hr class="my-2">
+          <div class="small text-muted">
+            <div class="d-flex justify-content-between mb-1">
+              <span>Threat type ({{ msg.threat_type or '—' }})</span>
+              <span>{% if msg.threat_type == 'Phish' %}+40{% elif msg.threat_type == 'Malware' %}+50{% elif msg.threat_type == 'Spam' %}+10{% else %}+0{% endif %} pts</span>
+            </div>
+            <div class="d-flex justify-content-between mb-1">
+              <span>SPF {{ msg.spf_result or 'none' }}</span>
+              <span>{% if msg.spf_result in ('fail','softfail') %}+20 pts{% else %}—{% endif %}</span>
+            </div>
+            <div class="d-flex justify-content-between mb-1">
+              <span>DKIM {{ msg.dkim_result or 'none' }}</span>
+              <span>{% if msg.dkim_result == 'fail' %}+20 pts{% else %}—{% endif %}</span>
+            </div>
+            <div class="d-flex justify-content-between mb-1">
+              <span>DMARC {{ msg.dmarc_result or 'none' }}</span>
+              <span>{% if msg.dmarc_result == 'fail' %}+15 pts{% else %}—{% endif %}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {% if is_admin %}
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-stars me-2" style="color:#a78bfa"></i>AI Analysis</span>
+          <button class="btn btn-sm btn-outline-primary" onclick="runDetailAiAnalysis('{{ msg.message_id }}')">
+            <i class="bi bi-stars me-1"></i>Analyze Email
+          </button>
+        </div>
+        <div class="card-body">
+          <div id="detail-ai-content" class="text-muted small">
+            Uses email metadata and raw headers to produce a SOC-style assessment.
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Actions -->
+      {% if is_admin %}
+      {% if msg.release_status == 'Quarantined' %}
+      <div class="card mb-3" style="border-color:rgba(255,193,7,.3)">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-lightning-fill me-2"></i>Actions</span>
+          <button class="btn btn-sm btn-outline-primary" onclick="openPreview('{{ msg.message_id }}', '{{ msg.release_status }}')">
+            <i class="bi bi-eye me-1"></i>Preview Email
+          </button>
+        </div>
+        <div class="card-body d-flex flex-column gap-2">
+          <form method="POST" action="{{ url_for('quarantine.quarantine_release', message_id=msg.message_id) }}"
+                onsubmit="return confirm('Release this message to {{ msg.recipient_address }}?')">
+            <button type="submit" class="btn btn-success btn-sm w-100">
+              <i class="bi bi-box-arrow-up me-1"></i>Release to Inbox
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('quarantine.quarantine_delete', message_id=msg.message_id) }}"
+                onsubmit="return confirm('Permanently delete this quarantined message? This cannot be undone.')">
+            <button type="submit" class="btn btn-outline-danger btn-sm w-100">
+              <i class="bi bi-trash3 me-1"></i>Delete from Quarantine
+            </button>
+          </form>
+        </div>
+      </div>
+      {% elif msg.release_status in ['Delivered', 'Junk', 'Released'] %}
+      <div class="card mb-3" style="border-color:rgba(220,53,69,.22)">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-lightning-fill me-2"></i>Actions</span>
+          <button class="btn btn-sm btn-outline-primary" onclick="openPreview('{{ msg.message_id }}', '{{ msg.release_status }}')">
+            <i class="bi bi-eye me-1"></i>Preview Email
+          </button>
+        </div>
+        <div class="card-body d-flex flex-column gap-2">
+          <form method="POST" action="{{ url_for('quarantine.quarantine_delete', message_id=msg.message_id) }}"
+                onsubmit="return confirm('Delete this message from {{ msg.recipient_address }}\'s mailbox?')">
+            <button type="submit" class="btn btn-outline-danger btn-sm w-100">
+              <i class="bi bi-trash3 me-1"></i>Delete from Mailbox
+            </button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      <!-- Campaign / Related messages -->
+      {% if is_admin and related %}
+      <div class="card mb-3">
+        <div class="card-header fw-semibold"><i class="bi bi-diagram-3 me-2 text-warning"></i>Related Campaign Messages
+          <span class="badge bg-warning text-dark ms-1">{{ related|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          <ul class="list-group list-group-flush" style="font-size:.82rem;">
+            {% for r in related %}
+            <li class="list-group-item d-flex justify-content-between align-items-center" style="background:transparent;">
+              <div>
+                <div class="text-truncate" style="max-width:240px;" title="{{ r.subject }}">{{ r.subject or '(no subject)' }}</div>
+                <div class="text-muted" style="font-size:.72rem;">{{ r.recipient_address }} • {{ r.received_time.strftime('%m/%d %H:%M') if r.received_time else '' }}</div>
+              </div>
+              <a href="{{ url_for('quarantine.quarantine_detail', message_id=r.message_id) }}" class="btn btn-xs btn-outline-secondary" style="padding:1px 8px;font-size:.72rem;white-space:nowrap;">View</a>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div class="card-footer">
+          <a href="{{ url_for('quarantine.quarantine_campaigns') }}" class="small text-warning text-decoration-none">
+            <i class="bi bi-arrow-right me-1"></i>View all campaigns
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Raw Headers -->
+      {% if parsed_headers %}
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span class="fw-semibold"><i class="bi bi-code-slash me-2"></i>Raw Headers</span>
+          <button class="btn btn-xs btn-outline-secondary" style="padding:2px 8px;font-size:.72rem;" onclick="toggleHeaders()">Toggle</button>
+        </div>
+        <div class="card-body p-0" id="headers-panel" style="max-height:350px;overflow-y:auto;">
+          <table class="table table-sm mb-0" style="font-size:.78rem;">
+            <tbody>
+              {% for h in parsed_headers %}
+              <tr>
+                <td class="header-name" style="padding-left:1rem;width:200px;">{{ h.name }}</td>
+                <td class="header-value">{{ h.value }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="card mb-3">
+        <div class="card-header fw-semibold"><i class="bi bi-code-slash me-2"></i>Raw Headers</div>
+        <div class="card-body text-muted small">
+          Headers not available. They are fetched on-demand via Exchange PS REST.
+          Ensure <code>Exchange.ManageAsApp</code> is granted and the app has the <code>Quarantine Administrator</code> RBAC role.
+        </div>
+      </div>
+      {% endif %}
+
+    </div><!-- /right column -->
+  </div><!-- /row -->
+
+</div>
+
+<!-- ── Preview Modal ──────────────────────────────────────────────────────── -->
+{% if is_admin %}
+<div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #2a2f3a;">
+      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;align-items:flex-start;">
+        <div class="flex-grow-1" style="min-width:0;">
+          <h5 class="modal-title fw-bold text-truncate" id="pv-subject" style="max-width:700px;">Loading…</h5>
+          <div class="d-flex flex-wrap gap-3 mt-1" style="font-size:.78rem;" id="pv-meta"></div>
+        </div>
+        <button type="button" class="btn-close btn-close-white ms-3 flex-shrink-0" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="pv-loading" class="text-center py-5"><div class="spinner-border text-primary mb-3"></div><div class="text-muted">Fetching message data…</div></div>
+        <div id="pv-content" style="display:none;">
+          <div class="px-4 pt-3 pb-2 d-flex flex-wrap gap-2 align-items-center" style="border-bottom:1px solid #1a2030;">
+            <div id="pv-auth"></div>
+            <div class="ms-auto text-muted small" id="pv-ip"></div>
+          </div>
+          <ul class="nav nav-tabs px-4 mt-3 mb-0" role="tablist">
+            <li class="nav-item"><button class="nav-link active" data-bs-target="#pv-tab-body"   data-bs-toggle="tab">Body</button></li>
+            <li class="nav-item"><button class="nav-link"        data-bs-target="#pv-tab-urls"   data-bs-toggle="tab">URLs <span class="badge bg-secondary ms-1" id="pv-url-ct">0</span></button></li>
+            <li class="nav-item"><button class="nav-link"        data-bs-target="#pv-tab-attach" data-bs-toggle="tab">Attachments <span class="badge bg-secondary ms-1" id="pv-att-ct">0</span></button></li>
+          </ul>
+          <div class="tab-content px-4 pb-3 pt-2">
+            <div class="tab-pane active" id="pv-tab-body">
+              <div id="pv-body-placeholder" class="text-center text-muted py-4"><i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>Body available only for threat-detected messages via Defender (EmailContent table).</div>
+              <iframe id="pv-body-frame" sandbox="allow-same-origin allow-popups" style="width:100%;min-height:360px;background:white;border:1px solid #2a2f3a;border-radius:6px;display:none;"></iframe>
+            </div>
+            <div class="tab-pane" id="pv-tab-urls"><div id="pv-urls"></div></div>
+            <div class="tab-pane" id="pv-tab-attach"><div id="pv-attach"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top:1px solid #2a2f3a;">
+        <span id="pv-threat-badge" class="me-auto"></span>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-sm btn-success" id="pv-release-btn" style="display:none;" onclick="previewAction('release')"><i class="bi bi-box-arrow-up me-1"></i>Release to Inbox</button>
+        <button class="btn btn-sm btn-danger"  id="pv-delete-btn"  style="display:none;" onclick="previewAction('delete')"><i class="bi bi-trash3 me-1"></i>Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleHeaders() {
+  const p = document.getElementById('headers-panel');
+  if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
+}
+
+// ── Shared preview utilities ──────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtBytes(b) {
+  if (!b) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+function showToast(msg, level) {
+  let t = document.getElementById('qToast');
+  if (!t) { t = document.createElement('div'); t.id='qToast'; document.body.appendChild(t); }
+  const colors = {success:{bg:'#1a3a2a',border:'#20c997',text:'#20c997'}, danger:{bg:'#3a1a1a',border:'#ff6b6b',text:'#ff6b6b'}, warning:{bg:'#3a2e10',border:'#ffc107',text:'#ffc107'}};
+  const c = colors[level] || colors.danger;
+  t.style.cssText = `position:fixed;top:20px;right:20px;z-index:9999;min-width:280px;border-radius:10px;padding:12px 16px;font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);background:${c.bg};border:1px solid ${c.border};color:${c.text};`;
+  t.textContent = msg;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+function authChip(name, val) {
+  const cls = val === 'pass' ? 'auth-pass' : (val === 'fail' || val === 'softfail' ? 'auth-fail' : 'auth-none');
+  const icon = val === 'pass' ? 'check-circle' : (val === 'fail' || val === 'softfail' ? 'x-circle' : 'dash-circle');
+  return `<span class="auth-chip ${cls} me-1"><i class="bi bi-${icon}"></i> ${name}: ${escHtml(val||'none')}</span>`;
+}
+
+let _pvId = null;
+function openPreview(messageId, status) {
+  _pvId = messageId;
+  new bootstrap.Modal(document.getElementById('previewModal')).show();
+  document.getElementById('pv-loading').style.display   = '';
+  document.getElementById('pv-content').style.display   = 'none';
+  document.getElementById('pv-subject').textContent     = 'Loading…';
+  document.getElementById('pv-release-btn').style.display = 'none';
+  document.getElementById('pv-delete-btn').style.display  = 'none';
+  document.getElementById('pv-body-frame').style.display  = 'none';
+  document.getElementById('pv-body-placeholder').style.display = '';
+
+  fetch(`/quarantine/${encodeURIComponent(messageId)}/preview`)
+    .then(r=>r.json())
+    .then(d => {
+      document.getElementById('pv-loading').style.display = 'none';
+      document.getElementById('pv-content').style.display = '';
+      document.getElementById('pv-subject').textContent = d.subject || '(no subject)';
+      document.getElementById('pv-meta').innerHTML = `
+        <span class="text-muted"><i class="bi bi-person me-1"></i>${escHtml(d.sender_display_name||d.sender||'')}</span>
+        <span class="text-muted">‹${escHtml(d.sender||'')}›</span>
+        <span class="text-muted"><i class="bi bi-send me-1"></i>${escHtml(d.recipient||'')}</span>
+        <span class="text-muted"><i class="bi bi-calendar3 me-1"></i>${d.received?new Date(d.received).toLocaleString():'—'}</span>`;
+      document.getElementById('pv-auth').innerHTML = authChip('SPF',d.spf)+authChip('DKIM',d.dkim)+authChip('DMARC',d.dmarc);
+      if (d.sender_ip) document.getElementById('pv-ip').innerHTML = `<i class="bi bi-hdd-network me-1"></i><code>${escHtml(d.sender_ip)}</code>`;
+      if (d.threat_type) document.getElementById('pv-threat-badge').innerHTML = `<span class="badge threat-badge-${d.threat_type}">${d.threat_type}</span>`;
+      if (d.body_html) { const f=document.getElementById('pv-body-frame'); f.srcdoc=d.body_html; f.style.display=''; document.getElementById('pv-body-placeholder').style.display='none'; }
+      document.getElementById('pv-url-ct').textContent = (d.urls||[]).length;
+      document.getElementById('pv-urls').innerHTML = d.urls&&d.urls.length
+        ? `<table class="table table-sm mt-2" style="font-size:.8rem;"><thead><tr><th>URL</th><th style="width:90px">Location</th></tr></thead><tbody>${d.urls.map(u=>`<tr><td style="word-break:break-all;font-family:monospace;font-size:.75rem;">${escHtml(u.Url||'')}</td><td class="text-muted">${escHtml(u.UrlLocation||'')}</td></tr>`).join('')}</tbody></table>`
+        : '<div class="text-muted small py-3 text-center">No URLs extracted</div>';
+      document.getElementById('pv-att-ct').textContent = (d.attachments||[]).length;
+      document.getElementById('pv-attach').innerHTML = d.attachments&&d.attachments.length
+        ? `<table class="table table-sm mt-2" style="font-size:.8rem;"><thead><tr><th>File</th><th>Size</th><th>SHA256</th><th>Threat</th></tr></thead><tbody>${d.attachments.map(a=>`<tr><td>${escHtml(a.FileName||'')}</td><td class="text-muted">${fmtBytes(a.FileSize)}</td><td style="font-family:monospace;font-size:.7rem;" title="${escHtml(a.SHA256||'')}">${a.SHA256?a.SHA256.slice(0,12)+'…':'—'}</td><td class="text-danger">${escHtml(a.MalwareFamily||a.ThreatNames||'—')}</td></tr>`).join('')}</tbody></table>`
+        : '<div class="text-muted small py-3 text-center">No attachments</div>';
+      if (d.release_status === 'Quarantined') { document.getElementById('pv-release-btn').style.display=''; document.getElementById('pv-delete-btn').style.display=''; }
+    }).catch(err => { document.getElementById('pv-loading').innerHTML=`<div class="alert alert-danger mx-4">Failed: ${escHtml(String(err))}</div>`; });
+}
+async function previewAction(action) {
+  if (!_pvId) return;
+  if (!confirm(action==='release'?'Release to inbox?':'Delete from quarantine?')) return;
+  const btn = document.getElementById(action==='release'?'pv-release-btn':'pv-delete-btn');
+  const orig = btn.innerHTML;
+  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+  const res = await fetch(`/quarantine/${encodeURIComponent(_pvId)}/${action}`,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}}).then(r=>r.json()).catch(e=>({success:false,error:String(e)}));
+  if (res.success) { bootstrap.Modal.getInstance(document.getElementById('previewModal')).hide(); showToast(action==='release'?'Released to inbox.':'Deleted.','success'); setTimeout(()=>location.reload(),1200); }
+  else { btn.disabled=false; btn.innerHTML=orig; showToast('Failed: '+(res.error||'Unknown error'),'danger'); }
+}
+async function runDetailAiAnalysis(messageId) {
+  const target = document.getElementById('detail-ai-content');
+  if (!target) return;
+  target.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary mb-2"></div><div class="text-muted small">Analyzing with GPT-4o…</div></div>';
+  try {
+    const r = await fetch(`/quarantine/${encodeURIComponent(messageId)}/ai-analyze`, {
+      method: 'POST',
+      headers: {'X-Requested-With': 'XMLHttpRequest'},
+    }).then(r => r.json());
+    if (r.error) {
+      target.innerHTML = `<div class="alert alert-warning mt-3"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(r.error)}</div>`;
+    } else {
+      target.innerHTML =
+        `<div class="text-muted" style="font-size:.7rem;margin-bottom:.5rem;"><i class="bi bi-stars me-1" style="color:#a78bfa"></i>Analyzed by ${escHtml(r.model||'GPT-4o')}</div>` +
+        renderMarkdown(r.analysis);
+    }
+  } catch (e) {
+    target.innerHTML = `<div class="alert alert-danger mt-3">Failed: ${escHtml(String(e))}</div>`;
+  }
+}
+function renderMarkdown(text) {
+  let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s
+    .replace(/^### (.+)$/gm, '<h6 class="fw-bold mt-3 mb-1" style="color:#a78bfa;">$1</h6>')
+    .replace(/^## (.+)$/gm, '<h5 class="fw-bold mt-3 mb-1">$1</h5>')
+    .replace(/^# (.+)$/gm, '<h4 class="fw-bold mt-3 mb-1">$1</h4>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`(.+?)`/g, '<code class="text-warning" style="font-size:.82em;">$1</code>')
+    .replace(/^[-\*] (.+)$/gm, '<li class="mb-1">$1</li>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+  s = s.replace(/(<li[^>]*>.*?<\/li><br>)+/g, m => '<ul class="mb-2 mt-1">' + m.replace(/<br>/g,'') + '</ul>');
+  return `<div style="font-size:.85rem;line-height:1.75;padding:.25rem 0;">${s}</div>`;
+}
+</script>
+{% endblock %}

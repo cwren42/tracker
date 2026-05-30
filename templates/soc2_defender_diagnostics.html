@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Defender Diagnostics{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-bug"></i> Defender Diagnostics</h2>
+    <a href="{{ url_for('soc2.soc2_dashboard') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back to SOC2 Dashboard
+    </a>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">API Base URL</h6>
+                <div class="small">{{ diagnostics.base_url }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Token Audience</h6>
+                <div class="small">{{ diagnostics.audience or 'Unavailable' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="text-muted">Granted Roles</h6>
+                <div class="small">{{ diagnostics.roles|length }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-plug"></i> Endpoint Checks</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Endpoint</th>
+                        <th>Status</th>
+                        <th>HTTP</th>
+                        <th>Count</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for endpoint, result in diagnostics.endpoint_checks.items() %}
+                    <tr>
+                        <td><strong>{{ endpoint }}</strong></td>
+                        <td>
+                            {% if result.status == 'ok' %}
+                                <span class="badge bg-success">OK</span>
+                            {% else %}
+                                <span class="badge bg-danger">Error</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ result.http_status or 'n/a' }}</td>
+                        <td>{{ result.count if result.count is not none else 'n/a' }}</td>
+                        <td><small class="text-muted">{{ result.message or 'No error' }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-key"></i> Token Roles</h5>
+    </div>
+    <div class="card-body">
+        {% if diagnostics.roles %}
+            <div class="d-flex flex-wrap gap-2">
+                {% for role in diagnostics.roles %}
+                <span class="badge bg-light text-dark border">{{ role }}</span>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="text-muted mb-0">No application roles were found in the current token.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

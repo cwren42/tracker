@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Automation Status{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2><i class="bi bi-activity"></i> Automated Evidence Status</h2>
+        <p class="text-muted mb-0">Review which evidence files were generated automatically and what still needs follow-up.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('readiness.automation_status_dashboard', refresh='1') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-repeat"></i> Refresh Live Status
+        </a>
+        <a href="{{ url_for('readiness.export_type1_pack') }}" class="btn btn-primary">
+            <i class="bi bi-file-earmark-zip"></i> Export Type 1 Pack
+        </a>
+        <a href="{{ url_for('readiness.readiness_dashboard') }}" class="btn btn-outline-primary">
+            <i class="bi bi-arrow-left"></i> Back to Readiness
+        </a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Automated Checks</div>
+                <div class="display-6 fw-semibold">{{ summary.total }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Exported</div>
+                <div class="display-6 fw-semibold text-success">{{ summary.exported }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Needs Follow-up</div>
+                <div class="display-6 fw-semibold text-warning">{{ summary.follow_up }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <div class="text-muted small mb-1">API Errors</div>
+                <div class="display-6 fw-semibold text-danger">{{ summary.errors }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body d-flex flex-wrap gap-3 align-items-center">
+        <div><span class="badge bg-success-subtle text-success border border-success-subtle">Exported</span> Files generated with data.</div>
+        <div><span class="badge bg-warning-subtle text-warning border border-warning-subtle">No Resources</span> The configured integration is working, but that evidence type has no matching Azure resources.</div>
+        <div><span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Attention</span> The file generated, but the output still needs review.</div>
+        <div><span class="badge bg-danger-subtle text-danger border border-danger-subtle">Error</span> The generator failed and needs investigation.</div>
+        <div class="ms-auto text-muted small">Source: {{ source_label }} · Generated {{ generated_at }}</div>
+    </div>
+</div>
+
+{% if not refresh_live %}
+<div class="alert alert-info border-0 shadow-sm">
+    This page loads from cached evidence files so it returns quickly. Use <strong>Refresh Live Status</strong> only when you want to regenerate evidence from the connected Microsoft services, which can still take a few seconds.
+</div>
+{% else %}
+<div class="alert alert-info border-0 shadow-sm">
+    Live refresh currently skips the long-running MFA and software inventory checks and uses their cached status instead so the page can finish interactively.
+</div>
+{% endif %}
+
+<div class="card border-0 shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Evidence</th>
+                    <th>Category</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in results %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">{{ item.evidence_name }}</div>
+                        <div class="small text-muted">{{ item.zip_path }}</div>
+                    </td>
+                    <td>{{ item.category }}</td>
+                    <td>
+                        {% if item.status == 'exported' %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">Exported</span>
+                        {% elif item.status == 'no-resources' %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">No Resources</span>
+                        {% elif item.status == 'attention' %}
+                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Attention</span>
+                        {% else %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Error</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted small">{{ item.detail or 'Generated successfully.' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-5">No automated evidence checks were available.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

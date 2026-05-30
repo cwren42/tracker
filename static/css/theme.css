@@ -973,6 +973,10 @@ a:hover { color: var(--button-primary-hover); }
 .card {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
+    /* Match Bootstrap's inner radius to the card's outer radius, else the
+       header/footer (which have their own background) keep the old smaller
+       corner and overhang the curve — the "missing corners" look. */
+    --bs-card-inner-border-radius: calc(var(--radius-lg) - 1px);
     box-shadow: var(--shadow-sm);
     margin-bottom: var(--space-5);
 }

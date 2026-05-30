@@ -144,30 +144,11 @@
     transform: translateY(0);
 }
 
-/* Edit Mode Specific */
-{% if edit_mode %}
-.widget-container {
-    cursor: default;
-}
-
-.widget-container:hover {
-    outline: 2px solid rgba(13, 110, 253, 0.4);
-    outline-offset: 4px;
-    border-radius: 6px;
-}
-
-.widget-drag-handle {
-    cursor: grab !important;
-}
-
-.widget-drag-handle:active {
-    cursor: grabbing !important;
-}
-
-.widget-controls {
-    opacity: 1;
-}
-{% endif %}
+/* NOTE: this is a STATIC css file — Jinja ({% if edit_mode %}) does not run here.
+   A previous edit-mode-only block lived here, but because the conditional never
+   evaluated, its :hover outline applied on every page load (the stray blue box).
+   Edit-mode affordances are handled by JS adding classes + the hover rule on
+   .widget-container:hover .widget-controls above, so nothing is needed here. */
 
 /* Sortable States */
 .sortable-ghost {

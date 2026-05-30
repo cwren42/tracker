@@ -24,7 +24,7 @@
     --text-secondary: #6B7280;
     --accent-primary: #6366F1;
     --accent-secondary: #EEF0FF;
-    --border-color: #E6E8EB;
+    --border-color: #CFD4DA;   /* visible on the gray app bg so all 4 card edges read */
     --card-bg: #FFFFFF;
     --navbar-bg: #FFFFFF;
     --navbar-text: #1A1D21;

@@ -257,23 +257,33 @@ class LicenseService:
         
         self.scheduler = BackgroundScheduler()
         
-        # Schedule periodic checks
+        # Schedule periodic checks (guarded so only one worker runs each cycle)
         self.scheduler.add_job(
-            func=self.perform_check,
+            func=self._guarded_periodic_check,
             trigger='interval',
             hours=CHECK_INTERVAL_HOURS,
             id='license_check',
             name='Periodic license verification',
             replace_existing=True
         )
-        
+
         self.scheduler.start()
-        
+
         # Perform initial check
         try:
             self.perform_check()
         except Exception as e:
             logger.error(f'Initial license check failed: {str(e)}')
+
+    def _guarded_periodic_check(self):
+        """Periodic license check, guarded by a cross-process lock so it runs in
+        only one gunicorn worker per interval (the scheduler fires in every
+        worker, but the external verification only needs to happen once)."""
+        from sync_scheduler import _file_lock
+        lock_path = os.environ.get('TRACKER_LICENSE_LOCK_PATH', '/tmp/tracker_license_check.lock')
+        with _file_lock(lock_path) as got_lock:
+            if got_lock:
+                self.perform_check()
     
     def shutdown(self):
         """Shutdown the scheduler"""

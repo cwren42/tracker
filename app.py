@@ -43,7 +43,7 @@ import ai_engine as _ai_engine
 import report_engine as _report_engine
 
 # ── Extensions (unbound objects) ──────────────────────────────────────────
-from extensions import db, login_manager, mail, limiter
+from extensions import db, login_manager, mail, limiter, csrf
 
 # ── Models ────────────────────────────────────────────────────────────────
 from models import (
@@ -91,7 +91,11 @@ _secret_key = os.environ.get('SECRET_KEY')
 if not _secret_key:
     raise RuntimeError('SECRET_KEY environment variable is not set. Set it in /etc/tracker/secrets.env')
 app.config['SECRET_KEY'] = _secret_key
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://tracker_user:tracker_secure_2026@localhost/tracker'
+_database_url = os.environ.get('DATABASE_URL')
+if not _database_url:
+    raise RuntimeError('DATABASE_URL environment variable is not set. Set it in /var/www/tracker/.secrets.env '
+                       '(loaded by systemd EnvironmentFile). A full `systemctl restart tracker` is required to pick it up.')
+app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'connect_args': {'options': '-c timezone=UTC'},
@@ -135,6 +139,19 @@ login_manager.init_app(app)
 mail.init_app(app)
 limiter.init_app(app)
 
+# ── CSRF protection ────────────────────────────────────────────────────────
+# Protects all session-cookie-authenticated POST/PUT/PATCH/DELETE. Agent and
+# external-API endpoints (token/API-key authenticated, no browser session) are
+# exempted by URL prefix after blueprints register, below. Kill-switch: set
+# TRACKER_CSRF_ENABLED=0 in /var/www/tracker/.secrets.env to disable without a
+# code change if something regresses post-deploy.
+CSRF_ENABLED = os.environ.get('TRACKER_CSRF_ENABLED', '1') != '0'
+app.config['WTF_CSRF_ENABLED'] = CSRF_ENABLED       # toggles enforcement only
+app.config['WTF_CSRF_TIME_LIMIT'] = None            # token valid for the session lifetime
+# Always init_app so the csrf_token() template global and the <meta> tag keep
+# working even when enforcement is switched off via the kill-switch.
+csrf.init_app(app)
+
 from license_service import license_service
 license_service.init_app(app, db)
 
@@ -146,6 +163,22 @@ def add_security_headers(response):
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    # Content-Security-Policy. 'unsafe-inline' is retained for script/style because the
+    # templates rely heavily on inline scripts/styles; the policy still meaningfully locks
+    # down object/base/frame-ancestors/form-action and restricts external origins to the
+    # CDNs actually in use (jsDelivr + Google Fonts).
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'self'; "
+        "form-action 'self'"
+    )
     return response
 
 # Routes
@@ -200,3 +233,36 @@ app.register_blueprint(vulnerabilities.bp)
 app.register_blueprint(ai.bp)
 app.register_blueprint(misc.bp)
 app.register_blueprint(backup.bp)
+
+# ── CSRF exemptions for non-browser endpoints ──────────────────────────────
+# Agents and external API consumers authenticate via agent token / API key, not
+# a browser session cookie, so the CSRF token mechanism does not apply to them.
+# Exempt by URL prefix/exact-rule so adding a new agent route under these paths
+# is covered automatically (safer than per-route decorators that are easy to miss).
+_CSRF_EXEMPT_PREFIXES = (
+    '/api/linux-agent/',     # Linux agent (X-API-Key)
+    '/api/rmm/agent/',       # RMM agent: command_result, heartbeat, version, file, remove
+    '/api/rmm/enroll',       # RMM enrollment
+    '/api/rmm/screenshot/',  # RMM screenshot upload
+    '/rmm/agent/',           # agent launcher/repair/tray/version/file
+    '/agent/',               # misc/monitoring Linux agent install + heartbeat
+)
+_CSRF_EXEMPT_RULES = {
+    '/api/rmm/<agent_id>/software',         # RMM software inventory upload
+    '/api/rmm/rustdesk-sync/<agent_id>',    # RMM agent RustDesk ID sync (agent-token auth)
+    '/api/rmm/telemetry',                   # Linux agent telemetry POST
+    '/api/rmm/system-info',                 # Linux agent system-info POST
+    '/api/rmm/backup-start/<agent_id>',     # RMM backup agent callback
+    '/api/rmm/backup-complete/<int:job_id>',# RMM backup agent callback
+    '/api/rmm/backup-job/<int:job_id>',     # RMM backup agent callback (PATCH)
+    '/api/asset/<int:asset_id>/software',   # @require_api_key('agent')
+    '/api/support-tickets',                 # @require_api_key('create_tickets')
+}
+_csrf_exempted = 0
+for _rule in app.url_map.iter_rules():
+    if _rule.rule.startswith(_CSRF_EXEMPT_PREFIXES) or _rule.rule in _CSRF_EXEMPT_RULES:
+        _vf = app.view_functions.get(_rule.endpoint)
+        if _vf is not None:
+            csrf.exempt(_vf)
+            _csrf_exempted += 1
+logger.info('CSRF: enforcement=%s, exempted %d agent/API endpoints', CSRF_ENABLED, _csrf_exempted)

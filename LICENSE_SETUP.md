@@ -7,7 +7,7 @@ Add these to your environment or create `/var/www/tracker/.env` file:
 ```bash
 # License Server Configuration
 LICENSE_SERVER_URL=https://license.corp.cirque.com/api
-LICENSE_API_KEY=sk_74211b5d5c4a78395cc5422902b37f09bc30d163e43fb3bba7892515324b05be
+LICENSE_API_KEY=sk_<your-license-api-key>   # keep the real value only in .secrets.env, never in docs/git
 
 # Asset Tracker License Key (get from license.corp.cirque.com)
 ASSET_TRACKER_LICENSE_KEY=LIC-XXXXX-XXXXX-XXXXX-XXXXX

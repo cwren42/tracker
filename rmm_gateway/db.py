@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -7,7 +8,29 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-PG_DSN = "dbname=tracker user=tracker_user password=tracker_secure_2026 host=localhost sslmode=disable"
+
+def _resolve_dsn() -> str:
+    """Resolve the Postgres connection string without hardcoding the password.
+
+    Order: DATABASE_URL env var (set by systemd EnvironmentFile) → parse
+    /var/www/tracker/.secrets.env directly (this service's unit may not load it).
+    """
+    dsn = os.environ.get('DATABASE_URL')
+    if dsn:
+        return dsn
+    secrets_path = '/var/www/tracker/.secrets.env'
+    try:
+        with open(secrets_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith('DATABASE_URL='):
+                    return line.split('=', 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    raise RuntimeError('DATABASE_URL not set and not found in %s' % secrets_path)
+
+
+PG_DSN = _resolve_dsn()
 
 # Shared connection pool — keeps 5 ready, allows up to 40 concurrent.
 # This prevents thundering-herd exhaustion when all agents reconnect at once.

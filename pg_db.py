@@ -10,11 +10,19 @@ import re
 import datetime as _dt
 import threading
 
+import os
+
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-DB_DSN = "postgresql://tracker_user:tracker_secure_2026@localhost/tracker"
+# Connection string is sourced from the environment (set in /var/www/tracker/.secrets.env,
+# loaded by the systemd EnvironmentFile). CLI scripts that import this module must export
+# DATABASE_URL first, e.g.: `set -a; . /var/www/tracker/.secrets.env; set +a`.
+DB_DSN = os.environ.get('DATABASE_URL')
+if not DB_DSN:
+    raise RuntimeError('DATABASE_URL environment variable is not set (expected in '
+                       '/var/www/tracker/.secrets.env). pg_db.py cannot open a connection without it.')
 
 
 # ─── Strip timezone from all TIMESTAMPTZ reads ────────────────────────────────

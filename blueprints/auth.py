@@ -306,8 +306,20 @@ def view_as_user(user_id):
         flash('You cannot view as yourself.', 'warning')
         return redirect(url_for('auth.users'))
     target = User.query.get_or_404(user_id)
+    real_admin_id = current_user.id  # still the admin during this request
     session['impersonate_user_id'] = user_id
-    session['impersonate_real_admin_id'] = current_user.id
+    session['impersonate_real_admin_id'] = real_admin_id
+    # Audit the start of impersonation, attributed to the real admin.
+    db.session.add(AuditTrail(
+        entity_type='User', entity_id=target.id, action='impersonate_start',
+        changes=json.dumps({'real_admin_id': real_admin_id,
+                            'target_user_id': target.id,
+                            'target_username': getattr(target, 'username', None),
+                            'target_role': target.role}),
+        user_id=real_admin_id,
+        ip_address=request.remote_addr,
+        user_agent=(request.user_agent.string or '')[:500]))
+    db.session.commit()
     flash(f'Now viewing as {target.display_name} ({target.role}). Use the banner at the top to stop.', 'warning')
     return redirect(url_for('dashboard.index'))
 
@@ -316,8 +328,22 @@ def view_as_user(user_id):
 @login_required
 def stop_view_as():
     """End impersonation session and return to real admin account."""
+    # During this request current_user is the impersonated user, so attribute
+    # the audit record to the real admin captured in the session.
+    impersonated_id = session.get('impersonate_user_id')
+    real_admin_id = session.get('impersonate_real_admin_id')
     session.pop('impersonate_user_id', None)
     session.pop('impersonate_real_admin_id', None)
+    if real_admin_id:
+        db.session.add(AuditTrail(
+            entity_type='User', entity_id=int(impersonated_id or 0),
+            action='impersonate_stop',
+            changes=json.dumps({'real_admin_id': real_admin_id,
+                                'target_user_id': impersonated_id}),
+            user_id=int(real_admin_id),
+            ip_address=request.remote_addr,
+            user_agent=(request.user_agent.string or '')[:500]))
+        db.session.commit()
     flash('Returned to your admin account.', 'success')
     return redirect(url_for('auth.users'))
 

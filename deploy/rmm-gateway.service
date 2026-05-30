@@ -9,6 +9,7 @@ Group=webuser
 WorkingDirectory=/var/www/tracker
 
 Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/var/www/tracker/.secrets.env
 UMask=0077
 
 # Gateway venv

@@ -81,10 +81,10 @@ def ins(table, data):
 def get_site_token_from_db() -> str:
     """Fetch (or create) the site enrollment token from the tracker DB."""
     import psycopg2
-    conn = psycopg2.connect(
-        host="localhost", dbname="tracker",
-        user="tracker_user", password="tracker_secure_2026"
-    )
+    dsn = os.environ.get('DATABASE_URL')
+    if not dsn:
+        raise SystemExit('DATABASE_URL not set; run: set -a; . /var/www/tracker/.secrets.env; set +a')
+    conn = psycopg2.connect(dsn)
     cur = conn.cursor()
     cur.execute("SELECT value FROM setting WHERE key = 'rmm_site_enrollment_token'")
     row = cur.fetchone()

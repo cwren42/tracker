@@ -9,8 +9,12 @@ from flask_login import LoginManager
 from flask_mail import Mail
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf import CSRFProtect
 
 db = SQLAlchemy()
+
+# CSRF protection. Bound to the app in app.py (gated by TRACKER_CSRF_ENABLED).
+csrf = CSRFProtect()
 
 login_manager = LoginManager()
 login_manager.login_view = 'auth.login'

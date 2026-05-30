@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="theme-color" content="#0d6efd">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Asset Tracker{% endblock %}</title>
     
     <!-- Favicons -->
@@ -361,6 +362,61 @@
 </div><!-- /#page-wrapper -->
 
     <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script>
+    /* ── CSRF: attach the token to same-origin mutating requests and forms ──
+       Covers all AJAX (fetch + XMLHttpRequest) and native POST forms in one
+       place, so individual templates/JS files need no changes. */
+    (function () {
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        var TOKEN = meta ? meta.getAttribute('content') : '';
+        if (!TOKEN) return;
+        var MUTATING = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+
+        function sameOrigin(url) {
+            try { return new URL(url, window.location.href).origin === window.location.origin; }
+            catch (e) { return true; }  // relative URL → same origin
+        }
+
+        if (window.fetch) {
+            var _fetch = window.fetch;
+            window.fetch = function (input, init) {
+                init = init || {};
+                var url = (typeof input === 'string') ? input : (input && input.url) || '';
+                var method = (init.method || (typeof input === 'object' && input && input.method) || 'GET').toUpperCase();
+                if (MUTATING[method] && sameOrigin(url)) {
+                    var headers = new Headers(init.headers || (typeof input === 'object' && input ? input.headers : undefined) || {});
+                    if (!headers.has('X-CSRFToken')) headers.set('X-CSRFToken', TOKEN);
+                    init.headers = headers;
+                }
+                return _fetch.call(this, input, init);
+            };
+        }
+
+        var _open = XMLHttpRequest.prototype.open;
+        var _send = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function (method, url) {
+            this.__csrfMutating = !!MUTATING[(method || 'GET').toUpperCase()] && sameOrigin(url);
+            return _open.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function (body) {
+            if (this.__csrfMutating) { try { this.setRequestHeader('X-CSRFToken', TOKEN); } catch (e) {} }
+            return _send.apply(this, arguments);
+        };
+
+        function injectForm(form) {
+            if (!form || (form.method || '').toUpperCase() !== 'POST') return;
+            if (form.action && !sameOrigin(form.action)) return;          // don't leak token cross-origin
+            if (form.querySelector('input[name="csrf_token"]')) return;
+            var inp = document.createElement('input');
+            inp.type = 'hidden'; inp.name = 'csrf_token'; inp.value = TOKEN;
+            form.appendChild(inp);
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelectorAll('form').forEach(injectForm);
+        });
+        document.addEventListener('submit', function (e) { injectForm(e.target); }, true);
+    })();
+    </script>
     <script>
         // Initialize Bootstrap tooltips
         document.addEventListener('DOMContentLoaded', function() {

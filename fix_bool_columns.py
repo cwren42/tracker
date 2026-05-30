@@ -3,9 +3,11 @@ Convert bigint columns that should be boolean to proper PostgreSQL boolean type.
 pgloader migrated SQLite boolean (0/1) columns as bigint instead of boolean.
 Run once after migration: python3 fix_bool_columns.py
 """
+import os
+import sys
 import psycopg2
 
-DSN = "dbname=tracker user=tracker_user password=tracker_secure_2026 host=localhost"
+DSN = os.environ.get('DATABASE_URL') or sys.exit('DATABASE_URL not set; run: set -a; . /var/www/tracker/.secrets.env; set +a')
 
 # (table, column) pairs that should be boolean
 BOOL_COLUMNS = [

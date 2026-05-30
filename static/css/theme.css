@@ -708,6 +708,19 @@ body {
 }
 #sidebar.collapsed .nav-section-label { opacity: 0; }
 
+/* Sub-header inside a submenu (e.g. Admin → System / Integrations) */
+#sidebar .submenu-header {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #6e7681;
+    padding: 8px 16px 2px 40px;   /* align with submenu links (padding-left:40px) */
+    white-space: nowrap;
+    overflow: hidden;
+    list-style: none;
+}
+#sidebar.collapsed .submenu-header { opacity: 0; }
+
 /* Nav items */
 #sidebar .sidebar-link {
     display: flex;

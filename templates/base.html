@@ -19,7 +19,7 @@
     
     <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/vendor/bootstrap-icons/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="/static/css/theme.css?v=4">
+    <link rel="stylesheet" href="/static/css/theme.css?v={{ asset_version }}">
     <script>/* Prevent sidebar flash-of-uncollapsed-content before JS runs */
     if(typeof localStorage!=='undefined'&&localStorage.getItem('sidebarCollapsed')!=='0'){document.documentElement.classList.add('sc-init');}</script>
     {% block styles %}{% endblock %}

@@ -108,6 +108,21 @@ csrf.init_app(app)
 from license_service import license_service
 license_service.init_app(app, db)
 
+# ── Static-asset cache-busting ─────────────────────────────────────────────
+# Append ?v={{ asset_version }} to CSS/JS so a deploy never serves stale assets.
+# Version = current git commit (changes every deploy); falls back to start time.
+try:
+    _ASSET_VERSION = subprocess.check_output(
+        ['git', 'rev-parse', '--short', 'HEAD'],
+        cwd=os.path.dirname(os.path.abspath(__file__)), text=True,
+        stderr=subprocess.DEVNULL).strip() or 'dev'
+except Exception:
+    _ASSET_VERSION = str(int(_time.time()))
+
+@app.context_processor
+def inject_asset_version():
+    return {'asset_version': _ASSET_VERSION}
+
 # ── Security headers ──────────────────────────────────────────────────────
 @app.after_request
 def add_security_headers(response):

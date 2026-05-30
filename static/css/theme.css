@@ -1100,6 +1100,13 @@ a:hover { color: var(--button-primary-hover); }
 }
 .table > thead.table-dark th { color: var(--muted) !important; }
 
+/* Users page role filter: neutral chips, indigo when active (JS toggles .active) */
+#roleFilter .btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
 /* Badges & pills — softer, semantic */
 .badge { font-weight: 600; border-radius: var(--radius-pill); padding: .35em .7em; }
 

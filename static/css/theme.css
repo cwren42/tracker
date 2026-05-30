@@ -1012,11 +1012,13 @@ a:hover { color: var(--button-primary-hover); }
     color: var(--text) !important;
     border-bottom: 1px solid var(--border);
 }
-.card > .card-header.bg-primary { background: var(--accent-weak) !important; }
-.card > .card-header.bg-success { background: var(--success-bg)  !important; }
-.card > .card-header.bg-warning { background: var(--warning-bg)  !important; }
-.card > .card-header.bg-danger  { background: var(--danger-bg)   !important; }
-.card > .card-header.bg-info    { background: var(--info-bg)     !important; }
+/* White/neutral header (not a colored tint) — the colored leading icon carries the
+   meaning, matching the dashboard list cards. */
+.card > .card-header.bg-primary,
+.card > .card-header.bg-success,
+.card > .card-header.bg-warning,
+.card > .card-header.bg-danger,
+.card > .card-header.bg-info { background: transparent !important; }
 
 /* tint the header's leading icon by meaning */
 .card > .card-header.bg-primary .bi:first-child { color: var(--accent);  }
@@ -1051,7 +1053,7 @@ a:hover { color: var(--button-primary-hover); }
 /* bg-secondary card headers (gray bars) -> quiet neutral header (scripts, cloudflare,
    eagleeye). Not a semantic color, so a subtle gray strip with muted text/icon. */
 .card > .card-header.bg-secondary {
-    background: var(--app-bg) !important;
+    background: transparent !important;
     color: var(--text) !important;
     border-bottom: 1px solid var(--border);
 }

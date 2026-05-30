@@ -100,27 +100,27 @@
 <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
   <span class="small text-muted me-1"><i class="bi bi-grid me-1"></i>Queue:</span>
   <a href="{{ url_for('tickets.tickets', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if not f_type and not show_alerts %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if not f_type and not show_alerts %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-people-fill me-1"></i>Human Tickets
   </a>
   <a href="{{ url_for('tickets.tickets', type='user', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if f_type=='user' %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if f_type=='user' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-person-fill me-1"></i>User Submitted
   </a>
   <a href="{{ url_for('tickets.tickets', type='hardware', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if f_type=='hardware' %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if f_type=='hardware' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-hdd-fill me-1"></i>Hardware
   </a>
   <a href="{{ url_for('tickets.tickets', type='software', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if f_type=='software' %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if f_type=='software' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-window-fill me-1"></i>Software
   </a>
   <a href="{{ url_for('tickets.tickets', type='network', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if f_type=='network' %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if f_type=='network' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-diagram-3-fill me-1"></i>Network
   </a>
   <a href="{{ url_for('tickets.tickets', type='auto', status=f_status, priority=f_priority, assignee=f_assignee) }}"
-     class="btn btn-sm {% if f_type=='auto' %}btn-primary{% else %}btn-outline-secondary{% endif %} rounded-pill">
+     class="btn btn-sm {% if f_type=='auto' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
     <i class="bi bi-robot me-1"></i>System Alerts
     {% if alert_open_count %}<span class="badge bg-secondary ms-1">{{ alert_open_count }}</span>{% endif %}
   </a>

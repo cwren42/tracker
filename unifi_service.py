@@ -517,19 +517,33 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                     category, device_type = _classify_device(dev)
                     online_state = _online_state(dev)
                     # Protect uses 'id', network uses 'device_id' or '_id'
-                    unifi_id: str = dev.get('device_id') or dev.get('_id') or dev.get('id') or mac
+                    real_id: str = (dev.get('device_id') or dev.get('_id') or dev.get('id') or '').strip()
+                    mac_norm: str = ''.join(c for c in mac if c in '0123456789abcdef')
+                    unifi_id: str = real_id or mac  # identifier stored on the asset
 
                     if not mac and not unifi_id:
                         logger.warning('UniFi sync: skipping device with no MAC or ID: %s', name)
                         summary['skipped'] += 1
                         continue
 
-                    # Try to find existing asset: by unifi_device_id first, then MAC
-                    asset = Asset.query.filter_by(unifi_device_id=unifi_id).first()
-                    if not asset and mac:
+                    # Find existing asset (priority order — stops duplicate creation):
+                    #  1) a real UniFi device id (UNAS / older gear may not expose one)
+                    #  2) normalized MAC — handles ':'-vs-'' formatting mismatches
+                    #  3) name for network gear, which rotates its MAC and can change id
+                    def _strip_mac(col):
+                        return db.func.replace(db.func.replace(
+                            db.func.lower(db.func.coalesce(col, '')), ':', ''), '-', '')
+                    asset = None
+                    if real_id:
+                        asset = Asset.query.filter_by(unifi_device_id=real_id).first()
+                    if not asset and mac_norm:
                         asset = Asset.query.filter(
-                            (Asset.hardware_mac_ethernet == mac) |
-                            (Asset.hardware_mac_wifi == mac)
+                            (_strip_mac(Asset.hardware_mac_ethernet) == mac_norm) |
+                            (_strip_mac(Asset.hardware_mac_wifi) == mac_norm)
+                        ).first()
+                    if not asset and name and category == 'Network Device':
+                        asset = Asset.query.filter(
+                            Asset.name == name, Asset.category == 'Network Device'
                         ).first()
 
                     if asset:

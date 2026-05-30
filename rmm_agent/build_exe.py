@@ -9,14 +9,25 @@ not exist here.
 Usage:
     python3 build_exe.py [--site-token TOKEN] [--tracker-url URL] [--gateway-url URL]
 
-If --site-token is omitted the script fetches it from the tracker DB.
+Site token resolution order:
+    1. --site-token CLI arg
+    2. $RMM_SITE_TOKEN env var       (used by CI — injected from a GitHub secret)
+    3. the tracker DB                (local/server builds with DATABASE_URL set)
+    4. a placeholder, iff --allow-placeholder is passed (artifact-only CI builds;
+       the agent then enrolls with the token the server hands it at install time)
 """
 
 import os
 import sys
+import shutil
 import subprocess
 import tempfile
 import argparse
+
+# Installers built without a real site token bake this sentinel. install_agent.ps1
+# / the server-generated one-liner supplies the real token at enrollment time, so a
+# placeholder build is still usable — it just can't self-enroll on a bare double-click.
+PLACEHOLDER_TOKEN = "PLACEHOLDER_SITE_TOKEN"
 
 AGENT_DIR    = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_EXE   = os.path.join(AGENT_DIR, "CirqueRMM.exe")
@@ -64,12 +75,23 @@ def get_site_token_from_db() -> str:
 def build():
     parser = argparse.ArgumentParser(description="Build CirqueRMM.exe with NSIS")
     parser.add_argument("--site-token", default="",
-                        help="Site-wide enrollment token (fetched from DB if omitted)")
+                        help="Site-wide enrollment token (else $RMM_SITE_TOKEN, else DB)")
     parser.add_argument("--tracker-url", default="https://tracker.corp.cirque.com")
     parser.add_argument("--gateway-url", default="wss://rmm.corp.cirque.com")
+    parser.add_argument("--allow-placeholder", action="store_true",
+                        help="If no token is available, bake a placeholder instead of "
+                             "failing (CI artifact builds with no DB/secret access)")
     args = parser.parse_args()
 
-    site_token  = args.site_token.strip() or get_site_token_from_db()
+    # Resolve token: CLI arg → env var (CI secret) → DB → placeholder (opt-in).
+    site_token = args.site_token.strip() or os.environ.get("RMM_SITE_TOKEN", "").strip()
+    if not site_token:
+        if args.allow_placeholder:
+            site_token = PLACEHOLDER_TOKEN
+            print("  WARNING: no site token provided — baking placeholder "
+                  "(installer relies on the server's token at enrollment time).")
+        else:
+            site_token = get_site_token_from_db()
     tracker_url = args.tracker_url.strip()
     gateway_url = args.gateway_url.strip()
 
@@ -147,7 +169,7 @@ def build():
             # Copy each source file into tmp so NSIS can find them by relative name
             dest = os.path.join(tmp, name)
             if not os.path.exists(dest):
-                subprocess.run(["cp", path, dest], check=True)
+                shutil.copy2(path, dest)  # cross-platform (Windows CI runner has no `cp`)
             file_lines.append(f'  File "{name}"')
         file_cmds = "\n".join(file_lines)
 

@@ -1,0 +1,77 @@
+name: Build RMM Agent
+
+# Builds the Windows RMM agent installer (CirqueRMM.exe) reproducibly on a clean
+# runner instead of by hand on the production box. Two ways in:
+#   * push a tag  agent-vX.Y.Z   → builds + attaches the EXE to a GitHub Release
+#   * "Run workflow" button       → builds + uploads the EXE as a run artifact
+#
+# Site token: set the repo secret RMM_SITE_TOKEN to bake the real enrollment token
+# into the installer. If it's absent the build still succeeds with a placeholder
+# (--allow-placeholder); such an installer relies on the token the server hands it
+# at enrollment time, so it's fine for the irm|iex one-liner but not bare double-click.
+
+on:
+  push:
+    tags: [ "agent-v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed to create the Release on tag builds
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
+
+      - name: Verify version sources are in sync
+        # Same guard the CI job runs — fail fast before producing a mislabeled build.
+        run: python -m pytest tests/test_agent_version_sync.py -q
+
+      - name: Build installer
+        env:
+          RMM_SITE_TOKEN: ${{ secrets.RMM_SITE_TOKEN }}
+        run: python rmm_agent/build_exe.py --allow-placeholder
+
+      - name: Compute checksum
+        run: |
+          $exe = "rmm_agent/CirqueRMM.exe"
+          if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $sha | Out-File -FilePath rmm_agent/checksum.txt -NoNewline -Encoding ascii
+          $ver = (Get-Content rmm_agent/version.txt).Trim()
+          Write-Host "Built CirqueRMM.exe v$ver  sha256=$sha"
+          "version=$ver" >> $env:GITHUB_OUTPUT
+        id: meta
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CirqueRMM-${{ steps.meta.outputs.version }}
+          path: |
+            rmm_agent/CirqueRMM.exe
+            rmm_agent/checksum.txt
+            rmm_agent/version.txt
+          retention-days: 30
+
+      - name: Create Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rmm_agent/CirqueRMM.exe
+            rmm_agent/checksum.txt
+          body: |
+            Cirque RMM Agent **v${{ steps.meta.outputs.version }}**
+
+            Built from ${{ github.sha }}. `checksum.txt` is the SHA-256 of `CirqueRMM.exe`.

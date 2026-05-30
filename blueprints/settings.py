@@ -69,12 +69,11 @@ _SCRIPT_FILE_TYPES = {
 def settings(section):
     """Admin settings page for email configuration and testing"""
     allowed_sections = {
-        'theme', 'license', 'email',
+        'license', 'email',
         'directory', 'rmm', 'scripts', 'eagleeye',
         'unifi', 'proxmox', 'ai', 'cloudflare'
     }
     section_endpoints = {
-        'theme': 'settings.settings_theme',
         'license': 'settings.settings_license',
         'email': 'settings.settings_email',
         'directory': 'settings.settings_directory',
@@ -204,13 +203,6 @@ def settings(section):
             db.session.commit()
             flash('UniFi settings saved successfully!', 'success')
 
-        elif action == 'update_theme':
-            # Update user's theme preference
-            theme = request.form.get('theme', 'dark')
-            current_user.theme = theme
-            db.session.commit()
-            flash('Theme updated successfully!', 'success')
-
         elif action == 'update_notification_routing':
             # Update alert vs ticket email routing addresses
             alert_email = request.form.get('alert_notify_email', '').strip()
@@ -310,20 +302,11 @@ def settings(section):
         return redirect(url_for('dashboard.index'))
 
     # GET — each section has its own dedicated page now. Send the user to the
-    # requested section, or default the bare /settings to Appearance (theme).
+    # requested section, or default the bare /settings to the License page.
     # (Previously a GET fell through here with no return -> 500.)
     if section:
         return redirect(url_for(section_endpoints[section]))
-    return redirect(url_for('settings.settings_theme'))
-
-
-@bp.route('/settings/theme', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def settings_theme():
-    if request.method == 'POST':
-        return settings('theme')
-    return render_template('settings_theme.html')
+    return redirect(url_for('settings.settings_license'))
 
 
 @bp.route('/settings/license', methods=['GET', 'POST'])

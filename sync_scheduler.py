@@ -48,6 +48,8 @@ BACKUP_INCREMENTAL_INTERVAL_HOURS = int(os.environ.get('BACKUP_INCREMENTAL_INTER
 DISABLE_BACKUP_SCHEDULER = os.environ.get('DISABLE_BACKUP_SCHEDULER', '').strip() in ('1', 'true', 'yes', 'on')
 
 QUARANTINE_SYNC_LOCK_PATH = os.environ.get('TRACKER_QUARANTINE_SYNC_LOCK_PATH', '/tmp/tracker_quarantine_sync.lock')
+METRICS_SNAPSHOT_LOCK_PATH = os.environ.get('TRACKER_METRICS_SNAPSHOT_LOCK_PATH', '/tmp/tracker_metrics_snapshot.lock')
+METRICS_HISTORY_RETENTION_DAYS = int(os.environ.get('METRICS_HISTORY_RETENTION_DAYS', '90'))
 QUARANTINE_SYNC_INTERVAL_MINUTES = int(os.environ.get('QUARANTINE_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_QUARANTINE_SYNC = os.environ.get('DISABLE_QUARANTINE_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
@@ -215,10 +217,53 @@ def start_sync_scheduler(flask_app):
         misfire_grace_time=3600,
     )
 
+    _scheduler.add_job(
+        func=lambda: run_metrics_snapshot_job(flask_app),
+        trigger='interval',
+        minutes=15,
+        id='metrics_snapshot',
+        name='RMM metrics time-series snapshot',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+
     _scheduler.start()
     logger.info('Started sync scheduler')
 
     return _scheduler
+
+
+def run_metrics_snapshot_job(flask_app):
+    """Downsample the current per-agent telemetry snapshot (rmm_telemetry) into the
+    rmm_metrics_history time-series every 15 min, and prune old rows. This revives
+    the metrics-history charts (the table had no writer) and builds the time-series
+    that trend/anomaly detection needs — without touching the hot ingest path."""
+    with _file_lock(METRICS_SNAPSHOT_LOCK_PATH) as acquired:
+        if not acquired:
+            return
+        with flask_app.app_context():
+            from extensions import db
+            from sqlalchemy import text
+            try:
+                inserted = db.session.execute(text("""
+                    INSERT INTO rmm_metrics_history (agent_id, cpu_percent, ram_percent, disk_percent, captured_at)
+                    SELECT agent_id, cpu_percent, ram_percent,
+                           NULLIF(disk_json::jsonb -> 0 ->> 'percent', '')::real,
+                           NOW()
+                    FROM rmm_telemetry
+                    WHERE last_seen > NOW() - interval '20 minutes'
+                      AND (cpu_percent IS NOT NULL OR ram_percent IS NOT NULL)
+                """)).rowcount
+                db.session.execute(
+                    text("DELETE FROM rmm_metrics_history WHERE captured_at < NOW() - make_interval(days => :d)"),
+                    {'d': METRICS_HISTORY_RETENTION_DAYS})
+                db.session.commit()
+                logger.info(f'Metrics snapshot: +{inserted} agent rows; pruned >{METRICS_HISTORY_RETENTION_DAYS}d')
+            except Exception as exc:
+                db.session.rollback()
+                logger.error(f'Metrics snapshot error: {exc}')
 
 
 def run_auto_approve_patches_job(flask_app):

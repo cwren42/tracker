@@ -1,20 +1,20 @@
 /* settings.html extracted CSS */
 /* Custom tab styling for settings */
     #settingsTabs .nav-link {
-        color: #6c757d;
+        color: var(--muted);
         border: 1px solid transparent;
         border-bottom: 3px solid transparent;
         transition: all 0.2s ease;
     }
-    
+
     #settingsTabs .nav-link:hover {
-        border-bottom-color: #dee2e6;
-        color: #495057;
+        border-bottom-color: var(--border);
+        color: var(--text);
     }
-    
+
     #settingsTabs .nav-link.active {
-        color: var(--bs-primary, #0d6efd);
-        border-bottom-color: var(--bs-primary, #0d6efd);
+        color: var(--accent);
+        border-bottom-color: var(--accent);
         background-color: transparent;
         font-weight: 600;
     }
@@ -33,10 +33,6 @@
         flex: 0 0 auto;
     }
 
-    #scripts-tab {
-        border-bottom-color: #198754;
-    }
-    
     .tab-content {
         min-height: 400px;
     }

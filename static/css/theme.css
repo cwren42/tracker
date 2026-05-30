@@ -996,6 +996,57 @@ a:hover { color: var(--button-primary-hover); }
    header's bottom divider would be a stray line with nothing under it. Hide it
    while collapsed; it returns when expanded (.show). */
 .card > .card-header:has(+ .collapse:not(.show)) { border-bottom-color: transparent; }
+
+/* ── Soften loud solid card-header bars app-wide ──────────────────────────────
+   Many cards use `card-header bg-primary/success/warning + text-white` (a full
+   saturated bar). Recolor to a subtle tinted strip with readable text and a
+   colored leading icon; convert the `btn-light` action that sat on the bar into a
+   neutral outline. One rule -> consistent, theme-aware headers everywhere, no
+   need to hand-edit dozens of templates. Scoped to .card > .card-header so it
+   never touches badges/buttons/other bg-* elements elsewhere. */
+.card > .card-header.bg-primary,
+.card > .card-header.bg-success,
+.card > .card-header.bg-warning,
+.card > .card-header.bg-danger,
+.card > .card-header.bg-info {
+    color: var(--text) !important;
+    border-bottom: 1px solid var(--border);
+}
+.card > .card-header.bg-primary { background: var(--accent-weak) !important; }
+.card > .card-header.bg-success { background: var(--success-bg)  !important; }
+.card > .card-header.bg-warning { background: var(--warning-bg)  !important; }
+.card > .card-header.bg-danger  { background: var(--danger-bg)   !important; }
+.card > .card-header.bg-info    { background: var(--info-bg)     !important; }
+
+/* tint the header's leading icon by meaning */
+.card > .card-header.bg-primary .bi:first-child { color: var(--accent);  }
+.card > .card-header.bg-success .bi:first-child { color: var(--success); }
+.card > .card-header.bg-warning .bi:first-child { color: var(--warning); }
+.card > .card-header.bg-danger  .bi:first-child { color: var(--danger);  }
+.card > .card-header.bg-info    .bi:first-child { color: var(--info);    }
+
+/* forced-white text on the old bar must stay readable on the light tint */
+.card > .card-header.bg-primary .text-white,
+.card > .card-header.bg-success .text-white,
+.card > .card-header.bg-warning .text-white,
+.card > .card-header.bg-danger  .text-white,
+.card > .card-header.bg-info    .text-white { color: var(--text) !important; }
+
+/* the btn-light action that lived on the colored bar -> neutral outline */
+.card > .card-header.bg-primary .btn-light,
+.card > .card-header.bg-success .btn-light,
+.card > .card-header.bg-warning .btn-light,
+.card > .card-header.bg-danger  .btn-light,
+.card > .card-header.bg-info    .btn-light {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+.card > .card-header.bg-primary .btn-light:hover,
+.card > .card-header.bg-success .btn-light:hover,
+.card > .card-header.bg-warning .btn-light:hover,
+.card > .card-header.bg-danger  .btn-light:hover,
+.card > .card-header.bg-info    .btn-light:hover { background: var(--surface-2); border-color: var(--muted); }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 
 /* Buttons — indigo, rounded, focus ring */

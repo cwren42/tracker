@@ -3,19 +3,51 @@
 
 /* Theme CSS Variables */
 :root {
-    /* Default Theme (Bootstrap) */
-    --bg-primary: #ffffff;
-    --bg-secondary: #f8f9fa;
-    --text-primary: #212529;
-    --text-secondary: #6c757d;
-    --accent-primary: #0d6efd;
-    --accent-secondary: #6c757d;
-    --border-color: #dee2e6;
-    --card-bg: #ffffff;
-    --navbar-bg: #0d6efd;
-    --navbar-text: #ffffff;
-    --button-primary: #0d6efd;
-    --button-primary-hover: #0b5ed7;
+    /* ===== Structural tokens (theme-independent) =====
+       Spacing/radius/shadow/type scales — the backbone of "Balanced" density.
+       Defined once here; every [data-theme] inherits these unchanged. */
+    --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+    --space-5: 24px; --space-6: 32px; --space-7: 48px;
+    --radius-sm: 6px; --radius: 10px; --radius-lg: 14px; --radius-pill: 999px;
+    --shadow-sm: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    --shadow:    0 1px 3px rgba(16,24,40,.06), 0 6px 16px rgba(16,24,40,.06);
+    --shadow-lg: 0 12px 28px rgba(16,24,40,.12), 0 2px 6px rgba(16,24,40,.06);
+    --fs-xs: .75rem; --fs-sm: .8125rem; --fs-base: .9375rem; --fs-lg: 1.0625rem;
+    --fs-xl: 1.25rem; --fs-2xl: 1.5rem; --fs-3xl: 2rem;
+    --transition: 150ms ease;
+    --ring: 0 0 0 3px rgba(99,102,241,.30);
+
+    /* ===== Default theme — Refined Slate + Indigo (light) ===== */
+    --bg-primary: #F7F8FA;     /* app background (body) — subtle gray so white cards lift */
+    --bg-secondary: #FFFFFF;   /* raised surfaces */
+    --text-primary: #1A1D21;
+    --text-secondary: #6B7280;
+    --accent-primary: #6366F1;
+    --accent-secondary: #EEF0FF;
+    --border-color: #E6E8EB;
+    --card-bg: #FFFFFF;
+    --navbar-bg: #FFFFFF;
+    --navbar-text: #1A1D21;
+    --button-primary: #6366F1;
+    --button-primary-hover: #4F51E0;
+
+    /* ===== Semantic colors (shared across themes) ===== */
+    --success: #16A34A; --success-bg: #ECFDF3;
+    --warning: #D97706; --warning-bg: #FFF8EB;
+    --danger:  #DC2626; --danger-bg:  #FEF2F2;
+    --info:    #2563EB; --info-bg:    #EFF6FF;
+
+    /* ===== Aliases — derive from each theme's base tokens, so every theme
+       (deep-forest, dark, …) gets correct values for the new component layer
+       automatically without re-declaring them. ===== */
+    --app-bg:      var(--bg-primary);
+    --surface:     var(--card-bg);
+    --surface-2:   var(--bg-secondary);
+    --text:        var(--text-primary);
+    --muted:       var(--text-secondary);
+    --border:      var(--border-color);
+    --accent:      var(--accent-primary);
+    --accent-weak: var(--accent-secondary);
 }
 
 /* Deep Forest Theme */
@@ -591,13 +623,14 @@ body {
 :root {
     --sidebar-width: 220px;
     --sidebar-collapsed-width: 56px;
-    --sidebar-bg: #161b22;
-    --sidebar-text: #c9d1d9;
-    --sidebar-hover-bg: #21262d;
-    --sidebar-active-bg: #21262d;
-    --sidebar-active-text: #58a6ff;
-    --sidebar-border: #30363d;
-    --sidebar-header-bg: #0d1117;
+    /* Refined Slate rail: deep neutral with an indigo active state */
+    --sidebar-bg: #16181D;
+    --sidebar-text: #C3C7CE;
+    --sidebar-hover-bg: #21242B;
+    --sidebar-active-bg: #262A4D;
+    --sidebar-active-text: #A5B4FC;
+    --sidebar-border: #24272E;
+    --sidebar-header-bg: #101216;
 }
 /* Override per theme */
 [data-theme="deep-forest"] {
@@ -910,3 +943,95 @@ body {
 @media (min-width: 769px) {
     #mobile-toggle { display: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DESIGN SYSTEM v2 — Refined Slate + Indigo, "Balanced" density
+   Token-driven component layer. Loaded last so it refines the older base
+   rules above; every value comes from a token, so all themes adapt for free.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Base typography & rhythm */
+body {
+    font-size: var(--fs-base);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+.content { padding: var(--space-5) 0; }
+h1, .h1 { font-size: var(--fs-3xl); }
+h2, .h2 { font-size: var(--fs-2xl); }
+h3, .h3 { font-size: var(--fs-xl); }
+h4, .h4 { font-size: var(--fs-lg); }
+h1,h2,h3,h4,h5,h6 { font-weight: 600; letter-spacing: -0.01em; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--button-primary-hover); }
+.text-muted, .text-secondary { color: var(--muted) !important; }
+
+/* Cards — soft border + subtle shadow, balanced padding */
+.card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    margin-bottom: var(--space-5);
+}
+.card > .card-body { padding: var(--space-5); }
+.card > .card-header {
+    background: transparent;
+    border-bottom: 1px solid var(--border);
+    padding: var(--space-4) var(--space-5);
+    font-weight: 600;
+}
+.card > .card-footer {
+    background: transparent;
+    border-top: 1px solid var(--border);
+    padding: var(--space-3) var(--space-5);
+}
+.stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+
+/* Buttons — indigo, rounded, focus ring */
+.btn {
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    transition: background-color var(--transition), border-color var(--transition), box-shadow var(--transition);
+}
+.btn-primary { color: #fff; }
+.btn-primary:focus, .btn-primary:focus-visible,
+.btn-outline-primary:focus, .btn-outline-primary:focus-visible { box-shadow: var(--ring); }
+.btn-outline-primary { color: var(--accent); border-color: var(--accent); }
+.btn-outline-primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Forms — clean borders + indigo focus ring */
+.form-control, .form-select {
+    border-radius: var(--radius-sm);
+    border-color: var(--border);
+    background-color: var(--surface);
+    color: var(--text);
+}
+.form-control:focus, .form-select:focus {
+    border-color: var(--accent);
+    box-shadow: var(--ring);
+}
+.input-group-text { border-radius: var(--radius-sm); border-color: var(--border); }
+
+/* Tables — quiet header, hairline rows, gentle hover */
+.table { color: var(--text); border-color: var(--border); }
+.table > thead th {
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    padding-top: var(--space-3);
+    padding-bottom: var(--space-3);
+}
+.table > tbody td { border-color: var(--border); vertical-align: middle; }
+.table-hover > tbody > tr:hover > * { background-color: var(--accent-weak); }
+
+/* Badges & pills — softer, semantic */
+.badge { font-weight: 600; border-radius: var(--radius-pill); padding: .35em .7em; }
+
+/* Subtle dividers / inputs honoring the new palette */
+hr { border-color: var(--border); opacity: 1; }
+.dropdown-menu { border-radius: var(--radius); border-color: var(--border); box-shadow: var(--shadow); }
+.modal-content { border-radius: var(--radius-lg); border-color: var(--border); }

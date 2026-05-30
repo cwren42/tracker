@@ -39,6 +39,52 @@
 </div>
 {% set ai_context = "dashboard" %}{% include '_ai_search_bar.html' %}
 
+<!-- AI Daily Briefing — "what needs attention today" -->
+<div class="card mb-4 shadow-sm" style="border-left:4px solid #6f42c1;">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <h5 class="mb-0"><i class="bi bi-stars me-2" style="color:#6f42c1;"></i>What needs attention today</h5>
+      <div class="d-flex align-items-center gap-2">
+        <small class="text-muted" id="ai-briefing-time"></small>
+        <button class="btn btn-sm btn-outline-primary" id="ai-briefing-refresh">
+          <i class="bi bi-arrow-clockwise"></i> <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+    <div id="ai-briefing-body" class="small" style="line-height:1.6;">Loading briefing…</div>
+  </div>
+</div>
+<script>
+(function(){
+  var body=document.getElementById('ai-briefing-body'),
+      timeEl=document.getElementById('ai-briefing-time'),
+      btn=document.getElementById('ai-briefing-refresh');
+  if(!body||!btn) return;
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function render(md){
+    var h=esc(md).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/^\s*[-*•]\s+/gm,'• ');
+    return h.replace(/\n/g,'<br>');
+  }
+  function ago(iso){ if(!iso) return ''; try{ var s=Math.floor((Date.now()-new Date(iso).getTime())/1000);
+    return s<60?'just now':s<3600?Math.floor(s/60)+'m ago':s<86400?Math.floor(s/3600)+'h ago':Math.floor(s/86400)+'d ago'; }catch(e){return '';} }
+  function show(d){
+    if(d&&d.answer){ body.innerHTML=render(d.answer); timeEl.textContent=d.generated_at?('updated '+ago(d.generated_at)):''; }
+    else { body.innerHTML='<span class="text-muted">No briefing yet — click Refresh to generate one from your live data.</span>'; timeEl.textContent=''; }
+  }
+  function gen(){
+    btn.disabled=true; var sp=btn.querySelector('span'), old=sp.textContent; sp.textContent='Generating…';
+    body.innerHTML='<span class="spinner-border spinner-border-sm"></span><span class="text-muted ms-2">Analyzing your environment…</span>';
+    fetch('/api/ai/daily-briefing/generate',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(d.error){ body.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; } else { show(d); }
+    }).catch(function(){ body.innerHTML='<span class="text-danger">Generation failed.</span>'; })
+      .finally(function(){ btn.disabled=false; sp.textContent=old; });
+  }
+  btn.addEventListener('click',gen);
+  fetch('/api/ai/daily-briefing').then(function(r){return r.json();}).then(show)
+    .catch(function(){ body.innerHTML='<span class="text-muted">Could not load briefing.</span>'; });
+})();
+</script>
+
 
 
 {% if edit_mode %}

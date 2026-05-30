@@ -521,6 +521,25 @@ def ask_ai(question: str) -> dict:
     return {"answer": answer, "sources": sources}
 
 
+def generate_daily_briefing() -> dict:
+    """Build a prioritized 'what needs attention today' briefing from live ops data.
+
+    Reuses ask_ai()'s cross-module context gathering with a fixed briefing prompt.
+    Returns {"answer": str, "sources": [...]}.
+    """
+    prompt = (
+        "You are giving me, the IT administrator, my morning operations briefing. "
+        "From the current environment data, list ONLY the items that genuinely need "
+        "attention today, in priority order (most urgent first). Consider: offline or "
+        "at-risk devices, low-storage devices, open critical/warning monitoring alerts, "
+        "urgent or unassigned tickets, degraded backups, and licenses expiring soon. "
+        "For each item give a short one-line recommended action. Use concise bullet "
+        "points (max ~10). If everything looks healthy, say so in one line and note the "
+        "overall fleet/ticket counts. Do not invent data that isn't present."
+    )
+    return ask_ai(prompt)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Predictive failure analysis + ticket auto-triage
 # ──────────────────────────────────────────────────────────────────────────────

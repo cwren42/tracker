@@ -136,6 +136,46 @@ def api_ai_ask():
         return jsonify({'error': str(e)}), 500
 
 
+@bp.route('/api/ai/daily-briefing', methods=['GET'])
+@login_required
+def api_ai_daily_briefing_get():
+    """Return the cached 'what needs attention today' briefing, if any."""
+    from models import Setting
+    row = Setting.query.filter_by(key='ai_daily_briefing').first()
+    if not row or not row.value:
+        return jsonify({'answer': None, 'generated_at': None})
+    try:
+        return jsonify(json.loads(row.value))
+    except Exception:
+        return jsonify({'answer': None, 'generated_at': None})
+
+
+@bp.route('/api/ai/daily-briefing/generate', methods=['POST'])
+@login_required
+def api_ai_daily_briefing_generate():
+    """Generate a fresh daily briefing from live ops data and cache it."""
+    from models import Setting
+    try:
+        result = _ai_engine.generate_daily_briefing()
+        payload = {
+            'answer': result.get('answer'),
+            'sources': result.get('sources', []),
+            'generated_at': datetime.utcnow().isoformat() + 'Z',
+        }
+        row = Setting.query.filter_by(key='ai_daily_briefing').first()
+        if not row:
+            row = Setting(key='ai_daily_briefing')
+            db.session.add(row)
+        row.value = json.dumps(payload)
+        db.session.commit()
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f'AI daily-briefing error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @bp.route('/api/ai/predict-failures', methods=['GET'])
 @login_required
 def api_ai_predict_failures():

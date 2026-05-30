@@ -178,6 +178,29 @@ def _action_center_groups():
                 sample = []
         groups.append({'key': key, 'title': title, 'severity': sev, 'icon': icon,
                        'count': int(cnt), 'link': link, 'sample': sample})
+    # Composite "at-risk" — devices with 2+ simultaneous risk factors (proactive:
+    # catches compounding problems before any single one trips a hard alert).
+    try:
+        risk_names = names("""
+          SELECT name FROM (
+            SELECT a.name,
+              (CASE WHEN a.hardware_storage_total_gb > 0
+                     AND a.hardware_storage_free_gb::float / a.hardware_storage_total_gb < 0.20 THEN 1 ELSE 0 END
+             + CASE WHEN EXISTS (SELECT 1 FROM device_vulnerability v
+                     WHERE v.asset_id = a.id AND v.status = 'Open' AND v.severity IN ('Critical','High')) THEN 1 ELSE 0 END
+             + CASE WHEN EXISTS (SELECT 1 FROM monitoring_alert m
+                     WHERE m.asset_id = a.id AND m.status = 'open') THEN 1 ELSE 0 END
+             + CASE WHEN a.warranty_expiry IS NOT NULL AND a.warranty_expiry < now()::date THEN 1 ELSE 0 END) AS score
+            FROM asset a WHERE a.status <> 'Retired' AND a.name IS NOT NULL
+          ) s WHERE s.score >= 2 ORDER BY s.score DESC
+        """)
+        if risk_names:
+            groups.append({'key': 'at_risk', 'title': 'At-risk devices (multiple issues)',
+                           'severity': 'danger', 'icon': 'bi-activity',
+                           'count': len(risk_names), 'link': '/assets', 'sample': risk_names[:5]})
+    except Exception:
+        pass
+
     # most severe first, then biggest count
     order = {'danger': 0, 'warning': 1, 'info': 2}
     groups.sort(key=lambda g: (order.get(g['severity'], 3), -g['count']))

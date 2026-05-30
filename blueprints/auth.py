@@ -43,6 +43,23 @@ bp = Blueprint('auth', __name__)
 
 
 
+def _audit_auth(action, user_id, detail=None):
+    """Record an authentication event (login / login_failed / logout) to the
+    audit trail. AuditTrail.user_id is NOT NULL with an FK to user, so
+    unauthenticated events (failed logins) are attributed to the system user
+    (id 1), consistent with the _log_audit fallback convention."""
+    try:
+        db.session.add(AuditTrail(
+            entity_type='User', entity_id=int(user_id or 0), action=action,
+            changes=json.dumps(detail) if detail else None,
+            user_id=int(user_id) if user_id else 1,
+            ip_address=request.remote_addr,
+            user_agent=(request.user_agent.string or '')[:500]))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 @bp.route('/login', methods=['GET', 'POST'])
 @limiter.limit("10 per minute; 30 per hour")
 def login():
@@ -96,6 +113,7 @@ def login_microsoft_callback():
     """Handle Microsoft/Azure AD OAuth2 callback"""
     # Verify state to prevent CSRF
     if request.args.get('state') != session.get('state'):
+        _audit_auth('login_failed', None, {'reason': 'invalid_state'})
         flash('Authentication failed: Invalid state parameter.', 'danger')
         return redirect(url_for('auth.login'))
     
@@ -131,6 +149,8 @@ def login_microsoft_callback():
     )
     
     if "error" in result:
+        _audit_auth('login_failed', None, {'reason': 'token_exchange_error',
+                                           'error': result.get('error')})
         flash(f'Authentication failed: {result.get("error_description", "Unknown error")}', 'danger')
         return redirect(url_for('auth.login'))
     
@@ -142,6 +162,8 @@ def login_microsoft_callback():
     )
     
     if graph_response.status_code != 200:
+        _audit_auth('login_failed', None, {'reason': 'graph_userinfo_failed',
+                                           'status': graph_response.status_code})
         flash('Failed to retrieve user information from Microsoft.', 'danger')
         return redirect(url_for('auth.login'))
     
@@ -190,14 +212,17 @@ def login_microsoft_callback():
     login_user(user)
     user.last_login = datetime.utcnow()
     db.session.commit()
-    
+    _audit_auth('login', user.id, {'method': 'microsoft_sso', 'email': email})
+
     return redirect(url_for('dashboard.index'))
 
 
 @bp.route('/logout')
 @login_required
 def logout():
+    uid = current_user.id if current_user.is_authenticated else None
     logout_user()
+    _audit_auth('logout', uid)
     flash('Logged out successfully!', 'success')
     return redirect(url_for('auth.login'))
 

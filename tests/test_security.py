@@ -104,6 +104,17 @@ def test_sla_pass_extracted_and_lock_available():
     assert hasattr(sync_scheduler, '_file_lock')
 
 
+def test_auth_events_are_audited():
+    """Login (success + failure) and logout must write to the audit trail."""
+    import inspect
+    import blueprints.auth as auth
+    assert hasattr(auth, '_audit_auth')
+    cb = inspect.getsource(auth.login_microsoft_callback)
+    assert "_audit_auth('login'" in cb, 'successful SSO login not audited'
+    assert "_audit_auth('login_failed'" in cb, 'failed SSO login not audited'
+    assert "_audit_auth('logout'" in inspect.getsource(auth.logout), 'logout not audited'
+
+
 def _lock_worker(path, q):
     from sync_scheduler import _file_lock
     with _file_lock(path) as got:

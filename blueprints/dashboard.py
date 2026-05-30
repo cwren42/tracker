@@ -122,6 +122,76 @@ def dashboard_live_status():
     }), 200, {'Content-Type': 'application/json', 'Cache-Control': 'no-cache'}
 
 
+def _action_center_groups():
+    """Compute cross-module 'needs attention' groups from live data.
+    Each group: key, title, severity, icon, count, link, sample (list of strings)."""
+    def scalar(sql):
+        return db.session.execute(text(sql)).scalar() or 0
+    def names(sql):
+        return [r[0] for r in db.session.execute(text(sql)).fetchall() if r[0]]
+
+    defs = [
+        ('offline', 'Devices offline 7+ days', 'warning', 'bi-wifi-off', '/assets',
+         "FROM asset WHERE intune_last_sync IS NOT NULL AND intune_last_sync < now() - interval '7 days'",
+         "SELECT name FROM asset WHERE intune_last_sync IS NOT NULL AND intune_last_sync < now() - interval '7 days' AND name IS NOT NULL ORDER BY intune_last_sync LIMIT 5"),
+        ('low_storage', 'Low storage (<20% free)', 'warning', 'bi-hdd', '/assets',
+         "FROM asset WHERE hardware_storage_total_gb > 0 AND hardware_storage_free_gb::float / hardware_storage_total_gb < 0.20",
+         "SELECT name FROM asset WHERE hardware_storage_total_gb > 0 AND hardware_storage_free_gb::float / hardware_storage_total_gb < 0.20 AND name IS NOT NULL ORDER BY hardware_storage_free_gb::float / hardware_storage_total_gb LIMIT 5"),
+        ('crit_alerts', 'Open critical alerts', 'danger', 'bi-exclamation-octagon', '/monitoring/alerts',
+         "FROM monitoring_alert WHERE status='open' AND severity='critical'",
+         "SELECT message FROM monitoring_alert WHERE status='open' AND severity='critical' ORDER BY triggered_at DESC LIMIT 5"),
+        ('warn_alerts', 'Open warning alerts', 'warning', 'bi-exclamation-triangle', '/monitoring/alerts',
+         "FROM monitoring_alert WHERE status='open' AND severity='warning'",
+         "SELECT message FROM monitoring_alert WHERE status='open' AND severity='warning' ORDER BY triggered_at DESC LIMIT 5"),
+        ('urgent_tickets', 'Urgent open tickets', 'danger', 'bi-fire', '/tickets',
+         "FROM support_ticket WHERE status IN ('Open','In Progress') AND priority='Urgent'",
+         "SELECT subject FROM support_ticket WHERE status IN ('Open','In Progress') AND priority='Urgent' ORDER BY created_at LIMIT 5"),
+        ('unassigned_tickets', 'Unassigned open tickets', 'info', 'bi-person-dash', '/tickets',
+         "FROM support_ticket WHERE status IN ('Open','In Progress') AND assigned_to_user_id IS NULL",
+         "SELECT subject FROM support_ticket WHERE status IN ('Open','In Progress') AND assigned_to_user_id IS NULL ORDER BY created_at LIMIT 5"),
+        ('warranty', 'Warranties expiring (30 days)', 'info', 'bi-calendar-x', '/assets',
+         "FROM asset WHERE warranty_expiry IS NOT NULL AND warranty_expiry BETWEEN now()::date AND (now() + interval '30 days')::date",
+         "SELECT name FROM asset WHERE warranty_expiry IS NOT NULL AND warranty_expiry BETWEEN now()::date AND (now() + interval '30 days')::date AND name IS NOT NULL ORDER BY warranty_expiry LIMIT 5"),
+        ('licenses', 'Licenses expiring (30 days)', 'info', 'bi-key', '/licenses',
+         "FROM license WHERE status='Active' AND expiry_date IS NOT NULL AND expiry_date <= (now() + interval '30 days')::date",
+         "SELECT software_name FROM license WHERE status='Active' AND expiry_date IS NOT NULL AND expiry_date <= (now() + interval '30 days')::date ORDER BY expiry_date LIMIT 5"),
+        ('vulns', 'Open critical/high vulnerabilities', 'danger', 'bi-bug', '/vulnerabilities',
+         "FROM device_vulnerability WHERE status='Open' AND severity IN ('Critical','High')",
+         None),
+        ('dupes', 'Duplicate-name assets', 'info', 'bi-files', '/assets/find-duplicates',
+         "FROM (SELECT name FROM asset GROUP BY name HAVING count(*)>1) d",
+         None),
+    ]
+    groups = []
+    for key, title, sev, icon, link, count_from, sample_sql in defs:
+        try:
+            cnt = scalar("SELECT count(*) " + count_from)
+        except Exception:
+            cnt = 0
+        if cnt <= 0:
+            continue
+        sample = []
+        if sample_sql:
+            try:
+                sample = names(sample_sql)
+            except Exception:
+                sample = []
+        groups.append({'key': key, 'title': title, 'severity': sev, 'icon': icon,
+                       'count': int(cnt), 'link': link, 'sample': sample})
+    # most severe first, then biggest count
+    order = {'danger': 0, 'warning': 1, 'info': 2}
+    groups.sort(key=lambda g: (order.get(g['severity'], 3), -g['count']))
+    return groups
+
+
+@bp.route('/action-center')
+@login_required
+def action_center():
+    """Deterministic cross-module 'needs attention' view with drill-downs."""
+    groups = _action_center_groups()
+    return render_template('action_center.html', groups=groups)
+
+
 def get_default_widgets():
     """Return default dashboard widget configuration"""
     return [

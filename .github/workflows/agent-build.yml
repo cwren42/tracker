@@ -22,13 +22,20 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # Only the agent tree is needed to build. A full checkout fails on
-          # Windows because some static/evidence/ filenames are illegal on NTFS
-          # (long names with spaces/commas under a deep path). Sparse avoids them.
-          sparse-checkout: rmm_agent
-          sparse-checkout-cone-mode: false
+      # Path-scoped checkout of ONLY rmm_agent/. A normal checkout (even a sparse
+      # one) fails on Windows: `git checkout -B main` validates every path in the
+      # tree before sparse filtering, and a few static/evidence/ policy PDFs have
+      # a literal newline in their filename — legal on Linux, impossible on NTFS.
+      # `git checkout <sha> -- rmm_agent` only ever touches rmm_agent paths, so the
+      # bad names are never read into the working tree.
+      - name: Checkout rmm_agent
+        shell: bash
+        run: |
+          git init -q .
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git -c protocol.version=2 fetch --no-tags --depth=1 --filter=blob:none origin "$GITHUB_SHA"
+          git checkout -q "$GITHUB_SHA" -- rmm_agent
+          ls rmm_agent
 
       - name: Set up Python
         uses: actions/setup-python@v5

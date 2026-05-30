@@ -1047,6 +1047,33 @@ a:hover { color: var(--button-primary-hover); }
 .card > .card-header.bg-warning .btn-light:hover,
 .card > .card-header.bg-danger  .btn-light:hover,
 .card > .card-header.bg-info    .btn-light:hover { background: var(--surface-2); border-color: var(--muted); }
+
+/* bg-secondary card headers (gray bars) -> quiet neutral header (scripts, cloudflare,
+   eagleeye). Not a semantic color, so a subtle gray strip with muted text/icon. */
+.card > .card-header.bg-secondary {
+    background: var(--app-bg) !important;
+    color: var(--text) !important;
+    border-bottom: 1px solid var(--border);
+}
+.card > .card-header.bg-secondary .text-white { color: var(--text) !important; }
+.card > .card-header.bg-secondary .bi:first-child { color: var(--muted); }
+.card > .card-header.bg-secondary .btn-light {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+}
+
+/* Dark command/token input fields -> light monospace "code" fields on the new theme
+   (settings RMM agent showed install commands/tokens as bg-dark text-light), plus the
+   subtle dark-tinted wrapper panels around them. Scoped tightly. */
+.form-control.bg-dark {
+    background-color: var(--surface-2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+.bg-dark.bg-opacity-25 {
+    background-color: var(--app-bg) !important;
+    border-color: var(--border) !important;
+}
+
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 
 /* Buttons — indigo, rounded, focus ring */

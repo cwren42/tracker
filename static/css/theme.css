@@ -957,7 +957,9 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
-.content { padding: var(--space-5) 0; }
+/* Keep horizontal padding (Bootstrap .row uses negative gutters; 0 side padding
+   here let content overflow past the sidebar). Balanced gutters on all sides. */
+.content { padding: var(--space-5) var(--space-6); }
 h1, .h1 { font-size: var(--fs-3xl); }
 h2, .h2 { font-size: var(--fs-2xl); }
 h3, .h3 { font-size: var(--fs-xl); }

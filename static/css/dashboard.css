@@ -108,17 +108,17 @@
     cursor: pointer;
     border-style: dashed !important;
     border-width: 2px !important;
-    border-color: #dee2e6 !important;
-    background-color: #f8f9fa;
+    border-color: var(--border) !important;
+    background-color: var(--surface-2);
     min-height: 200px;
     transition: all 0.3s ease;
 }
 
 .add-widget-card:hover {
-    border-color: var(--bs-primary) !important;
-    background-color: rgba(13, 110, 253, 0.03);
+    border-color: var(--accent) !important;
+    background-color: var(--accent-weak);
     transform: translateY(-4px);
-    box-shadow: 0 6px 16px rgba(13, 110, 253, 0.15);
+    box-shadow: var(--shadow);
 }
 
 .add-widget-card:hover i {

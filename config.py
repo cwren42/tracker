@@ -53,14 +53,14 @@ class Config:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024            # 16 MB
     MAX_FORM_MEMORY_SIZE = 16 * 1024 * 1024          # 16 MB for large markdown/manual edits
 
-    # ── Email ──
-    MAIL_SERVER = os.environ.get('MAIL_SERVER', 'cirque-com.mail.protection.outlook.com')
+    # ── Email ── (configured via .secrets.env; no values hardcoded here)
+    MAIL_SERVER = os.environ.get('MAIL_SERVER', 'localhost')
     MAIL_PORT = _int('MAIL_PORT', 25)
     MAIL_USE_TLS = _bool('MAIL_USE_TLS', True)
     MAIL_USE_SSL = _bool('MAIL_USE_SSL', False)
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or None
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or None
-    MAIL_DEFAULT_SENDER = ('Tracker', os.environ.get('MAIL_SENDER', 'tracker@cirque.com'))
+    MAIL_DEFAULT_SENDER = ('Tracker', os.environ.get('MAIL_SENDER', 'tracker@localhost'))
     MAIL_DELIVERY_METHOD = 'smtp'
     SEND_EMPLOYEE_EMAILS = _bool('SEND_EMPLOYEE_EMAILS', False)
 

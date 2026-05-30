@@ -69,13 +69,12 @@ _SCRIPT_FILE_TYPES = {
 def settings(section):
     """Admin settings page for email configuration and testing"""
     allowed_sections = {
-        'license', 'email',
+        'license',
         'directory', 'rmm', 'scripts', 'eagleeye',
         'unifi', 'proxmox', 'ai', 'cloudflare'
     }
     section_endpoints = {
         'license': 'settings.settings_license',
-        'email': 'settings.settings_email',
         'directory': 'settings.settings_directory',
         'rmm': 'settings.settings_rmm',
         'scripts': 'settings.settings_scripts',
@@ -92,95 +91,7 @@ def settings(section):
     if request.method == 'POST':
         action = request.form.get('action')
         
-        if action == 'test_email':
-            # Test email to admin
-            test_email = request.form.get('test_email')
-            if test_email:
-                try:
-                    subject = "Asset Tracker - Test Email"
-                    message = f"""
-                    <p>This is a test email from the Asset Tracker system.</p>
-                    <p><strong>Date/Time:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-                    <p><strong>Sent by:</strong> {current_user.username}</p>
-                    <p>If you received this email, your SMTP configuration is working correctly!</p>
-                    """
-                    
-                    if send_email(subject, [test_email], "Test email from Asset Tracker", message):
-                        flash('Test email sent successfully! Check your inbox.', 'success')
-                    else:
-                        flash('Failed to send test email. Check server logs for details.', 'danger')
-                except Exception as e:
-                    flash(f'Error sending test email: {str(e)}', 'danger')
-            else:
-                flash('Please enter an email address for testing.', 'warning')
-        
-        elif action == 'toggle_employee_emails':
-            # Toggle employee email notifications
-            current_app.config['SEND_EMPLOYEE_EMAILS'] = not current_app.config['SEND_EMPLOYEE_EMAILS']
-            status = "enabled" if current_app.config['SEND_EMPLOYEE_EMAILS'] else "disabled"
-            flash(f'Employee email notifications {status}.', 'success')
-        
-        elif action == 'update_sender':
-            # Update default sender email
-            new_sender = request.form.get('sender_email')
-            if new_sender:
-                current_app.config['MAIL_DEFAULT_SENDER'] = new_sender
-                flash('Default sender email updated.', 'success')
-        
-        elif action == 'update_smtp':
-            # Update SMTP settings
-            smtp_server = request.form.get('smtp_server', '').strip()
-            smtp_port = request.form.get('smtp_port', '').strip()
-            smtp_username = request.form.get('smtp_username', '').strip()
-            smtp_password = request.form.get('smtp_password', '').strip()
-            use_tls = request.form.get('use_tls') == 'on'
-            use_ssl = request.form.get('use_ssl') == 'on'
-            sender_email = request.form.get('sender_email', '').strip()
-            
-            try:
-                if not sender_email:
-                    raise ValueError('Sender email is required')
-                if not smtp_server or not smtp_port:
-                    raise ValueError('SMTP server and port are required')
-
-                # Update settings in database
-                settings_to_update = {
-                    'smtp_server': smtp_server,
-                    'smtp_port': smtp_port,
-                    'smtp_username': smtp_username,
-                    'smtp_password': smtp_password,
-                    'smtp_use_tls': 'true' if use_tls else 'false',
-                    'smtp_use_ssl': 'true' if use_ssl else 'false',
-                    'smtp_sender': sender_email,
-                }
-                
-                for key, value in settings_to_update.items():
-                    setting = Setting.query.filter_by(key=key).first()
-                    if not setting:
-                        setting = Setting(key=key)
-                    setting.value = encrypt_if_secret(key, value)
-                    setting.updated_by = current_user.username
-                    setting.updated_at = datetime.utcnow()
-                    db.session.add(setting)
-                
-                db.session.commit()
-                
-                # Update app config
-                current_app.config['MAIL_SERVER'] = smtp_server
-                current_app.config['MAIL_PORT'] = int(smtp_port) if smtp_port else 25
-                current_app.config['MAIL_USERNAME'] = smtp_username if smtp_username else None
-                current_app.config['MAIL_PASSWORD'] = smtp_password if smtp_password else None
-                current_app.config['MAIL_USE_TLS'] = use_tls
-                current_app.config['MAIL_USE_SSL'] = use_ssl
-                current_app.config['MAIL_DEFAULT_SENDER'] = sender_email
-                current_app.config['MAIL_DELIVERY_METHOD'] = 'smtp'
-                
-                flash('SMTP settings updated successfully!', 'success')
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Error updating SMTP settings: {str(e)}', 'danger')
-
-        elif action == 'update_unifi':
+        if action == 'update_unifi':
             # Save UniFi credentials
             def _save(key, val):
                 s = Setting.query.filter_by(key=key).first()
@@ -202,21 +113,6 @@ def settings(section):
             _save('unifi_site', request.form.get('unifi_site', 'default').strip() or 'default')
             db.session.commit()
             flash('UniFi settings saved successfully!', 'success')
-
-        elif action == 'update_notification_routing':
-            # Update alert vs ticket email routing addresses
-            alert_email = request.form.get('alert_notify_email', '').strip()
-            ticket_email = request.form.get('ticket_notify_email', '').strip()
-            for key, val in [('alert_notify_email', alert_email), ('ticket_notify_email', ticket_email)]:
-                s = Setting.query.filter_by(key=key).first()
-                if not s:
-                    s = Setting(key=key)
-                    db.session.add(s)
-                s.value = val
-                s.updated_by = current_user.username
-                s.updated_at = datetime.utcnow()
-            db.session.commit()
-            flash('Notification routing updated.', 'success')
 
         elif action == 'update_ad':
             ad_enabled = request.form.get('ad_enabled') == 'on'
@@ -329,34 +225,6 @@ def settings_license():
     }
     
     return render_template('settings_license.html', license_config=license_config)
-
-
-@bp.route('/settings/email', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def settings_email():
-    if request.method == 'POST':
-        return settings('email')
-    
-    # GET request — render the Email settings page
-    def get_setting_value(key, default=''):
-        s = Setting.query.filter_by(key=key).first()
-        return s.value if s and s.value is not None else default
-
-    config = {
-        'mail_delivery_method': 'smtp',
-        'mail_server': get_setting_value('smtp_server', current_app.config['MAIL_SERVER']),
-        'mail_port': get_setting_value('smtp_port', str(current_app.config['MAIL_PORT'])),
-        'mail_username': get_setting_value('smtp_username', current_app.config.get('MAIL_USERNAME', '')),
-        'mail_password': decrypt_secret(get_setting_value('smtp_password', current_app.config.get('MAIL_PASSWORD', ''))),
-        'mail_use_tls': get_setting_value('smtp_use_tls', 'false') == 'true',
-        'mail_use_ssl': get_setting_value('smtp_use_ssl', 'false') == 'true',
-        'mail_sender': get_setting_value('smtp_sender', current_app.config['MAIL_DEFAULT_SENDER']),
-        'alert_notify_email': get_setting_value('alert_notify_email', ''),
-        'ticket_notify_email': get_setting_value('ticket_notify_email', ''),
-    }
-    
-    return render_template('settings_email.html', config=config)
 
 
 @bp.route('/settings/directory', methods=['GET', 'POST'])

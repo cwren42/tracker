@@ -188,7 +188,7 @@
         </ul>
 
         <div class="nav-section-label">Admin</div>
-        {% set admin_endpoints = ['auth.users','settings.settings_license','settings.settings_email','settings.settings_directory','settings.settings_rmm','settings.settings_scripts','settings.settings_eagleeye','settings.settings_unifi','settings.settings_proxmox','settings.settings_ai','settings.settings_cloudflare'] %}
+        {% set admin_endpoints = ['auth.users','settings.settings_license','settings.settings_directory','settings.settings_rmm','settings.settings_scripts','settings.settings_eagleeye','settings.settings_unifi','settings.settings_proxmox','settings.settings_ai','settings.settings_cloudflare'] %}
         <a class="sidebar-link sidebar-parent {% if request.endpoint in admin_endpoints %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-admin" role="button"
            aria-expanded="{% if request.endpoint in admin_endpoints %}true{% else %}false{% endif %}">
@@ -199,7 +199,6 @@
             <li class="submenu-header"><span class="link-label">System</span></li>
             <li><a class="sidebar-link {% if request.endpoint == 'auth.users' %}active{% endif %}" href="{{ url_for('auth.users') }}"><i class="bi bi-people-fill"></i><span class="link-label">Users</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_license' %}active{% endif %}" href="{{ url_for('settings.settings_license') }}"><i class="bi bi-key-fill"></i><span class="link-label">License</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_email' %}active{% endif %}" href="{{ url_for('settings.settings_email') }}"><i class="bi bi-envelope-fill"></i><span class="link-label">Email</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'settings.settings_scripts' %}active{% endif %}" href="{{ url_for('settings.settings_scripts') }}"><i class="bi bi-terminal-fill"></i><span class="link-label">Scripts</span></a></li>
 
             <li class="submenu-header"><span class="link-label">Integrations</span></li>

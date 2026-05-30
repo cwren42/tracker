@@ -1037,3 +1037,15 @@ a:hover { color: var(--button-primary-hover); }
 hr { border-color: var(--border); opacity: 1; }
 .dropdown-menu { border-radius: var(--radius); border-color: var(--border); box-shadow: var(--shadow); }
 .modal-content { border-radius: var(--radius-lg); border-color: var(--border); }
+
+/* Kill the legacy dashboard hover outline (the "90s blue box"). It lived in a
+   {% if edit_mode %} block in the STATIC dashboard.css, so it always applied; that
+   file also loads after this one, so we override with !important here — this wins
+   even if a stale dashboard.css is still cached in the browser. Keyboard focus
+   (:focus-visible) is left intact for accessibility. */
+.widget-container,
+.widget-container:hover,
+.widget-container .card,
+.widget-container .card:hover,
+.stat-widget-link,
+.stat-widget-link:hover { outline: none !important; }

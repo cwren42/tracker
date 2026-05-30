@@ -1068,8 +1068,14 @@ def _do_sla_pass(flask_app):
     """Run a single SLA escalation pass. Caller holds the single-instance lock."""
     SLA_HOURS = {'Low': 120, 'Normal': 72, 'High': 24, 'Urgent': 4}
     with flask_app.app_context():
+        # Only auto-escalate human-submitted tickets. System/alert-generated
+        # tickets are informational and were flooding the Urgent queue purely by
+        # age (the monitoring alerts / EOL data are the real signal, shown
+        # elsewhere) — escalating them just created noise.
         open_tickets = SupportTicket.query.filter(
-            SupportTicket.status.in_(['Open', 'In Progress'])
+            SupportTicket.status.in_(['Open', 'In Progress']),
+            db.or_(SupportTicket.source.is_(None),
+                   ~SupportTicket.source.in_(['system', 'alert']))
         ).all()
         now = datetime.utcnow()
         escalated = []

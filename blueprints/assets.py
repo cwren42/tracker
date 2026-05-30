@@ -1252,7 +1252,7 @@ def _asset_eol_check():
                     if not _ticket_exists(pfx, asset.id):
                         age_years = (today - asset.purchase_date).days / 365.25
                         t = SupportTicket(
-                            status='Open', priority='Normal', source='system',
+                            status='Open', priority='Low', source='system',
                             category='Asset Management',
                             subject=f'{pfx}: {asset.asset_tag} ({asset.name}) — {age_years:.1f}yr old',
                             description=(

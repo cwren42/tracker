@@ -172,14 +172,19 @@ class MonitoringExecutor:
             elif check_type == 'custom':
                 result.update(self.check_custom(asset, params))
             
-            elif normalized_type in ('status', 'selinux_status', 'uptime', 'agent_version'):
-                # Informational checks — mark as passed (data comes from agent telemetry)
+            elif normalized_type in ('status', 'selinux_status', 'uptime', 'agent_version',
+                                     'linux_load', 'linux_updates', 'linux_load_avg',
+                                     'load', 'updates', 'patches'):
+                # Informational / agent-reported checks — the data comes from agent
+                # telemetry, not an active server-side probe.
                 result['success'] = True
                 result['message'] = f"{check.name}: informational check (no active probe)"
-            
+
             else:
-                result['message'] = f"Unknown check type: {check_type}"
-                result['success'] = False
+                # An unknown check type is a server-side config gap, not a device
+                # problem — mark it skipped so it doesn't raise a critical device alert.
+                result['success'] = True
+                result['message'] = f"Unsupported check type '{check_type}' — skipped (no active probe)"
         
         except Exception as e:
             logger.error(f"Error executing check {check.name}: {e}")

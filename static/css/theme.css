@@ -992,6 +992,10 @@ a:hover { color: var(--button-primary-hover); }
     border-top: 1px solid var(--border);
     padding: var(--space-3) var(--space-5);
 }
+/* Collapsible cards: when the panel is closed the body is display:none, so the
+   header's bottom divider would be a stray line with nothing under it. Hide it
+   while collapsed; it returns when expanded (.show). */
+.card > .card-header:has(+ .collapse:not(.show)) { border-bottom-color: transparent; }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 
 /* Buttons — indigo, rounded, focus ring */

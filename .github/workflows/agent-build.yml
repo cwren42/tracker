@@ -33,7 +33,7 @@ jobs:
         run: |
           git init -q .
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
-          git -c protocol.version=2 fetch --no-tags --depth=1 --filter=blob:none origin "$GITHUB_SHA"
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           git checkout -q "$GITHUB_SHA" -- rmm_agent
           ls rmm_agent
 

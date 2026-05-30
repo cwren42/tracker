@@ -104,6 +104,20 @@ def test_sla_pass_extracted_and_lock_available():
     assert hasattr(sync_scheduler, '_file_lock')
 
 
+def test_secret_store_roundtrip(monkeypatch):
+    """UI-managed secrets encrypt/decrypt correctly and pass plaintext through."""
+    from cryptography.fernet import Fernet
+    import secret_store
+    monkeypatch.setenv('SETTINGS_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    enc = secret_store.encrypt_secret('s3cret-value')
+    assert enc.startswith('enc:v1:') and enc != 's3cret-value'
+    assert secret_store.decrypt_secret(enc) == 's3cret-value'
+    assert secret_store.decrypt_secret('plaintext') == 'plaintext'   # transparent
+    assert secret_store.encrypt_secret(enc) == enc                   # no double-encrypt
+    assert secret_store.encrypt_if_secret('unifi_password', 'p').startswith('enc:v1:')
+    assert secret_store.encrypt_if_secret('not_a_secret', 'p') == 'p'
+
+
 def test_auth_events_are_audited():
     """Login (success + failure) and logout must write to the audit trail."""
     import inspect

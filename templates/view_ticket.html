@@ -122,84 +122,64 @@
       </div>
     </div>
 
-    {# Add note / reply #}
+    {# Add note / reply — single composer with a type selector (no tabs) #}
     <div class="card">
-      <div class="card-header p-0">
-        <ul class="nav nav-tabs card-header-tabs px-3" id="noteTabs" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="tab-note" data-bs-toggle="tab"
-                    data-bs-target="#pane-note" type="button">Note</button>
-          </li>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}" id="noteForm">
+          <input type="hidden" name="is_reply" id="nfReply" value="">
+          <input type="hidden" name="is_internal" id="nfInternal" value="">
+
+          <div class="btn-group btn-group-sm mb-3" role="group" aria-label="Note type">
+            <input type="radio" class="btn-check" name="noteType" id="ntNote" autocomplete="off" checked>
+            <label class="btn btn-outline-secondary" for="ntNote"><i class="bi bi-sticky me-1"></i>Note</label>
+            {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
+            <input type="radio" class="btn-check" name="noteType" id="ntReply" autocomplete="off">
+            <label class="btn btn-outline-secondary" for="ntReply"><i class="bi bi-reply me-1"></i>Reply to User</label>
+            {% endif %}
+            {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
+            <input type="radio" class="btn-check" name="noteType" id="ntInternal" autocomplete="off">
+            <label class="btn btn-outline-secondary" for="ntInternal"><i class="bi bi-lock me-1"></i>Internal</label>
+            {% endif %}
+          </div>
+
           {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-reply" data-bs-toggle="tab"
-                    data-bs-target="#pane-reply" type="button">
-              <i class="bi bi-reply me-1"></i>Reply to Reporter
-            </button>
-          </li>
+          <div class="mb-2 d-none" id="nfToWrap">
+            <label class="form-label small fw-semibold text-muted mb-1">To</label>
+            <input type="email" name="reply_to" class="form-control form-control-sm" value="{{ ticket.reporter_email }}">
+          </div>
           {% endif %}
-          {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-internal" data-bs-toggle="tab"
-                    data-bs-target="#pane-internal" type="button">
-              <i class="bi bi-lock me-1"></i>Internal
-            </button>
-          </li>
-          {% endif %}
-        </ul>
-      </div>
-      <div class="card-body tab-content pt-3">
 
-        {# ── Note tab ── #}
-        <div class="tab-pane fade show active" id="pane-note" role="tabpanel">
-          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
-            <textarea name="content" class="form-control mb-2" rows="3"
-                      placeholder="Add a note…" required></textarea>
-            <button type="submit" class="btn btn-primary btn-sm">
-              <i class="bi bi-send me-1"></i>Add Note
-            </button>
-          </form>
-        </div>
+          <textarea name="content" id="nfContent" class="form-control" rows="3" placeholder="Add a note…" required></textarea>
 
-        {# ── Reply to Reporter tab ── #}
-        {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
-        <div class="tab-pane fade" id="pane-reply" role="tabpanel">
-          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
-            <input type="hidden" name="is_reply" value="1">
-            <div class="mb-2">
-              <label class="form-label small fw-semibold text-muted mb-1">To</label>
-              <input type="email" name="reply_to" class="form-control form-control-sm"
-                     value="{{ ticket.reporter_email }}" required>
-            </div>
-            <div class="mb-2">
-              <label class="form-label small fw-semibold text-muted mb-1">Message</label>
-              <textarea name="content" class="form-control" rows="4"
-                        placeholder="Write your reply to the reporter…" required></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm">
-              <i class="bi bi-envelope me-1"></i>Send Reply
-            </button>
-            <span class="text-muted small ms-2">Will be emailed and logged in the timeline.</span>
-          </form>
-        </div>
-        {% endif %}
-
-        {# ── Internal note tab ── #}
-        {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
-        <div class="tab-pane fade" id="pane-internal" role="tabpanel">
-          <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}">
-            <input type="hidden" name="is_internal" value="1">
-            <textarea name="content" class="form-control mb-2" rows="3"
-                      placeholder="Internal note — only visible to technicians…" required></textarea>
-            <button type="submit" class="btn btn-warning btn-sm text-dark">
-              <i class="bi bi-lock me-1"></i>Add Internal Note
-            </button>
-          </form>
-        </div>
-        {% endif %}
-
+          <div class="d-flex align-items-center gap-2 mt-2">
+            <button type="submit" class="btn btn-primary btn-sm" id="nfSubmit"><i class="bi bi-send me-1"></i>Add Note</button>
+            <span class="text-muted small d-none" id="nfHint">Emailed to the user and logged in the timeline.</span>
+          </div>
+        </form>
       </div>
     </div>
+
+    <script>
+    (function(){
+      var f=document.getElementById('noteForm'); if(!f) return;
+      var reply=document.getElementById('nfReply'), internal=document.getElementById('nfInternal'),
+          toWrap=document.getElementById('nfToWrap'), content=document.getElementById('nfContent'),
+          submit=document.getElementById('nfSubmit'), hint=document.getElementById('nfHint');
+      function set(type){
+        reply.value    = type==='reply'    ? '1' : '';
+        internal.value = type==='internal' ? '1' : '';
+        if(toWrap) toWrap.classList.toggle('d-none', type!=='reply');
+        if(hint)   hint.classList.toggle('d-none', type!=='reply');
+        if(type==='reply'){    submit.innerHTML='<i class="bi bi-envelope me-1"></i>Send Reply';      content.placeholder='Write your reply to the user…'; }
+        else if(type==='internal'){ submit.innerHTML='<i class="bi bi-lock me-1"></i>Add Internal Note'; content.placeholder='Internal note — only visible to technicians…'; }
+        else {                 submit.innerHTML='<i class="bi bi-send me-1"></i>Add Note';             content.placeholder='Add a note…'; }
+      }
+      var n=document.getElementById('ntNote'), r=document.getElementById('ntReply'), i=document.getElementById('ntInternal');
+      if(n) n.addEventListener('change',function(){ if(this.checked) set('note'); });
+      if(r) r.addEventListener('change',function(){ if(this.checked) set('reply'); });
+      if(i) i.addEventListener('change',function(){ if(this.checked) set('internal'); });
+    })();
+    </script>
 
 
     {# Activity timeline #}
@@ -344,7 +324,7 @@
           <label class="form-label small text-muted mb-1">Category</label>
           <form method="POST" action="{{ url_for('tickets.set_ticket_category', ticket_id=ticket.id) }}">
             <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
-              {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
+              {% for cat in ['Hardware','Software','Network','Email','Account','General','Other'] %}
               <option value="{{ cat }}" {% if (ticket.category or 'General') == cat %}selected{% endif %}>{{ cat }}</option>
               {% endfor %}
             </select>
@@ -415,7 +395,7 @@
       <div class="card-header fw-semibold"><i class="bi bi-info-square me-2"></i>Context</div>
       <div class="card-body small vstack gap-3">
         <div>
-          <div class="text-muted mb-1"><i class="bi bi-person me-1"></i>Reporter</div>
+          <div class="text-muted mb-1"><i class="bi bi-person me-1"></i>User Submitter</div>
           {% if ticket.reporter_name %}<div>{{ ticket.reporter_name }}</div>{% endif %}
           {% if ticket.reporter_email %}<div><a href="mailto:{{ ticket.reporter_email }}">{{ ticket.reporter_email }}</a></div>{% endif %}
           {% if not ticket.reporter_name and not ticket.reporter_email %}<div class="text-muted">Unknown</div>{% endif %}

@@ -195,7 +195,7 @@
       <div class="col-sm-auto">
         <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">All Categories</option>
-          {% for cat in ['Hardware','Software','Network','Account','General','Other'] %}
+          {% for cat in ['Hardware','Software','Network','Email','Account','General','Other'] %}
           <option value="{{ cat }}" {% if f_category==cat %}selected{% endif %}>{{ cat }}</option>
           {% endfor %}
         </select>

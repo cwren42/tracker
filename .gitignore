@@ -5,6 +5,11 @@ tracker.db
 assets.db
 users.db
 
+# Database backups (large dumps + the secrets snapshot — never commit)
+backups/
+*.sql
+*.sql.gz
+
 # Logs
 *.log
 access.log

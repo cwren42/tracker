@@ -122,72 +122,6 @@
       </div>
     </div>
 
-    {# Activity timeline #}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>Activity</div>
-      <div class="card-body p-0">
-        {% if timeline %}
-        <ul class="list-group list-group-flush">
-          {% for item in timeline %}
-          {% set obj = item.obj %}
-          <li class="list-group-item d-flex gap-3 py-3{% if item.type == 'note' and obj.is_internal %} border-start border-4 border-warning{% elif item.type == 'note' and obj.is_reply %} border-start border-4 border-primary{% endif %}">
-            {# Icon #}
-            <div class="flex-shrink-0 mt-1">
-              {% if item.type == 'note' %}
-                {% if obj.is_internal %}
-                <span class="badge bg-warning rounded-circle p-2" title="Internal — tech only"><i class="bi bi-lock-fill text-dark"></i></span>
-                {% elif obj.is_reply %}
-                <span class="badge bg-primary rounded-circle p-2" title="Reply sent to {{ obj.reply_to }}"><i class="bi bi-reply-fill"></i></span>
-                {% else %}
-                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>
-                {% endif %}
-              {% elif obj.action == 'created' %}
-                <span class="badge bg-success rounded-circle p-2"><i class="bi bi-plus-lg"></i></span>
-              {% elif obj.action == 'closed' %}
-                <span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-check2-circle"></i></span>
-              {% elif obj.action == 'assigned' %}
-                <span class="badge bg-info rounded-circle p-2"><i class="bi bi-person-check"></i></span>
-              {% elif obj.action == 'priority_changed' %}
-                <span class="badge bg-warning rounded-circle p-2"><i class="bi bi-exclamation-triangle"></i></span>
-              {% elif obj.action == 'note_added' %}
-                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left"></i></span>
-              {% elif obj.action == 'edited' %}
-                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-pencil text-secondary"></i></span>
-              {% else %}
-                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-arrow-repeat text-info"></i></span>
-              {% endif %}
-            </div>
-            {# Content #}
-            <div class="flex-grow-1">
-              {% if item.type == 'note' %}
-                <div class="fw-semibold small mb-1">
-                  {% if obj.is_internal %}
-                  <span class="badge bg-warning text-dark me-1" style="font-size:10px;"><i class="bi bi-lock-fill me-1"></i>Internal</span>
-                  {% elif obj.is_reply %}
-                  <span class="badge bg-primary me-1" style="font-size:10px;"><i class="bi bi-reply me-1"></i>Reply</span>
-                  {% endif %}
-                  {{ 'Reply by' if obj.is_reply else 'Note by' }} {{ obj.author.display_name if obj.author else '—' }}
-                  {% if obj.is_reply and obj.reply_to %}
-                  <span class="fw-normal opacity-75">→ {{ obj.reply_to }}</span>
-                  {% endif %}
-                </div>
-                <div class="small border-start border-2 {% if obj.is_internal %}border-warning{% elif obj.is_reply %}border-primary{% else %}border-primary{% endif %} ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
-              {% else %}
-                <div class="small">{{ obj.detail or obj.action }}</div>
-              {% endif %}
-              <div class="text-muted" style="font-size:11px;">
-                {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}
-              </div>
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <div class="text-muted text-center py-4 small">No activity yet.</div>
-        {% endif %}
-      </div>
-    </div>
-
     {# Add note / reply #}
     <div class="card">
       <div class="card-header p-0">
@@ -267,6 +201,73 @@
       </div>
     </div>
 
+
+    {# Activity timeline #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>Activity</div>
+      <div class="card-body p-0">
+        {% if timeline %}
+        <ul class="list-group list-group-flush">
+          {% for item in timeline %}
+          {% set obj = item.obj %}
+          <li class="list-group-item d-flex gap-3 py-3{% if item.type == 'note' and obj.is_internal %} border-start border-4 border-warning{% elif item.type == 'note' and obj.is_reply %} border-start border-4 border-primary{% endif %}">
+            {# Icon #}
+            <div class="flex-shrink-0 mt-1">
+              {% if item.type == 'note' %}
+                {% if obj.is_internal %}
+                <span class="badge bg-warning rounded-circle p-2" title="Internal — tech only"><i class="bi bi-lock-fill text-dark"></i></span>
+                {% elif obj.is_reply %}
+                <span class="badge bg-primary rounded-circle p-2" title="Reply sent to {{ obj.reply_to }}"><i class="bi bi-reply-fill"></i></span>
+                {% else %}
+                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>
+                {% endif %}
+              {% elif obj.action == 'created' %}
+                <span class="badge bg-success rounded-circle p-2"><i class="bi bi-plus-lg"></i></span>
+              {% elif obj.action == 'closed' %}
+                <span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-check2-circle"></i></span>
+              {% elif obj.action == 'assigned' %}
+                <span class="badge bg-info rounded-circle p-2"><i class="bi bi-person-check"></i></span>
+              {% elif obj.action == 'priority_changed' %}
+                <span class="badge bg-warning rounded-circle p-2"><i class="bi bi-exclamation-triangle"></i></span>
+              {% elif obj.action == 'note_added' %}
+                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left"></i></span>
+              {% elif obj.action == 'edited' %}
+                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-pencil text-secondary"></i></span>
+              {% else %}
+                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-arrow-repeat text-info"></i></span>
+              {% endif %}
+            </div>
+            {# Content #}
+            <div class="flex-grow-1">
+              {% if item.type == 'note' %}
+                <div class="fw-semibold small mb-1">
+                  {% if obj.is_internal %}
+                  <span class="badge bg-warning text-dark me-1" style="font-size:10px;"><i class="bi bi-lock-fill me-1"></i>Internal</span>
+                  {% elif obj.is_reply %}
+                  <span class="badge bg-primary me-1" style="font-size:10px;"><i class="bi bi-reply me-1"></i>Reply</span>
+                  {% endif %}
+                  {{ 'Reply by' if obj.is_reply else 'Note by' }} {{ obj.author.display_name if obj.author else '—' }}
+                  {% if obj.is_reply and obj.reply_to %}
+                  <span class="fw-normal opacity-75">→ {{ obj.reply_to }}</span>
+                  {% endif %}
+                </div>
+                <div class="small border-start border-2 {% if obj.is_internal %}border-warning{% elif obj.is_reply %}border-primary{% else %}border-primary{% endif %} ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
+              {% else %}
+                <div class="small">{{ obj.detail or obj.action }}</div>
+              {% endif %}
+              <div class="text-muted" style="font-size:11px;">
+                {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}
+              </div>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-muted text-center py-4 small">No activity yet.</div>
+        {% endif %}
+      </div>
+    </div>
+
   </div>
 
   {# ══ RIGHT COLUMN ═════════════════════════════════════════ #}
@@ -277,13 +278,6 @@
       <div class="card-header fw-semibold"><i class="bi bi-info-circle me-2"></i>Details</div>
       <div class="card-body">
         <div class="row g-2 small">
-          <div class="col-5 text-muted">Priority</div>
-          <div class="col-7">
-            {% if ticket.priority == 'Urgent' %}<span class="badge bg-danger">Urgent</span>
-            {% elif ticket.priority == 'High' %}<span class="badge bg-warning text-dark">High</span>
-            {% elif ticket.priority == 'Low' %}<span class="badge bg-secondary">Low</span>
-            {% else %}<span class="badge bg-info text-dark">Normal</span>{% endif %}
-          </div>
           <div class="col-5 text-muted">Created</div>
           <div class="col-7">{{ ticket.created_at.strftime('%m/%d/%Y %H:%M') if ticket.created_at else '—' }}</div>
           {% if ticket.updated_at %}
@@ -416,41 +410,28 @@
     </div>
     {% endif %}
 
-    {# Reporter #}
+    {# Context — reporter + linked asset #}
     <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-person me-2"></i>Reporter</div>
-      <div class="card-body small">
-        {% if ticket.reporter_name %}
-        <div><i class="bi bi-person me-1 text-muted"></i>{{ ticket.reporter_name }}</div>
-        {% endif %}
-        {% if ticket.reporter_email %}
-        <div><i class="bi bi-envelope me-1 text-muted"></i><a href="mailto:{{ ticket.reporter_email }}">{{ ticket.reporter_email }}</a></div>
-        {% endif %}
-        {% if not ticket.reporter_name and not ticket.reporter_email %}
-        <div class="text-muted">Unknown</div>
-        {% endif %}
-      </div>
-    </div>
-
-    {# Asset #}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-laptop me-2"></i>Asset</div>
-      <div class="card-body small">
-        {% if ticket.asset_tag %}<div><strong>Tag:</strong> {{ ticket.asset_tag }}</div>{% endif %}
-        {% if ticket.hostname %}<div><strong>Host:</strong> {{ ticket.hostname }}</div>{% endif %}
-        {% if ticket.asset_id %}
-        <a href="{{ url_for('assets.view_asset', asset_id=ticket.asset_id) }}" class="btn btn-sm btn-outline-secondary mt-2 w-100">
-          <i class="bi bi-box-arrow-up-right me-1"></i>View Asset
-        </a>
-        {% if ticket.asset and ticket.asset.rustdesk_id %}
-        <button class="btn btn-sm btn-success mt-1 w-100" onclick="startRustDeskSession({{ ticket.asset_id }})">
-          <i class="bi bi-display me-1"></i>Remote Session
-        </button>
-        {% endif %}
-        {% endif %}
-        {% if not ticket.asset_tag and not ticket.hostname and not ticket.asset_id %}
-        <div class="text-muted">No asset linked</div>
-        {% endif %}
+      <div class="card-header fw-semibold"><i class="bi bi-info-square me-2"></i>Context</div>
+      <div class="card-body small vstack gap-3">
+        <div>
+          <div class="text-muted mb-1"><i class="bi bi-person me-1"></i>Reporter</div>
+          {% if ticket.reporter_name %}<div>{{ ticket.reporter_name }}</div>{% endif %}
+          {% if ticket.reporter_email %}<div><a href="mailto:{{ ticket.reporter_email }}">{{ ticket.reporter_email }}</a></div>{% endif %}
+          {% if not ticket.reporter_name and not ticket.reporter_email %}<div class="text-muted">Unknown</div>{% endif %}
+        </div>
+        <div>
+          <div class="text-muted mb-1"><i class="bi bi-laptop me-1"></i>Asset</div>
+          {% if ticket.asset_tag %}<div><strong>Tag:</strong> {{ ticket.asset_tag }}</div>{% endif %}
+          {% if ticket.hostname %}<div><strong>Host:</strong> {{ ticket.hostname }}</div>{% endif %}
+          {% if ticket.asset_id %}
+          <a href="{{ url_for('assets.view_asset', asset_id=ticket.asset_id) }}" class="btn btn-sm btn-outline-secondary mt-2 w-100"><i class="bi bi-box-arrow-up-right me-1"></i>View Asset</a>
+          {% if ticket.asset and ticket.asset.rustdesk_id %}
+          <button class="btn btn-sm btn-success mt-1 w-100" onclick="startRustDeskSession({{ ticket.asset_id }})"><i class="bi bi-display me-1"></i>Remote Session</button>
+          {% endif %}
+          {% endif %}
+          {% if not ticket.asset_tag and not ticket.hostname and not ticket.asset_id %}<div class="text-muted">No asset linked</div>{% endif %}
+        </div>
       </div>
     </div>
 

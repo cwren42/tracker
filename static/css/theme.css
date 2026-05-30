@@ -1089,6 +1089,17 @@ a:hover { color: var(--button-primary-hover); }
 .table > tbody td { border-color: var(--border); vertical-align: middle; }
 .table-hover > tbody > tr:hover > * { background-color: var(--accent-weak); }
 
+/* Neutralize dark table headers (thead.table-dark) to the same quiet light style
+   as every other table — used on users, eagle_eyes, patch_dashboard, _tab_unifi.
+   Override Bootstrap's table-dark CSS vars so the cells render light; the v2
+   .table>thead th rule above then supplies the uppercase muted styling. */
+.table > thead.table-dark {
+    --bs-table-bg: transparent;
+    --bs-table-color: var(--muted);
+    --bs-table-border-color: var(--border);
+}
+.table > thead.table-dark th { color: var(--muted) !important; }
+
 /* Badges & pills — softer, semantic */
 .badge { font-weight: 600; border-radius: var(--radius-pill); padding: .35em .7em; }
 

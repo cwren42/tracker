@@ -1,5 +1,5 @@
-.rule-card { background:#0f1923; border:1px solid #1a2d3d; border-radius:10px; transition:border-color .15s; }
-  .rule-card:hover { border-color:#2a4a6a; }
+.rule-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; transition:border-color .15s; }
+  .rule-card:hover { border-color:var(--accent); }
   .form-switch .form-check-input { width:2.5em; height:1.3em; cursor:pointer; }
   .form-check-input:checked { background-color:#28a745 !important; border-color:#28a745 !important; }
   .form-check-input:focus { box-shadow:0 0 0 .25rem rgba(40,167,69,.25); }
@@ -12,6 +12,6 @@
   /* Bootstrap 5 doesn't have btn-xs — define it */
   .btn-xs { padding:.15rem .45rem; font-size:.72rem; line-height:1.3; border-radius:.25rem; }
   /* Nav tab active highlight matches per-category color (set via JS) */
-  #alertTabs .nav-link { color:#8899aa; border-bottom:2px solid transparent; }
-  #alertTabs .nav-link.active { color:#fff; background:transparent; }
-  #alertTabs .nav-link:hover { color:#cdd9e5; }
+  #alertTabs .nav-link { color:var(--muted); border-bottom:2px solid transparent; }
+  #alertTabs .nav-link.active { color:var(--accent); background:transparent; }
+  #alertTabs .nav-link:hover { color:var(--text); }

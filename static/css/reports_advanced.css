@@ -1,14 +1,14 @@
-.rpt-card { background:#1a2233; border:1px solid #2d3a50; border-radius:8px; }
-  .rpt-card-header { background:#212d42; border-bottom:1px solid #2d3a50; padding:12px 16px; border-radius:8px 8px 0 0; }
-  .tmpl-row { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #1e2d45; }
+.rpt-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+  .rpt-card-header { background:var(--app-bg); border-bottom:1px solid var(--border); padding:12px 16px; border-radius:8px 8px 0 0; }
+  .tmpl-row { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--border); }
   .tmpl-row:last-child { border-bottom:none; }
-  .tmpl-icon { width:34px;height:34px;border-radius:6px;background:#1d2e54;color:#6aacf8;display:flex;align-items:center;justify-content:center;flex-shrink:0; }
-  .tmpl-name { color:#cdd9e5; font-size:.88rem; font-weight:600; }
-  .tmpl-desc { color:#8899aa; font-size:.78rem; }
-  #run-table th { color:#8899aa; font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; border:none; background:#212d42; }
-  #run-table td { color:#cdd9e5; font-size:.82rem; vertical-align:middle; border-color:#1e2d45; }
+  .tmpl-icon { width:34px;height:34px;border-radius:6px;background:var(--accent-weak);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+  .tmpl-name { color:var(--text); font-size:.88rem; font-weight:600; }
+  .tmpl-desc { color:var(--muted); font-size:.78rem; }
+  #run-table th { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; border:none; background:var(--app-bg); }
+  #run-table td { color:var(--text); font-size:.82rem; vertical-align:middle; border-color:var(--border); }
   #report-preview { display:none; }
-  #preview-table th { color:#8899aa; font-size:.75rem; background:#1e2d45; position:sticky;top:0; }
-  #preview-table td { font-size:.8rem; color:#cdd9e5; border-color:#1e2d45; }
+  #preview-table th { color:var(--muted); font-size:.75rem; background:var(--surface-2); position:sticky;top:0; }
+  #preview-table td { font-size:.8rem; color:var(--text); border-color:var(--border); }
   .status-badge { font-size:.72rem; font-weight:600; text-transform:uppercase; }
   .progress-wrap { display:none; }

@@ -249,11 +249,12 @@ def api_workflow_create():
     cur = db_conn.execute(
         """INSERT INTO workflow_definitions
            (name, description, trigger_type, trigger_config, nodes, edges, enabled, created_by, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,1,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (data['name'], data.get('description', ''), data['trigger_type'],
          json.dumps(data.get('trigger_config', {})),
          json.dumps(data.get('nodes', [])),
          json.dumps(data.get('edges', [])),
+         bool(data.get('enabled', True)),
          current_user.username, now, now)
     )
     wf_id = cur.lastrowid
@@ -293,7 +294,7 @@ def api_workflow_update(wf_id):
          json.dumps(data.get('trigger_config', {})),
          json.dumps(data.get('nodes', [])),
          json.dumps(data.get('edges', [])),
-         1 if data.get('enabled', True) else 0,
+         bool(data.get('enabled', True)),
          now, wf_id)
     )
     db_conn.commit(); db_conn.close()
@@ -321,7 +322,7 @@ def api_workflow_toggle(wf_id):
     if not row:
         db_conn.close()
         return jsonify({'error': 'Not found'}), 404
-    new_val = 0 if row['enabled'] else 1
+    new_val = not bool(row['enabled'])
     db_conn.execute("UPDATE workflow_definitions SET enabled=? WHERE id=?", (new_val, wf_id))
     db_conn.commit(); db_conn.close()
     return jsonify({'enabled': new_val})

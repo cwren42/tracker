@@ -290,8 +290,8 @@ function renderConfigPanel(nd) {
   if(nd.type==='trigger'){
     html+=`<div class="cfg-section"><div class="cfg-label">Trigger Type</div>
       <select class="cfg-input cfg-select" id="cfg-trigger" onchange="nd_set_trigger(this.value)">
-        ${['manual','schedule','ticket_created','ticket_updated','vulnerability_detected','patch_failed','user_offboarded','alert_triggered']
-          .map(v=>`<option value="${v}"${(nd.config.trigger_type||'manual')===v?' selected':''}>${v.replace(/_/g,' ')}</option>`).join('')}
+        ${['manual','schedule','ticket.created','ticket.resolved']
+          .map(v=>`<option value="${v}"${(nd.config.trigger_type||'manual')===v?' selected':''}>${v.replace(/[._]/g,' ')}</option>`).join('')}
       </select>
       <div id="cfg-sched-wrap" class="mt-2" style="display:${nd.config.trigger_type==='schedule'?'block':'none'}">
         <div class="cfg-label">Interval (mins)</div>
@@ -471,6 +471,7 @@ function nd_set(key,val){
 function nd_set_trigger(val){
   nd_set('config.trigger_type',val);
   document.getElementById('wf-trigger-type').value=val;
+  updateTriggerUI();
   const w=document.getElementById('cfg-sched-wrap');
   if(w) w.style.display=val==='schedule'?'block':'none';
 }
@@ -496,8 +497,27 @@ function resetCfgPanel(){document.getElementById('wf-config-inner').innerHTML='<
 function updateDropHint(){dropHint.style.display=nodes.length?'none':'block';}
 
 // ── SAVE / LOAD ────────────────────────────────────────────────────────
+// ── Event-trigger filter (trigger_config) ──────────────────────────────
+const EVENT_TRIGGERS=['ticket.created','ticket.resolved'];
+function getTriggerFilter(){
+  const raw=(document.getElementById('wf-trigger-filter').value||'').trim();
+  const cfg={};
+  if(raw) raw.split(',').forEach(pair=>{const i=pair.indexOf('='); if(i>0){const k=pair.slice(0,i).trim(); const v=pair.slice(i+1).trim(); if(k) cfg[k]=v;}});
+  return cfg;
+}
+function setTriggerFilter(cfg){
+  cfg=cfg||{};
+  document.getElementById('wf-trigger-filter').value=Object.keys(cfg).filter(k=>!k.startsWith('_')).map(k=>`${k}=${cfg[k]}`).join(', ');
+}
+function updateTriggerUI(){
+  const t=document.getElementById('wf-trigger-type').value;
+  const isEvent=EVENT_TRIGGERS.includes(t);
+  document.getElementById('wf-trigger-filter').style.display=isEvent?'inline-block':'none';
+  document.getElementById('wf-trigger-warn').style.display=(isEvent&&Object.keys(getTriggerFilter()).length===0)?'inline-block':'none';
+}
+
 async function saveWorkflow(){
-  const payload={name:document.getElementById('wf-title').value,trigger_type:document.getElementById('wf-trigger-type').value,enabled:document.getElementById('wf-enabled').checked,
+  const payload={name:document.getElementById('wf-title').value,trigger_type:document.getElementById('wf-trigger-type').value,trigger_config:getTriggerFilter(),enabled:document.getElementById('wf-enabled').checked,
     nodes:nodes.map(n=>({id:n.id,type:n.type,action:n.action,label:n.label,x:n.x,y:n.y,config:n.config})),edges};
   const method=currentWfId?'PUT':'POST', url=currentWfId?`/api/workflows/${currentWfId}`:'/api/workflows';
   const resp=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -511,6 +531,7 @@ async function loadWorkflow(id){
   currentWfId=wf.id; clearCanvas();
   document.getElementById('wf-title').value=wf.name;
   document.getElementById('wf-trigger-type').value=wf.trigger_type;
+  setTriggerFilter(wf.trigger_config); updateTriggerUI();
   document.getElementById('wf-enabled').checked=!!wf.enabled;
   document.getElementById('btn-run').disabled=false;
   (wf.nodes||[]).forEach(n=>{addNode(n.type,n.action||'',n.x,n.y,n.config||{},n.id,n.label);const s=parseInt((n.id||'').replace('n',''));if(!isNaN(s)&&s>=nodeIdSeq)nodeIdSeq=s+1;});
@@ -523,6 +544,7 @@ function applyGeneratedWorkflow(wf){
   clearCanvas();
   if(wf.name) document.getElementById('wf-title').value=wf.name;
   if(wf.trigger_type) document.getElementById('wf-trigger-type').value=wf.trigger_type;
+  setTriggerFilter(wf.trigger_config||{}); updateTriggerUI();
   (wf.nodes||[]).forEach(n=>{addNode(n.type,n.action||'',n.x||80,n.y||200,n.config||{},n.id,n.label);const s=parseInt((n.id||'').replace('n',''));if(!isNaN(s)&&s>=nodeIdSeq)nodeIdSeq=s+1;});
   (wf.edges||[]).forEach(e=>{edges.push(e);const s=parseInt((e.id||'').replace('e',''));if(!isNaN(s)&&s>=edgeIdSeq)edgeIdSeq=s+1;});
   refreshEdges();
@@ -549,6 +571,7 @@ function newWorkflow(){
   currentWfId=null; clearCanvas();
   document.getElementById('wf-title').value='New Workflow';
   document.getElementById('wf-trigger-type').value='manual';
+  document.getElementById('wf-trigger-filter').value=''; updateTriggerUI();
   document.getElementById('wf-enabled').checked=true;
   document.getElementById('btn-run').disabled=true;
   document.querySelectorAll('.wf-item').forEach(el=>el.classList.remove('active'));

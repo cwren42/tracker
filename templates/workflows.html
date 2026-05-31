@@ -89,16 +89,17 @@
   <div id="wf-main">
     <div id="wf-toolbar">
       <input id="wf-title" class="wf-title-input" value="New Workflow" placeholder="Workflow name…">
-      <select id="wf-trigger-type" class="cfg-input" style="width:auto;max-width:185px">
+      <select id="wf-trigger-type" class="cfg-input" style="width:auto;max-width:165px" onchange="updateTriggerUI()">
         <option value="manual">Manual</option>
         <option value="schedule">Schedule</option>
-        <option value="ticket_created">Ticket Created</option>
-        <option value="ticket_updated">Ticket Updated</option>
-        <option value="vulnerability_detected">Vulnerability Detected</option>
-        <option value="patch_failed">Patch Failed</option>
-        <option value="user_offboarded">User Offboarded</option>
-        <option value="alert_triggered">Alert Triggered</option>
+        <option value="ticket.created">Ticket created</option>
+        <option value="ticket.resolved">Ticket resolved</option>
       </select>
+      <input id="wf-trigger-filter" class="cfg-input" style="width:auto;max-width:240px;display:none"
+             placeholder="filter e.g. category=Security, subject=lock" oninput="updateTriggerUI()"
+             title="Only fire when these event fields match (case-insensitive substring). Blank = every event.">
+      <span id="wf-trigger-warn" class="text-warning ms-1" style="font-size:.72rem;display:none">
+        <i class="bi bi-exclamation-triangle-fill"></i> fires on every event</span>
       <div class="form-check form-switch mb-0 ms-1">
         <input type="checkbox" class="form-check-input" id="wf-enabled" checked>
         <label class="form-check-label text-secondary" for="wf-enabled" style="font-size:.78rem">Enabled</label>
@@ -149,5 +150,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/workflows.js"></script>
+<script src="/static/js/workflows.js?v={{ asset_version }}"></script>
 {% endblock %}

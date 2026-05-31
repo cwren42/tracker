@@ -49,7 +49,7 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 
-from blueprints.rmm import bp, _dt_iso, _agent_tz_offset_minutes, _eagle_date_params
+from blueprints.rmm import bp, _dt_iso, _agent_tz_offset_minutes, _eagle_date_params, _EAGLE_SYSTEM_EXCL
 
 
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])

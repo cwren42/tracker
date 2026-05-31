@@ -115,7 +115,14 @@
     fetch('/api/rmm/eagle-eyes/fleet')
       .then(r => r.json())
       .then(data => {
-        if (!data.ok) { console.error(data.error); return; }
+        if (!data.ok) {
+          console.error(data.error);
+          // Don't leave the spinner spinning forever — surface the failure.
+          const tb = document.getElementById('fleet-tbody');
+          if (tb) tb.innerHTML = '<tr><td colspan="99" class="text-center text-danger py-4">'
+            + 'Failed to load fleet: ' + (data.error || 'unknown error') + '</td></tr>';
+          return;
+        }
         _agents = data.agents;
         // summary cards
         document.getElementById('fleet-total').textContent  = data.total;

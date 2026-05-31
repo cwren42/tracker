@@ -29,6 +29,7 @@ _BATCH = 50                # max events handled per pass
 _MAX_ATTEMPTS = 5          # give up (status='error') after this many failures
 _RETENTION_DAYS = 30       # prune dispatched/error rows older than this
 _PRUNE_EVERY = 720         # ~ every hour (720 * 5s); prune runs on the leader only
+_REINDEX_EVERY = 120960    # ~ weekly (7d * 86400 / 5s); knowledge auto-reindex, leader only
 _started = False           # per-process guard (mirrors sync_scheduler/workflow_engine)
 
 # Defense-in-depth: never let a publisher persist an obvious secret in cleartext JSONB.
@@ -213,6 +214,13 @@ def start_event_dispatcher(flask_app):
                         _dispatch_once(flask_app)
                         if ticks % _PRUNE_EVERY == 0:
                             _prune()
+                        if ticks % _REINDEX_EVERY == 0:
+                            try:
+                                import knowledge_agent
+                                with flask_app.app_context():
+                                    knowledge_agent.reindex()
+                            except Exception:
+                                log.exception("scheduled knowledge reindex failed")
             except Exception:
                 log.exception("event dispatcher loop error")
 

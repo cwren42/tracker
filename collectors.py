@@ -45,16 +45,46 @@ function CountGroup($n){ try { @(Get-ADGroupMember $n -Recursive -ErrorAction St
 
 GPO_PS = r"""
 Import-Module GroupPolicy -ErrorAction Stop
+Import-Module ActiveDirectory -ErrorAction Stop
 $all=Get-GPO -All
+# Collect every linked GPO GUID from OUs, the domain root, and sites (gPLink).
+$linked=New-Object System.Collections.Generic.HashSet[string]
+$soms=@()
+$soms += Get-ADObject -LDAPFilter '(objectClass=organizationalUnit)' -Properties gPLink
+$soms += Get-ADObject -Identity ((Get-ADDomain).DistinguishedName) -Properties gPLink
+try { $cfg=(Get-ADRootDSE).configurationNamingContext
+      $soms += Get-ADObject -SearchBase "CN=Sites,$cfg" -LDAPFilter '(objectClass=site)' -Properties gPLink } catch {}
+foreach($s in $soms){ if($s.gPLink){ foreach($m in [regex]::Matches($s.gPLink,'\{([0-9A-Fa-f\-]+)\}')){ [void]$linked.Add($m.Groups[1].Value.ToLower()) } } }
 $gpos=$all | Sort-Object DisplayName | ForEach-Object {
-  [pscustomobject]@{ name=$_.DisplayName; status="$($_.GpoStatus)"; modified=$_.ModificationTime.ToString('yyyy-MM-dd') } }
+  [pscustomobject]@{ name=$_.DisplayName; status="$($_.GpoStatus)"; modified=$_.ModificationTime.ToString('yyyy-MM-dd');
+                     linked=$linked.Contains($_.Id.ToString().ToLower()) } }
+$unlinked=@($gpos | Where-Object { -not $_.linked })
 [pscustomobject]@{
-  gpo_count=$all.Count;
+  gpo_count=$all.Count; unlinked_count=$unlinked.Count;
   all_disabled=@($all|Where-Object{$_.GpoStatus -eq 'AllSettingsDisabled'}).Count;
   user_disabled=@($all|Where-Object{$_.GpoStatus -eq 'UserSettingsDisabled'}).Count;
   computer_disabled=@($all|Where-Object{$_.GpoStatus -eq 'ComputerSettingsDisabled'}).Count;
-  gpos=@($gpos)
+  unlinked=@($unlinked|Select-Object -ExpandProperty name); gpos=@($gpos)
 } | ConvertTo-Json -Compress -Depth 4
+"""
+
+FGPP_PS = r"""
+$ErrorActionPreference='Stop'
+$ps=@(Get-ADFineGrainedPasswordPolicy -Filter * -ErrorAction SilentlyContinue)
+$list=foreach($p in $ps){
+  [pscustomobject]@{ name=$p.Name; min_length=$p.MinPasswordLength; max_age_days=$p.MaxPasswordAge.Days;
+    history=$p.PasswordHistoryCount; lockout=$p.LockoutThreshold; precedence=$p.Precedence;
+    applies_to=@($p.AppliesTo | ForEach-Object { ($_ -split ',')[0] -replace '^CN=','' }) } }
+[pscustomobject]@{ fgpp_count=$ps.Count; policies=@($list) } | ConvertTo-Json -Compress -Depth 4
+"""
+
+REPL_PS = r"""
+$ErrorActionPreference='Stop'
+$dcs=@((Get-ADDomainController -Filter *).HostName)
+$rep=foreach($dc in $dcs){
+  $f=@(Get-ADReplicationFailure -Target $dc -ErrorAction SilentlyContinue)
+  [pscustomobject]@{ dc=$dc; failures=$f.Count; last_error=($f|Select-Object -First 1 -ExpandProperty FailureType -ErrorAction SilentlyContinue) } }
+[pscustomobject]@{ dc_count=$dcs.Count; total_failures=(@($rep|Measure-Object -Property failures -Sum).Sum); replication=@($rep) } | ConvertTo-Json -Compress -Depth 4
 """
 
 CERT_PS = r"""
@@ -94,13 +124,38 @@ def _ad_parse(o):
 
 
 def _gpo_parse(o):
-    facts = {k: o.get(k) for k in ('gpo_count', 'all_disabled', 'user_disabled', 'computer_disabled') if k in o}
-    extra = None
+    facts = {k: o.get(k) for k in ('gpo_count', 'unlinked_count', 'all_disabled',
+                                   'user_disabled', 'computer_disabled') if k in o}
+    extra = []
+    if o.get('unlinked'):
+        extra += ["## Unlinked GPOs (cleanup candidates)", ""] + [f"- {g}" for g in o['unlinked']]
     if o.get('gpos'):
-        extra = ["## Group Policy Objects (name · status · modified)", ""]
+        extra += ["", "## All GPOs (name · status · modified · linked)", ""]
         for g in o['gpos']:
-            extra.append(f"- {g.get('name')} — {g.get('status')} · {g.get('modified')}")
-    return facts, _facts_doc("Group Policy — live inventory", facts, extra)
+            extra.append(f"- {g.get('name')} — {g.get('status')} · {g.get('modified')} · {'linked' if g.get('linked') else 'UNLINKED'}")
+    return facts, _facts_doc("Group Policy — live inventory", facts, extra or None)
+
+
+def _fgpp_parse(o):
+    facts = {'fgpp_count': o.get('fgpp_count')}
+    extra = ["## Fine-grained password policies (PSOs)", ""]
+    if o.get('policies'):
+        for p in o['policies']:
+            extra.append(f"- **{p.get('name')}** (precedence {p.get('precedence')}): min {p.get('min_length')} chars, "
+                         f"max age {p.get('max_age_days')}d, history {p.get('history')}, lockout {p.get('lockout')} "
+                         f"→ applies to: {', '.join(p.get('applies_to') or []) or '(none)'}")
+    else:
+        extra.append("_No fine-grained password policies — the default domain policy applies to everyone._")
+    return facts, _facts_doc("Fine-grained password policies", facts, extra)
+
+
+def _repl_parse(o):
+    facts = {'dc_count': o.get('dc_count'), 'replication_failures': o.get('total_failures')}
+    extra = ["## Replication health by DC", ""]
+    for r in (o.get('replication') or []):
+        flag = ' ⚠️' if r.get('failures') else ' ✓'
+        extra.append(f"- {r.get('dc')}: {r.get('failures')} failures{(' — ' + str(r.get('last_error'))) if r.get('last_error') else ''}{flag}")
+    return facts, _facts_doc("Active Directory — replication health", facts, extra)
 
 
 def _cert_parse(o):
@@ -127,6 +182,10 @@ PROBES = [
      'applies': _is_ad, 'script': AD_PS, 'parse': _ad_parse},
     {'key': 'gpo', 'label': 'Group Policy inventory', 'kind': 'collect', 'shell': 'powershell',
      'applies': _is_ad, 'script': GPO_PS, 'parse': _gpo_parse},
+    {'key': 'fgpp', 'label': 'Fine-grained password policies', 'kind': 'collect', 'shell': 'powershell',
+     'applies': _is_ad, 'script': FGPP_PS, 'parse': _fgpp_parse},
+    {'key': 'ad_replication', 'label': 'AD replication health', 'kind': 'collect', 'shell': 'powershell',
+     'applies': _is_ad, 'script': REPL_PS, 'parse': _repl_parse, 'timeout': 300},
     {'key': 'certs', 'label': 'Certificate expiry', 'kind': 'collect', 'shell': 'powershell',
      'applies': lambda s: _is_cert(s) or _is_ad(s), 'script': CERT_PS, 'parse': _cert_parse},
     {'key': 'entra_sync', 'label': 'Run Entra (AAD Connect) delta sync', 'kind': 'action', 'shell': 'powershell',
@@ -156,7 +215,7 @@ def run_probe(system_id, key, user='system'):
 
     _success, output = we._dispatch_to_agent(
         agent_id, online, 'powershell', probe['script'],
-        asset_id=asset_id, reason=f"collector:{key}", timeout_s=120, wait_result=True)
+        asset_id=asset_id, reason=f"collector:{key}", timeout_s=probe.get('timeout', 120), wait_result=True)
     # NOTE: PowerShell-via-agent returns exit_code=1 even on success, so we DON'T trust
     # _dispatch_to_agent's exit-code grading — we grade on the captured stdout instead.
     stdout = (output.get('stdout') or '').strip()

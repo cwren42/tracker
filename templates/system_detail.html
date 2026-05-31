@@ -33,6 +33,22 @@
         <a href="{{ url_for('assets.view_asset', asset_id=asset.id) }}">{{ asset.name or asset.asset_tag }}</a></div>
       {% endif %}
     </div></div>
+
+    {% if probes %}
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6 mb-2"><i class="bi bi-cpu me-2 text-muted"></i>Live data &amp; actions</h2>
+      {% if not asset %}
+      <div class="small text-muted mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Set a <strong>host asset</strong> (a server with an RMM agent) via Edit to enable these.</div>
+      {% endif %}
+      <div class="small text-muted mb-2">Pulls live state from the host agent (read-only PowerShell) into the facts + a versioned doc.</div>
+      {% for p in probes %}
+      <form method="post" action="{{ url_for('systems.system_probe', system_id=sys.id, key=p.key) }}" class="d-inline-block me-2 mb-2">
+        <button class="btn btn-sm {{ 'btn-outline-warning' if p.kind == 'action' else 'btn-outline-primary' }}"{% if not asset %} disabled{% endif %}>
+          <i class="bi {{ 'bi-lightning-charge' if p.kind == 'action' else 'bi-arrow-repeat' }} me-1"></i>{{ p.label }}</button>
+      </form>
+      {% endfor %}
+    </div></div>
+    {% endif %}
   </div>
 
   <div class="col-12 col-lg-7">

@@ -131,10 +131,46 @@ def system_new():
 @login_required
 @admin_required
 def system_detail(system_id):
+    import collectors
     s = ITSystem.query.get_or_404(system_id)
     docs = SystemDoc.query.filter_by(system_id=system_id).order_by(SystemDoc.title).all()
     asset = Asset.query.get(s.asset_id) if s.asset_id else None
-    return render_template('system_detail.html', sys=s, docs=docs, asset=asset)
+    return render_template('system_detail.html', sys=s, docs=docs, asset=asset,
+                           probes=collectors.applicable(s))
+
+
+@bp.route('/systems/<int:system_id>/probe/<key>', methods=['POST'])
+@login_required
+@admin_required
+def system_probe(system_id, key):
+    """Run a live-facts collector (or safe action like the Entra delta sync) on the system's
+    host agent. Validates the agent synchronously, then dispatches in the background."""
+    import collectors, workflow_engine as we
+    s = ITSystem.query.get_or_404(system_id)
+    probe = next((p for p in collectors.PROBES if p['key'] == key and p['applies'](s)), None)
+    if not probe:
+        flash('That collector does not apply to this system.', 'warning')
+        return redirect(url_for('systems.system_detail', system_id=system_id))
+    if not s.asset_id:
+        flash('Set a host asset (a server with an RMM agent) on this system first — Edit → Host asset.', 'warning')
+        return redirect(url_for('systems.system_detail', system_id=system_id))
+    agent_id, _asset, online = we._resolve_agent(asset_id=s.asset_id)
+    if not agent_id:
+        flash('No RMM agent found on the host asset. Install/enroll the agent on that server.', 'warning')
+        return redirect(url_for('systems.system_detail', system_id=system_id))
+
+    flask_app = current_app._get_current_object()
+    user = current_user.username
+    def _bg():
+        with flask_app.app_context():
+            try:
+                collectors.run_probe(system_id, key, user)
+            except Exception:
+                flask_app.logger.exception('collector %s failed for system %s', key, system_id)
+    threading.Thread(target=_bg, daemon=True, name=f'collector-{key}').start()
+    verb = 'Running' if probe['kind'] == 'action' else 'Collecting'
+    flash(f"{verb} “{probe['label']}” on the host agent — refresh in a moment for results.", 'info')
+    return redirect(url_for('systems.system_detail', system_id=system_id))
 
 
 @bp.route('/systems/<int:system_id>/edit', methods=['GET', 'POST'])

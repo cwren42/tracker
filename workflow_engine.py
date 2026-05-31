@@ -127,33 +127,20 @@ def _action_disable_ad_user(config: dict, ctx: dict) -> tuple:
 
 
 def _action_azure_sync(config: dict, ctx: dict) -> tuple:
-    """Trigger Azure AD Connect delta sync via AD DS."""
-    try:
-        db = _db()
-        ad = {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM setting WHERE key LIKE 'ad_%'").fetchall()}
-        db.close()
-        # Attempt via RMM agent on DC if agent is registered
-        dc_host = ad.get("ad_server", "")
-        db2 = _db()
-        agent = db2.execute(
-            "SELECT agent_id FROM rmm_agent WHERE hostname LIKE ? AND online=1 LIMIT 1",
-            (dc_host.split(".")[0] + "%",)
-        ).fetchone()
-        db2.close()
-        if agent:
-            # Queue a script run via RMM
-            db3 = _db()
-            db3.execute(
-                "INSERT INTO rmm_event (agent_id, event_type, payload, created_at) VALUES (?,?,?,?)",
-                (agent["agent_id"], "run_powershell",
-                 json.dumps({"script": "Import-Module ADSync; Start-ADSyncSyncCycle -PolicyType Delta"}),
-                 _now())
-            )
-            db3.commit(); db3.close()
-            return True, {"method": "rmm_agent", "agent_id": agent["agent_id"]}
-        return False, {"error": "No online RMM agent found on domain controller"}
-    except Exception as e:
-        return False, {"error": str(e)}
+    """Trigger Azure AD Connect delta sync on the AD-Connect server via its RMM agent.
+
+    Requires an `asset_id` (the AAD-Connect / DC host running the agent) in config or
+    context. The rmm_agent table has no hostname column, so we resolve by asset_id.
+    """
+    asset_id = config.get("asset_id") or (ctx or {}).get("asset_id")
+    if not asset_id:
+        return False, {"error": "azure_sync requires asset_id of the AD-Connect host"}
+    script = "Import-Module ADSync; Start-ADSyncSyncCycle -PolicyType Delta"
+    return _device_action(
+        "azure_sync", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="medium", reason="workflow: Azure AD Connect delta sync",
+        wait_result=True, extra_output={"method": "rmm_agent"}, ctx=ctx,
+    )
 
 
 def _action_webhook(config: dict, ctx: dict) -> tuple:
@@ -292,36 +279,244 @@ def _ad_connect(ad):
     return ldap3.Connection(server, ad["ad_bind_username"], decrypt_secret(ad["ad_bind_password"]), auto_bind=True)
 
 
-def _queue_rmm(agent_id: str, cmd_type: str, payload: dict) -> bool:
-    """Queue a command to an online RMM agent via rmm_event table."""
+# Agent is considered "online" if it has checked in within this window.
+_AGENT_ONLINE_WINDOW = "5 minutes"
+
+
+def _resolve_agent(asset_id=None):
+    """Return (agent_id, asset_id, online: bool) for an asset, or (None, None, False).
+
+    The rmm_agent table has no `online` or `hostname` column — liveness is derived
+    from `last_seen_at` and `enabled` (mirrors settings_scripts' online check).
+    """
+    if asset_id is None:
+        return None, None, False
+    db = _db()
     try:
-        db = _db()
-        db.execute(
-            "INSERT INTO rmm_event (agent_id, event_type, payload, created_at) VALUES (?,?,?,?)",
-            (agent_id, cmd_type, json.dumps(payload), _now()),
-        )
-        db.commit(); db.close()
-        return True
-    except Exception:
-        return False
+        row = db.execute(
+            "SELECT agent_id, asset_id, "
+            "(last_seen_at > NOW() - INTERVAL '5 minutes') AS online "
+            "FROM rmm_agent WHERE asset_id=? AND enabled=1 "
+            "ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
+            (asset_id,),
+        ).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return None, None, False
+    return row["agent_id"], row["asset_id"], bool(row["online"])
 
 
 def _find_agent(asset_id=None, hostname=None):
-    """Return online agent_id for an asset or hostname, or None."""
-    db = _db()
-    agent = None
-    if asset_id:
-        agent = db.execute(
-            "SELECT agent_id FROM rmm_agent WHERE asset_id=? AND online=1 LIMIT 1",
-            (asset_id,),
-        ).fetchone()
-    if not agent and hostname:
-        agent = db.execute(
-            "SELECT agent_id FROM rmm_agent WHERE hostname LIKE ? AND online=1 LIMIT 1",
-            (hostname + "%",),
-        ).fetchone()
-    db.close()
-    return agent["agent_id"] if agent else None
+    """Backwards-compatible shim: return online-or-not agent_id for an asset, or None."""
+    agent_id, _asset, _online = _resolve_agent(asset_id=asset_id)
+    return agent_id
+
+
+# ── Command ledger (raw-SQL, best-effort) ───────────────────────────────────────
+# The SQLAlchemy command_ledger.log_action/mark_result helpers require a Flask app
+# context; the workflow engine runs in background daemon threads on raw pg_db, so we
+# write the same command_ledger columns directly here. Ledger failures must NEVER
+# crash a workflow — every call is wrapped and swallowed.
+def _ledger_log(tool, action_type, *, object_type=None, object_id=None,
+                requested_by="workflow_engine", planned_by="workflow_engine",
+                risk_tier="low", approval_status="auto", correlation_id=None,
+                status="dispatched"):
+    """Insert a command_ledger row at dispatch time. Returns row id or None."""
+    try:
+        db = _db()
+        try:
+            cur = db.execute(
+                "INSERT INTO command_ledger "
+                "(tool, action_type, object_type, object_id, requested_by, planned_by, "
+                " risk_tier, approval_status, correlation_id, status, rollback_available, "
+                " verification_status, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tool, action_type, object_type,
+                 (str(object_id) if object_id is not None else None),
+                 requested_by, planned_by, risk_tier, approval_status,
+                 correlation_id, status, False, "pending", _now()),
+            )
+            row_id = cur.lastrowid
+            db.commit()
+            return row_id
+        finally:
+            db.close()
+    except Exception:
+        log.exception("command_ledger log failed (non-fatal)")
+        return None
+
+
+def _ledger_result(row_id, status, *, after_state=None,
+                   verification_status=None, verification_detail=None):
+    """Update a command_ledger row with its outcome. Best-effort."""
+    if not row_id:
+        return
+    try:
+        db = _db()
+        try:
+            db.execute(
+                "UPDATE command_ledger SET status=?, after_state=?, "
+                "verification_status=?, verification_detail=?, completed_at=? WHERE id=?",
+                (status,
+                 json.dumps(after_state) if after_state is not None else None,
+                 verification_status, verification_detail, _now(), row_id),
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("command_ledger result update failed (non-fatal)")
+
+
+# ── Agent dispatch (gateway-first, rmm_commands fallback) ────────────────────────
+def _dispatch_to_agent(agent_id: str, online: bool, shell: str, code: str,
+                       *, asset_id=None, reason="workflow", timeout_s=120,
+                       wait_result=False) -> tuple:
+    """Send a script to an agent via the WS gateway, falling back to the rmm_commands
+    queue when the agent is not connected. Mirrors api_rmm_send_command's dual-path.
+
+    Returns (success: bool, output: dict). `success` reflects DISPATCH (and, when
+    wait_result=True and the agent is live, the script's exit_code==0). For the
+    offline queue path success means "queued" — the agent runs it on next heartbeat.
+    """
+    import urllib.request as _ur, urllib.error as _err
+
+    # Open an rmm_session so results can be correlated via rmm_event.session_id.
+    session_id = 0
+    try:
+        db = _db()
+        try:
+            cur = db.execute(
+                "INSERT INTO rmm_session (asset_id, reason, started_at) VALUES (?,?,?)",
+                (asset_id, reason, _now()),
+            )
+            session_id = cur.lastrowid or 0
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("failed to open rmm_session (continuing with session_id=0)")
+
+    # --- Try WebSocket gateway first (immediate delivery) ---
+    gateway_ok = False
+    gw_error = None
+    try:
+        from utils import RMM_GATEWAY_INTERNAL
+        gw_url = f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}"
+        body = json.dumps({
+            "type": "run_script",
+            "shell": shell,
+            "code": code,
+            "timeout": int(timeout_s),
+            "session_id": session_id,
+        }).encode()
+        req = _ur.Request(gw_url, data=body,
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with _ur.urlopen(req, timeout=5) as r:
+            resp = json.loads(r.read())
+        gateway_ok = bool(resp.get("ok"))
+        if not gateway_ok:
+            gw_error = resp.get("error")
+    except _err.HTTPError as e:
+        # 404 == "Agent not connected" -> fall through to the queue.
+        gw_error = f"gateway {e.code}"
+    except Exception as e:
+        gw_error = str(e)
+
+    if gateway_ok:
+        if wait_result:
+            result = _wait_for_script_result(session_id, timeout_s)
+            if result is None:
+                return False, {"delivered": "websocket", "session_id": session_id,
+                               "error": "Timed out waiting for script_result"}
+            exit_code = int(result.get("exit_code", 1) or 1)
+            out = {
+                "delivered": "websocket", "session_id": session_id,
+                "exit_code": exit_code,
+                "stdout": (result.get("stdout") or "")[:4000],
+                "stderr": (result.get("stderr") or "")[:4000],
+            }
+            return (exit_code == 0), out
+        return True, {"delivered": "websocket", "session_id": session_id}
+
+    # --- Fallback: queue in rmm_commands (picked up on next 5-min heartbeat) ---
+    try:
+        db = _db()
+        try:
+            db.execute(
+                "INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at) "
+                "VALUES (?,?,?,'pending',?)",
+                (agent_id, code, "powershell" if shell == "powershell" else "shell", _now()),
+            )
+            db.commit()
+        finally:
+            db.close()
+        return True, {"delivered": "queue", "session_id": session_id,
+                      "note": "agent offline — queued for next heartbeat",
+                      "gateway_error": gw_error}
+    except Exception as e:
+        return False, {"error": f"dispatch failed: {e}", "gateway_error": gw_error}
+
+
+def _wait_for_script_result(session_id: int, timeout_s: int):
+    """Poll rmm_event for the agent's script_result. Mirrors settings_scripts._wait_for_script_result."""
+    if not session_id:
+        return None
+    deadline = time.time() + max(5, int(timeout_s) + 15)
+    while time.time() < deadline:
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT data_json FROM rmm_event "
+                "WHERE session_id=? AND actor_type='agent' AND event_type='script_result' "
+                "ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        finally:
+            db.close()
+        if row:
+            try:
+                return json.loads(row["data_json"] or "{}")
+            except Exception:
+                return {"stdout": "", "stderr": "Invalid result payload", "exit_code": 1}
+        time.sleep(1.0)
+    return None
+
+
+def _device_action(action_type: str, tool: str, asset_id, shell: str, code: str,
+                   *, risk_tier="medium", reason="workflow", timeout_s=120,
+                   wait_result=False, extra_output=None, ctx=None) -> tuple:
+    """Shared body for every device (agent) action: resolve agent, ledger, dispatch,
+    record result. Returns (success, output)."""
+    agent_id, resolved_asset, online = _resolve_agent(asset_id=asset_id)
+    if not agent_id:
+        return False, {"error": "No RMM agent found for device (asset_id=%s)" % asset_id}
+
+    correlation_id = (ctx or {}).get("_correlation_id")
+    requested_by = (ctx or {}).get("_requested_by", "workflow_engine")
+    led = _ledger_log(
+        tool, action_type, object_type="asset", object_id=resolved_asset,
+        requested_by=requested_by, planned_by="workflow_engine",
+        risk_tier=risk_tier, approval_status="auto",
+        correlation_id=correlation_id, status="dispatched",
+    )
+
+    success, output = _dispatch_to_agent(
+        agent_id, online, shell, code,
+        asset_id=resolved_asset, reason=reason, timeout_s=timeout_s,
+        wait_result=wait_result,
+    )
+    output = {"agent_id": agent_id, **(extra_output or {}), **output}
+
+    # Ledger outcome + verification status.
+    if wait_result and "exit_code" in output:
+        vstatus = "verified" if success else "failed"
+    else:
+        vstatus = "unverifiable"  # fire-and-forget / queued — no exit_code came back
+    _ledger_result(led, "succeeded" if success else "failed",
+                   after_state=output, verification_status=vstatus)
+    return success, output
 
 
 # ── NEW ACTION HANDLERS ────────────────────────────────────────────────────────
@@ -500,37 +695,39 @@ def _action_reboot_device(config: dict, ctx: dict) -> tuple:
     """Reboot a device via RMM agent."""
     asset_id = config.get("asset_id") or ctx.get("asset_id")
     delay_s  = int(config.get("delay_seconds", 0))
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
     script = f"Start-Sleep -Seconds {delay_s}; Restart-Computer -Force" if delay_s else "Restart-Computer -Force"
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": script})
-    return (True, {"agent_id": agent_id, "action": "reboot"}) if ok else (False, {"error": "Failed to queue command"})
+    # Reboot kills the agent connection, so the script_result rarely returns — don't wait.
+    return _device_action(
+        "reboot_device", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="high", reason="workflow: reboot device",
+        wait_result=False, extra_output={"action": "reboot"}, ctx=ctx,
+    )
 
 
 def _action_shutdown_device(config: dict, ctx: dict) -> tuple:
     """Shut down a device via RMM agent."""
     asset_id = config.get("asset_id") or ctx.get("asset_id")
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": "Stop-Computer -Force"})
-    return (True, {"agent_id": agent_id, "action": "shutdown"}) if ok else (False, {"error": "Failed to queue command"})
+    return _device_action(
+        "shutdown_device", "rmm.run_script", asset_id, "powershell", "Stop-Computer -Force",
+        risk_tier="high", reason="workflow: shutdown device",
+        wait_result=False, extra_output={"action": "shutdown"}, ctx=ctx,
+    )
 
 
 def _action_lock_device(config: dict, ctx: dict) -> tuple:
     """Lock workstation or enable BitLocker on a device via RMM agent."""
     asset_id = config.get("asset_id") or ctx.get("asset_id")
     mode     = config.get("mode", "lock")   # lock | bitlocker
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
     if mode == "bitlocker":
         script = "Enable-BitLocker -MountPoint 'C:' -EncryptionMethod XtsAes256 -UsedSpaceOnlyEncryption -TpmProtector"
     else:
         script = "rundll32.exe user32.dll,LockWorkStation"
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": script})
-    return (True, {"agent_id": agent_id, "action": mode}) if ok else (False, {"error": "Failed to queue command"})
+    return _device_action(
+        "lock_device", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="high" if mode == "bitlocker" else "medium",
+        reason=f"workflow: lock device ({mode})",
+        wait_result=(mode == "bitlocker"), extra_output={"action": mode}, ctx=ctx,
+    )
 
 
 def _action_deploy_software(config: dict, ctx: dict) -> tuple:
@@ -541,9 +738,6 @@ def _action_deploy_software(config: dict, ctx: dict) -> tuple:
     args      = _render(config.get("args", ""), ctx)
     if not package:
         return False, {"error": "Package name/path is required"}
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
     if method == "chocolatey":
         script = f"choco install {package} -y --no-progress {args}".strip()
     elif method == "winget":
@@ -552,8 +746,12 @@ def _action_deploy_software(config: dict, ctx: dict) -> tuple:
         script = f"msiexec /i \"{package}\" /qn /norestart {args}".strip()
     else:  # exe
         script = f"Start-Process -FilePath \"{package}\" -ArgumentList \"{args}\" -Wait -NoNewWindow"
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": script})
-    return (True, {"agent_id": agent_id, "package": package, "method": method}) if ok else (False, {"error": "Failed to queue command"})
+    return _device_action(
+        "deploy_software", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="medium", reason=f"workflow: deploy software ({package})",
+        timeout_s=600, wait_result=True,
+        extra_output={"package": package, "method": method}, ctx=ctx,
+    )
 
 
 def _action_uninstall_software(config: dict, ctx: dict) -> tuple:
@@ -563,17 +761,18 @@ def _action_uninstall_software(config: dict, ctx: dict) -> tuple:
     package  = _render(config.get("package", ""), ctx)
     if not package:
         return False, {"error": "Package name is required"}
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
     if method == "chocolatey":
         script = f"choco uninstall {package} -y --no-progress"
     elif method == "winget":
         script = f"winget uninstall --id {package} --silent"
     else:
         script = f"Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*{package}*' }} | ForEach-Object {{ $_.Uninstall() }}"
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": script})
-    return (True, {"agent_id": agent_id, "package": package, "uninstalled": True}) if ok else (False, {"error": "Failed to queue command"})
+    return _device_action(
+        "uninstall_software", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="medium", reason=f"workflow: uninstall software ({package})",
+        timeout_s=600, wait_result=True,
+        extra_output={"package": package}, ctx=ctx,
+    )
 
 
 def _action_run_script(config: dict, ctx: dict) -> tuple:
@@ -583,12 +782,12 @@ def _action_run_script(config: dict, ctx: dict) -> tuple:
     lang     = config.get("language", "powershell")
     if not script:
         return False, {"error": "Script content is required"}
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
-    cmd_type = "run_powershell" if lang == "powershell" else "run_bash"
-    ok = _queue_rmm(agent_id, cmd_type, {"script": script})
-    return (True, {"agent_id": agent_id, "language": lang, "dispatched": True}) if ok else (False, {"error": "Failed to queue command"})
+    shell = "powershell" if lang == "powershell" else "bash"
+    return _device_action(
+        "run_script", "rmm.run_script", asset_id, shell, script,
+        risk_tier="medium", reason="workflow: run script",
+        wait_result=True, extra_output={"language": lang}, ctx=ctx,
+    )
 
 
 def _action_apply_gpo(config: dict, ctx: dict) -> tuple:
@@ -596,13 +795,13 @@ def _action_apply_gpo(config: dict, ctx: dict) -> tuple:
     asset_id = config.get("asset_id") or ctx.get("asset_id")
     target   = config.get("target", "device")   # device | dc
     force    = config.get("force", True)
-    agent_id = _find_agent(asset_id=asset_id)
-    if not agent_id:
-        return False, {"error": "No online RMM agent found for device"}
     flag = "/force" if force else ""
     script = f"gpupdate {flag}" if target == "device" else f"Invoke-GPUpdate -Computer $env:COMPUTERNAME {'/Force' if force else ''}"
-    ok = _queue_rmm(agent_id, "run_powershell", {"script": script})
-    return (True, {"agent_id": agent_id, "action": "gpupdate", "target": target}) if ok else (False, {"error": "Failed to queue command"})
+    return _device_action(
+        "apply_gpo", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="medium", reason=f"workflow: gpupdate ({target})",
+        wait_result=True, extra_output={"action": "gpupdate", "target": target}, ctx=ctx,
+    )
 
 
 def _action_send_teams(config: dict, ctx: dict) -> tuple:
@@ -798,6 +997,16 @@ def execute_workflow(workflow_id: int, trigger_data: dict = None) -> int:
     run_id = cur.lastrowid
     db.commit(); db.close()
 
+    # ── APPROVAL GATE (future) ──────────────────────────────────────────────────
+    # Track A makes agent dispatch POSSIBLE and fully ledgered, but nothing here
+    # forces a risk-scored approval before a medium+ device action fires. When the
+    # approval gate lands, it slots in HERE (and/or per-step inside _run_workflow,
+    # keyed on the _device_action risk_tier): a workflow containing medium+ device
+    # actions should be parked in 'pending_approval' instead of spawning the thread,
+    # and only resumed once command_ledger.approval_status flips to 'approved'.
+    # Until then, device actions still run only when a workflow is *explicitly*
+    # triggered/enabled — there is no new auto-fire path introduced by Track A.
+
     # Run in background
     t = threading.Thread(target=_run_workflow, args=(run_id, nodes, edges, trigger_data), daemon=True)
     t.start()
@@ -806,6 +1015,12 @@ def execute_workflow(workflow_id: int, trigger_data: dict = None) -> int:
 
 def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
     try:
+        # Seed correlation + actor for the command ledger so every device action in
+        # this run is tied together and attributed. _-prefixed keys are not merged
+        # into downstream node output (see action merge below).
+        ctx = dict(ctx or {})
+        ctx.setdefault("_correlation_id", f"wf-run-{run_id}")
+        ctx.setdefault("_requested_by", ctx.get("requested_by", "workflow_engine"))
         # Build adjacency: node_id -> list of target node_ids
         adj = {}
         edge_conditions = {}  # (src, tgt) -> condition label (true/false)
@@ -902,12 +1117,20 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
 
 
 def _update_step(step_id: int, status: str, output: dict):
+    # Surface failures in the dedicated `error` column so a failed step is visible
+    # without parsing output_data. No-op handlers now record their real status here.
+    error = None
+    if status == "failed" and isinstance(output, dict):
+        error = output.get("error") or "action failed"
     db = _db()
-    db.execute(
-        "UPDATE workflow_run_steps SET status=?, output_data=?, completed_at=? WHERE id=?",
-        (status, json.dumps(output), _now(), step_id)
-    )
-    db.commit(); db.close()
+    try:
+        db.execute(
+            "UPDATE workflow_run_steps SET status=?, output_data=?, error=?, completed_at=? WHERE id=?",
+            (status, json.dumps(output, default=str), error, _now(), step_id)
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def _finish_run(run_id: int, status: str, error: str = None):

@@ -8,6 +8,14 @@
 </div>
 
 <div class="card"><div class="card-body">
+  {% if reconcile %}
+  <div class="alert d-flex align-items-start gap-2" style="background:var(--info-bg,#0d2535);color:var(--info);border:1px solid var(--info);">
+    <i class="bi bi-stars mt-1"></i>
+    <div><strong>AI-proposed reconciliation.</strong> This is the brain's draft, updated against the live collector facts —
+      stale facts corrected, policy/intent conflicts flagged with <code>⚠️ Live check</code> notes (not overwritten).
+      <strong>Review it</strong>, edit anything, then Save to create a new version (the current v{{ doc.version }} is kept in history).</div>
+  </div>
+  {% endif %}
   <form method="post" action="{{ url_for('systems.system_doc_edit', doc_id=doc.id) }}">
     <div class="mb-2">
       <label class="form-label small text-muted">Title</label>
@@ -15,11 +23,13 @@
     </div>
     <div class="mb-2">
       <label class="form-label small text-muted">Content (Markdown)</label>
-      <textarea name="content" rows="16" class="form-control" required style="font-family:var(--font-mono,monospace);font-size:.85rem;">{{ doc.body }}</textarea>
+      <textarea name="content" rows="20" class="form-control" required style="font-family:var(--font-mono,monospace);font-size:.85rem;">{{ prefill_body if prefill_body is defined and prefill_body else doc.body }}</textarea>
     </div>
     <div class="mb-2">
       <label class="form-label small text-muted">What changed? <span class="text-muted">(optional — recorded in history)</span></label>
-      <input type="text" name="change_summary" class="form-control form-control-sm" placeholder="e.g. Added MFA re-registration steps after troubleshooting">
+      <input type="text" name="change_summary" class="form-control form-control-sm"
+             value="{{ prefill_summary if prefill_summary is defined else '' }}"
+             placeholder="e.g. Added MFA re-registration steps after troubleshooting">
     </div>
     <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Save new version</button>
     <span class="small text-muted ms-2">Saving snapshots the current text to history and re-embeds it for the agent.</span>

@@ -4,6 +4,7 @@ Layer 1 of the knowledge brain (see docs/AGENTIC_IT_OS_GAMEPLAN.md): human-brows
 agent-queryable. Markdown docs attach to a system and flow into the Knowledge Agent (RAG);
 structured `facts` hold the queryable truth; systems surface as nodes in the IT Graph.
 """
+import json
 import re
 import threading
 import urllib.parse
@@ -225,6 +226,59 @@ def system_doc_edit(doc_id):
             flash(str(e), 'warning')
         return redirect(url_for('systems.system_detail', system_id=doc.system_id))
     return render_template('system_doc_edit.html', doc=doc, sys=ITSystem.query.get(doc.system_id))
+
+
+def reconcile_doc(doc):
+    """AI-propose an updated version of an authored doc reconciled against its system's live
+    collector facts. Corrects stale facts to match reality, but FLAGS (does not overwrite)
+    any stated policy/intent that conflicts with reality. Returns (proposed_body, summary).
+    Does NOT save — the human reviews + saves a new version."""
+    from email_agent import run_chat
+    s = ITSystem.query.get(doc.system_id)
+    facts = s.facts or {}
+    live = SystemDoc.query.filter(SystemDoc.system_id == doc.system_id,
+                                  SystemDoc.source == 'collector').all()
+    if not facts and not live:
+        raise ValueError('No live facts collected for this system yet — run a collector first.')
+    live_ctx = "\n\n".join(f"### {d.title}\n{d.body[:2500]}" for d in live)
+    system_prompt = (
+        "You maintain IT documentation. Produce an updated version of the document that reconciles it "
+        "with the CURRENT live facts collected from the environment. Rules: (1) correct outdated/stale "
+        "facts — counts, names, versions, status — to match the live data; (2) if the document states an "
+        "intended POLICY or STANDARD that CONFLICTS with the live reality, DO NOT change the stated "
+        "policy — instead insert a clearly-marked note immediately after it, exactly like "
+        "'> ⚠️ Live check: <what reality shows> — does not match the above; reconcile.' so a human "
+        "decides which is right; (3) ONLY insert a Live-check note (or change a value) where the live "
+        "data actually DIFFERS from the document — if they already agree, leave that text unchanged; "
+        "(4) preserve the document's structure, headings, and voice; (5) never invent facts not in the "
+        "live data; (6) do NOT wrap your output in code fences. Return ONLY the full updated Markdown.")
+    user = (f"SYSTEM: {s.name}\n\nLIVE FACTS (structured): {json.dumps(facts)}\n\n"
+            f"LIVE COLLECTOR DOCS:\n{live_ctx or '(none)'}\n\n--- DOCUMENT TO UPDATE ---\n{doc.body}")
+    proposed, _model = run_chat(system_prompt, user, max_tokens=4000)
+    proposed = proposed.strip()
+    # Strip a stray ```markdown / ``` wrapper if the model added one anyway.
+    if proposed.startswith('```'):
+        proposed = re.sub(r'^```[a-zA-Z]*\n', '', proposed)
+        proposed = re.sub(r'\n?```$', '', proposed.rstrip())
+    return proposed.strip(), 'Reconciled with live collector facts (AI-proposed, human-reviewed)'
+
+
+@bp.route('/systems/doc/<int:doc_id>/reconcile')
+@login_required
+@admin_required
+def system_doc_reconcile(doc_id):
+    doc = SystemDoc.query.get_or_404(doc_id)
+    try:
+        proposed, summary = reconcile_doc(doc)
+    except ValueError as e:
+        flash(str(e), 'warning')
+        return redirect(url_for('systems.system_detail', system_id=doc.system_id))
+    except Exception as e:
+        flash(f'Could not generate reconciliation: {e}', 'danger')
+        return redirect(url_for('systems.system_detail', system_id=doc.system_id))
+    # Reuse the edit form, pre-filled with the AI proposal — saving it creates a new version.
+    return render_template('system_doc_edit.html', doc=doc, sys=ITSystem.query.get(doc.system_id),
+                           prefill_body=proposed, prefill_summary=summary, reconcile=True)
 
 
 @bp.route('/systems/doc/<int:doc_id>/history')

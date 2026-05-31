@@ -66,9 +66,12 @@
           </summary>
           <div class="small mt-2" style="white-space:pre-wrap;color:var(--text);">{{ doc.body }}</div>
         </details>
-        <div class="small text-muted mt-1 d-flex gap-3">
+        <div class="small text-muted mt-1 d-flex gap-3 flex-wrap">
           <a href="{{ url_for('systems.system_doc_edit', doc_id=doc.id) }}"><i class="bi bi-pencil me-1"></i>Edit</a>
           <a href="{{ url_for('systems.system_doc_history', doc_id=doc.id) }}"><i class="bi bi-clock-history me-1"></i>History</a>
+          {% if doc.source != 'collector' %}
+          <a href="{{ url_for('systems.system_doc_reconcile', doc_id=doc.id) }}" title="AI-reconcile this doc against the live collector facts (you review before saving)"><i class="bi bi-stars me-1"></i>Reconcile with live facts</a>
+          {% endif %}
           <span>updated {{ doc.updated_at.strftime('%b %d %H:%M') if doc.updated_at else '' }}{% if doc.updated_by %} by {{ doc.updated_by }}{% endif %}</span>
         </div>
       </div>

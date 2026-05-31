@@ -66,7 +66,7 @@ window.itGraph = null;
       .width(el.clientWidth).height(el.clientHeight)
       .nodeVal(function(n){ return 1 + (deg[n.id]||0)*0.5; })
       .nodeLabel(function(n){ return n.label + '  ·  ' + n.type; })
-      .linkColor(function(l){ return hiLinks.has(l) ? rgba(COLORS[l.__c]||'#94a3b8', 0.55) : 'rgba(120,140,180,0.10)'; })
+      .linkColor(function(l){ return hiLinks.has(l) ? rgba(COLORS[l.__c]||'#94a3b8', 0.6) : 'rgba(130,150,190,0.16)'; })
       .linkWidth(function(l){ return hiLinks.has(l) ? 1.6 : 0.5; })
       .linkDirectionalParticles(function(l){ return hiLinks.has(l) ? 4 : 0; })
       .linkDirectionalParticleWidth(2)
@@ -79,8 +79,16 @@ window.itGraph = null;
           (linksByNode[node.id]||[]).forEach(function(l){ hiLinks.add(l); });
         }
         el.style.cursor = node ? 'pointer' : 'default';
+        // Nudge the web so it visibly reacts to the mouse (Obsidian feel), then settle back.
+        G.d3AlphaTarget(node ? 0.16 : 0.045);
       })
-      .onNodeClick(function(n){ G.centerAt(n.x, n.y, 600); G.zoom(6, 600); })
+      .onNodeDrag(function(){ G.d3AlphaTarget(0.3); })
+      .onNodeDragEnd(function(n){ G.d3AlphaTarget(0.045); n.fx = n.x; n.fy = n.y; })  // pin where dropped, like Obsidian
+      .onNodeClick(function(n){
+        if(n.fx !== undefined){ n.fx = undefined; n.fy = undefined; }  // click a pinned node to release it
+        G.centerAt(n.x, n.y, 600); G.zoom(5, 600); G.d3ReheatSimulation();
+      })
+      .onBackgroundClick(function(){ G.d3ReheatSimulation(); })
       .nodeCanvasObject(function(node, ctx, scale){
         var color = COLORS[node.type] || '#9ca3af';
         var r = starR(node);
@@ -117,15 +125,19 @@ window.itGraph = null;
       l.__c = (a && a.type) ? a.type : 'asset';
     });
 
-    // Gentle galaxy spread + slow settle.
-    G.d3Force('charge').strength(-55).distanceMax(360);
-    G.d3Force('link').distance(function(l){ return 38; });
-    G.d3VelocityDecay(0.28);
-    G.cooldownTime(6000);
+    // Obsidian-style LIVING graph: the engine never freezes, holds a gentle perpetual
+    // simmer (d3AlphaTarget), and dragging a node pulls its neighbours along the links.
+    G.d3Force('charge').strength(-48).distanceMax(420);
+    G.d3Force('link').distance(34);
+    G.d3VelocityDecay(0.42);     // calm, floaty motion (not jittery)
+    G.d3AlphaDecay(0);           // don't let the simulation cool to a stop
+    G.cooldownTime(Infinity);    // keep ticking/rendering
+    G.enableNodeDrag(true);
 
     window.itGraph = G;
     window.addEventListener('resize', function(){ G.width(el.clientWidth).height(el.clientHeight); });
-    setTimeout(function(){ G.zoomToFit(800, 60); }, 600);
+    // Let it spread out, then fit the view (engine stays live for drag interaction).
+    setTimeout(function(){ G.zoomToFit(900, 70); }, 1400);
   }).catch(function(e){
     var el = document.getElementById('it-graph');
     el.innerHTML = '<div class="p-4 text-danger">Failed to load graph: ' + e + '</div>';

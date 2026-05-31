@@ -33,14 +33,18 @@ def _redact(d):
 
 
 def _action_object(action_type, config, ctx):
-    """Best-effort (object_type, object_id) for the command ledger / approval queue."""
+    """Best-effort (object_type, object_id) for the command ledger / approval queue.
+    Templated config values are rendered against ctx so the approval shows the real
+    target (e.g. 'jdoe'), not the raw '{{submitter_sam}}' placeholder."""
     asset_id = config.get("asset_id") or (ctx or {}).get("asset_id")
     if asset_id:
-        return "asset", asset_id
+        return "asset", _render(str(asset_id), ctx or {})
     user = (config.get("username") or (ctx or {}).get("username")
             or (ctx or {}).get("upn") or (ctx or {}).get("email"))
     if user:
-        return "identity", user
+        rendered = _render(str(user), ctx or {})
+        # If the template didn't resolve (still contains {{…}}), don't show the raw token.
+        return "identity", (rendered if "{{" not in rendered else None)
     return "workflow_action", None
 
 
@@ -1356,12 +1360,13 @@ def fire_trigger(trigger_type: str, context: dict):
 
 
 def _trigger_matches(tcfg: dict, ctx: dict) -> bool:
-    """Check if trigger config filters match the event context."""
+    """Check if trigger config filters match the event context (case-insensitive
+    substring per key). An empty tcfg matches everything — callers should scope it."""
     for key, expected in tcfg.items():
         if key.startswith("_"):
             continue
-        actual = str(ctx.get(key, ""))
-        if str(expected) not in actual:
+        actual = str(ctx.get(key, "")).lower()
+        if str(expected).lower() not in actual:
             return False
     return True
 

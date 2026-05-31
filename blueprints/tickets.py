@@ -352,11 +352,22 @@ def new_ticket():
         # for approval. Best-effort, post-commit; never blocks ticket creation.
         try:
             import event_bus
+            # Enrich with the submitter's AD identity so account-lockout workflows can
+            # resolve who to unlock (User.email -> Employee.sam_account_name).
+            _sam = None
+            try:
+                if current_user.email:
+                    _emp = Employee.query.filter_by(email=current_user.email).first()
+                    _sam = _emp.sam_account_name if _emp else None
+            except Exception:
+                _sam = None
             event_bus.publish('ticket.created', {
                 'ticket_id': ticket.id, 'subject': ticket.subject,
                 'priority': priority, 'category': getattr(ticket, 'category', None),
                 'asset_id': asset.id if asset else None,
                 'submitted_by': current_user.username,
+                'submitter_email': current_user.email,
+                'submitter_sam': _sam,
             }, source='tickets')
         except Exception as _e:
             logger.warning(f'Failed to publish ticket.created event: {_e}')

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Approvals — Agent Action Gate{% endblock %}
+{% block content %}
+{% set tier_color = {'high':'var(--danger)','medium':'var(--warning)','low':'var(--muted)'} %}
+{% set tier_bg = {'high':'var(--danger-bg)','medium':'var(--warning-bg)','low':'var(--surface-2)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-shield-check me-2" style="color:var(--accent)"></i>Approvals</h1>
+    <div class="small text-muted">Risk-scored agent actions waiting on a human. Low-risk runs automatically; medium &amp; high are held here.</div>
+  </div>
+  <span class="badge rounded-pill" style="background:var(--accent-weak);color:var(--accent);font-size:.85rem;">
+    {{ pending|length }} pending
+  </span>
+</div>
+
+{% if not pending %}
+  <div class="card mb-4"><div class="card-body text-center text-muted py-5">
+    <i class="bi bi-check2-circle d-block mb-2" style="font-size:2rem;color:var(--success)"></i>
+    Nothing waiting for approval. When a workflow plans a reboot, deploy, or other medium/high-risk action, it appears here for your sign-off.
+  </div></div>
+{% else %}
+  <div class="row g-3 mb-4">
+    {% for row in pending %}
+    {% set rp, policy = plan(row) %}
+    {% set cfg = rp.get('config') or {} %}
+    <div class="col-12 col-xl-6">
+      <div class="card h-100" style="border-left:4px solid {{ tier_color.get(row.risk_tier, 'var(--muted)') }};">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div>
+              <span class="badge" style="background:{{ tier_bg.get(row.risk_tier,'var(--surface-2)') }};color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};text-transform:uppercase;letter-spacing:.04em;">{{ row.risk_tier }} risk</span>
+              <span class="fw-semibold ms-1">{{ rp.get('node_label') or row.action_type.replace('_',' ')|title }}</span>
+            </div>
+            <span class="small text-muted">#{{ row.id }} · {{ row.created_at.strftime('%b %d, %H:%M') if row.created_at else '' }}</span>
+          </div>
+
+          <div class="small text-muted mb-2">
+            <span class="me-3"><i class="bi bi-lightning-charge me-1"></i>{{ row.action_type }}</span>
+            {% if row.object_type and row.object_type != 'workflow_action' %}<span class="me-3"><i class="bi bi-hdd me-1"></i>{{ row.object_type }} {{ row.object_id }}</span>{% endif %}
+            {% if row.correlation_id %}<span><i class="bi bi-diagram-2 me-1"></i>{{ row.correlation_id }}</span>{% endif %}
+          </div>
+          {% if policy %}<div class="small mb-2" style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};"><i class="bi bi-shield-exclamation me-1"></i>{{ policy }}</div>{% endif %}
+          <div class="small mb-2"><span class="text-muted">Requested by</span> {{ row.requested_by }}</div>
+
+          {% if cfg %}
+          {% set sensitive = ['pass','pwd','secret','token','key','credential'] %}
+          <details class="mb-3">
+            <summary class="small text-muted" style="cursor:pointer;">View planned parameters</summary>
+            <pre class="mt-2 p-2 mb-0" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);max-height:220px;overflow:auto;font-size:.8rem;"><code>{% for k, v in cfg.items() %}{% if not k.startswith('_') %}{{ k }}: {% if sensitive|select('in', k|lower)|list %}[redacted]{% else %}{{ v }}{% endif %}
+{% endif %}{% endfor %}</code></pre>
+          </details>
+          {% endif %}
+
+          <div class="d-flex gap-2">
+            <form method="post" action="{{ url_for('dashboard.approve_action', row_id=row.id) }}"
+                  onsubmit="return confirm('Approve and run this {{ row.risk_tier }}-risk action on the endpoint?');">
+              <button class="btn btn-sm btn-primary"><i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>
+            </form>
+            <form method="post" action="{{ url_for('dashboard.deny_action', row_id=row.id) }}" class="d-flex gap-2 flex-grow-1">
+              <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason (optional)">
+              <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-x-lg me-1"></i>Deny</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<h2 class="h6 text-muted mb-2">Recently resolved</h2>
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr class="small text-muted">
+        <th>#</th><th>Action</th><th>Risk</th><th>Decision</th><th>Result</th><th>Verify</th><th>When</th>
+      </tr></thead>
+      <tbody>
+        {% for row in recent %}
+        <tr>
+          <td class="small text-muted">{{ row.id }}</td>
+          <td>{{ row.action_type.replace('_',' ')|title }} <span class="small text-muted">{{ row.tool }}</span></td>
+          <td><span class="small" style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};">{{ row.risk_tier }}</span></td>
+          <td class="small">{{ row.approval_status }}</td>
+          <td>
+            {% if row.status == 'succeeded' %}<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>succeeded</span>
+            {% elif row.status == 'denied' %}<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>denied</span>
+            {% else %}<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>failed</span>{% endif %}
+          </td>
+          <td class="small text-muted">{{ row.verification_status or '—' }}</td>
+          <td class="small text-muted">{{ (row.completed_at or row.created_at).strftime('%b %d %H:%M') if (row.completed_at or row.created_at) else '' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-4">No resolved actions yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

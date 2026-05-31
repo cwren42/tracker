@@ -3,13 +3,45 @@ Cirque RMM — Workflow Engine
 Executes visual workflow definitions stored in workflow_definitions table.
 Runs as a background thread inside the Flask app.
 """
-import json, logging, threading, time, traceback
+import json, logging, re, threading, time, traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pg_db import pg_connect
+import approval
 
 log = logging.getLogger("workflow_engine")
+
+
+_SENSITIVE_KEY = re.compile(r"(pass|pwd|secret|token|api[_-]?key|credential|private[_-]?key)", re.I)
+
+
+def _redact(d):
+    """Mask values of obviously-sensitive keys before they're persisted to the ledger /
+    shown in the approvals UI. The parked ctx snapshot is plaintext-at-rest otherwise."""
+    if not isinstance(d, dict):
+        return d
+    out = {}
+    for k, v in d.items():
+        if isinstance(k, str) and _SENSITIVE_KEY.search(k) and v not in (None, "", "[redacted]"):
+            out[k] = "[redacted]"
+        elif isinstance(v, dict):
+            out[k] = _redact(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _action_object(action_type, config, ctx):
+    """Best-effort (object_type, object_id) for the command ledger / approval queue."""
+    asset_id = config.get("asset_id") or (ctx or {}).get("asset_id")
+    if asset_id:
+        return "asset", asset_id
+    user = (config.get("username") or (ctx or {}).get("username")
+            or (ctx or {}).get("upn") or (ctx or {}).get("email"))
+    if user:
+        return "identity", user
+    return "workflow_action", None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -321,8 +353,12 @@ def _find_agent(asset_id=None, hostname=None):
 def _ledger_log(tool, action_type, *, object_type=None, object_id=None,
                 requested_by="workflow_engine", planned_by="workflow_engine",
                 risk_tier="low", approval_status="auto", correlation_id=None,
-                status="dispatched"):
-    """Insert a command_ledger row at dispatch time. Returns row id or None."""
+                status="dispatched", before_state=None):
+    """Insert a command_ledger row at dispatch time. Returns row id or None.
+
+    before_state holds the planned command (agent/shell/code) when the action is held
+    for approval, so the Approvals queue can dispatch the exact same payload on approve.
+    """
     try:
         db = _db()
         try:
@@ -330,12 +366,13 @@ def _ledger_log(tool, action_type, *, object_type=None, object_id=None,
                 "INSERT INTO command_ledger "
                 "(tool, action_type, object_type, object_id, requested_by, planned_by, "
                 " risk_tier, approval_status, correlation_id, status, rollback_available, "
-                " verification_status, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " verification_status, before_state, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (tool, action_type, object_type,
                  (str(object_id) if object_id is not None else None),
                  requested_by, planned_by, risk_tier, approval_status,
-                 correlation_id, status, False, "pending", _now()),
+                 correlation_id, status, False, "pending",
+                 (json.dumps(before_state, default=str) if before_state is not None else None), _now()),
             )
             row_id = cur.lastrowid
             db.commit()
@@ -495,6 +532,11 @@ def _device_action(action_type: str, tool: str, asset_id, shell: str, code: str,
 
     correlation_id = (ctx or {}).get("_correlation_id")
     requested_by = (ctx or {}).get("_requested_by", "workflow_engine")
+    # NOTE: the risk-scored approval gate lives one level up, at the single action
+    # dispatch point in _run_workflow (so it covers identity actions too, not just
+    # device scripts). By the time we reach here the action is either auto-tier or
+    # an approved replay (ctx['_approved'] is set). We record the dispatch in the
+    # ledger as 'auto' here; the parked/approved row was written by the gate.
     led = _ledger_log(
         tool, action_type, object_type="asset", object_id=resolved_asset,
         requested_by=requested_by, planned_by="workflow_engine",
@@ -517,6 +559,121 @@ def _device_action(action_type: str, tool: str, asset_id, shell: str, code: str,
     _ledger_result(led, "succeeded" if success else "failed",
                    after_state=output, verification_status=vstatus)
     return success, output
+
+
+# ── Approval resolution (called from the Approvals queue, request context) ───────
+def _claim_pending(row_id, *, to_approval_status, to_status):
+    """Atomically claim a pending approval (compare-and-set). Returns the parsed
+    before_state dict if THIS caller won the claim, else None (already resolved/raced).
+
+    The conditional UPDATE is the single source of truth for who wins — two admins
+    (or two workers) clicking Approve cannot both pass, so the action can't dispatch
+    twice. pg_db only rewrites INSERTs, so our explicit RETURNING survives."""
+    try:
+        db = _db()
+        try:
+            row = db.execute(
+                "UPDATE command_ledger SET approval_status=?, status=? "
+                "WHERE id=? AND approval_status='pending' AND status='awaiting_approval' "
+                "RETURNING before_state",
+                (to_approval_status, to_status, row_id),
+            ).fetchone()
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("approval claim failed")
+        return None
+    if not row:
+        return None
+    bs = row["before_state"]
+    # command_ledger.before_state is a Postgres json column — psycopg2 returns it already
+    # parsed as a dict. Only json.loads when it actually came back as a string/bytes.
+    if isinstance(bs, (str, bytes, bytearray)):
+        try:
+            bs = json.loads(bs or "{}")
+        except Exception:
+            return {}
+    return bs or {}
+
+
+def approve_action(row_id, approver):
+    """Approve a parked action and replay it via its handler, in a background thread so a
+    long-running dispatch never blocks the request worker. Returns (claimed, info).
+
+    NOTE (v1): this replays the single gated action. It does NOT auto-resume the rest of
+    the parked workflow run (full DAG resume is the next iteration). The replay sets
+    ctx['_approved']=True — the ONLY place that flag is ever set — so the action runs."""
+    before = _claim_pending(row_id, to_approval_status="approved", to_status="running")
+    if before is None:
+        return False, {"error": "Not a pending approval (already resolved, denied, or not found)."}
+    replay = (before or {}).get("replay") or {}
+    action_type = replay.get("action_type")
+    if not action_type or action_type not in ACTION_MAP:
+        _ledger_set_status(row_id, status="failed", verification_status="failed",
+                           verification_detail=f"approved by {approver}; no replayable action ({action_type})",
+                           complete=True)
+        return True, {"error": f"Approved, but no replayable action ({action_type})."}
+
+    def _run():
+        try:
+            ctx = dict(replay.get("ctx") or {})
+            ctx["_approved"] = True            # satisfies the gate; set ONLY on this path
+            success, output = ACTION_MAP[action_type](replay.get("config") or {}, ctx)
+        except Exception as e:
+            success, output = False, {"error": str(e)}
+        out = output if isinstance(output, dict) else {"result": str(output)}
+        if success and "exit_code" in out:
+            vstatus = "verified"
+        elif not success:
+            vstatus = "failed"
+        else:
+            vstatus = "unverifiable"
+        _ledger_result(row_id, "succeeded" if success else "failed",
+                       after_state=out, verification_status=vstatus,
+                       verification_detail=f"approved by {approver}")
+
+    threading.Thread(target=_run, daemon=True, name=f"approve-{row_id}").start()
+    return True, {"approved": True, "action_type": action_type, "by": approver}
+
+
+def deny_action(row_id, approver, reason=""):
+    """Deny a parked action — atomic claim, no dispatch."""
+    before = _claim_pending(row_id, to_approval_status="denied", to_status="denied")
+    if before is None:
+        return False, {"error": "Not a pending approval (already resolved or not found)."}
+    detail = f"denied by {approver}" + (f": {reason}" if reason else "")
+    _ledger_set_status(row_id, verification_status="n/a", verification_detail=detail, complete=True)
+    return True, {"denied": True, "by": approver}
+
+
+def _ledger_set_status(row_id, *, approval_status=None, status=None,
+                       verification_status=None, verification_detail=None,
+                       complete=False):
+    """Patch approval/status fields on a command_ledger row. Best-effort."""
+    sets, vals = [], []
+    if approval_status is not None:
+        sets.append("approval_status=?"); vals.append(approval_status)
+    if status is not None:
+        sets.append("status=?"); vals.append(status)
+    if verification_status is not None:
+        sets.append("verification_status=?"); vals.append(verification_status)
+    if verification_detail is not None:
+        sets.append("verification_detail=?"); vals.append(verification_detail)
+    if complete:
+        sets.append("completed_at=?"); vals.append(_now())
+    if not sets:
+        return
+    try:
+        db = _db()
+        try:
+            db.execute(f"UPDATE command_ledger SET {', '.join(sets)} WHERE id=?",
+                       (*vals, row_id))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("command_ledger status update failed (non-fatal)")
 
 
 # ── NEW ACTION HANDLERS ────────────────────────────────────────────────────────
@@ -997,15 +1154,12 @@ def execute_workflow(workflow_id: int, trigger_data: dict = None) -> int:
     run_id = cur.lastrowid
     db.commit(); db.close()
 
-    # ── APPROVAL GATE (future) ──────────────────────────────────────────────────
-    # Track A makes agent dispatch POSSIBLE and fully ledgered, but nothing here
-    # forces a risk-scored approval before a medium+ device action fires. When the
-    # approval gate lands, it slots in HERE (and/or per-step inside _run_workflow,
-    # keyed on the _device_action risk_tier): a workflow containing medium+ device
-    # actions should be parked in 'pending_approval' instead of spawning the thread,
-    # and only resumed once command_ledger.approval_status flips to 'approved'.
-    # Until then, device actions still run only when a workflow is *explicitly*
-    # triggered/enabled — there is no new auto-fire path introduced by Track A.
+    # ── APPROVAL GATE ───────────────────────────────────────────────────────────
+    # The risk-scored gate runs per-action inside _run_workflow (see approval.decide):
+    # the first medium/high action parks the whole run as 'awaiting_approval' and writes
+    # a pending command_ledger row, rather than executing. A human approves/denies it
+    # from the Approvals queue (approve_action/deny_action), which replays the single
+    # approved action. (v1 replays the gated action; full multi-step DAG resume is next.)
 
     # Run in background
     t = threading.Thread(target=_run_workflow, args=(run_id, nodes, edges, trigger_data), daemon=True)
@@ -1019,6 +1173,9 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
         # this run is tied together and attributed. _-prefixed keys are not merged
         # into downstream node output (see action merge below).
         ctx = dict(ctx or {})
+        # Never let caller-supplied trigger_data pre-satisfy the approval gate: _approved
+        # is set ONLY on the internal approve-replay path, never from a trigger/webhook.
+        ctx.pop("_approved", None)
         ctx.setdefault("_correlation_id", f"wf-run-{run_id}")
         ctx.setdefault("_requested_by", ctx.get("requested_by", "workflow_engine"))
         # Build adjacency: node_id -> list of target node_ids
@@ -1087,6 +1244,34 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
 
             elif ntype == "action":
                 action_type = node.get("action") or config.get("action_type", "")
+
+                # ── Approval gate — single choke point for EVERY action type ──────
+                # Risk-score the action; medium/high park the run for human approval
+                # instead of executing. This covers identity/AD actions as well as
+                # device scripts. ctx['_approved'] is set only by the approve-replay.
+                decision, eff_tier, policy_note = approval.decide(action_type, config.get("risk_tier"))
+                if decision == "require" and not ctx.get("_approved"):
+                    obj_type, obj_id = _action_object(action_type, config, ctx)
+                    led = _ledger_log(
+                        action_type, action_type, object_type=obj_type, object_id=obj_id,
+                        requested_by=ctx.get("_requested_by", "workflow_engine"),
+                        planned_by="workflow_engine", risk_tier=eff_tier,
+                        approval_status="pending", correlation_id=ctx.get("_correlation_id"),
+                        status="awaiting_approval",
+                        before_state={"replay": {"run_id": run_id, "node_id": node_id,
+                                                 "action_type": action_type, "config": config,
+                                                 "ctx": _redact({k: v for k, v in ctx.items()})},
+                                      "policy": policy_note, "node_label": label},
+                    )
+                    parked = {"awaiting_approval": True, "ledger_id": led, "risk_tier": eff_tier,
+                              "policy": policy_note,
+                              "note": f"{eff_tier}-risk {action_type} parked for human approval"}
+                    _update_step(step_id, "awaiting_approval", parked)
+                    # Park the whole run: nothing past the gate runs until approved.
+                    _finish_run(run_id, "awaiting_approval",
+                                f"Parked on '{label}' ({action_type}) — needs approval (ledger #{led})")
+                    return
+
                 handler = ACTION_MAP.get(action_type)
                 if handler:
                     try:

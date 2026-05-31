@@ -59,6 +59,10 @@
            href="{{ url_for('dashboard.it_graph') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="IT Graph">
             <i class="bi bi-diagram-3-fill"></i><span class="link-label">IT Graph</span>
         </a>
+        <a class="sidebar-link {% if request.endpoint == 'dashboard.approvals' %}active{% endif %}"
+           href="{{ url_for('dashboard.approvals') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Approvals">
+            <i class="bi bi-shield-check"></i><span class="link-label">Approvals</span>
+        </a>
         {% endif %}
         {% endif %}
 

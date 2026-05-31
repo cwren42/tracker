@@ -769,3 +769,57 @@ def it_graph_data():
         'licenses': len(lic_used), 'nodes': len(nodes), 'links': len(links),
     }
     return jsonify({'nodes': nodes, 'links': links, 'stats': stats})
+
+
+# ── Approvals — the human-in-the-loop gate for risk-scored agent actions ─────────
+@bp.route('/approvals')
+@login_required
+@admin_required
+def approvals():
+    """Pending approvals queue + recently resolved actions (the command ledger's
+    human-decision surface). Medium/high-risk device actions land here instead of
+    firing automatically — see approval.py / docs/AGENTIC_IT_OS_GAMEPLAN.md."""
+    from models import CommandLedger
+    pending = (CommandLedger.query
+               .filter_by(status='awaiting_approval', approval_status='pending')
+               .order_by(CommandLedger.created_at.desc()).all())
+    recent = (CommandLedger.query
+              .filter(CommandLedger.status.in_(['succeeded', 'failed', 'denied']))
+              .order_by(CommandLedger.id.desc()).limit(25).all())
+
+    def _plan(row):
+        """(replay_dict, policy_note) parsed from the parked row's before_state."""
+        bs = row.before_state if isinstance(row.before_state, dict) else {}
+        bs = bs or {}
+        return (bs.get('replay') or {}), bs.get('policy', '')
+
+    return render_template('approvals.html', pending=pending, recent=recent, plan=_plan)
+
+
+@bp.route('/approvals/<int:row_id>/approve', methods=['POST'])
+@login_required
+@admin_required
+def approve_action(row_id):
+    import workflow_engine
+    approver = current_user.username or current_user.email or f'user#{current_user.id}'
+    claimed, info = workflow_engine.approve_action(row_id, approver)
+    if not claimed:
+        flash(info.get('error', 'Could not approve.'), 'warning')
+    elif info.get('error'):
+        flash(info['error'], 'warning')
+    else:
+        flash(f"Approved — {info.get('action_type', 'action')} is running. Refresh for the result.", 'success')
+    return redirect(url_for('dashboard.approvals'))
+
+
+@bp.route('/approvals/<int:row_id>/deny', methods=['POST'])
+@login_required
+@admin_required
+def deny_action(row_id):
+    import workflow_engine
+    approver = current_user.username or current_user.email or f'user#{current_user.id}'
+    reason = (request.form.get('reason') or '').strip()
+    success, output = workflow_engine.deny_action(row_id, approver, reason)
+    flash("Action denied — it will not run." if success else (output.get('error') or 'Could not deny.'),
+          'info' if success else 'warning')
+    return redirect(url_for('dashboard.approvals'))

@@ -32,6 +32,26 @@ def _redact(d):
     return out
 
 
+def _notify_parked(action_type, risk_tier, ledger_id, label):
+    """Drop an in-app notification-bell entry when an action parks for approval. Context-free
+    (raw pg_db) so it works in the workflow daemon thread; best-effort, never raises."""
+    try:
+        db = _db()
+        try:
+            db.execute(
+                "INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at) "
+                "VALUES (?,?,?,?,?,false,?)",
+                (f"Approval needed: {action_type.replace('_', ' ')}",
+                 f"A {risk_tier}-risk action ({label}) is parked awaiting your approval.",
+                 "bi-shield-exclamation", "warning", "/approvals", _now()),
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("parked-approval notification failed (non-fatal)")
+
+
 def _action_object(action_type, config, ctx):
     """Best-effort (object_type, object_id) for the command ledger / approval queue.
     Templated config values are rendered against ctx so the approval shows the real
@@ -1304,6 +1324,7 @@ def _drive(run_id, node_map, adj, edge_conditions, ctx, visited, queue):
                               "policy": policy_note,
                               "note": f"{eff_tier}-risk {action_type} parked for human approval"}
                     _update_step(step_id, "awaiting_approval", parked)
+                    _notify_parked(action_type, eff_tier, led, label)
                     _finish_run(run_id, "awaiting_approval",
                                 f"Parked on '{label}' ({action_type}) — needs approval (ledger #{led})")
                     return

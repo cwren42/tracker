@@ -70,6 +70,43 @@
     </div>
   </div>
 
+  {% if current_user.role == 'admin' %}
+  <!-- ── AI threat-landscape summary ──────────────────────────────── -->
+  <div class="card mb-4 shadow-sm" style="border-left:4px solid var(--accent);">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <h6 class="mb-0 fw-bold"><i class="bi bi-stars me-2" style="color:var(--accent);"></i>AI Threat Landscape</h6>
+        <div class="d-flex align-items-center gap-2">
+          <small class="text-muted" id="landscape-time"></small>
+          <button class="btn btn-sm btn-outline-primary" id="landscape-btn"><i class="bi bi-arrow-clockwise"></i> <span>Generate</span></button>
+        </div>
+      </div>
+      <div id="landscape-body" class="small" style="line-height:1.6;">Loading…</div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var body=document.getElementById('landscape-body'), timeEl=document.getElementById('landscape-time'), btn=document.getElementById('landscape-btn');
+    if(!body||!btn) return;
+    var days='{{ days }}';
+    function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function md(t){var h=esc(t).replace(/^### (.+)$/gm,'<div class="fw-bold mt-2 mb-1" style="color:var(--accent);">$1</div>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/^\s*[-*•]\s+/gm,'• ');return h.replace(/\n/g,'<br>');}
+    function ago(iso){if(!iso)return'';try{var s=Math.floor((Date.now()-new Date(iso).getTime())/1000);return s<60?'just now':s<3600?Math.floor(s/60)+'m ago':s<86400?Math.floor(s/3600)+'h ago':Math.floor(s/86400)+'d ago';}catch(e){return'';}}
+    function show(d){ if(d&&d.answer){body.innerHTML=md(d.answer);timeEl.textContent=d.generated_at?('updated '+ago(d.generated_at)+(d.days?(' · '+d.days+'d'):'')):'';} else {body.innerHTML='<span class="text-muted">No summary yet — click Generate to analyze the last '+days+' days.</span>';timeEl.textContent='';} }
+    function gen(){
+      btn.disabled=true;var sp=btn.querySelector('span'),old=sp.textContent;sp.textContent='Generating…';
+      body.innerHTML='<span class="spinner-border spinner-border-sm"></span><span class="text-muted ms-2">Analyzing the last '+days+' days…</span>';
+      fetch('/api/quarantine/landscape/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days:days})})
+        .then(function(r){return r.json();}).then(function(d){ if(d.error){body.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>';} else { show(d); } })
+        .catch(function(){body.innerHTML='<span class="text-danger">Generation failed.</span>';})
+        .finally(function(){btn.disabled=false;sp.textContent=old;});
+    }
+    btn.addEventListener('click',gen);
+    fetch('/api/quarantine/landscape').then(function(r){return r.json();}).then(show).catch(function(){body.innerHTML='';});
+  })();
+  </script>
+  {% endif %}
+
   <!-- ── Top stat cards ───────────────────────────────────────────── -->
   {% set phish_n   = threat_dist | selectattr('0','equalto','Phish')   | map(attribute='1') | first | default(0) %}
   {% set malware_n = threat_dist | selectattr('0','equalto','Malware') | map(attribute='1') | first | default(0) %}

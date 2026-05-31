@@ -130,6 +130,72 @@ def analyze_bulk(messages):
     return run_chat(BULK_SYSTEM_PROMPT, user, 900)
 
 
+LANDSCAPE_SYSTEM_PROMPT = (
+    "You are a SOC analyst summarizing an organization's inbound email threat landscape "
+    "from aggregate quarantine stats. Write a brief executive summary with these Markdown "
+    "sections: ### Posture (one or two sentences on overall risk), ### Notable (top threats, "
+    "lookalike/abusive sender domains, DMARC-failure or phishing spikes), ### Recommended "
+    "actions (2-4 short bullets). Be specific to the numbers given; do not invent data. Concise."
+)
+
+
+def gather_landscape_stats(days: int = 30) -> dict:
+    """Compact aggregates over quarantine_message for the period (for the AI landscape)."""
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, case
+    from extensions import db
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    in_window = QuarantineMessage.received_time >= cutoff
+
+    total = db.session.query(func.count(QuarantineMessage.id)).filter(in_window).scalar() or 0
+    by_threat = dict(
+        db.session.query(QuarantineMessage.threat_type, func.count(QuarantineMessage.id))
+        .filter(in_window).group_by(QuarantineMessage.threat_type).all()
+    )
+    by_status = dict(
+        db.session.query(QuarantineMessage.release_status, func.count(QuarantineMessage.id))
+        .filter(in_window).group_by(QuarantineMessage.release_status).all()
+    )
+    dmarc_fail = db.session.query(func.count(QuarantineMessage.id)).filter(
+        in_window, QuarantineMessage.dmarc_result == "fail"
+    ).scalar() or 0
+    top_domains = (
+        db.session.query(
+            QuarantineMessage.sender_domain,
+            func.count(QuarantineMessage.id).label("c"),
+            func.count(case((QuarantineMessage.dmarc_result == "fail", 1))).label("dmarc_fail"),
+        )
+        .filter(in_window, QuarantineMessage.sender_domain.isnot(None))
+        .group_by(QuarantineMessage.sender_domain)
+        .order_by(func.count(QuarantineMessage.id).desc())
+        .limit(10).all()
+    )
+    return {
+        "days": days,
+        "total_messages": int(total),
+        "by_threat_type": {(k or "Unknown"): int(v) for k, v in by_threat.items()},
+        "by_disposition": {(k or "Unknown"): int(v) for k, v in by_status.items()},
+        "dmarc_failures": int(dmarc_fail),
+        "top_sender_domains": [
+            {"domain": d, "messages": int(c), "dmarc_fails": int(df)} for d, c, df in top_domains
+        ],
+    }
+
+
+def summarize_landscape(days: int = 30):
+    """Threat-landscape summary for the period → (markdown, model, stats_dict)."""
+    stats = gather_landscape_stats(days)
+    if not stats["total_messages"]:
+        return ("No email security activity recorded in this period.", None, stats)
+    user_prompt = (
+        f"Email security aggregates for the last {days} days (JSON):\n"
+        + json.dumps(stats, default=str)
+    )
+    md, model = run_chat(LANDSCAPE_SYSTEM_PROMPT, user_prompt, max_tokens=600)
+    return md, model, stats
+
+
 def analyze_verdict(msg: QuarantineMessage):
     """Structured triage verdict for one message → (dict, model).
 

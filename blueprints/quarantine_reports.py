@@ -619,3 +619,53 @@ def _parse_headers(raw: str) -> list[dict]:
         headers.append({"name": current_name, "value": current_value or ""})
     return headers
 
+
+
+# ── C3: AI threat-landscape summary (cached, admin-only) ─────────────────────
+@bp.route("/api/quarantine/landscape", methods=["GET"])
+@login_required
+@email_access_required
+def quarantine_landscape_get():
+    """Return the cached email threat-landscape summary, if any (admin only)."""
+    if current_user.role != "admin":
+        return jsonify({"answer": None, "generated_at": None})
+    from models import Setting
+    row = Setting.query.filter_by(key="email_agent_landscape").first()
+    if not row or not row.value:
+        return jsonify({"answer": None, "generated_at": None})
+    try:
+        return jsonify(json.loads(row.value))
+    except Exception:
+        return jsonify({"answer": None, "generated_at": None})
+
+
+@bp.route("/api/quarantine/landscape/generate", methods=["POST"])
+@login_required
+def quarantine_landscape_generate():
+    """Generate + cache the AI threat-landscape summary for a period (admin only)."""
+    if current_user.role != "admin":
+        return jsonify({"error": "AI summary is only available to admins."}), 403
+    from models import Setting
+    import email_agent
+    days_raw = (request.get_json(silent=True) or {}).get("days") or request.args.get("days", "30")
+    days = int(days_raw) if str(days_raw).isdigit() else 30
+    try:
+        md, model, stats = email_agent.summarize_landscape(days)
+        payload = {
+            "answer": md,
+            "model": model,
+            "days": days,
+            "stats": stats,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        row = Setting.query.filter_by(key="email_agent_landscape").first()
+        if not row:
+            row = Setting(key="email_agent_landscape")
+            db.session.add(row)
+        row.value = json.dumps(payload, default=str)
+        db.session.commit()
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Landscape summary failed: {str(e)}"}), 500

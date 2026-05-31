@@ -94,19 +94,6 @@
   {# ══ LEFT COLUMN ══════════════════════════════════════════ #}
   <div class="col-lg-8">
 
-    {# Tabs: Ticket | Activity #}
-    <ul class="nav nav-tabs mb-3" id="ticketTabs" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="tab-ticket" data-bs-toggle="tab" data-bs-target="#pane-ticket" type="button" role="tab"><i class="bi bi-card-text me-1"></i>Ticket</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="tab-activity" data-bs-toggle="tab" data-bs-target="#pane-activity" type="button" role="tab"><i class="bi bi-clock-history me-1"></i>Activity{% if timeline %} <span class="badge bg-secondary ms-1">{{ timeline|length }}</span>{% endif %}</button>
-      </li>
-    </ul>
-
-    <div class="tab-content">
-    <div class="tab-pane fade show active" id="pane-ticket" role="tabpanel" aria-labelledby="tab-ticket">
-
     {# Description #}
     <div class="card mb-3">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -135,9 +122,43 @@
       </div>
     </div>
 
-    {# Add note / reply — single composer with a type selector (no tabs) #}
-    <div class="card">
+    {# Conversation — notes & replies always visible; status changes inline + subtle #}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="bi bi-chat-dots me-2"></i>Conversation</div>
       <div class="card-body">
+        {% if timeline %}
+        {% for item in timeline %}
+          {% set obj = item.obj %}
+          {% if item.type == 'note' %}
+          <div class="d-flex gap-2 mb-3">
+            <div class="flex-shrink-0 mt-1">
+              {% if obj.is_internal %}<span class="badge bg-warning rounded-circle p-2" title="Internal — tech only"><i class="bi bi-lock-fill text-dark"></i></span>
+              {% elif obj.is_reply %}<span class="badge bg-primary rounded-circle p-2" title="Reply to user"><i class="bi bi-reply-fill"></i></span>
+              {% else %}<span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>{% endif %}
+            </div>
+            <div class="flex-grow-1">
+              <div class="small mb-1">
+                {% if obj.is_internal %}<span class="badge bg-warning text-dark me-1" style="font-size:10px;"><i class="bi bi-lock-fill me-1"></i>Internal</span>
+                {% elif obj.is_reply %}<span class="badge bg-primary me-1" style="font-size:10px;"><i class="bi bi-reply me-1"></i>Reply</span>{% endif %}
+                <span class="fw-semibold">{{ obj.author.display_name if obj.author else '—' }}</span>
+                {% if obj.is_reply and obj.reply_to %}<span class="text-muted">&rarr; {{ obj.reply_to }}</span>{% endif %}
+                <span class="text-muted">&middot; {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}</span>
+              </div>
+              <div class="p-2 rounded border-start border-3 {% if obj.is_internal %}border-warning bg-warning bg-opacity-10{% elif obj.is_reply %}border-primary bg-primary bg-opacity-10{% else %}border-secondary bg-body-secondary{% endif %}" style="white-space:pre-wrap;">{{ obj.content }}</div>
+            </div>
+          </div>
+          {% else %}
+          <div class="text-muted small text-center my-2" style="font-size:11px;">
+            <i class="bi bi-dot"></i>{{ obj.detail or obj.action }} &middot; {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}
+          </div>
+          {% endif %}
+        {% endfor %}
+        {% else %}
+        <div class="text-muted text-center py-3 small">No messages yet — add a note or reply below.</div>
+        {% endif %}
+
+        {# Composer — always at the bottom of the conversation #}
+        <hr class="my-3">
         <form method="POST" action="{{ url_for('tickets.add_ticket_note', ticket_id=ticket.id) }}" id="noteForm">
           <input type="hidden" name="is_reply" id="nfReply" value="">
           <input type="hidden" name="is_internal" id="nfInternal" value="">
@@ -193,80 +214,6 @@
       if(i) i.addEventListener('change',function(){ if(this.checked) set('internal'); });
     })();
     </script>
-
-
-    </div>{# /pane-ticket #}
-
-    <div class="tab-pane fade" id="pane-activity" role="tabpanel" aria-labelledby="tab-activity">
-
-    {# Activity timeline #}
-    <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>Activity</div>
-      <div class="card-body p-0">
-        {% if timeline %}
-        <ul class="list-group list-group-flush">
-          {% for item in timeline %}
-          {% set obj = item.obj %}
-          <li class="list-group-item d-flex gap-3 py-3{% if item.type == 'note' and obj.is_internal %} border-start border-4 border-warning{% elif item.type == 'note' and obj.is_reply %} border-start border-4 border-primary{% endif %}">
-            {# Icon #}
-            <div class="flex-shrink-0 mt-1">
-              {% if item.type == 'note' %}
-                {% if obj.is_internal %}
-                <span class="badge bg-warning rounded-circle p-2" title="Internal — tech only"><i class="bi bi-lock-fill text-dark"></i></span>
-                {% elif obj.is_reply %}
-                <span class="badge bg-primary rounded-circle p-2" title="Reply sent to {{ obj.reply_to }}"><i class="bi bi-reply-fill"></i></span>
-                {% else %}
-                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left-text"></i></span>
-                {% endif %}
-              {% elif obj.action == 'created' %}
-                <span class="badge bg-success rounded-circle p-2"><i class="bi bi-plus-lg"></i></span>
-              {% elif obj.action == 'closed' %}
-                <span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-check2-circle"></i></span>
-              {% elif obj.action == 'assigned' %}
-                <span class="badge bg-info rounded-circle p-2"><i class="bi bi-person-check"></i></span>
-              {% elif obj.action == 'priority_changed' %}
-                <span class="badge bg-warning rounded-circle p-2"><i class="bi bi-exclamation-triangle"></i></span>
-              {% elif obj.action == 'note_added' %}
-                <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-chat-left"></i></span>
-              {% elif obj.action == 'edited' %}
-                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-pencil text-secondary"></i></span>
-              {% else %}
-                <span class="badge bg-light border rounded-circle p-2"><i class="bi bi-arrow-repeat text-info"></i></span>
-              {% endif %}
-            </div>
-            {# Content #}
-            <div class="flex-grow-1">
-              {% if item.type == 'note' %}
-                <div class="fw-semibold small mb-1">
-                  {% if obj.is_internal %}
-                  <span class="badge bg-warning text-dark me-1" style="font-size:10px;"><i class="bi bi-lock-fill me-1"></i>Internal</span>
-                  {% elif obj.is_reply %}
-                  <span class="badge bg-primary me-1" style="font-size:10px;"><i class="bi bi-reply me-1"></i>Reply</span>
-                  {% endif %}
-                  {{ 'Reply by' if obj.is_reply else 'Note by' }} {{ obj.author.display_name if obj.author else '—' }}
-                  {% if obj.is_reply and obj.reply_to %}
-                  <span class="fw-normal opacity-75">→ {{ obj.reply_to }}</span>
-                  {% endif %}
-                </div>
-                <div class="small border-start border-2 {% if obj.is_internal %}border-warning{% elif obj.is_reply %}border-primary{% else %}border-primary{% endif %} ps-2 mt-1" style="white-space:pre-wrap;">{{ obj.content }}</div>
-              {% else %}
-                <div class="small">{{ obj.detail or obj.action }}</div>
-              {% endif %}
-              <div class="text-muted" style="font-size:11px;">
-                {{ obj.created_at.strftime('%b %d, %Y %H:%M') if obj.created_at else '' }}
-              </div>
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <div class="text-muted text-center py-4 small">No activity yet.</div>
-        {% endif %}
-      </div>
-    </div>
-
-    </div>{# /pane-activity #}
-    </div>{# /tab-content #}
   </div>
 
   {# ══ RIGHT COLUMN ═════════════════════════════════════════ #}

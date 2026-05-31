@@ -143,11 +143,24 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
     # in how we actually resolved similar tickets before.
     history = _resolved_history(ticket["category"], exclude_ticket_id=ticket_id, limit=5)
 
+    # ── Knowledge grounding (learned runbooks + ISMS policy + system docs) ──
+    # Semantic retrieval over the Knowledge Agent corpus. A runbook learned from a
+    # past resolved ticket will surface here — this is the Learn -> Apply cycle.
+    knowledge_hits = []
+    try:
+        import knowledge_agent
+        if knowledge_agent.count():
+            knowledge_hits = knowledge_agent.search(
+                f"{ticket['subject']} {ticket['description'] or ''}".strip(), k=4)
+    except Exception:
+        log.exception("knowledge grounding failed (non-fatal)")
+
     system_prompt = (
         "You are an expert IT support engineer for an internal IT/RMM helpdesk. "
-        "Diagnose the ticket and propose a resolution. When prior resolved tickets in the "
-        "same category are provided, ground your answer in those proven resolutions and "
-        "reuse what worked. Respond with ONLY a JSON object (no markdown, no prose):\n"
+        "Diagnose the ticket and propose a resolution. Ground your answer in the provided "
+        "knowledge base (runbooks we wrote from past resolutions, plus policy & system docs) "
+        "and prior resolved tickets in the same category — prefer a matching runbook, it's how "
+        "we solved this before. Respond with ONLY a JSON object (no markdown, no prose):\n"
         '{"diagnosis": "...", "resolution_steps": ["step1","step2",...], '
         '"can_auto_resolve": true/false, "category": "hardware|software|network|email|account|security|other", '
         '"confidence": 0.0-1.0, "estimated_minutes": N}\n'
@@ -166,6 +179,13 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
             f"(category: {ticket['category'] or 'N/A'}):\n" + "\n".join(lines)
         )
 
+    knowledge_block = ""
+    if knowledge_hits:
+        klines = [f"- [{h['source_type']}] {h['title']}\n  {h['content'][:500]}"
+                  for h in knowledge_hits]
+        knowledge_block = ("\n\nRelevant knowledge base entries (prefer a matching runbook):\n"
+                           + "\n".join(klines))
+
     user_prompt = (
         f"NEW TICKET #{ticket_id}\n"
         f"Subject: {ticket['subject']}\n"
@@ -173,6 +193,7 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
         f"Priority: {ticket['priority']}\n"
         f"Category: {ticket['category'] or 'N/A'}\n\n"
         f"{history_block}"
+        f"{knowledge_block}"
     )
 
     model = _get_setting("openai_model", "gpt-4o")
@@ -191,12 +212,16 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
         parsed = {"diagnosis": raw, "resolution_steps": [], "can_auto_resolve": False,
                   "category": "other", "confidence": 0.5, "estimated_minutes": None}
 
-    # Record which past tickets informed the suggestion (advisory provenance).
+    # Record which past tickets + knowledge entries informed the suggestion (provenance).
     informed_by = [{"id": h["id"], "subject": h["subject"]} for h in history]
     parsed["informed_by"] = informed_by
+    parsed["knowledge_used"] = [
+        {"type": h["source_type"], "title": h["title"], "score": h["score"]}
+        for h in knowledge_hits
+    ]
 
     suggestion_text = json.dumps(parsed)
-    auto_mode = 1 if _get_setting("ai_ticket_auto_mode") == "1" else 0
+    auto_mode = _get_setting("ai_ticket_auto_mode") == "1"  # boolean (auto_mode is a bool column)
 
     db3 = _db()
     cur = db3.execute(

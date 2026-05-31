@@ -27,7 +27,7 @@ from sqlalchemy import case, func, or_, text
 from extensions import db
 from models import (AzureIntegrationConfig, QuarantineIOC, QuarantineMessage,
                     now_mst)
-from utils import admin_required, email_access_required
+from utils import admin_required, email_access_required, send_admin_notification
 
 logger = logging.getLogger(__name__)
 
@@ -685,6 +685,69 @@ def quarantine_ai_verdict(message_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"AI verdict failed: {str(e)}"}), 500
+
+
+@bp.route("/quarantine/<path:message_id>/request-release", methods=["POST"])
+@login_required
+@email_access_required
+def quarantine_request_release(message_id):
+    """A user requests that an admin release one of THEIR quarantined messages.
+    Emails the admins (with an AI verdict for context). Does not release anything."""
+    msg = QuarantineMessage.query.filter_by(message_id=message_id).first_or_404()
+
+    # Authorization: non-admins may only request release of their own mail.
+    if current_user.role != "admin":
+        own = (msg.recipient_address or "").strip().lower() == (current_user.email or "").strip().lower()
+        if not own:
+            return jsonify({"error": "You can only request release of your own messages."}), 403
+    if msg.release_status not in ("Quarantined", "Blocked"):
+        return jsonify({"error": "Only quarantined or blocked messages can be requested for release."}), 400
+
+    now = datetime.utcnow()
+    # Dedup: if a request was logged in the last hour, don't re-email the admins.
+    recently = bool(msg.release_requested_at) and (now - msg.release_requested_at.replace(tzinfo=None)) < timedelta(hours=1)
+    msg.release_requested_by = current_user.email or current_user.username
+    msg.release_requested_at = now
+    db.session.commit()
+    if recently:
+        return jsonify({"ok": True, "message": "Already requested recently — the admin has been notified."})
+
+    # Best-effort AI verdict to give the admin quick context (never blocks the email).
+    verdict_html = ""
+    try:
+        v, _model = _analyze_email_verdict(msg)
+        verdict_html = (
+            f"<p style='margin:8px 0;padding:8px 12px;background:#f1f3f6;border-radius:6px;'>"
+            f"<strong>AI verdict:</strong> {v['verdict'].upper()} "
+            f"({int(v['confidence'] * 100)}% confidence) — suggested: <strong>{v['recommended_action']}</strong>"
+            f"<br><em>{v['rationale']}</em></p>"
+        )
+    except Exception:
+        pass
+
+    try:
+        detail_url = url_for("quarantine.quarantine_detail", message_id=msg.message_id, _external=True)
+    except Exception:
+        detail_url = "/quarantine"
+    requester = getattr(current_user, "display_name", None) or current_user.username
+    subject = f"[Quarantine] Release requested by {requester}"
+    body = (
+        f"<p><strong>{requester}</strong> ({current_user.email}) requested release of a "
+        f"quarantined message to their inbox.</p>"
+        f"<ul>"
+        f"<li><strong>Subject:</strong> {msg.subject or '(none)'}</li>"
+        f"<li><strong>From:</strong> {msg.sender_address or '(unknown)'}</li>"
+        f"<li><strong>To:</strong> {msg.recipient_address or '(unknown)'}</li>"
+        f"<li><strong>Threat:</strong> {msg.threat_type or 'None'} &middot; <strong>Risk:</strong> {msg.risk_label or 'N/A'}</li>"
+        f"<li><strong>Auth:</strong> SPF {msg.spf_result or 'none'} / DKIM {msg.dkim_result or 'none'} / DMARC {msg.dmarc_result or 'none'}</li>"
+        f"<li><strong>Received:</strong> {msg.received_time.strftime('%Y-%m-%d %H:%M') if msg.received_time else '—'}</li>"
+        f"</ul>"
+        f"{verdict_html}"
+        f"<p><a href=\"{detail_url}\">Review &amp; action this message in the Tracker</a></p>"
+        f"<p style='color:#6b7280;font-size:12px;'>Review before releasing — the requester cannot release it themselves.</p>"
+    )
+    send_admin_notification(subject, body)
+    return jsonify({"ok": True, "message": "Release request sent to the admin."})
 
 
 @bp.route("/quarantine/ai-analyze-bulk", methods=["POST"])

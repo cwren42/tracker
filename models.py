@@ -1134,6 +1134,8 @@ class QuarantineMessage(db.Model):
     release_status       = db.Column(db.Text, nullable=False, default='Quarantined')  # Quarantined | Released | Deleted
     released_by          = db.Column(db.Text)
     released_at          = db.Column(db.DateTime(timezone=True))
+    release_requested_by = db.Column(db.Text)                  # user who asked an admin to release it
+    release_requested_at = db.Column(db.DateTime(timezone=True))
     url_count            = db.Column(db.Integer, default=0)
     attachment_count     = db.Column(db.Integer, default=0)
     urls_json            = db.Column(db.Text)           # JSON array of extracted URLs

@@ -10,7 +10,7 @@
         <div class="text-muted">{{ vendor.vendor_type or 'Vendor' }}{% if vendor.owner %} · {{ vendor.owner }}{% endif %}</div>
     </div>
     <div class="d-flex gap-2">
-        <span class="badge bg-dark">{{ vendor.criticality }}</span>
+        <span class="badge bg-secondary">{{ vendor.criticality }}</span>
         {% if vendor.risk_level == 'Low' %}<span class="badge bg-success">{{ vendor.risk_level }}</span>{% elif vendor.risk_level == 'Medium' %}<span class="badge bg-warning text-dark">{{ vendor.risk_level }}</span>{% else %}<span class="badge bg-danger">{{ vendor.risk_level }}</span>{% endif %}
     </div>
 </div>

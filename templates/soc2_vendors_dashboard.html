@@ -43,7 +43,7 @@
                 {% for vendor in vendors %}
                 <tr>
                     <td><div class="fw-semibold">{{ vendor.vendor_name }}</div><div class="small text-muted">{{ vendor.service_description or '' }}</div></td>
-                    <td><span class="badge bg-dark">{{ vendor.criticality }}</span></td>
+                    <td><span class="badge bg-secondary">{{ vendor.criticality }}</span></td>
                     <td>{% if vendor.risk_level == 'Low' %}<span class="badge bg-success">{{ vendor.risk_level }}</span>{% elif vendor.risk_level == 'Medium' %}<span class="badge bg-warning text-dark">{{ vendor.risk_level }}</span>{% else %}<span class="badge bg-danger">{{ vendor.risk_level }}</span>{% endif %}</td>
                     <td>{{ vendor.owner or 'Unassigned' }}</td>
                     <td>{{ vendor.assurance_status or '-' }}</td>

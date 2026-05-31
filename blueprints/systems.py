@@ -10,10 +10,49 @@ from flask import (Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import ITSystem, Asset
+from models import ITSystem, Asset, SystemDoc, SystemDocVersion
 from utils import admin_required
 
 bp = Blueprint('systems', __name__)
+
+
+def save_doc(system_id, title, body, *, source='manual', source_ref=None, user='system',
+             doc_id=None, doc_key=None, change_summary=None):
+    """Create or update a VERSIONED system doc + re-embed it for RAG. Snapshots the prior
+    version into SystemDocVersion before overwriting. Returns the SystemDoc."""
+    import knowledge_agent
+    title = (title or '').strip()
+    body = (body or '').strip()
+    if not body:
+        raise ValueError('Content is required.')
+    if not title:
+        title = (body.splitlines()[0].lstrip('# ').strip()[:120]) or 'Untitled'
+    key = doc_key or _slugify(title)
+
+    doc = SystemDoc.query.get(doc_id) if doc_id else None
+    if not doc:
+        doc = SystemDoc.query.filter_by(system_id=system_id, doc_key=key).first()
+    if doc:
+        # Snapshot the current version into history, then update + bump.
+        db.session.add(SystemDocVersion(doc_id=doc.id, version_number=doc.version or 1,
+                                        title=doc.title, body=doc.body,
+                                        change_summary=change_summary, created_by=user))
+        doc.title = title; doc.body = body
+        doc.version = (doc.version or 1) + 1; doc.updated_by = user
+        if source: doc.source = source
+        if source_ref: doc.source_ref = source_ref
+        key = doc.doc_key or key
+    else:
+        doc = SystemDoc(system_id=system_id, doc_key=key, title=title, body=body,
+                        source=source, source_ref=source_ref, version=1, updated_by=user)
+        db.session.add(doc)
+    db.session.commit()
+    # Re-embed the current text into the knowledge base (best-effort; needs OpenAI key).
+    try:
+        knowledge_agent.add_system_doc(system_id, title, body, doc_key=key)
+    except Exception:
+        pass
+    return doc
 
 CATEGORIES = ['Network', 'Identity', 'Virtualization', 'Compute', 'Backup', 'Security', 'Endpoint', 'Other']
 
@@ -83,9 +122,8 @@ def system_new():
 @login_required
 @admin_required
 def system_detail(system_id):
-    import knowledge_agent
     s = ITSystem.query.get_or_404(system_id)
-    docs = knowledge_agent.system_docs(system_id)
+    docs = SystemDoc.query.filter_by(system_id=system_id).order_by(SystemDoc.title).all()
     asset = Asset.query.get(s.asset_id) if s.asset_id else None
     return render_template('system_detail.html', sys=s, docs=docs, asset=asset)
 
@@ -115,21 +153,59 @@ def system_edit(system_id):
 @login_required
 @admin_required
 def system_add_doc(system_id):
-    import knowledge_agent
     ITSystem.query.get_or_404(system_id)
-    title = (request.form.get('title') or '').strip()
-    content = (request.form.get('content') or '').strip()
-    if not content:
-        flash('Doc content is required.', 'warning')
-        return redirect(url_for('systems.system_detail', system_id=system_id))
     try:
-        knowledge_agent.add_system_doc(system_id, title, content, doc_key=_slugify(title) if title else None)
-        flash('Doc added to the knowledge base.', 'success')
+        save_doc(system_id, request.form.get('title'), request.form.get('content'),
+                 source='manual', user=current_user.username)
+        flash('Doc saved and added to the knowledge base.', 'success')
     except ValueError as e:
         flash(str(e), 'warning')
     except Exception as e:
-        flash(f'Could not add doc: {e}', 'danger')
+        flash(f'Could not save doc: {e}', 'danger')
     return redirect(url_for('systems.system_detail', system_id=system_id))
+
+
+@bp.route('/systems/doc/<int:doc_id>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def system_doc_edit(doc_id):
+    doc = SystemDoc.query.get_or_404(doc_id)
+    if request.method == 'POST':
+        try:
+            save_doc(doc.system_id, request.form.get('title'), request.form.get('content'),
+                     user=current_user.username, doc_id=doc.id,
+                     change_summary=(request.form.get('change_summary') or '').strip() or None)
+            flash(f'Doc updated — now v{doc.version}.', 'success')
+        except ValueError as e:
+            flash(str(e), 'warning')
+        return redirect(url_for('systems.system_detail', system_id=doc.system_id))
+    return render_template('system_doc_edit.html', doc=doc, sys=ITSystem.query.get(doc.system_id))
+
+
+@bp.route('/systems/doc/<int:doc_id>/history')
+@login_required
+@admin_required
+def system_doc_history(doc_id):
+    doc = SystemDoc.query.get_or_404(doc_id)
+    versions = (SystemDocVersion.query.filter_by(doc_id=doc.id)
+                .order_by(SystemDocVersion.version_number.desc()).all())
+    return render_template('system_doc_history.html', doc=doc,
+                           sys=ITSystem.query.get(doc.system_id), versions=versions)
+
+
+@bp.route('/systems/doc/<int:doc_id>/restore/<int:version_id>', methods=['POST'])
+@login_required
+@admin_required
+def system_doc_restore(doc_id, version_id):
+    doc = SystemDoc.query.get_or_404(doc_id)
+    ver = SystemDocVersion.query.get_or_404(version_id)
+    if ver.doc_id != doc.id:
+        flash('Version does not belong to this doc.', 'warning')
+        return redirect(url_for('systems.system_doc_history', doc_id=doc.id))
+    save_doc(doc.system_id, ver.title or doc.title, ver.body, user=current_user.username,
+             doc_id=doc.id, change_summary=f'Restored from v{ver.version_number}')
+    flash(f'Restored v{ver.version_number} (saved as v{doc.version}).', 'success')
+    return redirect(url_for('systems.system_detail', system_id=doc.system_id))
 
 
 @bp.route('/systems/<int:system_id>/delete', methods=['POST'])

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}History — {{ doc.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4 mb-0"><i class="bi bi-clock-history me-2" style="color:var(--accent)"></i>{{ doc.title }}
+    <span class="text-muted fw-normal fs-6">— {{ sys.name }} · v{{ doc.version }} current</span></h1>
+  <a href="{{ url_for('systems.system_detail', system_id=doc.system_id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Back</a>
+</div>
+
+<div class="card mb-3"><div class="card-body">
+  <div class="d-flex justify-content-between"><h2 class="h6 mb-2">Current — v{{ doc.version }}</h2>
+    <span class="small text-muted">updated {{ doc.updated_at.strftime('%b %d %H:%M') if doc.updated_at else '' }}{% if doc.updated_by %} by {{ doc.updated_by }}{% endif %}</span></div>
+  <div class="small" style="white-space:pre-wrap;color:var(--text);max-height:240px;overflow:auto;">{{ doc.body }}</div>
+</div></div>
+
+<h2 class="h6 text-muted mb-2">Previous versions</h2>
+{% for v in versions %}
+<div class="card mb-2"><div class="card-body py-3">
+  <div class="d-flex justify-content-between align-items-center mb-1">
+    <span class="fw-semibold small">v{{ v.version_number }}{% if v.change_summary %} <span class="fw-normal text-muted">— {{ v.change_summary }}</span>{% endif %}</span>
+    <span class="d-flex gap-3 align-items-center small text-muted">
+      {{ v.created_at.strftime('%b %d %H:%M') if v.created_at else '' }}{% if v.created_by %} · {{ v.created_by }}{% endif %}
+      <form method="post" action="{{ url_for('systems.system_doc_restore', doc_id=doc.id, version_id=v.id) }}"
+            onsubmit="return confirm('Restore v{{ v.version_number }}? Saved as a new version.');">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-arrow-counterclockwise me-1"></i>Restore</button>
+      </form>
+    </span>
+  </div>
+  <details><summary class="small text-muted" style="cursor:pointer;">View v{{ v.version_number }} content</summary>
+    <div class="small mt-2" style="white-space:pre-wrap;color:var(--text);max-height:220px;overflow:auto;">{{ v.body }}</div>
+  </details>
+</div></div>
+{% else %}
+<div class="text-muted small">No prior versions yet — this doc has only its current version.</div>
+{% endfor %}
+{% endblock %}

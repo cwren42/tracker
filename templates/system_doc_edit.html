@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Edit doc — {{ doc.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4 mb-0"><i class="bi bi-pencil-square me-2" style="color:var(--accent)"></i>Edit doc
+    <span class="text-muted fw-normal fs-6">— {{ sys.name }} · currently v{{ doc.version }}</span></h1>
+  <a href="{{ url_for('systems.system_detail', system_id=doc.system_id) }}" class="btn btn-sm btn-outline-secondary">Cancel</a>
+</div>
+
+<div class="card"><div class="card-body">
+  <form method="post" action="{{ url_for('systems.system_doc_edit', doc_id=doc.id) }}">
+    <div class="mb-2">
+      <label class="form-label small text-muted">Title</label>
+      <input type="text" name="title" class="form-control" value="{{ doc.title }}" required>
+    </div>
+    <div class="mb-2">
+      <label class="form-label small text-muted">Content (Markdown)</label>
+      <textarea name="content" rows="16" class="form-control" required style="font-family:var(--font-mono,monospace);font-size:.85rem;">{{ doc.body }}</textarea>
+    </div>
+    <div class="mb-2">
+      <label class="form-label small text-muted">What changed? <span class="text-muted">(optional — recorded in history)</span></label>
+      <input type="text" name="change_summary" class="form-control form-control-sm" placeholder="e.g. Added MFA re-registration steps after troubleshooting">
+    </div>
+    <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Save new version</button>
+    <span class="small text-muted ms-2">Saving snapshots the current text to history and re-embeds it for the agent.</span>
+  </form>
+</div></div>
+{% endblock %}

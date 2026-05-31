@@ -1224,6 +1224,38 @@ class ITSystem(db.Model):
     updated_at  = db.Column(db.DateTime(timezone=True), default=now_mst, onupdate=now_mst)
     created_by  = db.Column(db.String(100))
 
+
+class SystemDoc(db.Model):
+    """A versioned Markdown doc attached to an IT system (Layer 2 knowledge). The CURRENT
+    version lives here; every save snapshots the prior text into SystemDocVersion (mirrors the
+    ISMS manual's versioning). The current body is also embedded into knowledge_chunk
+    (source_type='system_doc', source_id='system:<system_id>:<doc_key>') for RAG."""
+    __tablename__ = 'system_doc'
+    id          = db.Column(db.Integer, primary_key=True)
+    system_id   = db.Column(db.Integer, db.ForeignKey('it_system.id', ondelete='CASCADE'), nullable=False, index=True)
+    doc_key     = db.Column(db.String(180))      # slug, unique within a system
+    title       = db.Column(db.String(300), nullable=False)
+    body        = db.Column(db.Text)             # current markdown
+    source      = db.Column(db.String(40), default='manual')   # manual | gitlab | collector
+    source_ref  = db.Column(db.String(500))      # e.g. gitlab file path
+    version     = db.Column(db.Integer, default=1)
+    created_at  = db.Column(db.DateTime(timezone=True), default=now_mst)
+    updated_at  = db.Column(db.DateTime(timezone=True), default=now_mst, onupdate=now_mst)
+    updated_by  = db.Column(db.String(100))
+
+
+class SystemDocVersion(db.Model):
+    """Immutable history of a SystemDoc — one row per prior version, for diff/restore."""
+    __tablename__ = 'system_doc_version'
+    id             = db.Column(db.Integer, primary_key=True)
+    doc_id         = db.Column(db.Integer, db.ForeignKey('system_doc.id', ondelete='CASCADE'), nullable=False, index=True)
+    version_number = db.Column(db.Integer, nullable=False)
+    title          = db.Column(db.String(300))
+    body           = db.Column(db.Text)
+    change_summary = db.Column(db.Text)
+    created_at     = db.Column(db.DateTime(timezone=True), default=now_mst)
+    created_by     = db.Column(db.String(100))
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 

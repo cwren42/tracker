@@ -5,10 +5,11 @@ agent-queryable. Markdown docs attach to a system and flow into the Knowledge Ag
 structured `facts` hold the queryable truth; systems surface as nodes in the IT Graph.
 """
 import re
+import threading
 import urllib.parse
 
 import requests
-from flask import (Blueprint, render_template, request, redirect, url_for, flash, jsonify)
+from flask import (Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app)
 from flask_login import login_required, current_user
 
 from extensions import db
@@ -249,6 +250,32 @@ def _ca_bundle(ca_pem):
     return path
 
 
+# folder keyword -> a keyword expected in the target system's name
+_ROUTE_ALIASES = [
+    ('applocker', 'active directory'), ('gpo', 'active directory'), ('domain', 'active directory'),
+    ('azure', 'active directory'), ('ad ', 'active directory'), ('network', 'active directory'),
+    ('prox', 'proxmox'), ('backup', 'backup'), ('vpn', 'vpn'),
+    ('k8s', 'kubernetes'), ('kube', 'kubernetes'), ('cert', 'certificate'), ('unifi', 'unifi'),
+]
+
+
+def _route_system(fpath, sys_all, default_sid):
+    """Pick the best system for a repo file by its top folder: alias keywords first, then a
+    direct name-substring match, else the default."""
+    top = (fpath.split('/')[0].lower() if '/' in fpath else '')
+    if top:
+        for kw, name_kw in _ROUTE_ALIASES:
+            if kw in top:
+                for s in sys_all:
+                    if name_kw in (s.name or '').lower():
+                        return s.id
+        for s in sys_all:           # direct name match
+            nm = (s.name or '').lower()
+            if nm and (top in nm or nm in top or top.replace('-', ' ') in nm):
+                return s.id
+    return default_sid
+
+
 def _gitlab_import(base, project, branch, path, token, default_system_id, user, verify=True):
     """Pull .md files from a GitLab repo and save each as a versioned system doc (RAG too).
     Files are routed to a system by top-folder name match, else the chosen default system.
@@ -280,14 +307,7 @@ def _gitlab_import(base, project, branch, path, token, default_system_id, user, 
             if line.strip().startswith('#'):
                 title = line.lstrip('#').strip(); break
         title = title or fpath.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-        # Route to a system: top-folder fuzzy match, else default.
-        target = default_sid
-        top = (fpath.split('/')[0].lower() if '/' in fpath else '')
-        if top:
-            for s in sys_all:
-                nm = (s.name or '').lower()
-                if nm and (top in nm or nm in top or top.replace('-', ' ') in nm):
-                    target = s.id; break
+        target = _route_system(fpath, sys_all, default_sid)
         if not target:
             continue
         doc_key = _slugify(fpath.rsplit('.', 1)[0])[:180]
@@ -332,14 +352,29 @@ def systems_import():
                 _set_setting('gitlab_token', encrypt_secret(token))   # encrypted at rest
             db.session.commit()
 
+        verify = _ca_bundle(ca_pem)
+        # Validate connection synchronously (auth/TLS/URL) so errors surface immediately…
         try:
-            res = _gitlab_import(base, project, branch, path, token, default_system,
-                                 current_user.username, verify=_ca_bundle(ca_pem))
-            flash(f"GitLab import: {res['imported']} new, {res['updated']} updated "
-                  f"({res['scanned']} .md files scanned).", 'success')
+            proj = urllib.parse.quote(project, safe='')
+            t = requests.get(f"{base}/api/v4/projects/{proj}/repository/tree",
+                             headers={'PRIVATE-TOKEN': token}, params={'ref': branch, 'per_page': 1},
+                             timeout=15, verify=verify)
+            t.raise_for_status()
         except Exception as e:
-            flash(f'GitLab import failed: {e}', 'danger')
+            flash(f'GitLab connection failed: {e}', 'danger')
             return redirect(url_for('systems.systems_import'))
+        # …then run the (slower) per-file fetch+embed in the background so the page returns now.
+        flask_app = current_app._get_current_object()
+        user = current_user.username
+        def _bg():
+            with flask_app.app_context():
+                try:
+                    _gitlab_import(base, project, branch, path, token, default_system, user, verify=verify)
+                except Exception:
+                    flask_app.logger.exception('GitLab background import failed')
+        threading.Thread(target=_bg, daemon=True, name='gitlab-import').start()
+        flash('Connected ✓ — importing your docs in the background. Refresh this page in a moment '
+              'to watch them appear under each system.', 'info')
         return redirect(url_for('systems.systems'))
     cfg = {k: _setting('gitlab_' + k) for k in ('base', 'project', 'branch', 'path', 'default_system')}
     cfg['has_token'] = bool(_setting('gitlab_token'))

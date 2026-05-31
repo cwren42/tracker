@@ -504,8 +504,8 @@ def _dispatch_to_agent(agent_id: str, online: bool, shell: str, code: str,
             out = {
                 "delivered": "websocket", "session_id": session_id,
                 "exit_code": exit_code,
-                "stdout": (result.get("stdout") or "")[:4000],
-                "stderr": (result.get("stderr") or "")[:4000],
+                "stdout": (result.get("stdout") or "")[:200000],   # generous — collector inventories (GPOs, DCs) can be large
+                "stderr": (result.get("stderr") or "")[:8000],
             }
             return (exit_code == 0), out
         return True, {"delivered": "websocket", "session_id": session_id}

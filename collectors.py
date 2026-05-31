@@ -23,19 +23,38 @@ def _stamp():
 AD_PS = r"""
 $ErrorActionPreference='Stop'
 $d=Get-ADDomain; $f=Get-ADForest
-$dcs=@($d.ReplicaDirectoryServers)
+$rw=@($d.ReplicaDirectoryServers); $ro=@($d.ReadOnlyReplicaDirectoryServers)
+$pp=Get-ADDefaultDomainPasswordPolicy
+$en=@(Get-ADUser -Filter 'Enabled -eq $true' -Properties LastLogonDate -ResultSetSize 5000)
+$dis=@(Get-ADUser -Filter 'Enabled -eq $false' -ResultSetSize 5000).Count
+$cut=(Get-Date).AddDays(-90)
+$stale=@($en | Where-Object {$_.LastLogonDate -and $_.LastLogonDate -lt $cut}).Count
+function CountGroup($n){ try { @(Get-ADGroupMember $n -Recursive -ErrorAction Stop).Count } catch { -1 } }
 [pscustomobject]@{
   domain=$d.DNSRoot; netbios=$d.NetBIOSName; domain_mode="$($d.DomainMode)"; forest_mode="$($f.ForestMode)";
-  pdc_emulator=$d.PDCEmulator; dc_count=$dcs.Count; dcs=$dcs;
-  user_count=@(Get-ADUser -Filter * -ResultSetSize 5000).Count;
-  computer_count=@(Get-ADComputer -Filter * -ResultSetSize 5000).Count
+  dc_count=($rw.Count+$ro.Count); writable_dcs=$rw; rodcs=$ro;
+  fsmo_pdc=$d.PDCEmulator; fsmo_rid=$d.RIDMaster; fsmo_infrastructure=$d.InfrastructureMaster;
+  fsmo_schema=$f.SchemaMaster; fsmo_domain_naming=$f.DomainNamingMaster;
+  users_total=($en.Count+$dis); users_enabled=$en.Count; users_disabled=$dis; users_stale_90d=$stale;
+  domain_admins=(CountGroup 'Domain Admins'); enterprise_admins=(CountGroup 'Enterprise Admins');
+  computers=@(Get-ADComputer -Filter * -ResultSetSize 5000).Count;
+  pwd_min_length=$pp.MinPasswordLength; pwd_max_age_days=$pp.MaxPasswordAge.Days;
+  pwd_history=$pp.PasswordHistoryCount; lockout_threshold=$pp.LockoutThreshold
 } | ConvertTo-Json -Compress
 """
 
 GPO_PS = r"""
 Import-Module GroupPolicy -ErrorAction Stop
-$g=Get-GPO -All
-[pscustomobject]@{ gpo_count=$g.Count; gpos=@($g|Sort-Object DisplayName|Select-Object -ExpandProperty DisplayName) } | ConvertTo-Json -Compress
+$all=Get-GPO -All
+$gpos=$all | Sort-Object DisplayName | ForEach-Object {
+  [pscustomobject]@{ name=$_.DisplayName; status="$($_.GpoStatus)"; modified=$_.ModificationTime.ToString('yyyy-MM-dd') } }
+[pscustomobject]@{
+  gpo_count=$all.Count;
+  all_disabled=@($all|Where-Object{$_.GpoStatus -eq 'AllSettingsDisabled'}).Count;
+  user_disabled=@($all|Where-Object{$_.GpoStatus -eq 'UserSettingsDisabled'}).Count;
+  computer_disabled=@($all|Where-Object{$_.GpoStatus -eq 'ComputerSettingsDisabled'}).Count;
+  gpos=@($gpos)
+} | ConvertTo-Json -Compress -Depth 4
 """
 
 CERT_PS = r"""
@@ -60,15 +79,27 @@ def _facts_doc(title, facts, extra_lines=None):
 
 
 def _ad_parse(o):
-    facts = {k: o.get(k) for k in ('domain', 'netbios', 'domain_mode', 'forest_mode',
-                                   'pdc_emulator', 'dc_count', 'user_count', 'computer_count') if k in o}
-    extra = (["## Domain controllers", ""] + [f"- {d}" for d in (o.get('dcs') or [])]) if o.get('dcs') else None
-    return facts, _facts_doc("Active Directory — live state", facts, extra)
+    scalar_keys = ('domain', 'netbios', 'domain_mode', 'forest_mode', 'dc_count',
+                   'fsmo_pdc', 'fsmo_rid', 'fsmo_infrastructure', 'fsmo_schema', 'fsmo_domain_naming',
+                   'users_total', 'users_enabled', 'users_disabled', 'users_stale_90d',
+                   'domain_admins', 'enterprise_admins', 'computers',
+                   'pwd_min_length', 'pwd_max_age_days', 'pwd_history', 'lockout_threshold')
+    facts = {k: o.get(k) for k in scalar_keys if k in o}
+    extra = []
+    if o.get('writable_dcs'):
+        extra += ["## Domain controllers (writable)", ""] + [f"- {d}" for d in o['writable_dcs']]
+    if o.get('rodcs'):
+        extra += ["", "## Read-only DCs", ""] + [f"- {d}" for d in o['rodcs']]
+    return facts, _facts_doc("Active Directory — live state", facts, extra or None)
 
 
 def _gpo_parse(o):
-    facts = {'gpo_count': o.get('gpo_count')}
-    extra = (["## Group Policy Objects", ""] + [f"- {g}" for g in (o.get('gpos') or [])]) if o.get('gpos') else None
+    facts = {k: o.get(k) for k in ('gpo_count', 'all_disabled', 'user_disabled', 'computer_disabled') if k in o}
+    extra = None
+    if o.get('gpos'):
+        extra = ["## Group Policy Objects (name · status · modified)", ""]
+        for g in o['gpos']:
+            extra.append(f"- {g.get('name')} — {g.get('status')} · {g.get('modified')}")
     return facts, _facts_doc("Group Policy — live inventory", facts, extra)
 
 

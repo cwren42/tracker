@@ -89,9 +89,17 @@ def ensure_schema():
 def publish(event_type, payload=None, source="app"):
     """Record an event in the outbox. Best-effort — never raises into the caller.
 
-    NOTE: this inserts in its own connection (not the caller's business transaction),
-    so it's effectively at-least-once-after-commit. A true same-txn outbox is a later
-    refinement; for now publish AFTER the business change has committed.
+    DESIGN DECISION (assessed 2026-05-31): this inserts in its OWN connection, post-commit,
+    not the caller's business transaction. A true same-txn outbox would close the tiny
+    crash-between-commit-and-publish window, but it's deliberately NOT done here: (1) the
+    only window is a process death in the ~ms between the business commit and this insert;
+    (2) every subscriber is recoverable on a miss — a dropped ticket.created just means that
+    one ticket has no auto-suggestion (the manual Suggest button still works), and a dropped
+    ticket.resolved skips one auto-runbook; nothing destructive is lost; (3) a true outbox
+    needs the row id BEFORE commit (e.g. ticket.id), forcing a flush+restructure of each
+    caller for marginal gain. So: publish AFTER the business change commits, accept
+    at-least-once, keep subscribers idempotent. Revisit only if a critical, non-recoverable
+    event type is added.
     """
     try:
         db = _db()

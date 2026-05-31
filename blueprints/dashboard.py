@@ -914,6 +914,27 @@ def events():
     return render_template('events.html', rows=rows, counts=counts)
 
 
+@bp.route('/events/<int:event_id>/requeue', methods=['POST'])
+@login_required
+@admin_required
+def event_requeue(event_id):
+    """Reset a failed (status='error') event back to pending so the dispatcher retries it."""
+    from sqlalchemy import text
+    try:
+        res = db.session.execute(text(
+            "UPDATE event_outbox SET status='pending', attempts=0, last_error=NULL "
+            "WHERE id=:i AND status='error'"), {"i": event_id})
+        db.session.commit()
+        if res.rowcount:
+            flash(f'Event #{event_id} requeued — the dispatcher will retry it.', 'success')
+        else:
+            flash('Event not found or not in an error state.', 'warning')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Requeue failed: {e}', 'danger')
+    return redirect(url_for('dashboard.events'))
+
+
 # ── Mission Control — the single pane onto the whole agentic OS ──────────────────
 @bp.route('/mission-control')
 @login_required

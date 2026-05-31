@@ -938,9 +938,27 @@ def ledger_detail(row_id):
                     .filter(CommandLedger.correlation_id == row.correlation_id,
                             CommandLedger.id != row.id)
                     .order_by(CommandLedger.id).all())
+    import workflow_engine
+    reversible = (workflow_engine.is_reversible(row.action_type)
+                  and row.status in ('succeeded', 'completed'))
     return render_template('ledger_detail.html', row=row,
                            before_pretty=_pretty(row.before_state),
-                           after_pretty=_pretty(row.after_state), siblings=siblings)
+                           after_pretty=_pretty(row.after_state), siblings=siblings,
+                           reversible=reversible)
+
+
+@bp.route('/ledger/<int:row_id>/rollback', methods=['POST'])
+@login_required
+@admin_required
+def ledger_rollback(row_id):
+    import workflow_engine
+    actor = current_user.username or current_user.email or f'user#{current_user.id}'
+    new_id = workflow_engine.create_rollback(row_id, actor)
+    if new_id:
+        flash(f'Rollback queued for approval (ledger #{new_id}) — approve it to execute the reverse.', 'success')
+        return redirect(url_for('dashboard.approvals'))
+    flash('This action cannot be rolled back automatically.', 'warning')
+    return redirect(url_for('dashboard.ledger_detail', row_id=row_id))
 
 
 @bp.route('/events/<int:event_id>/requeue', methods=['POST'])

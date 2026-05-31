@@ -687,6 +687,62 @@ def _ledger_set_status(row_id, *, approval_status=None, status=None,
         log.exception("command_ledger status update failed (non-fatal)")
 
 
+# ── Rollback (reverse a completed action by parking its inverse for approval) ────
+_INVERSE_ACTIONS = {
+    "disable_ad_user":   "enable_ad_user",
+    "enable_ad_user":    "disable_ad_user",
+    "add_to_group":      "remove_from_group",
+    "remove_from_group": "add_to_group",
+}
+
+
+def is_reversible(action_type):
+    """True if we can automatically reverse this action type."""
+    return action_type in _INVERSE_ACTIONS
+
+
+def create_rollback(ledger_id, requested_by="operator"):
+    """Park the INVERSE of a completed ledger action for approval — reusing the approval
+    machinery, so the rollback itself passes through /approvals (it's a real change too).
+    Returns the new pending ledger id, or None if not reversible / not found."""
+    db = _db()
+    try:
+        row = db.execute(
+            "SELECT tool, action_type, object_type, object_id, before_state, status "
+            "FROM command_ledger WHERE id=?", (ledger_id,)).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return None
+    inv = _INVERSE_ACTIONS.get(row["action_type"])
+    if not inv:
+        return None
+    # Recover the original action's config from its parked replay snapshot (username,
+    # group_name, etc. carry over to the inverse).
+    before = row["before_state"]
+    if isinstance(before, (str, bytes, bytearray)):
+        try:
+            before = json.loads(before or "{}")
+        except Exception:
+            before = {}
+    config = dict(((before or {}).get("replay") or {}).get("config") or {})
+    eff_tier = approval.risk_tier_for(inv)
+    led = _ledger_log(
+        row["tool"] or inv, inv, object_type=row["object_type"], object_id=row["object_id"],
+        requested_by=requested_by, planned_by="rollback", risk_tier=eff_tier,
+        approval_status="pending", correlation_id=f"rollback-of-{ledger_id}",
+        status="awaiting_approval",
+        before_state={"replay": {"run_id": None, "node_id": None, "step_id": None,
+                                 "action_type": inv, "config": config, "ctx": {},
+                                 "visited": [], "queue": []},
+                      "policy": f"rollback of ledger #{ledger_id} ({row['action_type']})",
+                      "node_label": f"Rollback: {inv.replace('_', ' ')}"},
+    )
+    if led:
+        _notify_parked(inv, eff_tier, led, f"Rollback of #{ledger_id}")
+    return led
+
+
 # ── NEW ACTION HANDLERS ────────────────────────────────────────────────────────
 
 def _action_create_user(config: dict, ctx: dict) -> tuple:

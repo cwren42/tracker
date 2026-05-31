@@ -62,12 +62,14 @@ $gpos=$all | Sort-Object DisplayName | ForEach-Object {
   [pscustomobject]@{ name=$_.DisplayName; status="$($_.GpoStatus)"; modified=$_.ModificationTime.ToString('yyyy-MM-dd');
                      linked=$linked.Contains($_.Id.ToString().ToLower()) } }
 $unlinked=@($gpos | Where-Object { -not $_.linked })
+$baselines=@($unlinked | Where-Object { $_.name -like 'MSFT *' -or $_.name -like '*Baseline*' })
 [pscustomobject]@{
-  gpo_count=$all.Count; unlinked_count=$unlinked.Count;
+  gpo_count=$all.Count; unlinked_count=$unlinked.Count; unlinked_baselines=$baselines.Count;
   all_disabled=@($all|Where-Object{$_.GpoStatus -eq 'AllSettingsDisabled'}).Count;
   user_disabled=@($all|Where-Object{$_.GpoStatus -eq 'UserSettingsDisabled'}).Count;
   computer_disabled=@($all|Where-Object{$_.GpoStatus -eq 'ComputerSettingsDisabled'}).Count;
-  unlinked=@($unlinked|Select-Object -ExpandProperty name); gpos=@($gpos)
+  unlinked=@($unlinked|Select-Object -ExpandProperty name);
+  unlinked_baseline_names=@($baselines|Select-Object -ExpandProperty name); gpos=@($gpos)
 } | ConvertTo-Json -Compress -Depth 4
 """
 
@@ -136,11 +138,13 @@ def _ad_parse(o):
 
 
 def _gpo_parse(o):
-    facts = {k: o.get(k) for k in ('gpo_count', 'unlinked_count', 'all_disabled',
-                                   'user_disabled', 'computer_disabled') if k in o}
+    facts = {k: o.get(k) for k in ('gpo_count', 'unlinked_count', 'unlinked_baselines',
+                                   'all_disabled', 'user_disabled', 'computer_disabled') if k in o}
     extra = []
+    if o.get('unlinked_baseline_names'):
+        extra += ["## Unlinked Microsoft security baselines (staged, NOT applied)", ""] + [f"- {g}" for g in o['unlinked_baseline_names']]
     if o.get('unlinked'):
-        extra += ["## Unlinked GPOs (cleanup candidates)", ""] + [f"- {g}" for g in o['unlinked']]
+        extra += ["", "## All unlinked GPOs", ""] + [f"- {g}" for g in o['unlinked']]
     if o.get('gpos'):
         extra += ["", "## All GPOs (name · status · modified · linked)", ""]
         for g in o['gpos']:

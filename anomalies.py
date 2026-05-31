@@ -52,6 +52,19 @@ def _ad_rules(s, f):
     return out
 
 
+def _gpo_rules(s, f):
+    ub = f.get('unlinked_baselines')
+    if isinstance(ub, int) and ub > 0:
+        return [('unlinked_baselines', 'medium', 'Security',
+                 f'GPO: {ub} Microsoft security baseline(s) staged but NOT linked — hardening not applied',
+                 f'{ub} Microsoft security-baseline GPOs (Defender Antivirus, BitLocker, Credential Guard, '
+                 'Domain Security, Virtualization-Based Security) are imported but linked to no OU/domain/site, '
+                 'so the intended endpoint hardening is NOT being enforced. Review and link the appropriate '
+                 'baselines to the right OUs (or remove if superseded). The full list is in the GPO "Live facts" '
+                 'doc on the Active Directory system.')]
+    return []
+
+
 def _cert_rules(s, f):
     se = f.get('soon_expiring')
     if isinstance(se, int) and se > 0:
@@ -62,7 +75,7 @@ def _cert_rules(s, f):
     return []
 
 
-_RULES = [_ad_rules, _cert_rules]
+_RULES = [_ad_rules, _gpo_rules, _cert_rules]
 
 
 def scan(create_tickets=True, actor='brain'):

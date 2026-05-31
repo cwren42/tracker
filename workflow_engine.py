@@ -290,7 +290,14 @@ def _action_ai_suggest(config: dict, ctx: dict) -> tuple:
 # ── HELPERS ────────────────────────────────────────────────────────────────────
 def _get_ad_settings(db):
     rows = db.execute("SELECT key, value FROM setting WHERE key LIKE 'ad_%'").fetchall()
-    return {r["key"]: r["value"] for r in rows}
+    ad = {r["key"]: r["value"] for r in rows}
+    # Normalize boolean-ish settings to "1"/"0". The handlers below check == "1", but the
+    # app stores these as 'true'/'false' (settings.py) — without this every AD action fails
+    # with "AD integration not enabled" even when AD is on.
+    for k in ("ad_enabled", "ad_use_ssl"):
+        if k in ad:
+            ad[k] = "1" if str(ad[k]).strip().lower() in ("1", "true", "yes", "on") else "0"
+    return ad
 
 
 def _ad_connect(ad):

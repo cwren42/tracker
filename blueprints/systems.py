@@ -89,10 +89,15 @@ def _facts_to_text(facts):
 @admin_required
 def systems():
     rows = ITSystem.query.order_by(ITSystem.category, ITSystem.name).all()
+    # doc count per system (so the catalog shows where the knowledge lives)
+    from sqlalchemy import func
+    doc_counts = dict(db.session.query(SystemDoc.system_id, func.count(SystemDoc.id))
+                      .group_by(SystemDoc.system_id).all())
     grouped = {}
     for s in rows:
         grouped.setdefault(s.category or 'Other', []).append(s)
-    return render_template('systems.html', grouped=grouped, total=len(rows))
+    return render_template('systems.html', grouped=grouped, total=len(rows),
+                           doc_counts=doc_counts, total_docs=sum(doc_counts.values()))
 
 
 @bp.route('/systems/new', methods=['GET', 'POST'])

@@ -1149,6 +1149,160 @@ def _action_assign_ticket(config: dict, ctx: dict) -> tuple:
         return False, {"error": str(e)}
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Auto-resolve: when a remediation action succeeds for a ticket-driven run, close
+# the originating ticket + notify the reporter — mirroring the human resolve path
+# (status='Closed', closed_at, a ticket_note, a status_changed activity, and a
+# ticket.resolved bus event so the Knowledge Agent's Learn step fires). Raw-pg only,
+# so it runs in the workflow daemon thread without a Flask app context.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Actions that, on success, mean the user's problem is actually fixed and the ticket
+# can be auto-closed. Read/notify/ticket-bookkeeping actions are deliberately excluded.
+_REMEDIATION_ACTIONS = {
+    "unlock_account", "reset_password", "enable_ad_user",
+    "add_to_group", "remove_from_group",
+    "deploy_patch", "deploy_software", "uninstall_software",
+    "reboot_device",
+}
+
+
+def _resolution_summary(action_type: str, output: dict, ctx: dict) -> str:
+    """Human-readable one-liner describing what the brain did, for the ticket note + email."""
+    username = output.get("username") or ctx.get("submitter_sam") or ctx.get("username") or ""
+    if action_type == "unlock_account":
+        who = f" for {username}" if username else ""
+        return f"unlocked the Active Directory account{who}"
+    if action_type == "reset_password":
+        who = f" for {username}" if username else ""
+        return f"reset the Active Directory password{who}"
+    if action_type == "enable_ad_user":
+        who = f" for {username}" if username else ""
+        return f"re-enabled the Active Directory account{who}"
+    if action_type in ("add_to_group", "remove_from_group"):
+        grp = output.get("group") or ""
+        verb = "added to" if action_type == "add_to_group" else "removed from"
+        return f"{verb} the group {grp}".strip()
+    if action_type in ("deploy_patch", "deploy_software"):
+        return "deployed the required update"
+    if action_type == "uninstall_software":
+        return "removed the offending software"
+    if action_type == "reboot_device":
+        return "rebooted the affected device"
+    return f"completed the {action_type.replace('_', ' ')} remediation"
+
+
+def _auto_resolve_ticket_after_remediation(action_type: str, output: dict, ctx: dict):
+    """Close the ticket in ctx and notify its reporter — only on a successful remediation.
+    Best-effort and idempotent: a ticket already Closed/Merged is left untouched and no
+    second email is sent. Never raises into the run (logged + swallowed)."""
+    if action_type not in _REMEDIATION_ACTIONS:
+        return
+    ticket_id = ctx.get("ticket_id")
+    if not ticket_id:
+        return
+    try:
+        ticket_id = int(ticket_id)
+    except (TypeError, ValueError):
+        return
+
+    summary = _resolution_summary(action_type, output, ctx)
+    note_text = (f"🤖 Brain auto-remediated: {summary}. "
+                 f"Resolved automatically — no action needed on your part.")
+    try:
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT id, subject, status, reporter_email, reporter_name, category "
+                "FROM support_ticket WHERE id=?", (ticket_id,)).fetchone()
+            if not row:
+                log.warning("auto-resolve: ticket %s not found", ticket_id)
+                return
+            # Idempotency: never double-close or double-notify a finished ticket.
+            if row["status"] in ("Closed", "Merged"):
+                log.info("auto-resolve: ticket %s already %s — skipping", ticket_id, row["status"])
+                return
+
+            now = _now()
+            # 1) conversation note (real Python bools for the NOT NULL boolean columns)
+            db.execute(
+                "INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (ticket_id, None, note_text, False, False, now))
+            # 2) close exactly like the human handler (status='Closed' + closed_at)
+            db.execute(
+                "UPDATE support_ticket SET status='Closed', closed_at=?, updated_at=? WHERE id=?",
+                (now, now, ticket_id))
+            # 3) audit activity, attributed to the brain
+            db.execute(
+                "INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (ticket_id, None, "status_changed",
+                 f"{row['status']} → Closed (auto-remediated by brain)", now))
+            db.commit()
+        finally:
+            db.close()
+        log.info("auto-resolve: ticket %s closed after %s", ticket_id, action_type)
+    except Exception:
+        log.exception("auto-resolve: failed to close ticket %s", ctx.get("ticket_id"))
+        return
+
+    # 4) notify the reporting user via the EXISTING mailer (reuse, don't reinvent).
+    reporter_email = row["reporter_email"] or ctx.get("submitter_email")
+    if reporter_email:
+        try:
+            from email import send_email  # standalone SMTP helper, app-context-free
+            base = "https://tracker.cirque.com"
+            html_body = f"""
+            <div style="font-family:sans-serif;max-width:600px;">
+              <p>Hi {row['reporter_name'] or 'there'},</p>
+              <p>Good news — your support ticket
+                 <strong>#{ticket_id}: {row['subject']}</strong> has been resolved
+                 automatically.</p>
+              <blockquote style="border-left:4px solid #0d6efd;padding:10px 16px;
+                                 background:#f0f4ff;margin:16px 0;border-radius:4px;">
+                <p style="margin:0;">The IT brain {summary}. No further action is needed
+                   on your part. If the problem persists, just reply to reopen the ticket.</p>
+              </blockquote>
+              <p style="margin-top:20px;">
+                <a href="{base}/tickets/{ticket_id}"
+                   style="background:#0d6efd;color:#fff;padding:8px 16px;
+                          text-decoration:none;border-radius:4px;">
+                  View Ticket #{ticket_id}
+                </a>
+              </p>
+              <p style="color:#6c757d;font-size:12px;margin-top:24px;">
+                Ticket #{ticket_id} · IT Support (automated)
+              </p>
+            </div>"""
+            send_email(
+                subject=f"Resolved: [Ticket #{ticket_id}] {row['subject']}",
+                recipients=[reporter_email],
+                text_body=(f"Hi {row['reporter_name'] or 'there'},\n\n"
+                           f"Your support ticket #{ticket_id}: {row['subject']} has been "
+                           f"resolved automatically. The IT brain {summary}. "
+                           f"No further action is needed. If the problem persists, "
+                           f"reply to reopen the ticket.\n\n{base}/tickets/{ticket_id}"),
+                html_body=html_body)
+            log.info("auto-resolve: resolution email sent to %s for ticket %s",
+                     reporter_email, ticket_id)
+        except Exception:
+            log.exception("auto-resolve: resolution email failed for ticket %s", ticket_id)
+    else:
+        log.info("auto-resolve: ticket %s has no reporter email — closed without notify", ticket_id)
+
+    # 5) publish ticket.resolved so the Knowledge Agent's Learn step fires — same event
+    #    the human resolve path emits. Best-effort; subscribers are idempotent.
+    try:
+        import event_bus
+        event_bus.publish("ticket.resolved", {
+            "ticket_id": ticket_id, "subject": row["subject"],
+            "category": row["category"], "closed_by": "IT Brain (auto-remediation)",
+        }, source="workflow_engine")
+    except Exception:
+        log.exception("auto-resolve: ticket.resolved publish failed for ticket %s", ticket_id)
+
+
 def _action_http_request(config: dict, ctx: dict) -> tuple:
     """Generic HTTP request to any URL."""
     url     = _render(config.get("url", ""), ctx)
@@ -1431,6 +1585,12 @@ def _drive(run_id, node_map, adj, edge_conditions, ctx, visited, queue):
                 else:
                     success, output = False, {"error": f"Unknown action: {action_type}"}
                 ctx = {**ctx, **{k: v for k, v in output.items() if not k.startswith("_")}}
+
+                # A successful remediation for a ticket-driven run closes the originating
+                # ticket + notifies the reporter (idempotent, best-effort). Failures leave
+                # the ticket open — see _auto_resolve_ticket_after_remediation.
+                if success:
+                    _auto_resolve_ticket_after_remediation(action_type, output, ctx)
 
             status = "completed" if success else "failed"
             _update_step(step_id, status, output)

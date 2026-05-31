@@ -18,19 +18,25 @@
   </div>
 </div>
 
-<div id="it-graph" style="height:calc(100vh - 160px); background:#0b0e14; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:relative;">
+<div id="it-graph" style="height:calc(100vh - 160px); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:relative;
+     background:radial-gradient(ellipse at 50% 40%, #0d1322 0%, #06080f 60%, #03040a 100%);">
   <div id="graph-loading" class="position-absolute top-50 start-50 translate-middle text-center">
     <div class="spinner-border text-primary mb-2"></div>
     <div class="small" style="color:#94a3b8;">Assembling the world model…</div>
   </div>
+  <div id="graph-tip" class="position-absolute top-0 start-0 m-2 small" style="color:#64748b;pointer-events:none;">
+    drag to roam · scroll to zoom · hover a star to light its constellation · click to focus
+  </div>
 </div>
 
-<style>.legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle;box-shadow:0 0 6px currentColor;}</style>
+<style>.legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle;box-shadow:0 0 7px currentColor;}</style>
 <script src="https://cdn.jsdelivr.net/npm/force-graph"></script>
 <script>
 window.itGraph = null;
 (function(){
   var COLORS = {employee:'#818cf8', asset:'#22d3ee', identity:'#34d399', device:'#fbbf24', license:'#c084fc', knowledge:'#f472b6'};
+  function rgba(hex, a){ var h=hex.replace('#',''); var r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16); return 'rgba('+r+','+g+','+b+','+a+')'; }
+
   fetch('/api/it-graph/data').then(function(r){return r.json();}).then(function(d){
     var loading = document.getElementById('graph-loading'); if (loading) loading.remove();
     var s = d.stats || {};
@@ -38,29 +44,87 @@ window.itGraph = null;
       s.nodes + ' nodes · ' + s.links + ' links — ' + s.employees + ' employees · ' + s.assets +
       ' assets · ' + s.identities + ' identities · ' + s.devices + ' devices · ' + s.licenses + ' licenses' +
       (s.knowledge ? ' · ' + s.knowledge + ' knowledge' : '');
+
+    // Degree + neighbour maps (for star size + constellation highlight).
+    var deg = {}, nbr = {}, linksByNode = {};
+    d.nodes.forEach(function(n){ deg[n.id]=0; nbr[n.id]=new Set(); linksByNode[n.id]=[]; });
+    d.links.forEach(function(l){
+      var a = (l.source.id!==undefined)?l.source.id:l.source, b=(l.target.id!==undefined)?l.target.id:l.target;
+      deg[a]=(deg[a]||0)+1; deg[b]=(deg[b]||0)+1;
+      if(nbr[a]) nbr[a].add(b); if(nbr[b]) nbr[b].add(a);
+      if(linksByNode[a]) linksByNode[a].push(l); if(linksByNode[b]) linksByNode[b].push(l);
+    });
+    function starR(n){ return 1.4 + Math.sqrt(deg[n.id]||0) * 1.1; }
+
+    var hoverNode = null, hiNodes = new Set(), hiLinks = new Set();
+
     var el = document.getElementById('it-graph');
     var G = ForceGraph()(el)
       .graphData(d)
-      .backgroundColor('#0b0e14')
-      .nodeRelSize(4)
-      .nodeVal(function(n){ return n.type === 'employee' ? 4 : 1.5; })
-      .nodeColor(function(n){ return COLORS[n.type] || '#9ca3af'; })
-      .nodeLabel(function(n){ return n.label + '  (' + n.type + ')'; })
-      .linkColor(function(){ return 'rgba(148,163,184,0.16)'; })
-      .linkWidth(0.6)
+      .backgroundColor('rgba(0,0,0,0)')
       .width(el.clientWidth).height(el.clientHeight)
-      .onNodeClick(function(n){ G.centerAt(n.x, n.y, 500); G.zoom(5, 500); })
-      .nodeCanvasObjectMode(function(){ return 'after'; })
+      .nodeVal(function(n){ return 1 + (deg[n.id]||0)*0.5; })
+      .nodeLabel(function(n){ return n.label + '  ·  ' + n.type; })
+      .linkColor(function(l){ return hiLinks.has(l) ? rgba(COLORS[l.__c]||'#94a3b8', 0.55) : 'rgba(120,140,180,0.10)'; })
+      .linkWidth(function(l){ return hiLinks.has(l) ? 1.6 : 0.5; })
+      .linkDirectionalParticles(function(l){ return hiLinks.has(l) ? 4 : 0; })
+      .linkDirectionalParticleWidth(2)
+      .linkDirectionalParticleSpeed(0.008)
+      .linkDirectionalParticleColor(function(l){ return rgba(COLORS[l.__c]||'#cbd5e1', 0.9); })
+      .onNodeHover(function(node){
+        hiNodes.clear(); hiLinks.clear(); hoverNode = node || null;
+        if(node){
+          hiNodes.add(node.id); (nbr[node.id]||new Set()).forEach(function(id){ hiNodes.add(id); });
+          (linksByNode[node.id]||[]).forEach(function(l){ hiLinks.add(l); });
+        }
+        el.style.cursor = node ? 'pointer' : 'default';
+      })
+      .onNodeClick(function(n){ G.centerAt(n.x, n.y, 600); G.zoom(6, 600); })
       .nodeCanvasObject(function(node, ctx, scale){
-        if (scale < 2.2) return;                          // labels only when zoomed in (Obsidian-style)
-        ctx.font = (10 / scale) + 'px sans-serif';
-        ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-        ctx.fillText(node.label, node.x, node.y + 7 / scale);
+        var color = COLORS[node.type] || '#9ca3af';
+        var r = starR(node);
+        var dim = hoverNode && !hiNodes.has(node.id);
+        // glow
+        ctx.globalAlpha = dim ? 0.18 : 1;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = (hoverNode && hiNodes.has(node.id)) ? 22 : 10;
+        ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2*Math.PI);
+        ctx.fillStyle = color; ctx.fill();
+        // bright core
+        ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(node.x, node.y, r*0.45, 0, 2*Math.PI);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+        ctx.globalAlpha = 1;
+        // label: when zoomed in, or for hub stars, or hovered constellation
+        var showLabel = scale > 2.4 || (deg[node.id]||0) >= 8 || (hoverNode && hiNodes.has(node.id));
+        if(showLabel){
+          var fs = Math.max(3.5, 11/scale);
+          ctx.font = fs + 'px Inter, sans-serif';
+          ctx.fillStyle = dim ? 'rgba(150,160,180,0.3)' : '#dbe4f0';
+          ctx.textAlign='center'; ctx.textBaseline='top';
+          ctx.fillText(node.label.length>26?node.label.slice(0,26)+'…':node.label, node.x, node.y + r + 1.5);
+        }
+      })
+      .nodePointerAreaPaint(function(node, color, ctx){
+        ctx.fillStyle = color; ctx.beginPath();
+        ctx.arc(node.x, node.y, starR(node)+2, 0, 2*Math.PI); ctx.fill();
       });
-    G.d3VelocityDecay(0.3);
+
+    // Tag each link with its colour source (by the node type it connects from) for particles.
+    d.links.forEach(function(l){
+      var a=(l.source.id!==undefined)?l.source:null;
+      l.__c = (a && a.type) ? a.type : 'asset';
+    });
+
+    // Gentle galaxy spread + slow settle.
+    G.d3Force('charge').strength(-55).distanceMax(360);
+    G.d3Force('link').distance(function(l){ return 38; });
+    G.d3VelocityDecay(0.28);
+    G.cooldownTime(6000);
+
     window.itGraph = G;
     window.addEventListener('resize', function(){ G.width(el.clientWidth).height(el.clientHeight); });
-    setTimeout(function(){ G.zoomToFit(700, 50); }, 500);
+    setTimeout(function(){ G.zoomToFit(800, 60); }, 600);
   }).catch(function(e){
     var el = document.getElementById('it-graph');
     el.innerHTML = '<div class="p-4 text-danger">Failed to load graph: ' + e + '</div>';

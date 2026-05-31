@@ -912,3 +912,82 @@ def events():
         # Table may not exist yet (dispatcher creates it at startup).
         db.session.rollback()
     return render_template('events.html', rows=rows, counts=counts)
+
+
+# ── Mission Control — the single pane onto the whole agentic OS ──────────────────
+@bp.route('/mission-control')
+@login_required
+@admin_required
+def mission_control():
+    """One view of the brain: world-model coverage, the approval queue, the command
+    ledger, the event bus, and workflow activity — the layers stitched together."""
+    from sqlalchemy import text
+    from models import Asset, License, LicenseAssignment, CommandLedger
+    from soc2_models import M365User, IntuneDevice
+
+    def _scalar(sql):
+        try:
+            return db.session.execute(text(sql)).scalar() or 0
+        except Exception:
+            db.session.rollback()
+            return 0
+
+    # World model + Track B link coverage.
+    emp_n = Employee.query.count()
+    asset_n = Asset.query.count()
+    m365_total = M365User.query.filter_by(is_current=True).count()
+    m365_linked = M365User.query.filter(M365User.is_current == True, M365User.employee_id.isnot(None)).count()
+    intune_total = IntuneDevice.query.filter_by(is_current=True).count()
+    intune_linked = IntuneDevice.query.filter(IntuneDevice.is_current == True, IntuneDevice.asset_id.isnot(None)).count()
+    world = {
+        'employees': emp_n, 'assets': asset_n,
+        'm365_total': m365_total, 'm365_linked': m365_linked,
+        'm365_pct': round(100 * m365_linked / m365_total) if m365_total else 0,
+        'intune_total': intune_total, 'intune_linked': intune_linked,
+        'intune_pct': round(100 * intune_linked / intune_total) if intune_total else 0,
+    }
+
+    # Approvals queue (pending) + a small preview.
+    pending = (CommandLedger.query
+               .filter_by(status='awaiting_approval', approval_status='pending')
+               .order_by(CommandLedger.created_at.desc()).limit(6).all())
+    pending_n = (CommandLedger.query
+                 .filter_by(status='awaiting_approval', approval_status='pending').count())
+
+    # Command ledger — recent + status mix.
+    recent_actions = CommandLedger.query.order_by(CommandLedger.id.desc()).limit(8).all()
+    ledger_counts = {}
+    try:
+        for r in db.session.execute(text("SELECT status, COUNT(*) AS n FROM command_ledger GROUP BY status")):
+            ledger_counts[r._mapping['status']] = r._mapping['n']
+    except Exception:
+        db.session.rollback()
+
+    # Event bus — status mix + recent.
+    event_counts, recent_events = {}, []
+    try:
+        for r in db.session.execute(text("SELECT status, COUNT(*) AS n FROM event_outbox GROUP BY status")):
+            event_counts[r._mapping['status']] = r._mapping['n']
+        recent_events = [dict(r._mapping) for r in db.session.execute(text(
+            "SELECT id, event_type, source, status, created_at FROM event_outbox ORDER BY id DESC LIMIT 6"))]
+    except Exception:
+        db.session.rollback()
+
+    # Workflows — enabled + run status mix + recent runs.
+    wf_enabled = _scalar("SELECT COUNT(*) FROM workflow_definitions WHERE enabled=true")
+    run_counts, recent_runs = {}, []
+    try:
+        for r in db.session.execute(text("SELECT status, COUNT(*) AS n FROM workflow_runs GROUP BY status")):
+            run_counts[r._mapping['status']] = r._mapping['n']
+        recent_runs = [dict(r._mapping) for r in db.session.execute(text(
+            "SELECT wr.id, wr.status, wr.started_at, wd.name FROM workflow_runs wr "
+            "LEFT JOIN workflow_definitions wd ON wd.id = wr.workflow_id "
+            "ORDER BY wr.id DESC LIMIT 6"))]
+    except Exception:
+        db.session.rollback()
+
+    return render_template('mission_control.html',
+                           world=world, pending=pending, pending_n=pending_n,
+                           recent_actions=recent_actions, ledger_counts=ledger_counts,
+                           event_counts=event_counts, recent_events=recent_events,
+                           wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs)

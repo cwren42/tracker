@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Mission Control{% endblock %}
+{% block content %}
+{% set st_color = {'pending':'var(--warning)','dispatched':'var(--success)','succeeded':'var(--success)','completed':'var(--success)','error':'var(--danger)','failed':'var(--danger)','awaiting_approval':'var(--warning)','running':'var(--info)','denied':'var(--muted)','planned':'var(--muted)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-grid-1x2-fill me-2" style="color:var(--accent)"></i>Mission Control
+      <span class="text-muted fw-normal fs-6">— the agentic OS at a glance</span></h1>
+    <div class="small text-muted">World model · approvals · command ledger · event bus · workflows</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('dashboard.it_graph') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-diagram-3-fill me-1"></i>Graph</a>
+    <a href="{{ url_for('dashboard.approvals') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-shield-check me-1"></i>Approvals</a>
+    <a href="{{ url_for('dashboard.events') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-broadcast-pin me-1"></i>Events</a>
+  </div>
+</div>
+
+{% if pending_n %}
+<a href="{{ url_for('dashboard.approvals') }}" class="text-decoration-none">
+<div class="alert d-flex align-items-center gap-2 mb-3" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
+  <i class="bi bi-shield-exclamation fs-5"></i>
+  <div><strong>{{ pending_n }} action{{ 's' if pending_n != 1 }} waiting for your approval.</strong> The brain has parked them — nothing runs until you sign off.</div>
+</div>
+</a>
+{% endif %}
+
+<div class="row g-3">
+
+  <!-- World model -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-diagram-3-fill me-2 text-muted"></i>World model <span class="text-muted fw-normal small">(Track B coverage)</span></h2>
+      <div class="row g-2 text-center mb-3">
+        <div class="col"><div class="h4 mb-0">{{ world.employees }}</div><div class="small text-muted">employees</div></div>
+        <div class="col"><div class="h4 mb-0">{{ world.assets }}</div><div class="small text-muted">assets</div></div>
+        <div class="col"><div class="h4 mb-0">{{ world.m365_total }}</div><div class="small text-muted">identities</div></div>
+        <div class="col"><div class="h4 mb-0">{{ world.intune_total }}</div><div class="small text-muted">devices</div></div>
+      </div>
+      {% for label, linked, total, pct in [
+          ('Identities linked to employees', world.m365_linked, world.m365_total, world.m365_pct),
+          ('Devices linked to assets', world.intune_linked, world.intune_total, world.intune_pct)] %}
+      <div class="small d-flex justify-content-between"><span class="text-muted">{{ label }}</span><span>{{ linked }}/{{ total }} · {{ pct }}%</span></div>
+      <div class="progress mb-2" style="height:6px;background:var(--surface-2);">
+        <div class="progress-bar" role="progressbar" style="width:{{ pct }}%;background:var(--accent);"></div>
+      </div>
+      {% endfor %}
+    </div></div>
+  </div>
+
+  <!-- Workflows -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-diagram-2 me-2 text-muted"></i>Workflows</h2>
+      <div class="d-flex gap-4 mb-3">
+        <div><div class="h4 mb-0">{{ wf_enabled }}</div><div class="small text-muted">enabled</div></div>
+        <div><div class="h4 mb-0">{{ run_counts.values()|sum }}</div><div class="small text-muted">total runs</div></div>
+      </div>
+      {% if run_counts %}
+      <div class="mb-2">
+        {% for s, n in run_counts.items() %}
+        <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
+        {% endfor %}
+      </div>{% endif %}
+      <div class="small text-muted mb-1">Recent runs</div>
+      <ul class="list-unstyled small mb-0">
+        {% for r in recent_runs %}
+        <li class="d-flex justify-content-between"><span>{{ r.name or 'Workflow' }} <span class="text-muted">#{{ r.id }}</span></span>
+          <span style="color:{{ st_color.get(r.status,'var(--muted)') }}">{{ r.status }}</span></li>
+        {% else %}<li class="text-muted">No runs yet.</li>{% endfor %}
+      </ul>
+    </div></div>
+  </div>
+
+  <!-- Approval queue -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 mb-0"><i class="bi bi-shield-check me-2 text-muted"></i>Approval queue</h2>
+        <a href="{{ url_for('dashboard.approvals') }}" class="small">Open →</a>
+      </div>
+      {% if pending %}
+      <ul class="list-unstyled small mb-0">
+        {% for row in pending %}
+        <li class="d-flex justify-content-between mb-1">
+          <span><span style="color:{{ st_color.get(row.risk_tier,'var(--muted)') }}">●</span> {{ row.action_type.replace('_',' ') }}{% if row.object_id %} <span class="text-muted">→ {{ row.object_id }}</span>{% endif %}</span>
+          <span class="text-muted">{{ row.risk_tier }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<div class="text-muted small"><i class="bi bi-check2-circle me-1" style="color:var(--success)"></i>Nothing waiting. All clear.</div>{% endif %}
+    </div></div>
+  </div>
+
+  <!-- Event bus -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 mb-0"><i class="bi bi-broadcast-pin me-2 text-muted"></i>Event bus</h2>
+        <a href="{{ url_for('dashboard.events') }}" class="small">Open →</a>
+      </div>
+      <div class="mb-2">
+        {% for s in ['pending','dispatched','error'] %}
+        <span class="badge me-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ event_counts.get(s,0) }} {{ s }}</span>
+        {% endfor %}
+      </div>
+      <ul class="list-unstyled small mb-0">
+        {% for e in recent_events %}
+        <li class="d-flex justify-content-between"><code style="color:var(--accent)">{{ e.event_type }}</code>
+          <span style="color:{{ st_color.get(e.status,'var(--muted)') }}">{{ e.status }}</span></li>
+        {% else %}<li class="text-muted">No events yet.</li>{% endfor %}
+      </ul>
+    </div></div>
+  </div>
+
+  <!-- Command ledger -->
+  <div class="col-12">
+    <div class="card"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-journal-text me-2 text-muted"></i>Command ledger <span class="text-muted fw-normal small">— every action the brain takes</span></h2>
+      <div class="mb-2">
+        {% for s, n in ledger_counts.items() %}
+        <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
+        {% else %}<span class="text-muted small">No actions recorded yet.</span>{% endfor %}
+      </div>
+      {% if recent_actions %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr class="small text-muted"><th>#</th><th>Action</th><th>Object</th><th>Risk</th><th>Approval</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for a in recent_actions %}
+            <tr>
+              <td class="small text-muted">{{ a.id }}</td>
+              <td class="small">{{ a.action_type.replace('_',' ') }}</td>
+              <td class="small text-muted">{{ (a.object_type ~ ' ' ~ a.object_id) if a.object_id else (a.object_type or '—') }}</td>
+              <td class="small" style="color:{{ st_color.get(a.risk_tier,'var(--muted)') }}">{{ a.risk_tier }}</td>
+              <td class="small text-muted">{{ a.approval_status }}</td>
+              <td class="small" style="color:{{ st_color.get(a.status,'var(--muted)') }}">{{ a.status }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div></div>
+  </div>
+
+</div>
+{% endblock %}

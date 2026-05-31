@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}IT Graph — The Brain{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-diagram-3-fill me-2" style="color:var(--accent)"></i>IT Graph
+      <span class="text-muted fw-normal fs-6">— the connected world model</span></h1>
+    <div class="small text-muted" id="graph-stats">Loading the brain…</div>
+  </div>
+  <div class="d-flex flex-wrap gap-3 align-items-center small" id="graph-legend">
+    <span><span class="legend-dot" style="background:#818cf8"></span>Employee</span>
+    <span><span class="legend-dot" style="background:#22d3ee"></span>Asset</span>
+    <span><span class="legend-dot" style="background:#34d399"></span>Identity</span>
+    <span><span class="legend-dot" style="background:#fbbf24"></span>Device</span>
+    <span><span class="legend-dot" style="background:#c084fc"></span>License</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="if(window.itGraph) itGraph.zoomToFit(600,40)" title="Fit"><i class="bi bi-arrows-fullscreen"></i></button>
+  </div>
+</div>
+
+<div id="it-graph" style="height:calc(100vh - 160px); background:#0b0e14; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:relative;">
+  <div id="graph-loading" class="position-absolute top-50 start-50 translate-middle text-center">
+    <div class="spinner-border text-primary mb-2"></div>
+    <div class="small" style="color:#94a3b8;">Assembling the world model…</div>
+  </div>
+</div>
+
+<style>.legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle;box-shadow:0 0 6px currentColor;}</style>
+<script src="https://cdn.jsdelivr.net/npm/force-graph"></script>
+<script>
+window.itGraph = null;
+(function(){
+  var COLORS = {employee:'#818cf8', asset:'#22d3ee', identity:'#34d399', device:'#fbbf24', license:'#c084fc'};
+  fetch('/api/it-graph/data').then(function(r){return r.json();}).then(function(d){
+    var loading = document.getElementById('graph-loading'); if (loading) loading.remove();
+    var s = d.stats || {};
+    document.getElementById('graph-stats').textContent =
+      s.nodes + ' nodes · ' + s.links + ' links — ' + s.employees + ' employees · ' + s.assets +
+      ' assets · ' + s.identities + ' identities · ' + s.devices + ' devices · ' + s.licenses + ' licenses';
+    var el = document.getElementById('it-graph');
+    var G = ForceGraph()(el)
+      .graphData(d)
+      .backgroundColor('#0b0e14')
+      .nodeRelSize(4)
+      .nodeVal(function(n){ return n.type === 'employee' ? 4 : 1.5; })
+      .nodeColor(function(n){ return COLORS[n.type] || '#9ca3af'; })
+      .nodeLabel(function(n){ return n.label + '  (' + n.type + ')'; })
+      .linkColor(function(){ return 'rgba(148,163,184,0.16)'; })
+      .linkWidth(0.6)
+      .width(el.clientWidth).height(el.clientHeight)
+      .onNodeClick(function(n){ G.centerAt(n.x, n.y, 500); G.zoom(5, 500); })
+      .nodeCanvasObjectMode(function(){ return 'after'; })
+      .nodeCanvasObject(function(node, ctx, scale){
+        if (scale < 2.2) return;                          // labels only when zoomed in (Obsidian-style)
+        ctx.font = (10 / scale) + 'px sans-serif';
+        ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillText(node.label, node.x, node.y + 7 / scale);
+      });
+    G.d3VelocityDecay(0.3);
+    window.itGraph = G;
+    window.addEventListener('resize', function(){ G.width(el.clientWidth).height(el.clientHeight); });
+    setTimeout(function(){ G.zoomToFit(700, 50); }, 500);
+  }).catch(function(e){
+    var el = document.getElementById('it-graph');
+    el.innerHTML = '<div class="p-4 text-danger">Failed to load graph: ' + e + '</div>';
+  });
+})();
+</script>
+{% endblock %}

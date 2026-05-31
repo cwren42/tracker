@@ -712,3 +712,60 @@ def add_widget_to_dashboard():
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
+
+# ── IT Graph — "inside view of the brain": the connected world model ─────────
+@bp.route('/it-graph')
+@login_required
+@admin_required
+def it_graph():
+    return render_template('it_graph.html')
+
+
+@bp.route('/api/it-graph/data')
+@login_required
+@admin_required
+def it_graph_data():
+    """Nodes + links of the connected world model for the force-graph view."""
+    from models import Employee, Asset, License, LicenseAssignment
+    from soc2_models import M365User, IntuneDevice
+
+    nodes, links = [], []
+    emp_ids, asset_ids = set(), set()
+
+    for e in Employee.query.all():
+        nodes.append({'id': f'emp:{e.id}', 'label': e.name or f'Employee {e.id}', 'type': 'employee'})
+        emp_ids.add(e.id)
+
+    for a in Asset.query.all():
+        nodes.append({'id': f'asset:{a.id}', 'label': a.name or a.asset_tag or f'Asset {a.id}', 'type': 'asset'})
+        asset_ids.add(a.id)
+        if a.employee_id in emp_ids:
+            links.append({'source': f'emp:{a.employee_id}', 'target': f'asset:{a.id}', 'type': 'owns'})
+
+    for u in M365User.query.filter_by(is_current=True):
+        nodes.append({'id': f'm365:{u.id}', 'label': u.user_principal_name or u.display_name or f'M365 {u.id}', 'type': 'identity'})
+        if u.employee_id in emp_ids:
+            links.append({'source': f'emp:{u.employee_id}', 'target': f'm365:{u.id}', 'type': 'identity'})
+
+    for d in IntuneDevice.query.filter_by(is_current=True):
+        nodes.append({'id': f'mdm:{d.id}', 'label': d.device_name or f'Device {d.id}', 'type': 'device'})
+        if d.asset_id in asset_ids:
+            links.append({'source': f'asset:{d.asset_id}', 'target': f'mdm:{d.id}', 'type': 'managed'})
+
+    # Licenses — only those assigned to a known employee
+    lic_used = set()
+    for la in LicenseAssignment.query.filter(LicenseAssignment.employee_id.isnot(None)).all():
+        if la.employee_id in emp_ids and la.license_id:
+            links.append({'source': f'emp:{la.employee_id}', 'target': f'lic:{la.license_id}', 'type': 'license'})
+            lic_used.add(la.license_id)
+    for lic in License.query.all():
+        if lic.id in lic_used:
+            nodes.append({'id': f'lic:{lic.id}', 'label': lic.software_name or f'License {lic.id}', 'type': 'license'})
+
+    stats = {
+        'employees': len(emp_ids), 'assets': len(asset_ids),
+        'identities': sum(1 for n in nodes if n['type'] == 'identity'),
+        'devices': sum(1 for n in nodes if n['type'] == 'device'),
+        'licenses': len(lic_used), 'nodes': len(nodes), 'links': len(links),
+    }
+    return jsonify({'nodes': nodes, 'links': links, 'stats': stats})

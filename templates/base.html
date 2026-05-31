@@ -54,6 +54,12 @@
            href="{{ url_for('dashboard.action_center') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Action Center">
             <i class="bi bi-bullseye"></i><span class="link-label">Action Center</span>
         </a>
+        {% if current_user.role == 'admin' %}
+        <a class="sidebar-link {% if request.endpoint == 'dashboard.it_graph' %}active{% endif %}"
+           href="{{ url_for('dashboard.it_graph') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="IT Graph">
+            <i class="bi bi-diagram-3-fill"></i><span class="link-label">IT Graph</span>
+        </a>
+        {% endif %}
         {% endif %}
 
         {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer'] %}

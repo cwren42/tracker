@@ -184,15 +184,31 @@ def _action_disable_ad_user(config: dict, ctx: dict) -> tuple:
         return False, {"error": str(e)}
 
 
+def _entra_sync_asset():
+    """asset_id of the AAD-Connect host — the system tagged as the Entra/AD-Connect sync
+    (e.g. NABOO). Lets azure_sync 'just work' without an asset_id in config."""
+    try:
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT asset_id FROM it_system WHERE asset_id IS NOT NULL AND ("
+                "LOWER(name) LIKE '%entra%' OR LOWER(name) LIKE '%ad connect%' "
+                "OR LOWER(name) LIKE '%aad%') ORDER BY id LIMIT 1").fetchone()
+            return row["asset_id"] if row else None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 def _action_azure_sync(config: dict, ctx: dict) -> tuple:
     """Trigger Azure AD Connect delta sync on the AD-Connect server via its RMM agent.
 
-    Requires an `asset_id` (the AAD-Connect / DC host running the agent) in config or
-    context. The rmm_agent table has no hostname column, so we resolve by asset_id.
+    Resolves the host by asset_id from config/ctx, else the Entra-Sync system's host.
     """
-    asset_id = config.get("asset_id") or (ctx or {}).get("asset_id")
+    asset_id = config.get("asset_id") or (ctx or {}).get("asset_id") or _entra_sync_asset()
     if not asset_id:
-        return False, {"error": "azure_sync requires asset_id of the AD-Connect host"}
+        return False, {"error": "No AD-Connect host found (set a host asset on the Entra Sync system)."}
     script = "Import-Module ADSync; Start-ADSyncSyncCycle -PolicyType Delta"
     return _device_action(
         "azure_sync", "rmm.run_script", asset_id, "powershell", script,
@@ -790,7 +806,15 @@ def _action_create_user(config: dict, ctx: dict) -> tuple:
             conn.modify(dn, {"unicodePwd": [(ldap3.MODIFY_REPLACE, [f'"{password}"'.encode("utf-16-le")])]})
             conn.modify(dn, {"userAccountControl": [(ldap3.MODIFY_REPLACE, [512])]})
         conn.unbind()
-        return True, {"username": username, "dn": dn, "created": True}
+        # New AD account → kick the Entra (AAD Connect) delta sync so it propagates to 365
+        # without a manual run on the sync host. Best-effort; never fails the user creation.
+        entra = "skipped"
+        try:
+            ok, out = _action_azure_sync({}, ctx)
+            entra = "triggered" if ok else f"sync error: {out.get('error')}"
+        except Exception as e:
+            entra = f"sync error: {e}"
+        return True, {"username": username, "dn": dn, "created": True, "entra_sync": entra}
     except Exception as e:
         return False, {"error": str(e)}
 

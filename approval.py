@@ -39,7 +39,7 @@ RISK_TIERS = {
     "unlock_account":    "medium",
     "add_to_group":      "high",    # group membership = privilege grant (could be Domain Admins)
     "remove_from_group": "medium",
-    "azure_sync":        "medium",
+    "azure_sync":        "low",   # idempotent AAD-Connect delta sync — safe to auto-run
 
     # ── Endpoint actions — act on a live machine ──
     "run_script":        "high",    # arbitrary code execution on an endpoint

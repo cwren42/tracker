@@ -30,6 +30,7 @@ _MAX_ATTEMPTS = 5          # give up (status='error') after this many failures
 _RETENTION_DAYS = 30       # prune dispatched/error rows older than this
 _PRUNE_EVERY = 720         # ~ every hour (720 * 5s); prune runs on the leader only
 _REINDEX_EVERY = 120960    # ~ weekly (7d * 86400 / 5s); knowledge auto-reindex, leader only
+_COLLECT_EVERY = 17283     # ~ daily (offset so it doesn't collide with prune/reindex ticks)
 _started = False           # per-process guard (mirrors sync_scheduler/workflow_engine)
 
 # Defense-in-depth: never let a publisher persist an obvious secret in cleartext JSONB.
@@ -162,6 +163,25 @@ def _prune():
         log.exception("event_outbox prune failed")
 
 
+def _collect_all(flask_app):
+    """Nightly refresh of Layer-3 live facts: run every read-only collector on each system
+    that has a host asset. Actions (e.g. entra_sync) are NOT auto-run. Leader-only, best-effort."""
+    try:
+        import collectors
+        from models import ITSystem
+        with flask_app.app_context():
+            systems = ITSystem.query.filter(ITSystem.asset_id.isnot(None)).all()
+            for s in systems:
+                for p in collectors.PROBES:
+                    if p['kind'] == 'collect' and p['applies'](s):
+                        try:
+                            collectors.run_probe(s.id, p['key'], user='scheduler')
+                        except Exception:
+                            log.exception("scheduled collect failed: system %s / %s", s.id, p['key'])
+    except Exception:
+        log.exception("scheduled collector refresh failed")
+
+
 def _dispatch_once(flask_app):
     """One dispatch pass — fan pending events out to subscribers. Caller holds the lock."""
     db = _db()
@@ -229,6 +249,8 @@ def start_event_dispatcher(flask_app):
                                     knowledge_agent.reindex()
                             except Exception:
                                 log.exception("scheduled knowledge reindex failed")
+                        if ticks % _COLLECT_EVERY == 0:
+                            _collect_all(flask_app)
             except Exception:
                 log.exception("event dispatcher loop error")
 

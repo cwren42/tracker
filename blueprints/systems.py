@@ -423,6 +423,20 @@ def systems_import():
     return render_template('systems_import.html', systems=ITSystem.query.order_by(ITSystem.name).all(), cfg=cfg)
 
 
+@bp.route('/systems/scan-anomalies', methods=['POST'])
+@login_required
+@admin_required
+def systems_scan():
+    import anomalies
+    res = anomalies.scan(create_tickets=True, actor=current_user.username)
+    if res['created']:
+        ids = ', '.join(f"#{i}" for i, _ in res['created'])
+        flash(f"Brain scan: {res['findings']} finding(s) → {len(res['created'])} new ticket(s) opened ({ids}).", 'success')
+    else:
+        flash(f"Brain scan: {res['findings']} finding(s), no new tickets (already open, or all clear).", 'info')
+    return redirect(url_for('systems.systems'))
+
+
 @bp.route('/systems/<int:system_id>/delete', methods=['POST'])
 @login_required
 @admin_required

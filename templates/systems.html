@@ -11,6 +11,9 @@
     <div class="small text-muted">{{ total }} system{{ 's' if total != 1 }} · {{ total_docs }} doc{{ 's' if total_docs != 1 }} · click a system to read/edit its docs</div>
   </div>
   <div class="d-flex gap-2">
+    <form method="post" action="{{ url_for('systems.systems_scan') }}">
+      <button class="btn btn-sm btn-outline-warning" title="Have the brain inspect live facts and open tickets for anomalies"><i class="bi bi-shield-exclamation me-1"></i>Scan for anomalies</button>
+    </form>
     <a href="{{ url_for('systems.systems_import') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-git me-1"></i>Import from GitLab</a>
     <a href="{{ url_for('systems.system_new') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Add system</a>
   </div>

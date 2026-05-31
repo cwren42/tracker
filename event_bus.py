@@ -178,6 +178,12 @@ def _collect_all(flask_app):
                             collectors.run_probe(s.id, p['key'], user='scheduler')
                         except Exception:
                             log.exception("scheduled collect failed: system %s / %s", s.id, p['key'])
+            # After refreshing facts, let the brain flag anomalies + open tickets.
+            try:
+                import anomalies
+                anomalies.scan(create_tickets=True, actor='scheduler')
+            except Exception:
+                log.exception("scheduled anomaly scan failed")
     except Exception:
         log.exception("scheduled collector refresh failed")
 

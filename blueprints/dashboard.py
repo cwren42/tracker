@@ -1019,6 +1019,27 @@ def knowledge():
                            runbook_count=runbook_count)
 
 
+@bp.route('/knowledge/add', methods=['POST'])
+@login_required
+@admin_required
+def knowledge_add():
+    """Operator-authored how-to / SOP added directly to the knowledge base."""
+    import knowledge_agent
+    title = (request.form.get('title') or '').strip()
+    content = (request.form.get('content') or '').strip()
+    if not content:
+        flash('Content is required.', 'warning')
+        return redirect(url_for('dashboard.knowledge'))
+    try:
+        knowledge_agent.add_manual(title, content)
+        flash('Knowledge entry added and indexed.', 'success')
+    except ValueError as e:
+        flash(str(e), 'warning')
+    except Exception as e:
+        flash(f'Could not add knowledge: {e}', 'danger')
+    return redirect(url_for('dashboard.knowledge'))
+
+
 @bp.route('/knowledge/reindex', methods=['POST'])
 @login_required
 @admin_required

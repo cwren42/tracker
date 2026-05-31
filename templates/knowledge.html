@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Knowledge Agent{% endblock %}
 {% block content %}
-{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)','runbook':'var(--warning)'} %}
+{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)','runbook':'var(--warning)','manual':'var(--accent)'} %}
 
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
   <div>
@@ -9,12 +9,32 @@
       <span class="text-muted fw-normal fs-6">— ask the ISMS &amp; system docs</span></h1>
     <div class="small text-muted">Semantic search + grounded answers with citations · {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}{% if runbook_count %} · <span style="color:var(--success)">{{ runbook_count }} learned runbook{{ 's' if runbook_count != 1 }}</span>{% endif %}</div>
   </div>
-  <form method="post" action="{{ url_for('dashboard.knowledge_reindex') }}"
-        onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Indexing…';">
-    <button class="btn btn-sm btn-outline-secondary" title="Re-embed the corpus from the ISMS + system docs">
-      <i class="bi bi-arrow-repeat me-1"></i>Reindex
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#addKnowledge">
+      <i class="bi bi-plus-lg me-1"></i>Add note
     </button>
-  </form>
+    <form method="post" action="{{ url_for('dashboard.knowledge_reindex') }}"
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Indexing…';">
+      <button class="btn btn-sm btn-outline-secondary" title="Re-embed the corpus from the ISMS + system docs">
+        <i class="bi bi-arrow-repeat me-1"></i>Reindex
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="collapse mb-3" id="addKnowledge">
+  <div class="card"><div class="card-body">
+    <form method="post" action="{{ url_for('dashboard.knowledge_add') }}">
+      <div class="mb-2">
+        <input type="text" name="title" class="form-control form-control-sm" placeholder="Title — e.g. How to reset a user's MFA">
+      </div>
+      <div class="mb-2">
+        <textarea name="content" rows="5" class="form-control form-control-sm" required
+                  placeholder="Write the how-to / SOP here. It gets embedded into the knowledge base and surfaces in answers + ticket suggestions."></textarea>
+      </div>
+      <button class="btn btn-sm btn-primary"><i class="bi bi-journal-plus me-1"></i>Add to knowledge base</button>
+    </form>
+  </div></div>
 </div>
 
 <form method="post" action="{{ url_for('dashboard.knowledge') }}" class="mb-3">

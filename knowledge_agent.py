@@ -135,8 +135,10 @@ def reindex():
     vectors = _embed([f"{t}\n\n{c}" for (_st, _sid, t, c) in items])
     db = _db()
     try:
-        # Preserve learned runbooks (source_type='runbook') — only the static corpus is rebuilt.
-        db.execute("DELETE FROM knowledge_chunk WHERE source_type <> 'runbook'")
+        # Rebuild ONLY the static corpus; preserve generated entries (learned runbooks +
+        # operator-authored manual notes).
+        db.execute("DELETE FROM knowledge_chunk WHERE source_type IN "
+                   "('policy_section','system_description','isms_document')")
         for (st, sid, title, content), vec in zip(items, vectors):
             db.execute(
                 "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
@@ -271,6 +273,31 @@ def learn_from_ticket(ticket_id):
         db.close()
     log.info("learned runbook from ticket %s: %s", ticket_id, title)
     return title
+
+
+def add_manual(title, content):
+    """Operator-authored knowledge entry (a how-to / SOP written directly). Embeds + stores
+    as source_type='manual'. Returns the chunk id. App/raw context-agnostic."""
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("Content is required.")
+    if not title:
+        title = content[:80]
+    vec = _embed([f"{title}\n\n{content}"])[0]
+    db = _db()
+    try:
+        cur = db.execute(
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+            "VALUES ('manual', NULL, ?, ?, ?, ?)",
+            (title, content, json.dumps(vec), _now()),
+        )
+        cid = cur.lastrowid
+        db.commit()
+    finally:
+        db.close()
+    log.info("manual knowledge added: %s (#%s)", title, cid)
+    return cid
 
 
 def learn_from_ticket_async(flask_app, ticket_id):

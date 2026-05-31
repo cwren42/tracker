@@ -4,7 +4,7 @@
 
 {% block content %}
 
-<div class="container-fluid mt-4">
+<div class="mt-4">
     <div class="row mb-4">
         <div class="col d-flex justify-content-between align-items-center">
             <div>
@@ -32,7 +32,6 @@
                             <select class="form-select" id="scriptFileType">
                                 <option value=".ps1">.ps1 (PowerShell)</option>
                                 <option value=".bat">.bat (Batch)</option>
-                                <option value=".sh">.sh (Shell)</option>
                             </select>
                         </div>
                     </div>
@@ -56,8 +55,8 @@
                 <div class="card-body">
                     <div class="row g-3 align-items-end">
                         <div class="col-md-8">
-                            <label class="form-label">File (.ps1, .bat, .sh)</label>
-                            <input type="file" class="form-control" id="scriptUploadFile" accept=".ps1,.bat,.sh">
+                            <label class="form-label">File (.ps1, .bat)</label>
+                            <input type="file" class="form-control" id="scriptUploadFile" accept=".ps1,.bat">
                         </div>
                         <div class="col-md-4 d-grid">
                             <button type="button" class="btn btn-outline-primary" onclick="uploadScriptFile()"><i class="bi bi-cloud-upload me-1"></i>Upload</button>

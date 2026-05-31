@@ -54,7 +54,7 @@ def _normalize_script_file_type(raw: str) -> str:
     if not ft.startswith('.'):
         ft = f'.{ft}'
     if ft not in _SCRIPT_FILE_TYPES:
-        raise ValueError('file_type must be one of: .ps1, .bat, .sh')
+        raise ValueError('file_type must be one of: .ps1, .bat')
     return ft
 
 
@@ -375,9 +375,15 @@ def api_settings_scripts_test(script_id):
     exit_code = int(result.get('exit_code', 1) or 1)
     stdout = (result.get('stdout') or '').strip()
     stderr = (result.get('stderr') or '').strip()
+    # PowerShell serializes its warning/verbose streams to stderr as CLIXML even when a
+    # script succeeds (exit 0). That is NOT a failure — pass/fail is decided by exit_code.
+    # Label such output as warnings so a clean run doesn't look broken.
+    if stderr.startswith('#< CLIXML') or '<Objs ' in stderr[:200]:
+        stderr = '(PowerShell warning/verbose stream — not an error)'
     summary = (stdout[:1000] + ('\n...' if len(stdout) > 1000 else '')).strip()
     if stderr:
-        summary = (summary + '\nSTDERR:\n' + stderr[:1000]).strip()
+        label = 'STDERR' if exit_code != 0 else 'Warnings'
+        summary = (summary + f'\n{label}:\n' + stderr[:1000]).strip()
 
     db.session.execute(text("""
         UPDATE rmm_script_library

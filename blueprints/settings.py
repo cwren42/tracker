@@ -48,10 +48,12 @@ bp = Blueprint('settings', __name__)
 # ==================== SETTINGS ====================
 
 
+# NOTE: .sh/bash intentionally omitted — agents run any non-cmd script as PowerShell,
+# so a .sh would silently run under PowerShell. Re-add with a real agent bash branch
+# (AGENT_VERSION bump + self-update) if/when Linux script execution is needed.
 _SCRIPT_FILE_TYPES = {
     '.ps1': 'powershell',
     '.bat': 'cmd',
-    '.sh': 'bash',
 }
 
 

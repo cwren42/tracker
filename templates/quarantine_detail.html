@@ -305,6 +305,25 @@
       {% endif %}
       {% endif %}
 
+      <!-- User: request an admin unblock this sender domain -->
+      {% if not is_admin and msg.release_status == 'Blocked' and msg.sender_domain %}
+      <div class="card mb-3" style="border-color:rgba(13,110,253,.25)">
+        <div class="card-header fw-semibold"><i class="bi bi-unlock me-2"></i>Blocked Domain</div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">
+            Mail from <span style="font-family:monospace;">{{ msg.sender_domain }}</span> is currently blocked.
+            If you believe this is legitimate, ask an admin to review and unblock the domain.
+          </p>
+          <textarea id="unblock-reason" class="form-control form-control-sm mb-2" rows="2"
+                    placeholder="Optional: why should this domain be unblocked?"></textarea>
+          <button class="btn btn-outline-primary btn-sm w-100" id="unblock-btn"
+                  onclick="requestDomainUnblock('{{ msg.sender_domain }}', '{{ msg.message_id }}', this)">
+            <i class="bi bi-unlock me-1"></i>Request Domain Unblock
+          </button>
+        </div>
+      </div>
+      {% endif %}
+
       <!-- Campaign / Related messages -->
       {% if is_admin and related %}
       <div class="card mb-3">
@@ -440,6 +459,32 @@ function showToast(msg, level) {
   t.textContent = msg;
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+// ── User: request an admin unblock a blocked sender domain ───────────────────
+async function requestDomainUnblock(domain, messageId, btn) {
+  if (!confirm('Ask an admin to review and unblock the domain "' + domain + '"?')) return;
+  const reasonEl = document.getElementById('unblock-reason');
+  const reason = reasonEl ? reasonEl.value.trim() : '';
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  try {
+    const res = await fetch('/quarantine/domain/' + encodeURIComponent(domain) + '/request-unblock', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({reason: reason, message_id: messageId}),
+    }).then(r => r.json());
+    if (res.ok) {
+      showToast(res.message || 'Unblock request sent to the admin.', 'success');
+      btn.outerHTML = '<span class="badge bg-info text-dark"><i class="bi bi-check2 me-1"></i>Unblock requested</span>';
+    } else {
+      btn.disabled = false; btn.innerHTML = orig;
+      showToast(res.error || 'Could not send request.', 'danger');
+    }
+  } catch (e) {
+    btn.disabled = false; btn.innerHTML = orig;
+    showToast('Request failed: ' + String(e), 'danger');
+  }
 }
 function authChip(name, val) {
   const cls = val === 'pass' ? 'auth-pass' : (val === 'fail' || val === 'softfail' ? 'auth-fail' : 'auth-none');

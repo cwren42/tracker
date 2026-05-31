@@ -25,13 +25,56 @@ from flask_login import current_user, login_required
 from sqlalchemy import case, func, or_, text
 
 from extensions import db
-from models import (AzureIntegrationConfig, QuarantineIOC, QuarantineMessage,
-                    now_mst)
+from models import (AzureIntegrationConfig, DomainUnblockRequest, QuarantineIOC,
+                    QuarantineMessage, now_mst)
 from utils import admin_required, email_access_required, send_admin_notification
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("quarantine", __name__)
+
+
+def _ensure_domain_unblock_table():
+    """Idempotently create the domain_unblock_request table.
+
+    The app has no db.create_all() on startup, so additive tables are created
+    here with CREATE TABLE IF NOT EXISTS (matches the migrate_add_quarantine.py
+    DDL). Safe to call repeatedly; never alters/drops existing data.
+    """
+    try:
+        from pg_db import pg_connect
+        con = pg_connect()
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS domain_unblock_request (
+                    id            BIGSERIAL PRIMARY KEY,
+                    domain        TEXT NOT NULL,
+                    message_id    TEXT,
+                    requested_by  TEXT NOT NULL,
+                    reason        TEXT,
+                    status        TEXT NOT NULL DEFAULT 'pending',
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    decided_by    TEXT,
+                    decided_at    TIMESTAMPTZ,
+                    decision_note TEXT
+                )
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dur_status ON domain_unblock_request(status)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dur_domain ON domain_unblock_request(domain)"
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:  # pragma: no cover - never block app import
+        logger.warning("Could not ensure domain_unblock_request table: %s", e)
+
+
+_ensure_domain_unblock_table()
 
 # ─── Sync state: stored in Setting table so all gunicorn workers see the same state ──
 _SYNC_STATE_KEY_PREFIX = "quarantine_sync_state"
@@ -364,6 +407,13 @@ def quarantine_list():
 
     last_sync = _read_sync_cursor(sync_scope_email)
 
+    unblock_pending_count = 0
+    if is_admin:
+        try:
+            unblock_pending_count = DomainUnblockRequest.query.filter_by(status="pending").count()
+        except Exception:
+            unblock_pending_count = 0
+
     return render_template(
         "quarantine.html",
         messages=messages,
@@ -384,6 +434,7 @@ def quarantine_list():
         last_sync=last_sync,
         now=datetime.utcnow(),
         is_admin=is_admin,
+        unblock_pending_count=unblock_pending_count,
     )
 
 
@@ -748,6 +799,182 @@ def quarantine_request_release(message_id):
     )
     send_admin_notification(subject, body)
     return jsonify({"ok": True, "message": "Release request sent to the admin."})
+
+
+# ─── Blocked-domain unblock requests ──────────────────────────────────────────
+# Mirrors the release-request pattern: a user who sees mail blocked from a
+# domain can ask an admin to reconsider blocking that domain. Routes to admins
+# (notify + an admin review surface). Approving records the decision; it does
+# NOT mutate the live Tenant Allow/Block List — actual unblock enforcement still
+# goes through the reviewed PowerShell block-script playbook (see
+# quarantine_reports.py / quarantine_report.html). The hook point for future
+# auto-enforcement is marked in quarantine_unblock_decide().
+
+def _normalize_domain(value: str) -> str:
+    """Best-effort extract a bare domain from an address or domain string."""
+    v = (value or "").strip().lower()
+    if "@" in v:
+        v = v.rsplit("@", 1)[-1]
+    return v.strip().strip(".")
+
+
+@bp.route("/quarantine/domain/<path:domain>/request-unblock", methods=["POST"])
+@login_required
+@email_access_required
+def quarantine_request_unblock(domain):
+    """A user requests that an admin review/unblock a blocked sender domain.
+
+    Optional JSON/form fields: reason, message_id (source quarantine message for
+    context). Dedups a pending request for the same domain within 24h. Notifies
+    admins. Does not change any mail-flow policy."""
+    domain = _normalize_domain(domain)
+    if not domain:
+        return jsonify({"error": "A domain is required."}), 400
+
+    data = request.get_json(silent=True) or {}
+    reason = (data.get("reason") or request.form.get("reason") or "").strip()[:1000]
+    src_message_id = (data.get("message_id") or request.form.get("message_id") or "").strip() or None
+
+    # If a source message is supplied, non-admins may only reference their own mail.
+    if src_message_id and current_user.role != "admin":
+        src = QuarantineMessage.query.filter_by(message_id=src_message_id).first()
+        if src:
+            own = (src.recipient_address or "").strip().lower() == (current_user.email or "").strip().lower()
+            if not own:
+                return jsonify({"error": "You can only request unblock for your own messages."}), 403
+
+    now = datetime.utcnow()
+    # Dedup: a pending request for the same domain logged within the last 24h.
+    cutoff = now - timedelta(hours=24)
+    existing = (
+        DomainUnblockRequest.query
+        .filter(func.lower(DomainUnblockRequest.domain) == domain)
+        .filter(DomainUnblockRequest.status == "pending")
+        .filter(DomainUnblockRequest.created_at >= cutoff)
+        .first()
+    )
+    if existing:
+        return jsonify({
+            "ok": True,
+            "message": "An unblock request for this domain is already pending — the admin has been notified.",
+        })
+
+    req = DomainUnblockRequest(
+        domain=domain,
+        message_id=src_message_id,
+        requested_by=current_user.email or current_user.username,
+        reason=reason or None,
+        status="pending",
+    )
+    db.session.add(req)
+    db.session.commit()
+
+    # How widely is this domain blocked? Quick context for the admin.
+    try:
+        blocked_count = (
+            QuarantineMessage.query
+            .filter(func.lower(QuarantineMessage.sender_domain) == domain)
+            .filter(QuarantineMessage.release_status == "Blocked")
+            .count()
+        )
+    except Exception:
+        blocked_count = 0
+
+    requester = getattr(current_user, "display_name", None) or current_user.username
+    try:
+        review_url = url_for("quarantine.quarantine_unblock_requests", _external=True)
+    except Exception:
+        review_url = "/quarantine/unblock-requests"
+    subject = f"[Unblock request] {domain}"
+    body = (
+        f"<p><strong>{requester}</strong> ({current_user.email}) requested that the "
+        f"blocked sender domain <strong>{domain}</strong> be reviewed for unblocking.</p>"
+        f"<ul>"
+        f"<li><strong>Domain:</strong> {domain}</li>"
+        f"<li><strong>Blocked messages from this domain:</strong> {blocked_count}</li>"
+        f"<li><strong>Requested by:</strong> {requester} ({current_user.email})</li>"
+        f"<li><strong>Reason:</strong> {reason or '(none provided)'}</li>"
+        f"</ul>"
+        f"<p><a href=\"{review_url}\">Review &amp; decide on this request in the Tracker</a></p>"
+        f"<p style='color:#6b7280;font-size:12px;'>Approving records the decision and notifies — it does "
+        f"not auto-change the Tenant Allow/Block List. Unblock enforcement still runs through the reviewed "
+        f"PowerShell block-script playbook.</p>"
+    )
+    send_admin_notification(subject, body)
+    return jsonify({"ok": True, "message": "Unblock request sent to the admin."})
+
+
+@bp.route("/quarantine/unblock-requests")
+@login_required
+@admin_required
+def quarantine_unblock_requests():
+    """Admin surface: list domain unblock requests (pending first)."""
+    status_filter = (request.args.get("status") or "").strip().lower()
+    q = DomainUnblockRequest.query
+    if status_filter in ("pending", "approved", "denied"):
+        q = q.filter(DomainUnblockRequest.status == status_filter)
+    requests_list = q.order_by(
+        case((DomainUnblockRequest.status == "pending", 0), else_=1),
+        DomainUnblockRequest.created_at.desc(),
+    ).all()
+    pending_count = DomainUnblockRequest.query.filter_by(status="pending").count()
+    return render_template(
+        "quarantine_unblock_requests.html",
+        requests=requests_list,
+        status_filter=status_filter,
+        pending_count=pending_count,
+        now=datetime.utcnow(),
+    )
+
+
+@bp.route("/quarantine/unblock-requests/<int:req_id>/decide", methods=["POST"])
+@login_required
+@admin_required
+def quarantine_unblock_decide(req_id):
+    """Admin approves or denies an unblock request.
+
+    Records status + decided_by/at (+ optional note). Does NOT itself mutate any
+    live mail-flow policy. If/when safe auto-enforcement is wired up (e.g. driving
+    Remove-TenantAllowBlockListItems via the reviewed block-script), this is the
+    hook point — gate it behind an explicit, audited admin action."""
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    req = DomainUnblockRequest.query.get_or_404(req_id)
+    data = request.get_json(silent=True) or {}
+    decision = (data.get("decision") or request.form.get("decision") or "").strip().lower()
+    note = (data.get("note") or request.form.get("note") or "").strip()[:1000] or None
+
+    if decision not in ("approve", "deny"):
+        msg = "Decision must be 'approve' or 'deny'."
+        if is_ajax:
+            return jsonify({"error": msg}), 400
+        flash(msg, "danger")
+        return redirect(url_for("quarantine.quarantine_unblock_requests"))
+
+    if req.status != "pending":
+        msg = f"This request was already {req.status}."
+        if is_ajax:
+            return jsonify({"error": msg}), 400
+        flash(msg, "warning")
+        return redirect(url_for("quarantine.quarantine_unblock_requests"))
+
+    req.status = "approved" if decision == "approve" else "denied"
+    req.decided_by = current_user.email or current_user.username
+    req.decided_at = datetime.utcnow()
+    req.decision_note = note
+    db.session.commit()
+
+    # NOTE: enforcement hook — approving does NOT auto-remove the domain from the
+    # Tenant Allow/Block List. To actually unblock, an admin runs the reviewed
+    # PowerShell (Remove-TenantAllowBlockListItems) from the block-script playbook.
+
+    flash_msg = (
+        f"Unblock request for {req.domain} {req.status}."
+        + (" Run the block-script playbook to enforce the unblock." if req.status == "approved" else "")
+    )
+    if is_ajax:
+        return jsonify({"ok": True, "status": req.status, "message": flash_msg})
+    flash(flash_msg, "success")
+    return redirect(url_for("quarantine.quarantine_unblock_requests"))
 
 
 @bp.route("/quarantine/ai-analyze-bulk", methods=["POST"])

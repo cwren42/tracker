@@ -1180,6 +1180,28 @@ class QuarantineIOC(db.Model):
     first_seen   = db.Column(db.DateTime, default=datetime.utcnow)
     seen_count   = db.Column(db.Integer, default=1)
 
+
+class DomainUnblockRequest(db.Model):
+    """A user-submitted request to review/unblock a blocked sender domain.
+
+    Mirrors the quarantine "release request" pattern: a non-admin who sees mail
+    blocked from a domain can ask an admin to reconsider. Approving records the
+    decision + notifies — it does NOT itself mutate any live mail-flow policy
+    (Tenant Allow/Block List). Enforcement still goes through the reviewed
+    PowerShell block-script playbook in quarantine_reports.
+    """
+    __tablename__ = 'domain_unblock_request'
+    id            = db.Column(db.BigInteger, primary_key=True)
+    domain        = db.Column(db.Text, nullable=False)
+    message_id    = db.Column(db.Text)                       # source quarantine message (optional context)
+    requested_by  = db.Column(db.Text, nullable=False)       # email or username of requester
+    reason        = db.Column(db.Text)                       # optional justification from the user
+    status        = db.Column(db.Text, nullable=False, default='pending')  # pending | approved | denied
+    created_at    = db.Column(db.DateTime(timezone=True), default=now_mst)
+    decided_by    = db.Column(db.Text)                       # admin who approved/denied
+    decided_at    = db.Column(db.DateTime(timezone=True))
+    decision_note = db.Column(db.Text)                       # optional admin note
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 

@@ -60,6 +60,11 @@
       <a href="{{ url_for('quarantine.quarantine_campaigns') }}" class="btn btn-sm btn-outline-warning">
         <i class="bi bi-diagram-3 me-1"></i>Campaigns
       </a>
+      <a href="{{ url_for('quarantine.quarantine_unblock_requests') }}" class="btn btn-sm btn-outline-secondary"
+         title="Review user requests to unblock blocked domains">
+        <i class="bi bi-unlock me-1"></i>Unblock Requests
+        {% if unblock_pending_count %}<span class="badge bg-warning text-dark ms-1">{{ unblock_pending_count }}</span>{% endif %}
+      </a>
       <a href="{{ url_for('quarantine.quarantine_export_iocs') }}" class="btn btn-sm btn-outline-secondary">
         <i class="bi bi-download me-1"></i>Export IOCs
       </a>

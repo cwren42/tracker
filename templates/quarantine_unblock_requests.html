@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Domain Unblock Requests{% endblock %}
+
+{% block content %}
+<div class="content py-3">
+
+  <!-- Header -->
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <a href="{{ url_for('quarantine.quarantine_list') }}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i>Back to Email Security
+    </a>
+    <span class="text-muted small">›</span>
+    <span class="fw-semibold">Domain Unblock Requests</span>
+    {% if pending_count %}
+    <span class="badge bg-warning text-dark ms-1">{{ pending_count }} pending</span>
+    {% endif %}
+  </div>
+
+  <!-- Status filter chips -->
+  <div class="mb-3 d-flex gap-2">
+    <a href="{{ url_for('quarantine.quarantine_unblock_requests') }}"
+       class="btn btn-sm {{ 'btn-primary' if not status_filter else 'btn-outline-secondary' }}">All</a>
+    <a href="{{ url_for('quarantine.quarantine_unblock_requests', status='pending') }}"
+       class="btn btn-sm {{ 'btn-primary' if status_filter == 'pending' else 'btn-outline-secondary' }}">Pending</a>
+    <a href="{{ url_for('quarantine.quarantine_unblock_requests', status='approved') }}"
+       class="btn btn-sm {{ 'btn-primary' if status_filter == 'approved' else 'btn-outline-secondary' }}">Approved</a>
+    <a href="{{ url_for('quarantine.quarantine_unblock_requests', status='denied') }}"
+       class="btn btn-sm {{ 'btn-primary' if status_filter == 'denied' else 'btn-outline-secondary' }}">Denied</a>
+  </div>
+
+  <div class="alert alert-light border small text-muted" role="alert">
+    <i class="bi bi-info-circle me-1"></i>
+    Approving records the decision and notifies — it does <strong>not</strong> auto-change the Tenant
+    Allow/Block List. To actually unblock a domain, run the reviewed PowerShell
+    (<code>Remove-TenantAllowBlockListItems</code>) from the
+    <a href="{{ url_for('quarantine.quarantine_report') }}">block-script playbook</a>.
+  </div>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Requested by</th>
+            <th>Reason</th>
+            <th>Requested</th>
+            <th>Status</th>
+            <th class="text-end">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in requests %}
+          <tr>
+            <td style="font-family:monospace;">{{ r.domain }}</td>
+            <td>{{ r.requested_by }}</td>
+            <td class="small" style="max-width:280px;">{{ r.reason or '—' }}</td>
+            <td class="small text-muted">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '—' }}</td>
+            <td>
+              {% if r.status == 'pending' %}
+              <span class="badge bg-warning text-dark">Pending</span>
+              {% elif r.status == 'approved' %}
+              <span class="badge bg-success">Approved</span>
+              <div class="small text-muted">by {{ r.decided_by }}{% if r.decided_at %} · {{ r.decided_at.strftime('%m/%d %H:%M') }}{% endif %}</div>
+              {% elif r.status == 'denied' %}
+              <span class="badge bg-secondary">Denied</span>
+              <div class="small text-muted">by {{ r.decided_by }}{% if r.decided_at %} · {{ r.decided_at.strftime('%m/%d %H:%M') }}{% endif %}</div>
+              {% else %}
+              <span class="badge bg-secondary">{{ r.status }}</span>
+              {% endif %}
+              {% if r.decision_note %}<div class="small text-muted fst-italic">{{ r.decision_note }}</div>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if r.status == 'pending' %}
+              <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-success" onclick="decideUnblock({{ r.id }}, 'approve', this)">
+                  <i class="bi bi-check2 me-1"></i>Approve
+                </button>
+                <button class="btn btn-outline-danger" onclick="decideUnblock({{ r.id }}, 'deny', this)">
+                  <i class="bi bi-x me-1"></i>Deny
+                </button>
+              </div>
+              {% else %}
+              <span class="text-muted small">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="text-center text-muted py-5">
+              <i class="bi bi-unlock fs-3 d-block mb-2"></i>
+              No domain unblock requests{% if status_filter %} with status "{{ status_filter }}"{% endif %}.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+async function decideUnblock(reqId, decision, btn) {
+  const verb = decision === 'approve' ? 'approve' : 'deny';
+  const note = prompt('Optional note for this ' + verb + ' decision:') || '';
+  if (note === null) return;
+  const group = btn.closest('.btn-group');
+  group.querySelectorAll('button').forEach(b => b.disabled = true);
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  try {
+    const res = await fetch('/quarantine/unblock-requests/' + reqId + '/decide', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({decision: decision, note: note}),
+    }).then(r => r.json());
+    if (res.ok) {
+      location.reload();
+    } else {
+      group.querySelectorAll('button').forEach(b => b.disabled = false);
+      btn.innerHTML = orig;
+      alert(res.error || 'Could not record decision.');
+    }
+  } catch (e) {
+    group.querySelectorAll('button').forEach(b => b.disabled = false);
+    btn.innerHTML = orig;
+    alert('Request failed: ' + String(e));
+  }
+}
+</script>
+{% endblock %}

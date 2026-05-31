@@ -20,13 +20,13 @@
 </div>
 
 <div id="it-graph" style="height:calc(100vh - 160px); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:relative;
-     background:radial-gradient(ellipse at 50% 40%, #0d1322 0%, #06080f 60%, #03040a 100%);">
+     background:radial-gradient(ellipse at 50% 42%, #102539 0%, #0a1626 55%, #060e1a 100%);">
   <div id="graph-loading" class="position-absolute top-50 start-50 translate-middle text-center">
     <div class="spinner-border text-primary mb-2"></div>
     <div class="small" style="color:#94a3b8;">Assembling the world model…</div>
   </div>
-  <div id="graph-tip" class="position-absolute top-0 start-0 m-2 small" style="color:#64748b;pointer-events:none;">
-    drag to roam · scroll to zoom · hover a star to light its constellation · click to focus
+  <div id="graph-tip" class="position-absolute top-0 start-0 m-2 small" style="color:#5b7187;pointer-events:none;">
+    drag to roam · scroll to zoom · hover a node to light its connections · click to focus
   </div>
 </div>
 
@@ -55,7 +55,7 @@ window.itGraph = null;
       if(nbr[a]) nbr[a].add(b); if(nbr[b]) nbr[b].add(a);
       if(linksByNode[a]) linksByNode[a].push(l); if(linksByNode[b]) linksByNode[b].push(l);
     });
-    function starR(n){ return 1.4 + Math.sqrt(deg[n.id]||0) * 1.1; }
+    function nodeR(n){ return 1.5 + Math.sqrt(deg[n.id]||0) * 1.3; }   // hubs big
 
     var hoverNode = null, hiNodes = new Set(), hiLinks = new Set();
 
@@ -66,12 +66,12 @@ window.itGraph = null;
       .width(el.clientWidth).height(el.clientHeight)
       .nodeVal(function(n){ return 1 + (deg[n.id]||0)*0.5; })
       .nodeLabel(function(n){ return n.label + '  ·  ' + n.type; })
-      .linkColor(function(l){ return hiLinks.has(l) ? rgba(COLORS[l.__c]||'#94a3b8', 0.6) : 'rgba(130,150,190,0.16)'; })
-      .linkWidth(function(l){ return hiLinks.has(l) ? 1.6 : 0.5; })
-      .linkDirectionalParticles(function(l){ return hiLinks.has(l) ? 4 : 0; })
+      // Teal edge-haze: faint teal links sum into a glow through the dense core.
+      .linkColor(function(l){ return hiLinks.has(l) ? 'rgba(130,230,240,0.65)' : 'rgba(56,189,210,0.11)'; })
+      .linkWidth(function(l){ return hiLinks.has(l) ? 1.4 : 0.4; })
+      .linkDirectionalParticles(function(l){ return hiLinks.has(l) ? 3 : 0; })
       .linkDirectionalParticleWidth(2)
-      .linkDirectionalParticleSpeed(0.008)
-      .linkDirectionalParticleColor(function(l){ return rgba(COLORS[l.__c]||'#cbd5e1', 0.9); })
+      .linkDirectionalParticleColor(function(){ return 'rgba(170,240,250,0.9)'; })
       .onNodeHover(function(node){
         hiNodes.clear(); hiLinks.clear(); hoverNode = node || null;
         if(node){
@@ -79,34 +79,32 @@ window.itGraph = null;
           (linksByNode[node.id]||[]).forEach(function(l){ hiLinks.add(l); });
         }
         el.style.cursor = node ? 'pointer' : 'default';
-        // Nudge the web so it visibly reacts to the mouse (Obsidian feel), then settle back.
-        G.d3AlphaTarget(node ? 0.16 : 0.045);
       })
-      .onNodeDrag(function(){ G.d3AlphaTarget(0.3); })
-      .onNodeDragEnd(function(n){ G.d3AlphaTarget(0.045); n.fx = n.x; n.fy = n.y; })  // pin where dropped, like Obsidian
+      .onNodeDragEnd(function(n){ n.fx = n.x; n.fy = n.y; })   // pin where dropped (Obsidian-style)
       .onNodeClick(function(n){
-        if(n.fx !== undefined){ n.fx = undefined; n.fy = undefined; }  // click a pinned node to release it
-        G.centerAt(n.x, n.y, 600); G.zoom(5, 600); G.d3ReheatSimulation();
+        if(n.fx !== undefined){ n.fx = undefined; n.fy = undefined; G.d3ReheatSimulation(); }  // release pin
+        G.centerAt(n.x, n.y, 600); G.zoom(5, 600);
       })
-      .onBackgroundClick(function(){ G.d3ReheatSimulation(); })
       .nodeCanvasObject(function(node, ctx, scale){
         var color = COLORS[node.type] || '#9ca3af';
-        var r = starR(node);
-        var dim = hoverNode && !hiNodes.has(node.id);
-        // glow
-        ctx.globalAlpha = dim ? 0.18 : 1;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = (hoverNode && hiNodes.has(node.id)) ? 22 : 10;
+        var r = nodeR(node);
+        var hub = (deg[node.id]||0) >= 6;
+        var hot = hoverNode && hiNodes.has(node.id);
+        var dim = hoverNode && !hot;
+        ctx.globalAlpha = dim ? 0.14 : 1;
+        // Glow only on hubs + highlighted nodes (cheap — keeps it from freezing).
+        if (hub || hot) { ctx.shadowColor = color; ctx.shadowBlur = hot ? 16 : 11; }
+        else { ctx.shadowBlur = 0; }
         ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2*Math.PI);
         ctx.fillStyle = color; ctx.fill();
-        // bright core
         ctx.shadowBlur = 0;
-        ctx.beginPath(); ctx.arc(node.x, node.y, r*0.45, 0, 2*Math.PI);
-        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+        if (r > 3) {  // bright core on the bigger nodes
+          ctx.beginPath(); ctx.arc(node.x, node.y, r*0.4, 0, 2*Math.PI);
+          ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.fill();
+        }
         ctx.globalAlpha = 1;
-        // label: when zoomed in, or for hub stars, or hovered constellation
-        var showLabel = scale > 2.4 || (deg[node.id]||0) >= 8 || (hoverNode && hiNodes.has(node.id));
-        if(showLabel){
+        var showLabel = scale > 2.6 || (deg[node.id]||0) >= 10 || hot;
+        if (showLabel) {
           var fs = Math.max(3.5, 11/scale);
           ctx.font = fs + 'px Inter, sans-serif';
           ctx.fillStyle = dim ? 'rgba(150,160,180,0.3)' : '#dbe4f0';
@@ -116,28 +114,20 @@ window.itGraph = null;
       })
       .nodePointerAreaPaint(function(node, color, ctx){
         ctx.fillStyle = color; ctx.beginPath();
-        ctx.arc(node.x, node.y, starR(node)+2, 0, 2*Math.PI); ctx.fill();
+        ctx.arc(node.x, node.y, nodeR(node)+2, 0, 2*Math.PI); ctx.fill();
       });
 
-    // Tag each link with its colour source (by the node type it connects from) for particles.
-    d.links.forEach(function(l){
-      var a=(l.source.id!==undefined)?l.source:null;
-      l.__c = (a && a.type) ? a.type : 'asset';
-    });
-
-    // Obsidian-style LIVING graph: the engine never freezes, holds a gentle perpetual
-    // simmer (d3AlphaTarget), and dragging a node pulls its neighbours along the links.
-    G.d3Force('charge').strength(-48).distanceMax(420);
-    G.d3Force('link').distance(34);
-    G.d3VelocityDecay(0.42);     // calm, floaty motion (not jittery)
-    G.d3AlphaDecay(0);           // don't let the simulation cool to a stop
-    G.cooldownTime(Infinity);    // keep ticking/rendering
+    // Spread-out organic layout, then SETTLE AND STOP (the freeze was a never-ending sim).
+    // Cooled, it stays fully interactive — hover lights connections, drag reheats + pins.
+    G.d3Force('charge').strength(-75).distanceMax(520);
+    G.d3Force('link').distance(32);
+    G.d3VelocityDecay(0.4);
+    G.cooldownTime(6000);        // settle ~6s then halt rendering — no CPU burn, no freeze
     G.enableNodeDrag(true);
 
     window.itGraph = G;
     window.addEventListener('resize', function(){ G.width(el.clientWidth).height(el.clientHeight); });
-    // Let it spread out, then fit the view (engine stays live for drag interaction).
-    setTimeout(function(){ G.zoomToFit(900, 70); }, 1400);
+    G.onEngineStop(function(){ if(!G.__fit){ G.__fit = true; G.zoomToFit(700, 70); } });
   }).catch(function(e){
     var el = document.getElementById('it-graph');
     el.innerHTML = '<div class="p-4 text-danger">Failed to load graph: ' + e + '</div>';

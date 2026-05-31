@@ -80,20 +80,17 @@ $list=foreach($p in $ps){
 
 REPL_PS = r"""
 $ErrorActionPreference='Stop'
-$dcs=@((Get-ADDomainController -Filter *).HostName)
-# Bound EACH DC query (the Taiwan RODC has latency) so one slow/unreachable DC can't stall
-# the whole collector. failures=-1 means no response within 25s (treated as a latency flag).
-$rep=foreach($dc in $dcs){
-  $j=Start-Job -ScriptBlock { param($d) @(Get-ADReplicationFailure -Target $d -ErrorAction SilentlyContinue).Count } -ArgumentList $dc
-  if(Wait-Job $j -Timeout 25){ $c=[int](Receive-Job $j) } else { $c=-1; Stop-Job $j -ErrorAction SilentlyContinue }
-  Remove-Job $j -Force -ErrorAction SilentlyContinue
-  [pscustomobject]@{ dc=$dc; failures=$c }
+# Only probe WRITABLE DCs — querying the Taiwan RODC hangs (latency) and can't be cleanly
+# bounded. RODCs are reported separately (count only), not deep-probed.
+$wdc=@((Get-ADDomainController -Filter {IsReadOnly -eq $false}).HostName)
+$rodc=@((Get-ADDomainController -Filter {IsReadOnly -eq $true}).HostName)
+$rep=foreach($dc in $wdc){
+  $f=@(Get-ADReplicationFailure -Target $dc -ErrorAction SilentlyContinue)
+  [pscustomobject]@{ dc=$dc; failures=$f.Count }
 }
 [pscustomobject]@{
-  dc_count=$dcs.Count;
-  total_failures=(@($rep|Where-Object{$_.failures -gt 0}|Measure-Object -Property failures -Sum).Sum);
-  unreachable=@($rep|Where-Object{$_.failures -lt 0}).Count;
-  replication=@($rep)
+  writable_dc_count=$wdc.Count; rodc_count=$rodc.Count; rodcs=@($rodc);
+  total_failures=(@($rep|Measure-Object -Property failures -Sum).Sum); replication=@($rep)
 } | ConvertTo-Json -Compress -Depth 4
 """
 
@@ -160,17 +157,13 @@ def _fgpp_parse(o):
 
 
 def _repl_parse(o):
-    facts = {'dc_count': o.get('dc_count'), 'replication_failures': o.get('total_failures'),
-             'dcs_unreachable': o.get('unreachable')}
-    extra = ["## Replication health by DC", ""]
+    facts = {'writable_dc_count': o.get('writable_dc_count'), 'rodc_count': o.get('rodc_count'),
+             'replication_failures': o.get('total_failures')}
+    extra = ["## Replication health — writable DCs", ""]
     for r in (o.get('replication') or []):
-        n = r.get('failures')
-        if n is not None and n < 0:
-            extra.append(f"- {r.get('dc')}: ⏳ no response in 25s (latency — e.g. Taiwan RODC)")
-        elif n:
-            extra.append(f"- {r.get('dc')}: {n} replication failures ⚠️")
-        else:
-            extra.append(f"- {r.get('dc')}: healthy ✓")
+        extra.append(f"- {r.get('dc')}: {'healthy ✓' if not r.get('failures') else str(r.get('failures')) + ' failures ⚠️'}")
+    if o.get('rodcs'):
+        extra += ["", "## Read-only DCs (not deep-probed — latency)", ""] + [f"- {d}" for d in o['rodcs']]
     return facts, _facts_doc("Active Directory — replication health", facts, extra)
 
 

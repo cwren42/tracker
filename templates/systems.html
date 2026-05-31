@@ -10,7 +10,10 @@
       <span class="text-muted fw-normal fs-6">— the knowledge brain's system registry</span></h1>
     <div class="small text-muted">{{ total }} system{{ 's' if total != 1 }} · the structured catalog of what we run, with docs the agent grounds answers in</div>
   </div>
-  <a href="{{ url_for('systems.system_new') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Add system</a>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('systems.systems_import') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-git me-1"></i>Import from GitLab</a>
+    <a href="{{ url_for('systems.system_new') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Add system</a>
+  </div>
 </div>
 
 {% if not grouped %}

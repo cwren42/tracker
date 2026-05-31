@@ -5,12 +5,15 @@ agent-queryable. Markdown docs attach to a system and flow into the Knowledge Ag
 structured `facts` hold the queryable truth; systems surface as nodes in the IT Graph.
 """
 import re
+import urllib.parse
 
+import requests
 from flask import (Blueprint, render_template, request, redirect, url_for, flash, jsonify)
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import ITSystem, Asset, SystemDoc, SystemDocVersion
+from models import ITSystem, Asset, SystemDoc, SystemDocVersion, Setting
+from secret_store import encrypt_secret, decrypt_secret
 from utils import admin_required
 
 bp = Blueprint('systems', __name__)
@@ -206,6 +209,105 @@ def system_doc_restore(doc_id, version_id):
              doc_id=doc.id, change_summary=f'Restored from v{ver.version_number}')
     flash(f'Restored v{ver.version_number} (saved as v{doc.version}).', 'success')
     return redirect(url_for('systems.system_detail', system_id=doc.system_id))
+
+
+def _setting(key, default=''):
+    r = Setting.query.filter_by(key=key).first()
+    return r.value if (r and r.value) else default
+
+
+def _set_setting(key, value):
+    r = Setting.query.filter_by(key=key).first()
+    if not r:
+        r = Setting(key=key); db.session.add(r)
+    r.value = value
+
+
+def _gitlab_import(base, project, branch, path, token, default_system_id, user):
+    """Pull .md files from a GitLab repo and save each as a versioned system doc (RAG too).
+    Files are routed to a system by top-folder name match, else the chosen default system."""
+    proj = urllib.parse.quote(project, safe='')
+    headers = {'PRIVATE-TOKEN': token}
+    files, page = [], 1
+    while page and page <= 20:
+        r = requests.get(f"{base}/api/v4/projects/{proj}/repository/tree", headers=headers,
+                         params={'ref': branch, 'recursive': 'true', 'path': path, 'per_page': 100, 'page': page},
+                         timeout=30)
+        r.raise_for_status()
+        files += [f for f in r.json() if f.get('type') == 'blob' and f.get('path', '').lower().endswith('.md')]
+        nxt = r.headers.get('X-Next-Page')
+        page = int(nxt) if nxt else 0
+
+    sys_all = ITSystem.query.all()
+    default_sid = int(default_system_id) if default_system_id else (sys_all[0].id if sys_all else None)
+    imported = updated = 0
+    for f in files:
+        fpath = f['path']
+        raw = requests.get(f"{base}/api/v4/projects/{proj}/repository/files/{urllib.parse.quote(fpath, safe='')}/raw",
+                           headers=headers, params={'ref': branch}, timeout=30)
+        if raw.status_code != 200:
+            continue
+        body = raw.text
+        title = None
+        for line in body.splitlines():
+            if line.strip().startswith('#'):
+                title = line.lstrip('#').strip(); break
+        title = title or fpath.rsplit('/', 1)[-1].rsplit('.', 1)[0]
+        # Route to a system: top-folder fuzzy match, else default.
+        target = default_sid
+        top = (fpath.split('/')[0].lower() if '/' in fpath else '')
+        if top:
+            for s in sys_all:
+                nm = (s.name or '').lower()
+                if nm and (top in nm or nm in top or top.replace('-', ' ') in nm):
+                    target = s.id; break
+        if not target:
+            continue
+        doc_key = _slugify(fpath.rsplit('.', 1)[0])[:180]
+        existed = SystemDoc.query.filter_by(system_id=target, doc_key=doc_key).first() is not None
+        save_doc(target, title, body, source='gitlab', source_ref=fpath, user=user, doc_key=doc_key,
+                 change_summary='Updated from GitLab' if existed else 'Imported from GitLab')
+        updated += 1 if existed else 0
+        imported += 0 if existed else 1
+    return {'scanned': len(files), 'imported': imported, 'updated': updated}
+
+
+@bp.route('/systems/import', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def systems_import():
+    if request.method == 'POST':
+        base = (request.form.get('base') or '').strip().rstrip('/') or 'https://gitlab.com'
+        project = (request.form.get('project') or '').strip()
+        branch = (request.form.get('branch') or 'main').strip()
+        path = (request.form.get('path') or '').strip()
+        token = (request.form.get('token') or '').strip()
+        default_system = request.form.get('default_system')
+        fresh_token = bool(token)
+        if not token:
+            saved = _setting('gitlab_token')
+            token = decrypt_secret(saved) if saved else ''
+        if not project or not token:
+            flash('GitLab project path and a token are required.', 'warning')
+            return redirect(url_for('systems.systems_import'))
+        try:
+            res = _gitlab_import(base, project, branch, path, token, default_system, current_user.username)
+            flash(f"GitLab import: {res['imported']} new, {res['updated']} updated "
+                  f"({res['scanned']} .md files scanned).", 'success')
+        except Exception as e:
+            flash(f'GitLab import failed: {e}', 'danger')
+            return redirect(url_for('systems.systems_import'))
+        if request.form.get('save_config'):
+            _set_setting('gitlab_base', base); _set_setting('gitlab_project', project)
+            _set_setting('gitlab_branch', branch); _set_setting('gitlab_path', path)
+            _set_setting('gitlab_default_system', default_system or '')
+            if fresh_token:
+                _set_setting('gitlab_token', encrypt_secret(token))   # encrypted at rest
+            db.session.commit()
+        return redirect(url_for('systems.systems'))
+    cfg = {k: _setting('gitlab_' + k) for k in ('base', 'project', 'branch', 'path', 'default_system')}
+    cfg['has_token'] = bool(_setting('gitlab_token'))
+    return render_template('systems_import.html', systems=ITSystem.query.order_by(ITSystem.name).all(), cfg=cfg)
 
 
 @bp.route('/systems/<int:system_id>/delete', methods=['POST'])

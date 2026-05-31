@@ -241,13 +241,20 @@
       <div class="card mb-3">
         <div class="card-header d-flex align-items-center justify-content-between">
           <span class="fw-semibold"><i class="bi bi-stars me-2" style="color:#a78bfa"></i>AI Analysis</span>
-          <button class="btn btn-sm btn-outline-primary" onclick="runDetailAiAnalysis('{{ msg.message_id }}')">
-            <i class="bi bi-stars me-1"></i>Analyze Email
-          </button>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" onclick="runDetailAiVerdict('{{ msg.message_id }}')">
+              <i class="bi bi-shield-check me-1"></i>Verdict
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="runDetailAiAnalysis('{{ msg.message_id }}')">
+              <i class="bi bi-stars me-1"></i>Full Analysis
+            </button>
+          </div>
         </div>
         <div class="card-body">
+          <div id="detail-ai-verdict"></div>
           <div id="detail-ai-content" class="text-muted small">
-            Uses email metadata and raw headers to produce a SOC-style assessment.
+            <strong>Verdict</strong> = quick structured triage (advisory). <strong>Full Analysis</strong> = SOC-style write-up.
+            Based on metadata + headers — message body isn't available for quarantined/blocked mail.
           </div>
         </div>
       </div>
@@ -386,7 +393,7 @@
           </ul>
           <div class="tab-content px-4 pb-3 pt-2">
             <div class="tab-pane active" id="pv-tab-body">
-              <div id="pv-body-placeholder" class="text-center text-muted py-4"><i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>Body available only for threat-detected messages via Defender (EmailContent table).</div>
+              <div id="pv-body-placeholder" class="text-center text-muted py-4"><i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>Body is fetched via Graph (Mail.Read) and is only available for mail still in a mailbox (Delivered/Junk/Released) — quarantined and blocked messages have no retrievable body.</div>
               <iframe id="pv-body-frame" sandbox="allow-same-origin allow-popups" style="width:100%;min-height:360px;background:white;border:1px solid #2a2f3a;border-radius:6px;display:none;"></iframe>
             </div>
             <div class="tab-pane" id="pv-tab-urls"><div id="pv-urls"></div></div>
@@ -506,6 +513,37 @@ async function runDetailAiAnalysis(messageId) {
     }
   } catch (e) {
     target.innerHTML = `<div class="alert alert-danger mt-3">Failed: ${escHtml(String(e))}</div>`;
+  }
+}
+function verdictColor(v){return ({phishing:'danger',malware:'danger',bec:'danger',spam:'warning',bulk:'warning',legitimate:'success',uncertain:'secondary'})[v]||'secondary';}
+function actionColor(a){return ({block:'danger','delete':'danger',release:'success',investigate:'warning',none:'secondary'})[a]||'secondary';}
+async function runDetailAiVerdict(messageId) {
+  const v = document.getElementById('detail-ai-verdict');
+  if (!v) return;
+  v.innerHTML = '<div class="py-2"><div class="spinner-border spinner-border-sm text-primary me-2"></div><span class="text-muted small">Assessing…</span></div>';
+  try {
+    const r = await fetch(`/quarantine/${encodeURIComponent(messageId)}/ai-verdict`, {
+      method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'},
+    }).then(r => r.json());
+    if (r.error) {
+      v.innerHTML = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(r.error)}</div>`;
+      return;
+    }
+    const d = r.verdict || {};
+    const conf = Math.round((d.confidence || 0) * 100);
+    const inds = (d.indicators || []).map(i => `<li>${escHtml(i)}</li>`).join('');
+    v.innerHTML =
+      `<div class="d-flex flex-wrap align-items-center gap-2 mb-2">` +
+        `<span class="badge bg-${verdictColor(d.verdict)} text-uppercase">${escHtml(d.verdict || 'uncertain')}</span>` +
+        `<span class="text-muted small">${conf}% confidence</span>` +
+        `<span class="ms-auto small">Suggested: <span class="badge bg-${actionColor(d.recommended_action)}">${escHtml(d.recommended_action || 'investigate')}</span></span>` +
+      `</div>` +
+      (d.rationale ? `<div class="small mb-2">${escHtml(d.rationale)}</div>` : '') +
+      (d.auth_assessment ? `<div class="small text-muted mb-2"><i class="bi bi-shield-lock me-1"></i>${escHtml(d.auth_assessment)}</div>` : '') +
+      (inds ? `<ul class="small mb-2">${inds}</ul>` : '') +
+      `<div class="text-muted" style="font-size:.7rem;">Advisory only — you decide. Assessed by ${escHtml(r.model || 'GPT-4o')}.</div>`;
+  } catch (e) {
+    v.innerHTML = `<div class="alert alert-danger">Failed: ${escHtml(String(e))}</div>`;
   }
 }
 function renderMarkdown(text) {

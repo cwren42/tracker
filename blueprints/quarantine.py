@@ -613,64 +613,13 @@ def quarantine_preview(message_id):
         **preview,
     })
 
-def _get_openai_email_config():
-    from models import Setting
-
-    from secret_store import decrypt_secret
-    api_key_row = Setting.query.filter_by(key="openai_api_key").first()
-    api_key = decrypt_secret(api_key_row.value) if api_key_row else None
-    if not api_key:
-        raise ValueError("OpenAI API key not configured — add it in Settings -> AI")
-
-    model_row = Setting.query.filter_by(key="openai_model").first()
-    model = (model_row.value if model_row and model_row.value else None) or "gpt-4o"
-    return api_key, model
-
-
-def _build_ai_message_summary(msg: QuarantineMessage, include_headers: bool = True) -> str:
-    lines = [
-        f"Subject: {msg.subject or '(none)'}",
-        f"From: {msg.sender_address or '(unknown)'}",
-        f"To: {msg.recipient_address or '(unknown)'}",
-        f"Direction: {msg.email_direction or 'Unknown'}",
-        f"Disposition: {msg.release_status or 'Unknown'}",
-        f"Threat type: {msg.threat_type or 'None'}",
-        f"Detection policy: {msg.policy_type or 'None'}",
-        f"SPF: {msg.spf_result or 'none'}, DKIM: {msg.dkim_result or 'none'}, DMARC: {msg.dmarc_result or 'none'}",
-        f"Sender IP: {msg.sender_ip or 'Unknown'}",
-        f"URLs: {msg.url_count or 0}, Attachments: {msg.attachment_count or 0}",
-        f"Risk score: {msg.risk_score or 'N/A'} ({msg.risk_label or 'N/A'})",
-    ]
-    if include_headers:
-        raw_headers = (msg.raw_headers or "").strip()
-        if raw_headers:
-            lines.append("Raw headers excerpt:")
-            lines.append(raw_headers[:4000])
-        else:
-            lines.append("Raw headers excerpt: Not available")
-    return "\n".join(lines)
-
-
-def _run_openai_email_analysis(system_prompt: str, user_prompt: str, max_tokens: int = 700):
-    import requests as _http
-
-    api_key, model = _get_openai_email_config()
-    resp = _http.post(
-        "https://api.openai.com/v1/chat/completions",
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": max_tokens,
-        },
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    analysis = resp.json()["choices"][0]["message"]["content"].strip()
-    return analysis, model
+# Email-AI helpers live in email_agent.py (shared with verdict/bulk/future capabilities).
+from email_agent import (
+    get_openai_config as _get_openai_email_config,
+    build_message_summary as _build_ai_message_summary,
+    run_chat as _run_openai_email_analysis,
+    analyze_verdict as _analyze_email_verdict,
+)
 
 
 _MAILBOX_MESSAGE_STATUSES = {"Delivered", "Junk", "Released"}
@@ -719,6 +668,23 @@ def quarantine_ai_analyze(message_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"AI analysis failed: {str(e)}"}), 500
+
+
+@bp.route("/quarantine/<path:message_id>/ai-verdict", methods=["POST"])
+@login_required
+@email_access_required
+def quarantine_ai_verdict(message_id):
+    """Structured AI triage verdict for one message (advisory only). Admin only."""
+    if current_user.role != "admin":
+        return jsonify({"error": "AI analysis is only available to admins."}), 403
+    msg = QuarantineMessage.query.filter_by(message_id=message_id).first_or_404()
+    try:
+        verdict, model = _analyze_email_verdict(msg)
+        return jsonify({"verdict": verdict, "model": model})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"AI verdict failed: {str(e)}"}), 500
 
 
 @bp.route("/quarantine/ai-analyze-bulk", methods=["POST"])

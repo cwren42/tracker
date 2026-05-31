@@ -379,7 +379,7 @@
             <div class="tab-pane active" id="pv-tab-body">
               <div id="pv-body-placeholder" class="text-center text-muted py-4">
                 <i class="bi bi-envelope-slash d-block fs-2 mb-2"></i>
-                Body available only for threat-detected messages via Defender Advanced Hunting (EmailContent table).
+                Body is fetched via Graph (Mail.Read) and only for mail still in a mailbox (Delivered/Junk/Released) — quarantined/blocked messages have no retrievable body.
               </div>
               <iframe id="pv-body-frame" sandbox="allow-same-origin allow-popups"
                       style="width:100%;min-height:360px;background:white;border:1px solid var(--border);border-radius:6px;display:none;"></iframe>

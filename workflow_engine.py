@@ -602,12 +602,13 @@ def _claim_pending(row_id, *, to_approval_status, to_status):
 
 
 def approve_action(row_id, approver):
-    """Approve a parked action and replay it via its handler, in a background thread so a
-    long-running dispatch never blocks the request worker. Returns (claimed, info).
+    """Approve a parked action: run JUST that action via its handler, then RESUME the rest
+    of the parked workflow run (full DAG resume). Runs in a background thread so a long
+    dispatch never blocks the request worker. Returns (claimed, info).
 
-    NOTE (v1): this replays the single gated action. It does NOT auto-resume the rest of
-    the parked workflow run (full DAG resume is the next iteration). The replay sets
-    ctx['_approved']=True — the ONLY place that flag is ever set — so the action runs."""
+    The approved action runs by calling its handler directly — the gate lives in _drive,
+    not the handler, so the direct call executes it. The resumed remainder runs through
+    _drive normally, so any FURTHER medium/high action parks again for its own approval."""
     before = _claim_pending(row_id, to_approval_status="approved", to_status="running")
     if before is None:
         return False, {"error": "Not a pending approval (already resolved, denied, or not found)."}
@@ -620,10 +621,12 @@ def approve_action(row_id, approver):
         return True, {"error": f"Approved, but no replayable action ({action_type})."}
 
     def _run():
+        config = replay.get("config") or {}
+        ctx = dict(replay.get("ctx") or {})
+        step_id = replay.get("step_id")
+        run_id = replay.get("run_id")
         try:
-            ctx = dict(replay.get("ctx") or {})
-            ctx["_approved"] = True            # satisfies the gate; set ONLY on this path
-            success, output = ACTION_MAP[action_type](replay.get("config") or {}, ctx)
+            success, output = ACTION_MAP[action_type](config, ctx)
         except Exception as e:
             success, output = False, {"error": str(e)}
         out = output if isinstance(output, dict) else {"result": str(output)}
@@ -636,6 +639,20 @@ def approve_action(row_id, approver):
         _ledger_result(row_id, "succeeded" if success else "failed",
                        after_state=out, verification_status=vstatus,
                        verification_detail=f"approved by {approver}")
+        if step_id:
+            _update_step(step_id, "completed" if success else "failed", out)
+        # Resume the rest of the run (or fail it if the approved action failed).
+        if run_id:
+            if success:
+                merged = {**ctx, **{k: v for k, v in out.items() if not k.startswith("_")}}
+                try:
+                    resume_run(run_id, replay.get("node_id"), merged,
+                               replay.get("visited") or [], replay.get("queue") or [])
+                except Exception:
+                    log.exception("resume_run failed for run %s", run_id)
+                    _finish_run(run_id, "failed", "resume failed after approval")
+            else:
+                _finish_run(run_id, "failed", out.get("error") or "approved action failed")
 
     threading.Thread(target=_run, daemon=True, name=f"approve-{row_id}").start()
     return True, {"approved": True, "action_type": action_type, "by": approver}
@@ -1171,36 +1188,84 @@ def execute_workflow(workflow_id: int, trigger_data: dict = None) -> int:
     return run_id
 
 
+def _build_graph(nodes, edges):
+    """(node_map, adj, edge_conditions) from a workflow definition."""
+    adj, edge_conditions = {}, {}
+    for e in edges:
+        src, tgt = e.get("source"), e.get("target")
+        if src and tgt:
+            adj.setdefault(src, []).append(tgt)
+            if e.get("label"):
+                edge_conditions[(src, tgt)] = e["label"].lower()
+    node_map = {n["id"]: n for n in nodes}
+    return node_map, adj, edge_conditions
+
+
+def _load_run_definition(run_id):
+    """Reload the (nodes, edges) of the workflow behind a run — used to resume a parked run."""
+    db = _db()
+    try:
+        row = db.execute(
+            "SELECT wd.nodes AS nodes, wd.edges AS edges FROM workflow_runs wr "
+            "JOIN workflow_definitions wd ON wd.id = wr.workflow_id WHERE wr.id=?",
+            (run_id,)).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return None, None
+    parse = lambda x: x if isinstance(x, list) else json.loads(x or "[]")
+    return parse(row["nodes"]), parse(row["edges"])
+
+
+def _set_run_status(run_id, status, error=None):
+    db = _db()
+    try:
+        db.execute("UPDATE workflow_runs SET status=?, error=? WHERE id=?", (status, error, run_id))
+        db.commit()
+    finally:
+        db.close()
+
+
 def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
     try:
-        # Seed correlation + actor for the command ledger so every device action in
-        # this run is tied together and attributed. _-prefixed keys are not merged
-        # into downstream node output (see action merge below).
+        # Seed correlation + actor for the command ledger so every action in this run is
+        # tied together and attributed. _-prefixed keys are not merged into downstream
+        # node output (see the action merge in _drive).
         ctx = dict(ctx or {})
-        # Never let caller-supplied trigger_data pre-satisfy the approval gate: _approved
-        # is set ONLY on the internal approve-replay path, never from a trigger/webhook.
+        # Never let caller-supplied trigger_data pre-satisfy the approval gate.
         ctx.pop("_approved", None)
         ctx.setdefault("_correlation_id", f"wf-run-{run_id}")
         ctx.setdefault("_requested_by", ctx.get("requested_by", "workflow_engine"))
-        # Build adjacency: node_id -> list of target node_ids
-        adj = {}
-        edge_conditions = {}  # (src, tgt) -> condition label (true/false)
-        for e in edges:
-            src, tgt = e.get("source"), e.get("target")
-            if src and tgt:
-                adj.setdefault(src, []).append(tgt)
-                if e.get("label"):
-                    edge_conditions[(src, tgt)] = e["label"].lower()
+        node_map, adj, edge_conditions = _build_graph(nodes, edges)
+        start_nodes = [n for n in nodes if n.get("type") == "trigger"] or nodes[:1]
+        _drive(run_id, node_map, adj, edge_conditions, ctx,
+               visited=set(), queue=[n["id"] for n in start_nodes])
+    except Exception:
+        log.exception("Workflow run %s crashed", run_id)
+        _finish_run(run_id, "failed", traceback.format_exc())
 
-        # Find trigger node (type == "trigger")
-        node_map = {n["id"]: n for n in nodes}
-        start_nodes = [n for n in nodes if n.get("type") == "trigger"]
-        if not start_nodes:
-            start_nodes = nodes[:1]
 
-        visited = set()
-        queue   = [n["id"] for n in start_nodes]
+def resume_run(run_id, parked_node_id, ctx, visited, queue):
+    """Continue a parked run after its gated action was approved + executed. Re-enters the
+    DAG at the parked node's successors; any FURTHER medium/high action parks again."""
+    nodes, edges = _load_run_definition(run_id)
+    if nodes is None:
+        log.warning("resume_run: no definition for run %s", run_id)
+        return
+    node_map, adj, edge_conditions = _build_graph(nodes, edges)
+    visited = set(visited or [])
+    # The parked node already executed via approve_action; enqueue its successors + whatever
+    # was still queued when the run parked.
+    new_queue = [t for t in adj.get(parked_node_id, []) if t not in visited] + list(queue or [])
+    _set_run_status(run_id, "running")
+    _drive(run_id, node_map, adj, edge_conditions, dict(ctx or {}), visited, new_queue)
 
+
+def _drive(run_id, node_map, adj, edge_conditions, ctx, visited, queue):
+    """Core DAG traversal — shared by the initial run and resume-after-approval. Runs until
+    the queue drains (completed), an action parks (awaiting_approval), or one fails. The run
+    status is finalized here in every exit path."""
+    try:
         while queue:
             node_id = queue.pop(0)
             if node_id in visited:
@@ -1226,13 +1291,11 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
             success, output = True, {}
 
             if ntype == "trigger":
-                # Trigger node just passes through with context
                 success, output = True, ctx
 
             elif ntype == "condition":
                 result = _evaluate_condition(config, ctx)
                 output = {"result": result}
-                # Only follow matching edges
                 next_nodes = []
                 for tgt in adj.get(node_id, []):
                     label_req = edge_conditions.get((node_id, tgt), "")
@@ -1250,9 +1313,8 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
                 action_type = node.get("action") or config.get("action_type", "")
 
                 # ── Approval gate — single choke point for EVERY action type ──────
-                # Risk-score the action; medium/high park the run for human approval
-                # instead of executing. This covers identity/AD actions as well as
-                # device scripts. ctx['_approved'] is set only by the approve-replay.
+                # medium/high park the run for human approval. Persist enough to resume:
+                # the parked node, the visited set, and the remaining queue.
                 decision, eff_tier, policy_note = approval.decide(action_type, config.get("risk_tier"))
                 if decision == "require" and not ctx.get("_approved"):
                     obj_type, obj_id = _action_object(action_type, config, ctx)
@@ -1263,15 +1325,15 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
                         approval_status="pending", correlation_id=ctx.get("_correlation_id"),
                         status="awaiting_approval",
                         before_state={"replay": {"run_id": run_id, "node_id": node_id,
-                                                 "action_type": action_type, "config": config,
-                                                 "ctx": _redact({k: v for k, v in ctx.items()})},
+                                                 "step_id": step_id, "action_type": action_type,
+                                                 "config": config, "ctx": _redact(dict(ctx)),
+                                                 "visited": list(visited), "queue": list(queue)},
                                       "policy": policy_note, "node_label": label},
                     )
                     parked = {"awaiting_approval": True, "ledger_id": led, "risk_tier": eff_tier,
                               "policy": policy_note,
                               "note": f"{eff_tier}-risk {action_type} parked for human approval"}
                     _update_step(step_id, "awaiting_approval", parked)
-                    # Park the whole run: nothing past the gate runs until approved.
                     _finish_run(run_id, "awaiting_approval",
                                 f"Parked on '{label}' ({action_type}) — needs approval (ledger #{led})")
                     return
@@ -1284,7 +1346,6 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
                         success, output = False, {"error": str(e)}
                 else:
                     success, output = False, {"error": f"Unknown action: {action_type}"}
-                # Merge output into context
                 ctx = {**ctx, **{k: v for k, v in output.items() if not k.startswith("_")}}
 
             status = "completed" if success else "failed"
@@ -1294,14 +1355,13 @@ def _run_workflow(run_id: int, nodes: list, edges: list, ctx: dict):
                 _finish_run(run_id, "failed", output.get("error"))
                 return
 
-            # Enqueue next nodes
             for tgt in adj.get(node_id, []):
                 if tgt not in visited:
                     queue.append(tgt)
 
         _finish_run(run_id, "completed")
-    except Exception as e:
-        log.exception("Workflow run %s crashed", run_id)
+    except Exception:
+        log.exception("Workflow run %s crashed (drive)", run_id)
         _finish_run(run_id, "failed", traceback.format_exc())
 
 

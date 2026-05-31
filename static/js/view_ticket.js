@@ -49,9 +49,10 @@ async function requestAiSuggestion() {
 
 function renderSuggestion(d, body) {
   const p = d.parsed || {};
+  if (!d.informed_by) d.informed_by = p.informed_by || [];
   const conf = p.confidence ? Math.round(p.confidence * 100) : null;
   const confCol = conf >= 85 ? '#5fcf8b' : conf >= 60 ? '#f8a84a' : '#f87171';
-  const sugId = d.suggestion_id;
+  const sugId = d.suggestion_id || d.id;
   body.innerHTML = `
     <div class="mb-2 d-flex align-items-center">
       <strong class="small">AI Diagnosis</strong>
@@ -60,6 +61,7 @@ function renderSuggestion(d, body) {
     <p class="small text-secondary mb-2">${escHtml(p.diagnosis||d.suggestion||'—')}</p>
     ${p.resolution_steps&&p.resolution_steps.length ? `<div class="small mb-2"><strong>Steps:</strong><ol class="mb-1 ps-3">${p.resolution_steps.map(s=>`<li>${escHtml(s)}</li>`).join('')}</ol></div>` : ''}
     ${p.estimated_minutes ? `<div class="small text-muted mb-2"><i class="bi bi-clock me-1"></i>Est. ${p.estimated_minutes} min</div>` : ''}
+    ${(d.informed_by && d.informed_by.length) ? `<div class="small text-muted mb-2 border-top pt-2"><i class="bi bi-clock-history me-1"></i>Informed by past resolved tickets:<ul class="mb-0 ps-3">${d.informed_by.map(t=>`<li><a href="/tickets/${t.id}" class="text-decoration-none">#${t.id}</a> ${escHtml(t.subject||'')}</li>`).join('')}</ul></div>` : ''}
     ${sugId ? `<div class="d-flex gap-2 mt-2">
       <button class="btn btn-sm btn-outline-success py-0 px-2" onclick="applySugg(${sugId})"><i class="bi bi-check-lg"></i> Apply as Note</button>
       <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="dismissSugg(${sugId})"><i class="bi bi-x-lg"></i> Dismiss</button>

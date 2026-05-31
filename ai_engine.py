@@ -62,6 +62,54 @@ def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> st
 # ──────────────────────────────────────────────────────────────────────────────
 # Ticket assistant
 # ──────────────────────────────────────────────────────────────────────────────
+def _resolved_history(category: str, exclude_ticket_id: int = 0, limit: int = 5) -> list:
+    """
+    Return up to `limit` recently-closed tickets in `category`, each with the
+    most useful human resolution note attached. Resolution content lives in
+    ticket_note rows (there is no resolution column). We prefer reply-to-user
+    notes (what the user was actually told), then any internal/plain note,
+    and skip auto-generated SLA/ALERT system lines.
+
+    Returns: [{"id", "subject", "resolution"}]  (resolution may be None).
+    """
+    if not category:
+        return []
+    db = _db()
+    try:
+        rows = db.execute(
+            """
+            SELECT t.id AS id, t.subject AS subject,
+                   (
+                     SELECT n.content FROM ticket_note n
+                     WHERE n.ticket_id = t.id
+                       AND n.content NOT LIKE '[SLA]%'
+                       AND n.content NOT LIKE '[ALERT]%'
+                       AND trim(n.content) <> ''
+                     ORDER BY (CASE WHEN n.is_reply THEN 0 ELSE 1 END), n.created_at DESC
+                     LIMIT 1
+                   ) AS resolution
+            FROM support_ticket t
+            WHERE t.status IN ('Closed', 'Merged')
+              AND t.category = ?
+              AND t.id <> ?
+            ORDER BY t.closed_at DESC NULLS LAST, t.id DESC
+            LIMIT ?
+            """,
+            (category, exclude_ticket_id, limit),
+        ).fetchall()
+    finally:
+        db.close()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        res = (d.get("resolution") or "").strip()
+        if res and len(res) > 600:
+            res = res[:600] + "…"
+        out.append({"id": d["id"], "subject": d["subject"], "resolution": res or None})
+    return out
+
+
 def suggest_ticket_resolution(ticket_id: int) -> dict:
     """
     Generate an AI resolution suggestion for a ticket.
@@ -81,20 +129,50 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
     ).fetchone()
     db2.close()
     if existing:
-        return dict(existing)
+        out = dict(existing)
+        out["suggestion_id"] = out["id"]
+        try:
+            out["informed_by"] = json.loads(out["suggestion"]).get("informed_by", [])
+        except Exception:
+            out["informed_by"] = []
+        return out
+
+    # ── Resolved-history context ───────────────────────────────────────────
+    # Pull recently-closed tickets in the SAME category and the most useful
+    # human resolution note from each, so the model can ground its suggestion
+    # in how we actually resolved similar tickets before.
+    history = _resolved_history(ticket["category"], exclude_ticket_id=ticket_id, limit=5)
 
     system_prompt = (
-        "You are an expert IT support engineer. When given a support ticket, respond with a JSON object:\n"
+        "You are an expert IT support engineer for an internal IT/RMM helpdesk. "
+        "Diagnose the ticket and propose a resolution. When prior resolved tickets in the "
+        "same category are provided, ground your answer in those proven resolutions and "
+        "reuse what worked. Respond with ONLY a JSON object (no markdown, no prose):\n"
         '{"diagnosis": "...", "resolution_steps": ["step1","step2",...], '
-        '"can_auto_resolve": true/false, "category": "hardware|software|network|account|security|other", '
-        '"confidence": 0.0-1.0, "estimated_minutes": N}'
+        '"can_auto_resolve": true/false, "category": "hardware|software|network|email|account|security|other", '
+        '"confidence": 0.0-1.0, "estimated_minutes": N}\n'
+        "Set can_auto_resolve=true only for routine issues with a well-established fix; "
+        "lower the confidence when the history is thin or the issue is ambiguous."
     )
+
+    history_block = "No prior resolved tickets in this category were found."
+    if history:
+        lines = []
+        for h in history:
+            res = h["resolution"] or "(no resolution note recorded)"
+            lines.append(f"- Ticket #{h['id']} [{h['subject']}]\n  Resolution: {res}")
+        history_block = (
+            "How we resolved similar past tickets in this category "
+            f"(category: {ticket['category'] or 'N/A'}):\n" + "\n".join(lines)
+        )
+
     user_prompt = (
-        f"Ticket #{ticket_id}\n"
-        f"Title: {ticket['title']}\n"
+        f"NEW TICKET #{ticket_id}\n"
+        f"Subject: {ticket['subject']}\n"
         f"Description: {ticket['description'] or 'N/A'}\n"
         f"Priority: {ticket['priority']}\n"
-        f"Category: {ticket.get('category', 'N/A')}"
+        f"Category: {ticket['category'] or 'N/A'}\n\n"
+        f"{history_block}"
     )
 
     model = _get_setting("openai_model", "gpt-4o")
@@ -112,6 +190,10 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
         # Fallback: wrap raw text
         parsed = {"diagnosis": raw, "resolution_steps": [], "can_auto_resolve": False,
                   "category": "other", "confidence": 0.5, "estimated_minutes": None}
+
+    # Record which past tickets informed the suggestion (advisory provenance).
+    informed_by = [{"id": h["id"], "subject": h["subject"]} for h in history]
+    parsed["informed_by"] = informed_by
 
     suggestion_text = json.dumps(parsed)
     auto_mode = 1 if _get_setting("ai_ticket_auto_mode") == "1" else 0
@@ -131,14 +213,18 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
     row = db3.execute("SELECT * FROM ai_ticket_suggestions WHERE id=?", (sug_id,)).fetchone()
     db3.close()
 
-    # Auto-apply if mode is on and confidence is high
+    # Auto-apply if mode is on and confidence is high. This adds an advisory
+    # note only — it never closes the ticket. Off by default (ai_ticket_auto_mode).
     if auto_mode and parsed.get("confidence", 0) >= 0.85 and parsed.get("can_auto_resolve"):
         try:
             apply_ticket_suggestion(sug_id, auto=True)
         except Exception:
             log.exception("Auto-apply failed for suggestion %s", sug_id)
 
-    return dict(row)
+    out = dict(row)
+    out["suggestion_id"] = sug_id
+    out["informed_by"] = informed_by
+    return out
 
 
 def apply_ticket_suggestion(suggestion_id: int, auto: bool = False) -> bool:

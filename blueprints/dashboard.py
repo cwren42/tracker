@@ -762,11 +762,32 @@ def it_graph_data():
         if lic.id in lic_used:
             nodes.append({'id': f'lic:{lic.id}', 'label': lic.software_name or f'License {lic.id}', 'type': 'license'})
 
+    # Knowledge the brain has GENERATED (learned runbooks + authored notes) — shown as a
+    # bounded cluster off a "Knowledge" hub (the static ISMS corpus is excluded to avoid
+    # clutter). Raw query: knowledge_chunk is a raw-SQL table, not an ORM model.
+    kn = 0
+    try:
+        from sqlalchemy import text
+        krows = db.session.execute(text(
+            "SELECT id, title, source_type FROM knowledge_chunk "
+            "WHERE source_type IN ('runbook','manual') ORDER BY id DESC LIMIT 60")).fetchall()
+        if krows:
+            nodes.append({'id': 'kb', 'label': 'Knowledge', 'type': 'knowledge'})
+            for k in krows:
+                m = k._mapping
+                nodes.append({'id': f"kb:{m['id']}", 'type': 'knowledge',
+                              'label': (m['title'] or 'Knowledge')[:60]})
+                links.append({'source': 'kb', 'target': f"kb:{m['id']}", 'type': 'knowledge'})
+                kn += 1
+    except Exception:
+        db.session.rollback()
+
     stats = {
         'employees': len(emp_ids), 'assets': len(asset_ids),
         'identities': sum(1 for n in nodes if n['type'] == 'identity'),
         'devices': sum(1 for n in nodes if n['type'] == 'device'),
-        'licenses': len(lic_used), 'nodes': len(nodes), 'links': len(links),
+        'licenses': len(lic_used), 'knowledge': kn,
+        'nodes': len(nodes), 'links': len(links),
     }
     return jsonify({'nodes': nodes, 'links': links, 'stats': stats})
 

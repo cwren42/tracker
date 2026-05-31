@@ -13,6 +13,7 @@
     <span><span class="legend-dot" style="background:#34d399"></span>Identity</span>
     <span><span class="legend-dot" style="background:#fbbf24"></span>Device</span>
     <span><span class="legend-dot" style="background:#c084fc"></span>License</span>
+    <span><span class="legend-dot" style="background:#f472b6"></span>Knowledge</span>
     <button class="btn btn-sm btn-outline-secondary" onclick="if(window.itGraph) itGraph.zoomToFit(600,40)" title="Fit"><i class="bi bi-arrows-fullscreen"></i></button>
   </div>
 </div>
@@ -29,13 +30,14 @@
 <script>
 window.itGraph = null;
 (function(){
-  var COLORS = {employee:'#818cf8', asset:'#22d3ee', identity:'#34d399', device:'#fbbf24', license:'#c084fc'};
+  var COLORS = {employee:'#818cf8', asset:'#22d3ee', identity:'#34d399', device:'#fbbf24', license:'#c084fc', knowledge:'#f472b6'};
   fetch('/api/it-graph/data').then(function(r){return r.json();}).then(function(d){
     var loading = document.getElementById('graph-loading'); if (loading) loading.remove();
     var s = d.stats || {};
     document.getElementById('graph-stats').textContent =
       s.nodes + ' nodes · ' + s.links + ' links — ' + s.employees + ' employees · ' + s.assets +
-      ' assets · ' + s.identities + ' identities · ' + s.devices + ' devices · ' + s.licenses + ' licenses';
+      ' assets · ' + s.identities + ' identities · ' + s.devices + ' devices · ' + s.licenses + ' licenses' +
+      (s.knowledge ? ' · ' + s.knowledge + ' knowledge' : '');
     var el = document.getElementById('it-graph');
     var G = ForceGraph()(el)
       .graphData(d)

@@ -9,7 +9,8 @@
     <h1 class="h4 mb-0"><i class="bi bi-shield-check me-2" style="color:var(--accent)"></i>Approvals</h1>
     <div class="small text-muted">Risk-scored agent actions waiting on a human. Low-risk runs automatically; medium &amp; high are held here.</div>
   </div>
-  <span class="badge rounded-pill" style="background:var(--accent-weak);color:var(--accent);font-size:.85rem;">
+  <span class="badge rounded-pill" id="pending-count" data-count="{{ pending|length }}"
+        style="background:var(--accent-weak);color:var(--accent);font-size:.85rem;">
     {{ pending|length }} pending
   </span>
 </div>
@@ -74,7 +75,7 @@
       <thead class="table-dark"><tr>
         <th>#</th><th>Action</th><th>Risk</th><th>Decision</th><th>Result</th><th>Verify</th><th>When</th>
       </tr></thead>
-      <tbody>
+      <tbody id="recent-tbody">
         {% for row in recent %}
         <tr>
           <td class="small"><a href="{{ url_for('dashboard.ledger_detail', row_id=row.id) }}">{{ row.id }}</a></td>
@@ -90,7 +91,7 @@
           <td class="small text-muted">{{ (row.completed_at or row.created_at).strftime('%b %d %H:%M') if (row.completed_at or row.created_at) else '' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="text-center text-muted py-4">No resolved actions yet.</td></tr>
+        <tr id="recent-empty"><td colspan="7" class="text-center text-muted py-4">No resolved actions yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -100,7 +101,39 @@
 <script>
 function _apprEl(id, p){ return document.getElementById('appr-'+p+'-'+id); }
 function _disableActions(id){ var a=_apprEl(id,'actions'); if(a) a.querySelectorAll('button,input').forEach(function(e){e.disabled=true;}); }
-function _fade(id){ var c=document.getElementById('appr-'+id); if(c) setTimeout(function(){ c.style.transition='opacity .6s'; c.style.opacity=.5; }, 1400); }
+function _esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
+function _title(s){ return (s||'').replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();}); }
+
+function _resultCell(status){
+  if(status==='succeeded'||status==='completed') return '<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>succeeded</span>';
+  if(status==='denied') return '<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>denied</span>';
+  return '<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>failed</span>';
+}
+function _addResolvedRow(d){
+  var tbody=document.getElementById('recent-tbody'); if(!tbody) return;
+  var empty=document.getElementById('recent-empty'); if(empty) empty.remove();
+  var tr=document.createElement('tr');
+  tr.innerHTML = '<td class="small"><a href="/ledger/'+d.id+'">'+d.id+'</a></td>'
+    + '<td>'+_esc(_title(d.action_type))+' <span class="small text-muted">'+_esc(d.tool)+'</span></td>'
+    + '<td><span class="small">'+_esc(d.risk_tier)+'</span></td>'
+    + '<td class="small">'+_esc(d.approval_status)+'</td>'
+    + '<td>'+_resultCell(d.status)+'</td>'
+    + '<td class="small text-muted">'+_esc(d.verification_status||'—')+'</td>'
+    + '<td class="small text-muted">'+_esc(d.when)+'</td>';
+  tr.style.background='var(--accent-weak)';
+  tbody.insertBefore(tr, tbody.firstChild);
+  setTimeout(function(){ tr.style.transition='background 1s'; tr.style.background=''; }, 700);
+}
+function _removePending(id){
+  var c=document.getElementById('appr-'+id);
+  if(c){ c.style.transition='opacity .4s'; c.style.opacity=0; setTimeout(function(){ c.remove(); _refreshPendingCount(); }, 420); }
+  else { _refreshPendingCount(); }
+}
+function _refreshPendingCount(){
+  var badge=document.getElementById('pending-count');
+  var n=document.querySelectorAll('[id^="appr-actions-"]').length;
+  if(badge) badge.textContent=n+' pending';
+}
 
 function approveAction(id, tier){
   if(!confirm('Approve and run this '+tier+'-risk action on the endpoint?')) return;
@@ -128,7 +161,8 @@ function pollApproval(id, tries){
       } else {
         res.innerHTML='<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>Failed'+(d.verification_detail?' — '+d.verification_detail:'')+'</span>';
       }
-      _fade(id);
+      _addResolvedRow(d);
+      _removePending(id);
     } else if(tries>40){
       res.innerHTML='<span class="text-muted">Still running… check back shortly.</span>';
     } else {
@@ -145,9 +179,13 @@ function denyAction(id){
   fetch('/approvals/'+id+'/deny', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'}, body:JSON.stringify({reason:reason})})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      res.innerHTML = d.ok ? '<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied — it will not run.</span>'
-                           : '<span class="text-warning">'+(d.error||'Could not deny')+'</span>';
-      if(d.ok) _fade(id);
+      if(d.ok){
+        res.innerHTML='<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied.</span>';
+        fetch('/api/approvals/'+id+'/status').then(function(r){ return r.json(); })
+          .then(function(s){ _addResolvedRow(s); _removePending(id); });
+      } else {
+        res.innerHTML='<span class="text-warning">'+(d.error||'Could not deny')+'</span>';
+      }
     })
     .catch(function(e){ res.innerHTML='<span class="text-danger">'+e+'</span>'; });
 }

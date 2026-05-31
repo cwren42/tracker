@@ -864,9 +864,13 @@ def approval_status(row_id):
     """Live status of one approval/ledger row — polled by the approvals UI after Approve."""
     from models import CommandLedger
     r = CommandLedger.query.get_or_404(row_id)
-    return jsonify({'status': r.status, 'approval_status': r.approval_status,
+    when = r.completed_at or r.created_at
+    return jsonify({'id': r.id, 'status': r.status, 'approval_status': r.approval_status,
                     'verification_status': r.verification_status,
-                    'verification_detail': r.verification_detail})
+                    'verification_detail': r.verification_detail,
+                    'action_type': r.action_type, 'tool': r.tool, 'risk_tier': r.risk_tier,
+                    'object_id': r.object_id,
+                    'when': when.strftime('%b %d %H:%M') if when else ''})
 
 
 # ── Access view — "what does this person have access to?" (blast radius) ─────────

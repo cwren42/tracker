@@ -251,3 +251,8 @@ _sla_thread = threading.Thread(
     target=tickets._ticket_sla_check, args=(app,), daemon=True
 )
 _sla_thread.start()
+
+# Event bus — the connective tissue. One dispatcher thread per worker; only the
+# cross-process flock winner actually fans events out to workflow triggers.
+import event_bus
+event_bus.start_event_dispatcher(app)

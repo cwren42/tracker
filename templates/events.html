@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Event Bus{% endblock %}
+{% block content %}
+{% set st_color = {'pending':'var(--warning)','dispatched':'var(--success)','error':'var(--danger)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-broadcast-pin me-2" style="color:var(--accent)"></i>Event Bus</h1>
+    <div class="small text-muted">The brain's nervous system — subsystems publish events; a single leader worker dispatches them to workflow triggers.</div>
+  </div>
+  <div class="d-flex gap-3 align-items-center small">
+    {% for s in ['pending','dispatched','error'] %}
+    <span><span class="legend-dot" style="background:{{ st_color[s] }}"></span>{{ counts.get(s, 0) }} {{ s }}</span>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr class="small text-muted">
+        <th>#</th><th>Event</th><th>Source</th><th>Status</th><th>Tries</th><th>Created</th><th>Dispatched</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="small text-muted">{{ r.id }}</td>
+          <td><code style="color:var(--accent)">{{ r.event_type }}</code></td>
+          <td class="small text-muted">{{ r.source or '—' }}</td>
+          <td>
+            <span class="small" style="color:{{ st_color.get(r.status, 'var(--muted)') }}">
+              {% if r.status == 'dispatched' %}<i class="bi bi-check-circle-fill me-1"></i>
+              {% elif r.status == 'error' %}<i class="bi bi-x-circle-fill me-1"></i>
+              {% else %}<i class="bi bi-hourglass-split me-1"></i>{% endif %}{{ r.status }}
+            </span>
+            {% if r.last_error %}<i class="bi bi-info-circle ms-1 text-muted" title="{{ r.last_error }}"></i>{% endif %}
+          </td>
+          <td class="small text-muted">{{ r.attempts }}</td>
+          <td class="small text-muted">{{ r.created_at.strftime('%b %d %H:%M:%S') if r.created_at else '' }}</td>
+          <td class="small text-muted">{{ r.dispatched_at.strftime('%b %d %H:%M:%S') if r.dispatched_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-5">
+          <i class="bi bi-broadcast d-block mb-2" style="font-size:1.6rem;"></i>
+          No events yet. They'll appear here as subsystems publish (e.g. a new ticket emits <code>ticket.created</code>).
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}</style>
+{% endblock %}

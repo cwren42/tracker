@@ -890,3 +890,25 @@ def employee_access(employee_id):
                            admin_roles=admin_roles, m365_licenses=m365_licenses,
                            assets=assets, devices=devices, lic_assigns=lic_assigns,
                            lic_map=lic_map, summary=summary)
+
+
+# ── Event bus monitor — the brain's nervous system, made visible ─────────────────
+@bp.route('/events')
+@login_required
+@admin_required
+def events():
+    """Recent events on the bus + dispatch status. Read-only window onto event_outbox."""
+    from sqlalchemy import text
+    rows, counts = [], {}
+    try:
+        res = db.session.execute(text(
+            "SELECT id, event_type, source, status, attempts, last_error, "
+            "created_at, dispatched_at FROM event_outbox ORDER BY id DESC LIMIT 100"))
+        rows = [dict(r._mapping) for r in res]
+        cres = db.session.execute(text(
+            "SELECT status, COUNT(*) AS n FROM event_outbox GROUP BY status"))
+        counts = {r._mapping['status']: r._mapping['n'] for r in cres}
+    except Exception:
+        # Table may not exist yet (dispatcher creates it at startup).
+        db.session.rollback()
+    return render_template('events.html', rows=rows, counts=counts)

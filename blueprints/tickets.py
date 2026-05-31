@@ -347,6 +347,20 @@ def new_ticket():
         except Exception as _e:
             logger.warning(f'Failed to insert ticket notification bell: {_e}')
 
+        # Emit onto the event bus — the brain's nervous system. Subscribers (workflows
+        # whose trigger_type matches 'ticket.created') react; risky actions still park
+        # for approval. Best-effort, post-commit; never blocks ticket creation.
+        try:
+            import event_bus
+            event_bus.publish('ticket.created', {
+                'ticket_id': ticket.id, 'subject': ticket.subject,
+                'priority': priority, 'category': getattr(ticket, 'category', None),
+                'asset_id': asset.id if asset else None,
+                'submitted_by': current_user.username,
+            }, source='tickets')
+        except Exception as _e:
+            logger.warning(f'Failed to publish ticket.created event: {_e}')
+
         flash(f'Ticket #{ticket.id} created.', 'success')
         return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
 

@@ -63,6 +63,10 @@
            href="{{ url_for('dashboard.approvals') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Approvals">
             <i class="bi bi-shield-check"></i><span class="link-label">Approvals</span>
         </a>
+        <a class="sidebar-link {% if request.endpoint == 'dashboard.events' %}active{% endif %}"
+           href="{{ url_for('dashboard.events') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Event Bus">
+            <i class="bi bi-broadcast-pin"></i><span class="link-label">Event Bus</span>
+        </a>
         {% endif %}
         {% endif %}
 

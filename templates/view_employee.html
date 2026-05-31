@@ -23,6 +23,12 @@
         <span>{{ employee.name }}</span>
     </h1>
     <div class="d-flex gap-2">
+        {% if current_user.role == 'admin' %}
+        <a href="{{ url_for('dashboard.employee_access', employee_id=employee.id) }}" class="btn btn-outline-primary"
+           title="What does this person have access to? (blast radius)">
+            <i class="bi bi-diagram-3"></i> Access
+        </a>
+        {% endif %}
         {% if current_user.role in ['admin', 'manager'] %}
         <a href="{{ url_for('employees.edit_employee', employee_id=employee.id) }}" class="btn btn-warning">
             <i class="bi bi-pencil-square"></i> Edit

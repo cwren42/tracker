@@ -823,3 +823,70 @@ def deny_action(row_id):
     flash("Action denied — it will not run." if success else (output.get('error') or 'Could not deny.'),
           'info' if success else 'warning')
     return redirect(url_for('dashboard.approvals'))
+
+
+# ── Access view — "what does this person have access to?" (blast radius) ─────────
+@bp.route('/employees/<int:employee_id>/access')
+@login_required
+@admin_required
+def employee_access(employee_id):
+    """Read-only blast-radius view over the connected world model (Track B identity
+    graph): identity + privileged roles, owned assets, managed devices, and licenses.
+    This is what an offboarding saga would need to revoke — and the brain answering
+    'what does this person have access to?'."""
+    import json as _json
+    from models import Asset, License, LicenseAssignment
+    from soc2_models import M365User, IntuneDevice, AdminRoleSnapshot
+
+    emp = Employee.query.get_or_404(employee_id)
+
+    # Identity (M365), via the Track B employee_id link.
+    m365 = (M365User.query.filter_by(employee_id=emp.id, is_current=True)
+            .order_by(M365User.sync_date.desc()).first())
+    admin_roles, m365_licenses = [], []
+    if m365:
+        try:
+            admin_roles = [r for r in (_json.loads(m365.admin_roles or '[]')) if r]
+        except Exception:
+            admin_roles = []
+        try:
+            m365_licenses = _json.loads(m365.licenses or '[]')
+        except Exception:
+            m365_licenses = []
+        # Fold in any active privileged-role snapshots not already listed.
+        for s in AdminRoleSnapshot.query.filter_by(
+                user_principal_name=m365.user_principal_name, status='active').all():
+            if s.role_name and s.role_name not in admin_roles:
+                admin_roles.append(s.role_name)
+
+    # Owned assets.
+    assets = Asset.query.filter_by(employee_id=emp.id).all()
+    asset_ids = {a.id for a in assets}
+
+    # Managed devices: linked via an owned asset (Track B asset_id) OR by UPN match.
+    upn = (m365.user_principal_name or '').lower() if m365 else ''
+    devices, seen = [], set()
+    for d in IntuneDevice.query.filter_by(is_current=True):
+        if d.id in seen:
+            continue
+        if d.asset_id in asset_ids or (upn and (d.user_principal_name or '').lower() == upn):
+            devices.append(d)
+            seen.add(d.id)
+
+    # Internally-tracked license assignments.
+    lic_assigns = LicenseAssignment.query.filter_by(employee_id=emp.id).all()
+    lic_ids = [la.license_id for la in lic_assigns if la.license_id]
+    lic_map = {l.id: l for l in License.query.filter(License.id.in_(lic_ids)).all()} if lic_ids else {}
+
+    summary = {
+        'assets': len(assets),
+        'devices': len(devices),
+        'licenses': len(lic_assigns) + len(m365_licenses),
+        'admin_roles': len(admin_roles),
+        'account_enabled': (m365.account_enabled if m365 else None),
+        'has_identity': bool(m365),
+    }
+    return render_template('employee_access.html', emp=emp, m365=m365,
+                           admin_roles=admin_roles, m365_licenses=m365_licenses,
+                           assets=assets, devices=devices, lic_assigns=lic_assigns,
+                           lic_map=lic_map, summary=summary)

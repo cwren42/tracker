@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}{{ emp.name }} — Access{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-person-badge me-2" style="color:var(--accent)"></i>{{ emp.name }}
+      <span class="text-muted fw-normal fs-6">— access &amp; blast radius</span></h1>
+    <div class="small text-muted">
+      {{ emp.job_title or '—' }}{% if emp.department %} · {{ emp.department }}{% endif %}
+      {% if emp.email %} · {{ emp.email }}{% endif %}
+    </div>
+  </div>
+  <a href="{{ url_for('employees.view_employee', employee_id=emp.id) }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Back to employee
+  </a>
+</div>
+
+<!-- Summary tiles -->
+<div class="row g-2 mb-3">
+  {% set tiles = [
+    ('Identity', '1' if summary.has_identity else '0', 'bi-person-circle',
+       ('Enabled' if summary.account_enabled else ('Disabled' if summary.account_enabled is sameas false else 'No M365 link'))),
+    ('Privileged roles', summary.admin_roles, 'bi-shield-lock', 'admin / directory roles'),
+    ('Assets', summary.assets, 'bi-laptop', 'owned hardware'),
+    ('Devices', summary.devices, 'bi-pc-display', 'Intune-managed'),
+    ('Licenses', summary.licenses, 'bi-card-checklist', 'M365 + tracked'),
+  ] %}
+  {% for label, val, icon, sub in tiles %}
+  <div class="col-6 col-md">
+    <div class="card h-100"><div class="card-body py-3">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <i class="bi {{ icon }}" style="color:var(--accent)"></i>
+        <span class="small text-muted">{{ label }}</span>
+      </div>
+      <div class="h4 mb-0">{{ val }}</div>
+      <div class="small text-muted">{{ sub }}</div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if summary.admin_roles %}
+<div class="alert d-flex align-items-center gap-2 mb-3" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
+  <i class="bi bi-shield-exclamation"></i>
+  <div><strong>Privileged access.</strong> This person holds {{ summary.admin_roles }} admin/directory role(s) — prioritise these on offboarding.</div>
+</div>
+{% endif %}
+
+<div class="row g-3">
+  <!-- Identity -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-person-circle me-2 text-muted"></i>Microsoft 365 identity</h2>
+      {% if m365 %}
+      <dl class="row small mb-0">
+        <dt class="col-5 text-muted">UPN</dt><dd class="col-7">{{ m365.user_principal_name }}</dd>
+        <dt class="col-5 text-muted">Account</dt>
+        <dd class="col-7">
+          {% if m365.account_enabled %}<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Enabled</span>
+          {% else %}<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>Disabled</span>{% endif %}
+        </dd>
+        <dt class="col-5 text-muted">Last sign-in</dt><dd class="col-7">{{ m365.last_signin_datetime.strftime('%Y-%m-%d %H:%M') if m365.last_signin_datetime else '—' }}</dd>
+        <dt class="col-5 text-muted">Department</dt><dd class="col-7">{{ m365.department or '—' }}</dd>
+      </dl>
+      {% if admin_roles %}
+      <hr class="my-3">
+      <div class="small text-muted mb-1">Privileged roles</div>
+      {% for r in admin_roles %}<span class="badge me-1 mb-1" style="background:var(--warning-bg);color:var(--warning);">{{ r }}</span>{% endfor %}
+      {% endif %}
+      {% else %}
+      <div class="text-muted small">No linked M365 identity (Track B found no <code>employee_id</code> match).</div>
+      {% endif %}
+    </div></div>
+  </div>
+
+  <!-- Licenses -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-card-checklist me-2 text-muted"></i>Licenses</h2>
+      {% if m365_licenses %}
+      <div class="small text-muted mb-1">Microsoft 365</div>
+      <ul class="list-unstyled small mb-3">
+        {% for l in m365_licenses %}
+        <li><i class="bi bi-dot"></i>{{ l.skuPartNumber or l.sku or l.name or l if l is mapping else l }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if lic_assigns %}
+      <div class="small text-muted mb-1">Tracked software licenses</div>
+      <ul class="list-unstyled small mb-0">
+        {% for la in lic_assigns %}
+        {% set lic = lic_map.get(la.license_id) %}
+        <li><i class="bi bi-dot"></i>{{ lic.software_name if lic else ('License #' ~ la.license_id) }}
+          {% if la.status and la.status != 'Active' %}<span class="text-muted">({{ la.status }})</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if not m365_licenses and not lic_assigns %}
+      <div class="text-muted small">No licenses found.</div>
+      {% endif %}
+    </div></div>
+  </div>
+
+  <!-- Assets -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-laptop me-2 text-muted"></i>Owned assets ({{ assets|length }})</h2>
+      {% if assets %}
+      <ul class="list-unstyled small mb-0">
+        {% for a in assets %}
+        <li class="mb-1">
+          <a href="{{ url_for('assets.view_asset', asset_id=a.id) }}">{{ a.name or a.asset_tag or ('Asset #' ~ a.id) }}</a>
+          {% if a.category %}<span class="text-muted">· {{ a.category }}</span>{% endif %}
+          {% if a.status %}<span class="text-muted">· {{ a.status }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<div class="text-muted small">No assets assigned.</div>{% endif %}
+    </div></div>
+  </div>
+
+  <!-- Devices -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-pc-display me-2 text-muted"></i>Managed devices ({{ devices|length }})</h2>
+      {% if devices %}
+      <ul class="list-unstyled small mb-0">
+        {% for d in devices %}
+        <li class="mb-2">
+          <div>{{ d.device_name }} <span class="text-muted">· {{ d.os_version or d.model or '' }}</span></div>
+          <div class="small">
+            {% if d.compliance_state == 'compliant' %}<span style="color:var(--success)"><i class="bi bi-check-circle me-1"></i>compliant</span>
+            {% elif d.compliance_state %}<span style="color:var(--danger)"><i class="bi bi-exclamation-circle me-1"></i>{{ d.compliance_state }}</span>
+            {% else %}<span class="text-muted">compliance unknown</span>{% endif %}
+            {% if d.is_encrypted %}<span class="text-muted ms-2"><i class="bi bi-lock me-1"></i>encrypted</span>{% endif %}
+            {% if d.ownership %}<span class="text-muted ms-2">{{ d.ownership }}</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<div class="text-muted small">No managed devices linked.</div>{% endif %}
+    </div></div>
+  </div>
+</div>
+
+<p class="small text-muted mt-3 mb-0">
+  <i class="bi bi-info-circle me-1"></i>Assembled live from the connected world model (Track B identity links).
+  This is the revocation surface an offboarding workflow would act on.
+</p>
+{% endblock %}

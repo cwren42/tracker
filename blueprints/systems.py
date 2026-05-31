@@ -223,16 +223,43 @@ def _set_setting(key, value):
     r.value = value
 
 
-def _gitlab_import(base, project, branch, path, token, default_system_id, user):
+def _normalize_repo(base, project):
+    """If a full repo URL was pasted into `project`, split it into (base, project-path).
+    Strips scheme/host and a trailing .git so '.../cjwren/it' -> base + 'cjwren/it'."""
+    project = (project or '').strip()
+    if project.startswith('http://') or project.startswith('https://'):
+        u = urllib.parse.urlparse(project)
+        base = f"{u.scheme}://{u.netloc}"
+        project = u.path
+    project = project.strip('/')
+    if project.endswith('.git'):
+        project = project[:-4]
+    return base.rstrip('/'), project
+
+
+def _ca_bundle(ca_pem):
+    """Write a pasted internal CA cert (PEM) to a file for requests' `verify=`. Returns the
+    path, or True (system trust) when no custom CA is configured. TLS is always verified."""
+    ca_pem = (ca_pem or '').strip()
+    if not ca_pem:
+        return True
+    path = '/tmp/tracker_gitlab_ca.pem'
+    with open(path, 'w') as f:
+        f.write(ca_pem + '\n')
+    return path
+
+
+def _gitlab_import(base, project, branch, path, token, default_system_id, user, verify=True):
     """Pull .md files from a GitLab repo and save each as a versioned system doc (RAG too).
-    Files are routed to a system by top-folder name match, else the chosen default system."""
+    Files are routed to a system by top-folder name match, else the chosen default system.
+    `verify` is True (system trust) or a path to a CA bundle — TLS is always verified."""
     proj = urllib.parse.quote(project, safe='')
     headers = {'PRIVATE-TOKEN': token}
     files, page = [], 1
     while page and page <= 20:
         r = requests.get(f"{base}/api/v4/projects/{proj}/repository/tree", headers=headers,
                          params={'ref': branch, 'recursive': 'true', 'path': path, 'per_page': 100, 'page': page},
-                         timeout=30)
+                         timeout=30, verify=verify)
         r.raise_for_status()
         files += [f for f in r.json() if f.get('type') == 'blob' and f.get('path', '').lower().endswith('.md')]
         nxt = r.headers.get('X-Next-Page')
@@ -244,7 +271,7 @@ def _gitlab_import(base, project, branch, path, token, default_system_id, user):
     for f in files:
         fpath = f['path']
         raw = requests.get(f"{base}/api/v4/projects/{proj}/repository/files/{urllib.parse.quote(fpath, safe='')}/raw",
-                           headers=headers, params={'ref': branch}, timeout=30)
+                           headers=headers, params={'ref': branch}, timeout=30, verify=verify)
         if raw.status_code != 200:
             continue
         body = raw.text
@@ -279,34 +306,44 @@ def systems_import():
     if request.method == 'POST':
         base = (request.form.get('base') or '').strip().rstrip('/') or 'https://gitlab.com'
         project = (request.form.get('project') or '').strip()
+        base, project = _normalize_repo(base, project)   # tolerate a pasted full URL
         branch = (request.form.get('branch') or 'main').strip()
         path = (request.form.get('path') or '').strip()
         token = (request.form.get('token') or '').strip()
         default_system = request.form.get('default_system')
+        ca_pem = (request.form.get('ca_pem') or '').strip()   # internal CA cert (PEM), not secret
         fresh_token = bool(token)
         if not token:
             saved = _setting('gitlab_token')
             token = decrypt_secret(saved) if saved else ''
+        if not ca_pem:
+            ca_pem = _setting('gitlab_ca_pem')                # fall back to saved CA
         if not project or not token:
             flash('GitLab project path and a token are required.', 'warning')
             return redirect(url_for('systems.systems_import'))
+
+        # Persist config FIRST (so a failed import still saves your settings + PAT for retry).
+        if request.form.get('save_config'):
+            _set_setting('gitlab_base', base); _set_setting('gitlab_project', project)
+            _set_setting('gitlab_branch', branch); _set_setting('gitlab_path', path)
+            _set_setting('gitlab_default_system', default_system or '')
+            _set_setting('gitlab_ca_pem', ca_pem or '')
+            if fresh_token:
+                _set_setting('gitlab_token', encrypt_secret(token))   # encrypted at rest
+            db.session.commit()
+
         try:
-            res = _gitlab_import(base, project, branch, path, token, default_system, current_user.username)
+            res = _gitlab_import(base, project, branch, path, token, default_system,
+                                 current_user.username, verify=_ca_bundle(ca_pem))
             flash(f"GitLab import: {res['imported']} new, {res['updated']} updated "
                   f"({res['scanned']} .md files scanned).", 'success')
         except Exception as e:
             flash(f'GitLab import failed: {e}', 'danger')
             return redirect(url_for('systems.systems_import'))
-        if request.form.get('save_config'):
-            _set_setting('gitlab_base', base); _set_setting('gitlab_project', project)
-            _set_setting('gitlab_branch', branch); _set_setting('gitlab_path', path)
-            _set_setting('gitlab_default_system', default_system or '')
-            if fresh_token:
-                _set_setting('gitlab_token', encrypt_secret(token))   # encrypted at rest
-            db.session.commit()
         return redirect(url_for('systems.systems'))
     cfg = {k: _setting('gitlab_' + k) for k in ('base', 'project', 'branch', 'path', 'default_system')}
     cfg['has_token'] = bool(_setting('gitlab_token'))
+    cfg['has_ca'] = bool(_setting('gitlab_ca_pem'))
     return render_template('systems_import.html', systems=ITSystem.query.order_by(ITSystem.name).all(), cfg=cfg)
 
 

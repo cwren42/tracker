@@ -19,8 +19,8 @@
         <input type="text" name="base" class="form-control" value="{{ cfg.base or 'https://gitlab.com' }}">
       </div>
       <div class="col-md-6">
-        <label class="form-label small text-muted">Project path</label>
-        <input type="text" name="project" class="form-control" placeholder="group/subgroup/it-docs" value="{{ cfg.project or '' }}" required>
+        <label class="form-label small text-muted">Project path <span class="text-muted">(or paste the full repo URL)</span></label>
+        <input type="text" name="project" class="form-control" placeholder="cjwren/it" value="{{ cfg.project or '' }}" required>
       </div>
       <div class="col-md-4">
         <label class="form-label small text-muted">Branch</label>
@@ -46,6 +46,13 @@
           <input class="form-check-input" type="checkbox" name="save_config" id="save_config" checked>
           <label class="form-check-label small" for="save_config">Save config for re-sync (token encrypted)</label>
         </div>
+      </div>
+      <div class="col-12">
+        <label class="form-label small text-muted">Internal CA certificate (PEM)
+          <span class="text-muted">— for self-signed/internal GitLab. TLS stays verified against this CA.</span>
+          {% if cfg.has_ca %}<span class="badge ms-1" style="background:var(--surface-2);color:var(--success);">saved</span>{% endif %}</label>
+        <textarea name="ca_pem" rows="4" class="form-control" style="font-family:var(--font-mono,monospace);font-size:.78rem;"
+          placeholder="{{ 'leave blank to use the saved CA' if cfg.has_ca else '-----BEGIN CERTIFICATE-----\n…your internal root/issuing CA…\n-----END CERTIFICATE-----' }}"></textarea>
       </div>
     </div>
     <button class="btn btn-primary mt-3"><i class="bi bi-download me-1"></i>Import now</button>

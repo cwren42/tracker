@@ -34,6 +34,31 @@ def _get_setting(key: str, default: str = "") -> str:
     return row["value"] if row else default
 
 
+def _loads_lenient(raw):
+    """Parse JSON from a model response that may be wrapped in ```json fences or have prose
+    around it. Returns the parsed object, or None if nothing parseable is found."""
+    if not raw:
+        return None
+    s = raw.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    m = re.search(r"```(?:json)?\s*(.*?)```", s, re.S)  # fenced block
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except Exception:
+            pass
+    m = re.search(r"(\{.*\}|\[.*\])", s, re.S)  # first {...} or [...]
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    return None
+
+
 def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> str:
     """Call OpenAI chat completions. Raises on failure."""
     api_key = _get_api_key()
@@ -204,11 +229,9 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
         max_tokens=600
     )
 
-    # Parse JSON (model should return JSON)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        # Fallback: wrap raw text
+    # Parse JSON (model should return JSON, but may wrap it in ```json fences)
+    parsed = _loads_lenient(raw)
+    if parsed is None:
         parsed = {"diagnosis": raw, "resolution_steps": [], "can_auto_resolve": False,
                   "category": "other", "confidence": 0.5, "estimated_minutes": None}
 
@@ -359,9 +382,8 @@ def generate_security_summary() -> dict:
         model=model,
         max_tokens=500
     )
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    parsed = _loads_lenient(raw)
+    if parsed is None:
         parsed = {"summary": raw, "risk_level": "unknown", "action_items": [], "positive_notes": []}
 
     db2 = _db()

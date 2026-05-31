@@ -247,51 +247,21 @@ def _action_update_ticket(config: dict, ctx: dict) -> tuple:
 
 
 def _action_ai_suggest(config: dict, ctx: dict) -> tuple:
-    """Generate an AI suggestion (ticket assistant) — needs API key pre-configured."""
+    """Generate a knowledge-grounded AI resolution suggestion for the ticket in context.
+
+    Delegates to ai_engine.suggest_ticket_resolution — the good path that grounds the
+    suggestion in resolved-ticket history AND the Knowledge Agent (learned runbooks + policy
+    + system docs) and saves it to ai_ticket_suggestions. Both ai_engine and knowledge_agent
+    are raw-pg_db / context-free, so this runs fine in the workflow daemon thread."""
+    ticket_id = ctx.get("ticket_id")
+    if not ticket_id:
+        return False, {"error": "No ticket_id in context"}
     try:
-        db = _db()
-        api_key = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
-        db.close()
-        if not api_key or not api_key["value"]:
-            return False, {"error": "OpenAI API key not configured — add it in Settings → AI"}
-        ticket_id = ctx.get("ticket_id")
-        if not ticket_id:
-            return False, {"error": "No ticket_id in context"}
-        db2 = _db()
-        ticket = db2.execute("SELECT * FROM support_ticket WHERE id=?", (ticket_id,)).fetchone()
-        db2.close()
-        if not ticket:
-            return False, {"error": "Ticket not found"}
-        import urllib.request
-        prompt = (
-            f"You are an IT support assistant. A ticket has been created:\n\n"
-            f"Title: {ticket['title']}\nDescription: {ticket['description']}\n"
-            f"Priority: {ticket['priority']}\nCategory: {ticket.get('category','')}\n\n"
-            f"Provide: 1) A brief diagnosis. 2) Step-by-step resolution. 3) Whether this can be auto-resolved.\n"
-            f"Be concise and technical."
-        )
-        payload = json.dumps({
-            "model": config.get("model", "gpt-4o"),
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 500
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=payload,
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {__import__('secret_store').decrypt_secret(api_key['value'])}"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            resp = json.loads(r.read())
-        suggestion = resp["choices"][0]["message"]["content"]
-        db3 = _db()
-        db3.execute(
-            "INSERT INTO ai_ticket_suggestions (ticket_id, model, suggestion, status) VALUES (?,?,?,'pending')",
-            (ticket_id, config.get("model", "gpt-4o"), suggestion)
-        )
-        db3.commit(); db3.close()
-        return True, {"ticket_id": ticket_id, "suggestion_created": True}
+        import ai_engine
+        out = ai_engine.suggest_ticket_resolution(int(ticket_id))
+        return True, {"ticket_id": ticket_id, "suggestion_id": out.get("suggestion_id"),
+                      "knowledge_used": len((out.get("informed_by") or [])),
+                      "suggestion_created": True}
     except Exception as e:
         return False, {"error": str(e)}
 

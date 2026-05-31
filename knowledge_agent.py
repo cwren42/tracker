@@ -55,8 +55,17 @@ def ensure_schema():
 
 
 def _api_key():
-    from email_agent import get_openai_config
-    return get_openai_config()[0]
+    """OpenAI key from settings, decrypted. Context-free (raw pg_db + secret_store) so this
+    works inside workflow daemon threads that have no Flask app context."""
+    from secret_store import decrypt_secret
+    db = _db()
+    try:
+        row = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
+    finally:
+        db.close()
+    if not row or not row["value"]:
+        raise ValueError("OpenAI API key not configured — add it in Settings → AI")
+    return decrypt_secret(row["value"])
 
 
 def _embed(texts):

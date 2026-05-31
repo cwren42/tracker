@@ -9,6 +9,7 @@ online agent. See docs/AGENTIC_IT_OS_GAMEPLAN.md.
 """
 import json
 import logging
+import re
 from datetime import datetime
 
 log = logging.getLogger("collectors")
@@ -122,21 +123,35 @@ def run_probe(system_id, key, user='system'):
     if not agent_id:
         return False, {'error': 'No RMM agent found on the host asset.'}
 
-    success, output = we._dispatch_to_agent(
+    _success, output = we._dispatch_to_agent(
         agent_id, online, 'powershell', probe['script'],
         asset_id=asset_id, reason=f"collector:{key}", timeout_s=120, wait_result=True)
-    if not success:
-        return False, {'error': output.get('error') or output.get('stderr') or 'dispatch failed'}
-
+    # NOTE: PowerShell-via-agent returns exit_code=1 even on success, so we DON'T trust
+    # _dispatch_to_agent's exit-code grading — we grade on the captured stdout instead.
     stdout = (output.get('stdout') or '').strip()
+    stderr = (output.get('stderr') or '').strip()
+    if not stdout:
+        return False, {'error': output.get('error') or stderr
+                       or 'No output returned (agent offline, timed out, or the script errored).'}
+
     if probe['kind'] == 'action':
         log.info("probe action %s on system %s ok", key, system_id)
-        return True, {'output': stdout or 'triggered'}
+        return True, {'output': stdout}
 
     try:
         parsed = json.loads(stdout)
     except Exception:
-        return False, {'error': 'Collector ran but output was not valid JSON.', 'stdout': stdout[:400]}
+        # Tolerate stray banner/CLIXML lines around the JSON object.
+        m = re.search(r'(\{.*\})', stdout, re.S)
+        if m:
+            try:
+                parsed = json.loads(m.group(1))
+            except Exception:
+                parsed = None
+        else:
+            parsed = None
+        if parsed is None:
+            return False, {'error': 'Collector ran but output was not valid JSON.', 'stdout': stdout[:400]}
 
     facts, doc = probe['parse'](parsed)
     merged = dict(s.facts or {})

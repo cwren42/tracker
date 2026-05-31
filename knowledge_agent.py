@@ -300,6 +300,48 @@ def add_manual(title, content):
     return cid
 
 
+def add_system_doc(system_id, title, content, doc_key=None):
+    """Attach a Markdown doc to an IT system — embedded into the knowledge base as
+    source_type='system_doc', source_id='system:<id>[:doc_key]'. Upserts on (system,doc_key)
+    so re-saving a doc replaces it. Returns the chunk id. reindex() preserves these."""
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("Content is required.")
+    if not title:
+        title = content[:80]
+    sid = f"system:{system_id}" + (f":{doc_key}" if doc_key else "")
+    vec = _embed([f"{title}\n\n{content}"])[0]
+    db = _db()
+    try:
+        db.execute("DELETE FROM knowledge_chunk WHERE source_type='system_doc' AND source_id=?", (sid,))
+        cur = db.execute(
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+            "VALUES ('system_doc', ?, ?, ?, ?, ?)",
+            (sid, title, content, json.dumps(vec), _now()),
+        )
+        cid = cur.lastrowid
+        db.commit()
+    finally:
+        db.close()
+    log.info("system doc added: %s (#%s)", title, cid)
+    return cid
+
+
+def system_docs(system_id):
+    """List the docs attached to a system (id, title, source_id, updated_at)."""
+    db = _db()
+    try:
+        rows = db.execute(
+            "SELECT id, title, source_id, content, updated_at FROM knowledge_chunk "
+            "WHERE source_type='system_doc' AND (source_id=? OR source_id LIKE ?) ORDER BY id",
+            (f"system:{system_id}", f"system:{system_id}:%"),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
+
+
 def learn_from_ticket_async(flask_app, ticket_id):
     """Fire-and-forget the learn step in a background thread with an app context."""
     import threading

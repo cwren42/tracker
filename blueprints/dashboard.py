@@ -762,23 +762,42 @@ def it_graph_data():
         if lic.id in lic_used:
             nodes.append({'id': f'lic:{lic.id}', 'label': lic.software_name or f'License {lic.id}', 'type': 'license'})
 
-    # Knowledge the brain has GENERATED (learned runbooks + authored notes) — shown as a
-    # bounded cluster off a "Knowledge" hub (the static ISMS corpus is excluded to avoid
-    # clutter). Raw query: knowledge_chunk is a raw-SQL table, not an ORM model.
+    # IT Systems — the registry, as first-class nodes linked to their host asset.
+    from models import ITSystem
+    sys_ids = set()
+    for sy in ITSystem.query.all():
+        nodes.append({'id': f'sys:{sy.id}', 'label': sy.name, 'type': 'system'})
+        sys_ids.add(sy.id)
+        if sy.asset_id in asset_ids:
+            links.append({'source': f'asset:{sy.asset_id}', 'target': f'sys:{sy.id}', 'type': 'hosts'})
+
+    # Knowledge the brain has (learned runbooks, authored notes, system docs). Runbooks/notes
+    # cluster off a "Knowledge" hub; system docs attach to their system node. Static ISMS
+    # corpus excluded to avoid clutter. Raw query (knowledge_chunk isn't an ORM model).
     kn = 0
     try:
         from sqlalchemy import text
         krows = db.session.execute(text(
-            "SELECT id, title, source_type FROM knowledge_chunk "
-            "WHERE source_type IN ('runbook','manual') ORDER BY id DESC LIMIT 60")).fetchall()
-        if krows:
-            nodes.append({'id': 'kb', 'label': 'Knowledge', 'type': 'knowledge'})
-            for k in krows:
-                m = k._mapping
-                nodes.append({'id': f"kb:{m['id']}", 'type': 'knowledge',
-                              'label': (m['title'] or 'Knowledge')[:60]})
-                links.append({'source': 'kb', 'target': f"kb:{m['id']}", 'type': 'knowledge'})
-                kn += 1
+            "SELECT id, title, source_type, source_id FROM knowledge_chunk "
+            "WHERE source_type IN ('runbook','manual','system_doc') ORDER BY id DESC LIMIT 120")).fetchall()
+        hub_added = False
+        for k in krows:
+            m = k._mapping
+            nid = f"kb:{m['id']}"
+            nodes.append({'id': nid, 'type': 'knowledge', 'label': (m['title'] or 'Knowledge')[:60]})
+            kn += 1
+            if m['source_type'] == 'system_doc' and (m['source_id'] or '').startswith('system:'):
+                try:
+                    sysid = int(str(m['source_id']).split(':')[1])
+                except (ValueError, IndexError):
+                    sysid = None
+                if sysid in sys_ids:
+                    links.append({'source': f'sys:{sysid}', 'target': nid, 'type': 'knowledge'})
+                    continue
+            if not hub_added:
+                nodes.append({'id': 'kb', 'label': 'Knowledge', 'type': 'knowledge'})
+                hub_added = True
+            links.append({'source': 'kb', 'target': nid, 'type': 'knowledge'})
     except Exception:
         db.session.rollback()
 
@@ -786,7 +805,7 @@ def it_graph_data():
         'employees': len(emp_ids), 'assets': len(asset_ids),
         'identities': sum(1 for n in nodes if n['type'] == 'identity'),
         'devices': sum(1 for n in nodes if n['type'] == 'device'),
-        'licenses': len(lic_used), 'knowledge': kn,
+        'licenses': len(lic_used), 'systems': len(sys_ids), 'knowledge': kn,
         'nodes': len(nodes), 'links': len(links),
     }
     return jsonify({'nodes': nodes, 'links': links, 'stats': stats})

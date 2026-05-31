@@ -1202,6 +1202,28 @@ class DomainUnblockRequest(db.Model):
     decided_at    = db.Column(db.DateTime(timezone=True))
     decision_note = db.Column(db.Text)                       # optional admin note
 
+
+class ITSystem(db.Model):
+    """The System Registry — the structured catalog of IT systems/services the org runs
+    (VPNs, AD, cert server, Proxmox, backups, k8s, …). Layer 1 of the knowledge brain:
+    human-browsable AND agent-queryable. Markdown docs attach via knowledge_chunk
+    (source_type='system_doc', source_id='system:<id>') for RAG; live facts (PowerShell/API)
+    land in `facts`. Linked to a host Asset and surfaced as a node in the IT Graph."""
+    __tablename__ = 'it_system'
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(200), nullable=False)
+    slug        = db.Column(db.String(120), unique=True)
+    category    = db.Column(db.String(50))   # Network, Identity, Virtualization, Backup, Compute, Security, Endpoint
+    role        = db.Column(db.String(50))   # primary, backup, lab, production
+    vendor      = db.Column(db.String(120))
+    summary     = db.Column(db.Text)
+    facts       = db.Column(db.JSON)         # structured key facts (auth, endpoints, deps, owner, …)
+    status      = db.Column(db.String(30), default='active')
+    asset_id    = db.Column(db.Integer, db.ForeignKey('asset.id'))   # optional host asset
+    created_at  = db.Column(db.DateTime(timezone=True), default=now_mst)
+    updated_at  = db.Column(db.DateTime(timezone=True), default=now_mst, onupdate=now_mst)
+    created_by  = db.Column(db.String(100))
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 

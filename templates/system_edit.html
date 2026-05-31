@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if sys else 'New' }} system{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4 mb-0"><i class="bi bi-hdd-network me-2" style="color:var(--accent)"></i>{{ 'Edit ' + sys.name if sys else 'Add a system' }}</h1>
+  <a href="{{ url_for('systems.systems') if not sys else url_for('systems.system_detail', system_id=sys.id) }}" class="btn btn-sm btn-outline-secondary">Cancel</a>
+</div>
+
+<div class="card"><div class="card-body">
+  <form method="post" action="{{ url_for('systems.system_edit', system_id=sys.id) if sys else url_for('systems.system_new') }}">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label small text-muted">Name</label>
+        <input type="text" name="name" class="form-control" required value="{{ sys.name if sys else '' }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted">Category</label>
+        <select name="category" class="form-select">
+          {% for c in categories %}<option value="{{ c }}"{% if sys and sys.category==c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted">Role</label>
+        <input type="text" name="role" class="form-control" placeholder="primary / backup / lab" value="{{ sys.role or '' if sys else '' }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small text-muted">Vendor</label>
+        <input type="text" name="vendor" class="form-control" value="{{ sys.vendor or '' if sys else '' }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small text-muted">Host asset (optional)</label>
+        <select name="asset_id" class="form-select">
+          <option value="">— none —</option>
+          {% for a in assets %}<option value="{{ a.id }}"{% if sys and sys.asset_id==a.id %} selected{% endif %}>{{ a.name or a.asset_tag }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label small text-muted">Summary</label>
+        <textarea name="summary" rows="2" class="form-control">{{ sys.summary or '' if sys else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label small text-muted">Key facts <span class="text-muted">— one per line, key=value (queryable structured truth)</span></label>
+        <textarea name="facts" rows="5" class="form-control" placeholder="auth=Microsoft 365 + Authenticator&#10;endpoint=vpn.cirque.com&#10;depends_on=Active Directory&#10;owner=IT">{{ facts_text }}</textarea>
+      </div>
+    </div>
+    <button class="btn btn-primary mt-3"><i class="bi bi-check-lg me-1"></i>{{ 'Save changes' if sys else 'Create system' }}</button>
+  </form>
+</div></div>
+{% endblock %}

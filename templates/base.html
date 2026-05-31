@@ -75,6 +75,10 @@
            href="{{ url_for('dashboard.knowledge') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Knowledge Agent">
             <i class="bi bi-journal-richtext"></i><span class="link-label">Knowledge</span>
         </a>
+        <a class="sidebar-link {% if request.endpoint in ['systems.systems','systems.system_detail','systems.system_new','systems.system_edit'] %}active{% endif %}"
+           href="{{ url_for('systems.systems') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="IT Systems">
+            <i class="bi bi-hdd-network"></i><span class="link-label">IT Systems</span>
+        </a>
         {% endif %}
         {% endif %}
 

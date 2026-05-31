@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}IT Systems{% endblock %}
+{% block content %}
+{% set cat_icon = {'Network':'bi-router','Identity':'bi-person-badge','Virtualization':'bi-hdd-stack','Compute':'bi-cpu','Backup':'bi-archive','Security':'bi-shield-lock','Endpoint':'bi-pc-display','Other':'bi-box'} %}
+{% set role_color = {'primary':'var(--success)','backup':'var(--warning)','lab':'var(--info)','production':'var(--accent)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-hdd-network me-2" style="color:var(--accent)"></i>IT Systems
+      <span class="text-muted fw-normal fs-6">— the knowledge brain's system registry</span></h1>
+    <div class="small text-muted">{{ total }} system{{ 's' if total != 1 }} · the structured catalog of what we run, with docs the agent grounds answers in</div>
+  </div>
+  <a href="{{ url_for('systems.system_new') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Add system</a>
+</div>
+
+{% if not grouped %}
+<div class="card"><div class="card-body text-center text-muted py-5">
+  <i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;"></i>
+  No systems yet. Add your VPNs, AD, Proxmox, backups, k8s lab… each becomes a node the brain reasons over.
+</div></div>
+{% endif %}
+
+{% for cat, rows in grouped.items() %}
+<h2 class="h6 text-muted mt-3 mb-2"><i class="bi {{ cat_icon.get(cat,'bi-box') }} me-1"></i>{{ cat }}</h2>
+<div class="row g-2 mb-2">
+  {% for s in rows %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <a href="{{ url_for('systems.system_detail', system_id=s.id) }}" class="text-decoration-none">
+      <div class="card h-100"><div class="card-body py-3">
+        <div class="d-flex justify-content-between align-items-start">
+          <span class="fw-semibold">{{ s.name }}</span>
+          {% if s.role %}<span class="badge" style="background:var(--surface-2);color:{{ role_color.get(s.role,'var(--muted)') }};">{{ s.role }}</span>{% endif %}
+        </div>
+        {% if s.vendor %}<div class="small text-muted">{{ s.vendor }}</div>{% endif %}
+        {% if s.summary %}<div class="small mt-1" style="color:var(--text);max-height:3.2em;overflow:hidden;">{{ s.summary }}</div>{% endif %}
+      </div></div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endblock %}

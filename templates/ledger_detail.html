@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Ledger #{{ row.id }}{% endblock %}
+{% block content %}
+{% set st_color = {'succeeded':'var(--success)','completed':'var(--success)','dispatched':'var(--info)','running':'var(--info)','awaiting_approval':'var(--warning)','failed':'var(--danger)','denied':'var(--muted)','planned':'var(--muted)'} %}
+{% set tier_color = {'high':'var(--danger)','medium':'var(--warning)','low':'var(--muted)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-journal-text me-2" style="color:var(--accent)"></i>Command Ledger #{{ row.id }}</h1>
+    <div class="small text-muted">{{ row.action_type.replace('_',' ')|title }} · {{ row.tool }}</div>
+  </div>
+  <a href="{{ url_for('dashboard.mission_control') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Mission Control</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-5">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3">Action</h2>
+      <dl class="row small mb-0">
+        <dt class="col-5 text-muted">Tool</dt><dd class="col-7">{{ row.tool }}</dd>
+        <dt class="col-5 text-muted">Action</dt><dd class="col-7">{{ row.action_type }}</dd>
+        <dt class="col-5 text-muted">Object</dt><dd class="col-7">{{ (row.object_type ~ ' ' ~ row.object_id) if row.object_id else (row.object_type or '—') }}</dd>
+        <dt class="col-5 text-muted">Risk</dt><dd class="col-7"><span style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }}">{{ row.risk_tier }}</span></dd>
+        <dt class="col-5 text-muted">Approval</dt><dd class="col-7">{{ row.approval_status }}</dd>
+        <dt class="col-5 text-muted">Status</dt><dd class="col-7"><span style="color:{{ st_color.get(row.status,'var(--muted)') }}">{{ row.status }}</span></dd>
+        <dt class="col-5 text-muted">Verification</dt><dd class="col-7">{{ row.verification_status or '—' }}{% if row.verification_detail %} <span class="text-muted">— {{ row.verification_detail }}</span>{% endif %}</dd>
+        <dt class="col-5 text-muted">Rollback</dt><dd class="col-7">{{ 'available' if row.rollback_available else 'no' }}{% if row.rolled_back_at %} (rolled back {{ row.rolled_back_at.strftime('%Y-%m-%d %H:%M') }}){% endif %}</dd>
+      </dl>
+      <hr class="my-3">
+      <dl class="row small mb-0">
+        <dt class="col-5 text-muted">Requested by</dt><dd class="col-7">{{ row.requested_by }}</dd>
+        <dt class="col-5 text-muted">Planned by</dt><dd class="col-7">{{ row.planned_by }}</dd>
+        <dt class="col-5 text-muted">Correlation</dt><dd class="col-7">{{ row.correlation_id or '—' }}</dd>
+        <dt class="col-5 text-muted">Created</dt><dd class="col-7">{{ row.created_at.strftime('%Y-%m-%d %H:%M:%S') if row.created_at else '—' }}</dd>
+        <dt class="col-5 text-muted">Completed</dt><dd class="col-7">{{ row.completed_at.strftime('%Y-%m-%d %H:%M:%S') if row.completed_at else '—' }}</dd>
+      </dl>
+    </div></div>
+  </div>
+
+  <div class="col-12 col-lg-7">
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6 mb-2">Before state</h2>
+      {% if before_pretty %}<pre class="p-2 mb-0" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);max-height:240px;overflow:auto;font-size:.78rem;"><code>{{ before_pretty }}</code></pre>
+      {% else %}<div class="text-muted small">None recorded.</div>{% endif %}
+    </div></div>
+    <div class="card"><div class="card-body">
+      <h2 class="h6 mb-2">After state</h2>
+      {% if after_pretty %}<pre class="p-2 mb-0" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);max-height:240px;overflow:auto;font-size:.78rem;"><code>{{ after_pretty }}</code></pre>
+      {% else %}<div class="text-muted small">None recorded.</div>{% endif %}
+    </div></div>
+  </div>
+</div>
+
+{% if siblings %}
+<div class="card mt-3"><div class="card-body">
+  <h2 class="h6 mb-2">Other actions in this run <span class="text-muted fw-normal small">({{ row.correlation_id }})</span></h2>
+  <ul class="list-unstyled small mb-0">
+    {% for s in siblings %}
+    <li class="d-flex justify-content-between">
+      <span><a href="{{ url_for('dashboard.ledger_detail', row_id=s.id) }}">#{{ s.id }}</a> {{ s.action_type.replace('_',' ') }}{% if s.object_id %} → {{ s.object_id }}{% endif %}</span>
+      <span style="color:{{ st_color.get(s.status,'var(--muted)') }}">{{ s.status }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div></div>
+{% endif %}
+{% endblock %}

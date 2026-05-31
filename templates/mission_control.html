@@ -129,7 +129,7 @@
           <tbody>
             {% for a in recent_actions %}
             <tr>
-              <td class="small text-muted">{{ a.id }}</td>
+              <td class="small"><a href="{{ url_for('dashboard.ledger_detail', row_id=a.id) }}">{{ a.id }}</a></td>
               <td class="small">{{ a.action_type.replace('_',' ') }}</td>
               <td class="small text-muted">{{ (a.object_type ~ ' ' ~ a.object_id) if a.object_id else (a.object_type or '—') }}</td>
               <td class="small" style="color:{{ st_color.get(a.risk_tier,'var(--muted)') }}">{{ a.risk_tier }}</td>

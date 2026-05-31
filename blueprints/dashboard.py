@@ -914,6 +914,35 @@ def events():
     return render_template('events.html', rows=rows, counts=counts)
 
 
+@bp.route('/ledger/<int:row_id>')
+@login_required
+@admin_required
+def ledger_detail(row_id):
+    """Full record of one command-ledger action: who/planned-by, risk + approval, before/after
+    state, verification, timing, and any sibling actions sharing its correlation id."""
+    import json as _json
+    from models import CommandLedger
+    row = CommandLedger.query.get_or_404(row_id)
+
+    def _pretty(v):
+        if v is None:
+            return None
+        try:
+            return _json.dumps(v if isinstance(v, (dict, list)) else _json.loads(v), indent=2)
+        except Exception:
+            return str(v)
+
+    siblings = []
+    if row.correlation_id:
+        siblings = (CommandLedger.query
+                    .filter(CommandLedger.correlation_id == row.correlation_id,
+                            CommandLedger.id != row.id)
+                    .order_by(CommandLedger.id).all())
+    return render_template('ledger_detail.html', row=row,
+                           before_pretty=_pretty(row.before_state),
+                           after_pretty=_pretty(row.after_state), siblings=siblings)
+
+
 @bp.route('/events/<int:event_id>/requeue', methods=['POST'])
 @login_required
 @admin_required

@@ -79,7 +79,7 @@
       <tbody>
         {% for row in recent %}
         <tr>
-          <td class="small text-muted">{{ row.id }}</td>
+          <td class="small"><a href="{{ url_for('dashboard.ledger_detail', row_id=row.id) }}">{{ row.id }}</a></td>
           <td>{{ row.action_type.replace('_',' ')|title }} <span class="small text-muted">{{ row.tool }}</span></td>
           <td><span class="small" style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};">{{ row.risk_tier }}</span></td>
           <td class="small">{{ row.approval_status }}</td>

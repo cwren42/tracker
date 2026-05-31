@@ -16,7 +16,7 @@ def _db():
 
 
 def _now():
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # local time (TZ=America/Denver), see now_mst
 
 
 def _get_api_key() -> str | None:

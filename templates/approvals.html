@@ -24,7 +24,7 @@
     {% for row in pending %}
     {% set rp, policy = plan(row) %}
     {% set cfg = rp.get('config') or {} %}
-    <div class="col-12 col-xl-6">
+    <div class="col-12 col-xl-6" id="appr-{{ row.id }}">
       <div class="card h-100" style="border-left:4px solid {{ tier_color.get(row.risk_tier, 'var(--muted)') }};">
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start mb-2">
@@ -52,16 +52,14 @@
           </details>
           {% endif %}
 
-          <div class="d-flex gap-2">
-            <form method="post" action="{{ url_for('dashboard.approve_action', row_id=row.id) }}"
-                  onsubmit="return confirm('Approve and run this {{ row.risk_tier }}-risk action on the endpoint?');">
-              <button class="btn btn-sm btn-primary"><i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>
-            </form>
-            <form method="post" action="{{ url_for('dashboard.deny_action', row_id=row.id) }}" class="d-flex gap-2 flex-grow-1">
-              <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason (optional)">
-              <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-x-lg me-1"></i>Deny</button>
-            </form>
+          <div class="d-flex gap-2 align-items-center" id="appr-actions-{{ row.id }}">
+            <button class="btn btn-sm btn-primary" onclick="approveAction({{ row.id }}, '{{ row.risk_tier }}')">
+              <i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>
+            <input type="text" id="deny-reason-{{ row.id }}" class="form-control form-control-sm flex-grow-1" placeholder="Reason (optional)">
+            <button class="btn btn-sm btn-outline-secondary" onclick="denyAction({{ row.id }})">
+              <i class="bi bi-x-lg me-1"></i>Deny</button>
           </div>
+          <div id="appr-result-{{ row.id }}" class="small mt-2"></div>
         </div>
       </div>
     </div>
@@ -72,8 +70,8 @@
 <h2 class="h6 text-muted mb-2">Recently resolved</h2>
 <div class="card">
   <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0">
-      <thead><tr class="small text-muted">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-dark"><tr>
         <th>#</th><th>Action</th><th>Risk</th><th>Decision</th><th>Result</th><th>Verify</th><th>When</th>
       </tr></thead>
       <tbody>
@@ -98,4 +96,60 @@
     </table>
   </div>
 </div>
+
+<script>
+function _apprEl(id, p){ return document.getElementById('appr-'+p+'-'+id); }
+function _disableActions(id){ var a=_apprEl(id,'actions'); if(a) a.querySelectorAll('button,input').forEach(function(e){e.disabled=true;}); }
+function _fade(id){ var c=document.getElementById('appr-'+id); if(c) setTimeout(function(){ c.style.transition='opacity .6s'; c.style.opacity=.5; }, 1400); }
+
+function approveAction(id, tier){
+  if(!confirm('Approve and run this '+tier+'-risk action on the endpoint?')) return;
+  var res=_apprEl(id,'result');
+  _disableActions(id);
+  res.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>Running…';
+  fetch('/approvals/'+id+'/approve', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok){ res.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>'+(d.error||'Could not approve')+'</span>'; return; }
+      pollApproval(id, 0);
+    })
+    .catch(function(e){ res.innerHTML='<span class="text-danger">'+e+'</span>'; });
+}
+
+function pollApproval(id, tries){
+  var res=_apprEl(id,'result');
+  fetch('/api/approvals/'+id+'/status').then(function(r){ return r.json(); }).then(function(d){
+    var done=['succeeded','completed','failed','denied'].indexOf(d.status)>=0;
+    if(done){
+      if(d.status==='succeeded'||d.status==='completed'){
+        res.innerHTML='<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Succeeded'+(d.verification_status?' · '+d.verification_status:'')+'</span>';
+      } else if(d.status==='denied'){
+        res.innerHTML='<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied</span>';
+      } else {
+        res.innerHTML='<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>Failed'+(d.verification_detail?' — '+d.verification_detail:'')+'</span>';
+      }
+      _fade(id);
+    } else if(tries>40){
+      res.innerHTML='<span class="text-muted">Still running… check back shortly.</span>';
+    } else {
+      res.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>'+(d.status||'running')+'…';
+      setTimeout(function(){ pollApproval(id, tries+1); }, 1500);
+    }
+  }).catch(function(){ setTimeout(function(){ pollApproval(id, tries+1); }, 2000); });
+}
+
+function denyAction(id){
+  var res=_apprEl(id,'result');
+  var reason=(document.getElementById('deny-reason-'+id)||{}).value||'';
+  _disableActions(id);
+  fetch('/approvals/'+id+'/deny', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'}, body:JSON.stringify({reason:reason})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      res.innerHTML = d.ok ? '<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied — it will not run.</span>'
+                           : '<span class="text-warning">'+(d.error||'Could not deny')+'</span>';
+      if(d.ok) _fade(id);
+    })
+    .catch(function(e){ res.innerHTML='<span class="text-danger">'+e+'</span>'; });
+}
+</script>
 {% endblock %}

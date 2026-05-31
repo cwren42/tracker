@@ -76,7 +76,9 @@ def _db():
 
 
 def _now():
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    # Local time (server TZ = America/Denver), matching models.now_mst() and the rest of the
+    # app. utcnow() here previously made ledger/event/run timestamps display 6-7h in the future.
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -407,6 +409,20 @@ def _ledger_result(row_id, status, *, after_state=None,
         log.exception("command_ledger result update failed (non-fatal)")
 
 
+def _verify_status(success, out):
+    """Map an action result to a verification status. A synchronous success (e.g. an LDAP
+    modify like unlock/disable) IS verified — the change committed. Only an agent dispatch
+    whose result we never captured (queued offline, or fire-and-forget websocket) is
+    'unverifiable'. Device scripts with a captured exit_code are verified on success."""
+    if not success:
+        return "failed"
+    if isinstance(out, dict) and "exit_code" in out:
+        return "verified"
+    if isinstance(out, dict) and out.get("delivered") in ("queue", "websocket"):
+        return "unverifiable"
+    return "verified"
+
+
 # ── Agent dispatch (gateway-first, rmm_commands fallback) ────────────────────────
 def _dispatch_to_agent(agent_id: str, online: bool, shell: str, code: str,
                        *, asset_id=None, reason="workflow", timeout_s=120,
@@ -553,12 +569,8 @@ def _device_action(action_type: str, tool: str, asset_id, shell: str, code: str,
     output = {"agent_id": agent_id, **(extra_output or {}), **output}
 
     # Ledger outcome + verification status.
-    if wait_result and "exit_code" in output:
-        vstatus = "verified" if success else "failed"
-    else:
-        vstatus = "unverifiable"  # fire-and-forget / queued — no exit_code came back
     _ledger_result(led, "succeeded" if success else "failed",
-                   after_state=output, verification_status=vstatus)
+                   after_state=output, verification_status=_verify_status(success, output))
     return success, output
 
 
@@ -627,14 +639,8 @@ def approve_action(row_id, approver):
         except Exception as e:
             success, output = False, {"error": str(e)}
         out = output if isinstance(output, dict) else {"result": str(output)}
-        if success and "exit_code" in out:
-            vstatus = "verified"
-        elif not success:
-            vstatus = "failed"
-        else:
-            vstatus = "unverifiable"
         _ledger_result(row_id, "succeeded" if success else "failed",
-                       after_state=out, verification_status=vstatus,
+                       after_state=out, verification_status=_verify_status(success, out),
                        verification_detail=f"approved by {approver}")
         if step_id:
             _update_step(step_id, "completed" if success else "failed", out)

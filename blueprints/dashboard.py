@@ -824,12 +824,19 @@ def approve_action(row_id):
     import workflow_engine
     approver = current_user.username or current_user.email or f'user#{current_user.id}'
     claimed, info = workflow_engine.approve_action(row_id, approver)
+    ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    if ajax:
+        if not claimed:
+            return jsonify({'ok': False, 'error': info.get('error', 'Could not approve.')}), 409
+        if info.get('error'):
+            return jsonify({'ok': False, 'error': info['error']}), 400
+        return jsonify({'ok': True, 'running': True, 'action_type': info.get('action_type')})
     if not claimed:
         flash(info.get('error', 'Could not approve.'), 'warning')
     elif info.get('error'):
         flash(info['error'], 'warning')
     else:
-        flash(f"Approved — {info.get('action_type', 'action')} is running. Refresh for the result.", 'success')
+        flash(f"Approved — {info.get('action_type', 'action')} is running.", 'success')
     return redirect(url_for('dashboard.approvals'))
 
 
@@ -839,11 +846,27 @@ def approve_action(row_id):
 def deny_action(row_id):
     import workflow_engine
     approver = current_user.username or current_user.email or f'user#{current_user.id}'
-    reason = (request.form.get('reason') or '').strip()
+    data = request.get_json(silent=True) or {}
+    reason = (data.get('reason') or request.form.get('reason') or '').strip()
     success, output = workflow_engine.deny_action(row_id, approver, reason)
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return (jsonify({'ok': True}) if success
+                else (jsonify({'ok': False, 'error': output.get('error', 'Could not deny.')}), 409))
     flash("Action denied — it will not run." if success else (output.get('error') or 'Could not deny.'),
           'info' if success else 'warning')
     return redirect(url_for('dashboard.approvals'))
+
+
+@bp.route('/api/approvals/<int:row_id>/status')
+@login_required
+@admin_required
+def approval_status(row_id):
+    """Live status of one approval/ledger row — polled by the approvals UI after Approve."""
+    from models import CommandLedger
+    r = CommandLedger.query.get_or_404(row_id)
+    return jsonify({'status': r.status, 'approval_status': r.approval_status,
+                    'verification_status': r.verification_status,
+                    'verification_detail': r.verification_detail})
 
 
 # ── Access view — "what does this person have access to?" (blast radius) ─────────

@@ -26,7 +26,7 @@
     <div class="small" style="color:#94a3b8;">Assembling the world model…</div>
   </div>
   <div id="graph-tip" class="position-absolute top-0 start-0 m-2 small" style="color:#5b7187;pointer-events:none;">
-    drag to roam · scroll to zoom · hover a node to light its connections · click to focus
+    drag to roam · scroll to zoom · hover to light connections · click a node to open it
   </div>
 </div>
 
@@ -66,9 +66,9 @@ window.itGraph = null;
       .width(el.clientWidth).height(el.clientHeight)
       .nodeVal(function(n){ return 1 + (deg[n.id]||0)*0.5; })
       .nodeLabel(function(n){ return n.label + '  ·  ' + n.type; })
-      // Teal edge-haze: faint teal links sum into a glow through the dense core.
-      .linkColor(function(l){ return hiLinks.has(l) ? 'rgba(130,230,240,0.65)' : 'rgba(56,189,210,0.11)'; })
-      .linkWidth(function(l){ return hiLinks.has(l) ? 1.4 : 0.4; })
+      // Teal edges — visible at rest, brighten on hover.
+      .linkColor(function(l){ return hiLinks.has(l) ? 'rgba(150,240,250,0.75)' : 'rgba(94,205,225,0.28)'; })
+      .linkWidth(function(l){ return hiLinks.has(l) ? 1.8 : 0.7; })
       .linkDirectionalParticles(function(l){ return hiLinks.has(l) ? 3 : 0; })
       .linkDirectionalParticleWidth(2)
       .linkDirectionalParticleColor(function(){ return 'rgba(170,240,250,0.9)'; })
@@ -82,8 +82,8 @@ window.itGraph = null;
       })
       .onNodeDragEnd(function(n){ n.fx = n.x; n.fy = n.y; })   // pin where dropped (Obsidian-style)
       .onNodeClick(function(n){
-        if(n.fx !== undefined){ n.fx = undefined; n.fy = undefined; G.d3ReheatSimulation(); }  // release pin
-        G.centerAt(n.x, n.y, 600); G.zoom(5, 600);
+        if(n.url){ window.open(n.url, '_blank'); return; }      // open the doc / system / employee / asset / ticket
+        G.centerAt(n.x, n.y, 600); G.zoom(5, 600);             // no page? just focus
       })
       .nodeCanvasObject(function(node, ctx, scale){
         var color = COLORS[node.type] || '#9ca3af';

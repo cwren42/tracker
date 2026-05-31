@@ -733,11 +733,13 @@ def it_graph_data():
     emp_ids, asset_ids = set(), set()
 
     for e in Employee.query.all():
-        nodes.append({'id': f'emp:{e.id}', 'label': e.name or f'Employee {e.id}', 'type': 'employee'})
+        nodes.append({'id': f'emp:{e.id}', 'label': e.name or f'Employee {e.id}', 'type': 'employee',
+                      'url': f'/employees/{e.id}'})
         emp_ids.add(e.id)
 
     for a in Asset.query.all():
-        nodes.append({'id': f'asset:{a.id}', 'label': a.name or a.asset_tag or f'Asset {a.id}', 'type': 'asset'})
+        nodes.append({'id': f'asset:{a.id}', 'label': a.name or a.asset_tag or f'Asset {a.id}', 'type': 'asset',
+                      'url': f'/assets/{a.id}'})
         asset_ids.add(a.id)
         if a.employee_id in emp_ids:
             links.append({'source': f'emp:{a.employee_id}', 'target': f'asset:{a.id}', 'type': 'owns'})
@@ -766,7 +768,8 @@ def it_graph_data():
     from models import ITSystem
     sys_ids = set()
     for sy in ITSystem.query.all():
-        nodes.append({'id': f'sys:{sy.id}', 'label': sy.name, 'type': 'system'})
+        nodes.append({'id': f'sys:{sy.id}', 'label': sy.name, 'type': 'system',
+                      'url': f'/systems/{sy.id}'})
         sys_ids.add(sy.id)
         if sy.asset_id in asset_ids:
             links.append({'source': f'asset:{sy.asset_id}', 'target': f'sys:{sy.id}', 'type': 'hosts'})
@@ -784,18 +787,26 @@ def it_graph_data():
         for k in krows:
             m = k._mapping
             nid = f"kb:{m['id']}"
-            nodes.append({'id': nid, 'type': 'knowledge', 'label': (m['title'] or 'Knowledge')[:60]})
+            sid = str(m['source_id'] or '')
+            # Where clicking the doc node should take you.
+            if m['source_type'] == 'runbook' and sid.startswith('ticket:'):
+                url = f"/tickets/{sid.split(':')[1]}"            # the resolved ticket it was learned from
+            elif m['source_type'] == 'system_doc' and sid.startswith('system:'):
+                url = f"/systems/{sid.split(':')[1]}"            # the system page (lists/edits the doc)
+            else:
+                url = '/knowledge'                                # authored note → search the KB
+            nodes.append({'id': nid, 'type': 'knowledge', 'label': (m['title'] or 'Knowledge')[:60], 'url': url})
             kn += 1
-            if m['source_type'] == 'system_doc' and (m['source_id'] or '').startswith('system:'):
+            if m['source_type'] == 'system_doc' and sid.startswith('system:'):
                 try:
-                    sysid = int(str(m['source_id']).split(':')[1])
+                    sysid = int(sid.split(':')[1])
                 except (ValueError, IndexError):
                     sysid = None
                 if sysid in sys_ids:
                     links.append({'source': f'sys:{sysid}', 'target': nid, 'type': 'knowledge'})
                     continue
             if not hub_added:
-                nodes.append({'id': 'kb', 'label': 'Knowledge', 'type': 'knowledge'})
+                nodes.append({'id': 'kb', 'label': 'Knowledge', 'type': 'knowledge', 'url': '/knowledge'})
                 hub_added = True
             links.append({'source': 'kb', 'target': nid, 'type': 'knowledge'})
     except Exception:

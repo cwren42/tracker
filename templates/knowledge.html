@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Agent{% endblock %}
+{% block content %}
+{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)'} %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0"><i class="bi bi-journal-richtext me-2" style="color:var(--accent)"></i>Knowledge Agent
+      <span class="text-muted fw-normal fs-6">— ask the ISMS &amp; system docs</span></h1>
+    <div class="small text-muted">Semantic search + grounded answers with citations · {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}</div>
+  </div>
+  <form method="post" action="{{ url_for('dashboard.knowledge_reindex') }}"
+        onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Indexing…';">
+    <button class="btn btn-sm btn-outline-secondary" title="Re-embed the corpus from the ISMS + system docs">
+      <i class="bi bi-arrow-repeat me-1"></i>Reindex
+    </button>
+  </form>
+</div>
+
+<form method="post" action="{{ url_for('dashboard.knowledge') }}" class="mb-3">
+  <div class="input-group input-group-lg">
+    <span class="input-group-text" style="background:var(--surface);border-color:var(--border);"><i class="bi bi-search"></i></span>
+    <input type="text" name="q" class="form-control" placeholder="e.g. What's our password policy? How do we handle an offboarding?"
+           value="{{ query }}" autofocus>
+    <button class="btn btn-primary"><i class="bi bi-stars me-1"></i>Ask</button>
+  </div>
+</form>
+
+{% if chunk_count == 0 %}
+<div class="alert d-flex align-items-center gap-2" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
+  <i class="bi bi-info-circle"></i>
+  <div>The knowledge base is empty. Click <strong>Reindex</strong> to embed the ISMS policies and system documentation.</div>
+</div>
+{% endif %}
+
+{% if result %}
+<div class="row g-3">
+  <!-- Answer -->
+  <div class="col-12 col-lg-7">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-stars me-2" style="color:var(--accent)"></i>Answer</h2>
+      <div class="knowledge-answer">{{ answer_html | safe }}</div>
+    </div></div>
+  </div>
+  <!-- Sources -->
+  <div class="col-12 col-lg-5">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-link-45deg me-2 text-muted"></i>Sources</h2>
+      {% for s in result.sources %}
+      <div class="mb-3 pb-2" style="border-bottom:1px solid var(--border);">
+        <div class="d-flex justify-content-between align-items-start">
+          <span class="fw-semibold small">[{{ loop.index }}] {{ s.title }}</span>
+          <span class="badge ms-2" style="background:var(--surface-2);color:{{ src_color.get(s.source_type,'var(--muted)') }};">{{ s.score }}</span>
+        </div>
+        <div class="small text-muted mb-1">{{ s.source_type.replace('_',' ') }}</div>
+        <div class="small text-muted" style="max-height:5.5em;overflow:hidden;">{{ s.content[:280] }}{% if s.content|length > 280 %}…{% endif %}</div>
+      </div>
+      {% else %}
+      <div class="text-muted small">No matching sources.</div>
+      {% endfor %}
+    </div></div>
+  </div>
+</div>
+{% endif %}
+
+<style>
+.knowledge-answer h1,.knowledge-answer h2,.knowledge-answer h3{font-size:1rem;font-weight:600;margin-top:1rem;}
+.knowledge-answer p{margin-bottom:.6rem;}
+.knowledge-answer ul,.knowledge-answer ol{padding-left:1.2rem;}
+.knowledge-answer code{background:var(--surface-2);padding:.1em .3em;border-radius:4px;}
+</style>
+{% endblock %}

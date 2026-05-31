@@ -1,0 +1,203 @@
+"""Knowledge Agent — the brain's "what to do" half (the graph is the "what's true" half).
+
+Semantic search + RAG over the ISMS policies and system documentation. pgvector isn't
+available on this Postgres, and the corpus is small (~600 sections), so we store OpenAI
+embeddings as JSONB and brute-force cosine similarity in Python at query time — fast enough
+for hundreds of chunks, zero new infrastructure.
+
+Pipeline: reindex() pulls the corpus (policy_section / system_description / isms_document
+versions) -> embeds each chunk -> knowledge_chunk(embedding JSONB). search() embeds the
+query and ranks by cosine. answer() does retrieval-augmented generation: top-k chunks ->
+the chat model, grounded + cited. As the brain resolves incidents it can later write its
+own runbooks back into this corpus (the "Learn" step). See docs/AGENTIC_IT_OS_GAMEPLAN.md.
+"""
+import json, logging, math
+from datetime import datetime
+
+import requests as _http
+
+from pg_db import pg_connect
+
+log = logging.getLogger("knowledge_agent")
+
+EMBED_MODEL = "text-embedding-3-small"
+EMBED_URL = "https://api.openai.com/v1/embeddings"
+EMBED_BATCH = 96
+CHUNK_CHARS = 1500
+TOP_K = 6
+
+
+def _db():
+    return pg_connect()
+
+
+def _now():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def ensure_schema():
+    db = _db()
+    try:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS knowledge_chunk ("
+            " id SERIAL PRIMARY KEY,"
+            " source_type VARCHAR(40) NOT NULL,"
+            " source_id VARCHAR(80),"
+            " title TEXT,"
+            " content TEXT NOT NULL,"
+            " embedding JSONB,"
+            " updated_at TIMESTAMP)"
+        )
+        db.execute("CREATE INDEX IF NOT EXISTS ix_knowledge_src ON knowledge_chunk(source_type, source_id)")
+        db.commit()
+    finally:
+        db.close()
+
+
+def _api_key():
+    from email_agent import get_openai_config
+    return get_openai_config()[0]
+
+
+def _embed(texts):
+    """Embed a list of strings -> list of float vectors. Batched."""
+    if not texts:
+        return []
+    key = _api_key()
+    out = []
+    for i in range(0, len(texts), EMBED_BATCH):
+        batch = [t[:8000] for t in texts[i:i + EMBED_BATCH]]  # cap per-input length
+        resp = _http.post(
+            EMBED_URL, json={"model": EMBED_MODEL, "input": batch},
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        out.extend([d["embedding"] for d in resp.json()["data"]])
+    return out
+
+
+def _chunks(text, size=CHUNK_CHARS):
+    """Split on paragraph boundaries into ~size-char windows."""
+    paras = text.split("\n\n")
+    buf, out = "", []
+    for p in paras:
+        if buf and len(buf) + len(p) > size:
+            out.append(buf)
+            buf = p
+        else:
+            buf = (buf + "\n\n" + p) if buf else p
+    if buf.strip():
+        out.append(buf)
+    return out or [text[:size]]
+
+
+def _gather_corpus():
+    """(source_type, source_id, title, content) tuples from the ISMS/system corpus.
+    Must run inside an app context (uses the ORM)."""
+    from models import (PolicySection, Policy, SystemDescription,
+                        ISMSDocument, ISMSDocumentVersion)
+    items = []
+    pol_titles = {p.id: p.title for p in Policy.query.all()}
+    for s in PolicySection.query.all():
+        body = (s.section_content or "").strip()
+        if not body:
+            continue
+        title = f"{pol_titles.get(s.policy_id, 'Policy')} — {s.section_title}"
+        items.append(("policy_section", str(s.id), title, body))
+    for sd in SystemDescription.query.all():
+        body = (sd.content or "").strip()
+        if body:
+            items.append(("system_description", str(sd.id), sd.section_title, body))
+    for doc in ISMSDocument.query.all():
+        ver = ISMSDocumentVersion.query.get(doc.current_version_id) if doc.current_version_id else None
+        body = ((ver.markdown_body if ver else "") or "").strip()
+        if not body:
+            continue
+        for j, chunk in enumerate(_chunks(body)):
+            items.append(("isms_document", f"{doc.id}.{j}", doc.title, chunk))
+    return items
+
+
+def reindex():
+    """Rebuild the knowledge index from the corpus. Returns chunk count. App context required."""
+    ensure_schema()
+    items = _gather_corpus()
+    vectors = _embed([f"{t}\n\n{c}" for (_st, _sid, t, c) in items])
+    db = _db()
+    try:
+        db.execute("DELETE FROM knowledge_chunk")
+        for (st, sid, title, content), vec in zip(items, vectors):
+            db.execute(
+                "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (st, sid, title, content, json.dumps(vec), _now()),
+            )
+        db.commit()
+    finally:
+        db.close()
+    log.info("knowledge reindex: %d chunks", len(items))
+    return len(items)
+
+
+def _cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def search(query, k=TOP_K):
+    """Top-k corpus chunks by cosine similarity to the query."""
+    qv = _embed([query])[0]
+    db = _db()
+    try:
+        rows = db.execute(
+            "SELECT id, source_type, source_id, title, content, embedding FROM knowledge_chunk"
+        ).fetchall()
+    finally:
+        db.close()
+    scored = []
+    for r in rows:
+        emb = r["embedding"]
+        if isinstance(emb, (str, bytes, bytearray)):
+            emb = json.loads(emb)
+        if not emb:
+            continue
+        scored.append((_cosine(qv, emb), r))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [{"score": round(s, 3), "id": r["id"], "source_type": r["source_type"],
+             "source_id": r["source_id"], "title": r["title"], "content": r["content"]}
+            for s, r in scored[:k]]
+
+
+def answer(query, k=TOP_K):
+    """Retrieval-augmented answer grounded in the corpus, with cited sources."""
+    hits = search(query, k)
+    if not hits:
+        return {"answer": "The knowledge base is empty — click **Reindex** to build it from the "
+                          "ISMS policies and system documentation.", "sources": []}
+    context = "\n\n".join(f"[{i + 1}] {h['title']}\n{h['content'][:1200]}" for i, h in enumerate(hits))
+    from email_agent import run_chat
+    system = ("You are the IT knowledge assistant for this organization. Answer the question using ONLY "
+              "the provided context excerpts from the ISMS policies and system documentation. Cite the "
+              "sources you use as [n]. If the answer isn't in the context, say so plainly rather than "
+              "guessing. Be concise and practical; use Markdown.")
+    user = f"Question: {query}\n\nContext excerpts:\n{context}"
+    try:
+        content, _model = run_chat(system, user, max_tokens=600)
+    except Exception as e:
+        content = f"_(Retrieved {len(hits)} sources, but could not synthesize an answer: {e})_"
+    return {"answer": content, "sources": hits}
+
+
+def count():
+    try:
+        db = _db()
+        try:
+            row = db.execute("SELECT COUNT(*) AS n FROM knowledge_chunk").fetchone()
+            return row["n"] if row else 0
+        finally:
+            db.close()
+    except Exception:
+        return 0

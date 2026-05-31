@@ -991,3 +991,42 @@ def mission_control():
                            recent_actions=recent_actions, ledger_counts=ledger_counts,
                            event_counts=event_counts, recent_events=recent_events,
                            wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs)
+
+
+# ── Knowledge Agent — semantic search + RAG over ISMS/system docs ────────────────
+@bp.route('/knowledge', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def knowledge():
+    """Ask the IT knowledge base. Semantic retrieval over the ISMS policies + system docs,
+    answered with citations (knowledge_agent). Read-only against the corpus."""
+    import knowledge_agent
+    query = (request.form.get('q') or request.args.get('q') or '').strip()
+    result, answer_html = None, None
+    chunk_count = knowledge_agent.count()
+    if query:
+        try:
+            result = knowledge_agent.answer(query)
+            import markdown as _md
+            answer_html = _md.markdown(result.get('answer') or '', extensions=['extra'])
+        except ValueError as e:
+            flash(str(e), 'warning')  # e.g. no OpenAI key configured
+        except Exception as e:
+            flash(f'Knowledge search failed: {e}', 'danger')
+    return render_template('knowledge.html', query=query, result=result,
+                           answer_html=answer_html, chunk_count=chunk_count)
+
+
+@bp.route('/knowledge/reindex', methods=['POST'])
+@login_required
+@admin_required
+def knowledge_reindex():
+    import knowledge_agent
+    try:
+        n = knowledge_agent.reindex()
+        flash(f'Knowledge base reindexed — {n} chunks embedded from the ISMS + system docs.', 'success')
+    except ValueError as e:
+        flash(str(e), 'warning')
+    except Exception as e:
+        flash(f'Reindex failed: {e}', 'danger')
+    return redirect(url_for('dashboard.knowledge'))

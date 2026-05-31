@@ -71,6 +71,10 @@
            href="{{ url_for('dashboard.events') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Event Bus">
             <i class="bi bi-broadcast-pin"></i><span class="link-label">Event Bus</span>
         </a>
+        <a class="sidebar-link {% if request.endpoint == 'dashboard.knowledge' %}active{% endif %}"
+           href="{{ url_for('dashboard.knowledge') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Knowledge Agent">
+            <i class="bi bi-journal-richtext"></i><span class="link-label">Knowledge</span>
+        </a>
         {% endif %}
         {% endif %}
 

@@ -2,7 +2,7 @@
 {% block title %}Eagle Eyes — {{ hostname }}{% endblock %}
 
 {% block content %}
-<div class="container-fluid py-3" style="max-width:1500px;">
+<div class="py-3">
 
   <!-- Header -->
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
@@ -74,16 +74,16 @@
   <!-- Stat Cards -->
   <div class="row g-3 mb-3">
     <div class="col-6 col-md">
-      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1a1a2e,#16213e);">
+      <div class="card shadow-sm h-100">
         <div class="card-body py-3">
           <div class="small text-muted mb-1"><i class="bi bi-clock me-1"></i>Total Tracked Time</div>
-          <div class="fw-bold fs-4 text-white" id="stat-total-time">—</div>
+          <div class="fw-bold fs-4" id="stat-total-time">—</div>
           <div class="small text-muted" id="stat-total-sub"></div>
         </div>
       </div>
     </div>
     <div class="col-6 col-md">
-      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#0f3460,#1a4f72);">
+      <div class="card shadow-sm h-100">
         <div class="card-body py-3">
           <div class="small text-muted mb-1"><i class="bi bi-trophy me-1"></i>Top App</div>
           <div class="fw-bold fs-5 text-warning text-truncate" id="stat-top-app">—</div>
@@ -92,25 +92,25 @@
       </div>
     </div>
     <div class="col-6 col-md">
-      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1b4332,#2d6a4f);">
+      <div class="card shadow-sm h-100">
         <div class="card-body py-3">
           <div class="small text-muted mb-1"><i class="bi bi-calendar-check me-1"></i>Active Days</div>
-          <div class="fw-bold fs-4 text-white" id="stat-active-days">—</div>
+          <div class="fw-bold fs-4" id="stat-active-days">—</div>
           <div class="small text-muted" id="stat-active-days-sub"></div>
         </div>
       </div>
     </div>
     <div class="col-6 col-md">
-      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#3d0000,#6d1a1a);">
+      <div class="card shadow-sm h-100">
         <div class="card-body py-3">
           <div class="small text-muted mb-1"><i class="bi bi-bar-chart-line me-1"></i>Peak Hour</div>
-          <div class="fw-bold fs-4 text-white" id="stat-peak-hour">—</div>
+          <div class="fw-bold fs-4" id="stat-peak-hour">—</div>
           <div class="small text-muted" id="stat-peak-hour-sub"></div>
         </div>
       </div>
     </div>
     <div class="col-6 col-md">
-      <div class="card shadow-sm h-100 border-0" style="background:linear-gradient(135deg,#1a2a1a,#2d4a1e);">
+      <div class="card shadow-sm h-100">
         <div class="card-body py-3">
           <div class="small text-muted mb-1"><i class="bi bi-lightning-charge me-1"></i>Productivity</div>
           <div class="fw-bold fs-4" id="stat-prod-score" style="color:#51cf66;">—</div>
@@ -123,7 +123,7 @@
   <!-- Right Now — Live Activity Panel -->
   <div class="row g-2 mb-3">
     <div class="col-12">
-      <div class="card border-0" id="ee-now-card" style="background:linear-gradient(90deg,#12181f,#0d1117);">
+      <div class="card border" id="ee-now-card">
         <div class="card-body py-2 px-3 d-flex align-items-center gap-3" style="min-height:46px;">
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             <span id="ee-now-dot" class="rounded-circle d-inline-block" style="width:9px;height:9px;background:#495057;flex-shrink:0;transition:background .4s;"></span>
@@ -254,7 +254,7 @@
     <div class="card-body p-0" style="max-height:220px;overflow-y:auto;">
       <div id="ee-focus-spin" class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>
       <table class="table table-sm table-hover mb-0" id="ee-focus-table" style="font-size:.78rem;display:none;">
-        <thead class="sticky-top table-dark">
+        <thead class="sticky-top">
           <tr>
             <th style="width:130px;">Application</th>
             <th style="width:145px;">Started</th>
@@ -277,7 +277,7 @@
     <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
       <div id="ee-evt-spin" class="text-center py-5"><span class="spinner-border spinner-border-sm"></span></div>
       <table class="table table-sm table-hover mb-0" id="ee-evt-table" style="font-size:.78rem;display:none;">
-        <thead class="sticky-top table-dark">
+        <thead class="sticky-top">
           <tr>
             <th style="width:145px;">Time</th>
             <th style="width:130px;">Application</th>
@@ -383,7 +383,7 @@
           </div>
           <div style="max-height:310px;overflow-y:auto;">
             <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
-              <thead class="sticky-top table-dark">
+              <thead class="sticky-top">
                 <tr><th>Process</th><th>Label</th><th>Productivity</th><th style="width:80px;"></th></tr>
               </thead>
               <tbody id="cls-tbody"></tbody>
@@ -437,7 +437,7 @@
 
           <div style="max-height:300px;overflow-y:auto;">
             <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
-              <thead class="sticky-top table-dark">
+              <thead class="sticky-top">
                 <tr><th>Site pattern</th><th>Label</th><th>Productivity</th><th style="width:80px;"></th></tr>
               </thead>
               <tbody id="cls-site-tbody"></tbody>
@@ -488,7 +488,7 @@
         </div>
         <div style="max-height:200px;overflow-y:auto;" class="border-bottom">
           <table class="table table-sm table-hover mb-0" style="font-size:.8rem;">
-            <thead class="sticky-top table-dark"><tr><th>Type</th><th>Threshold</th><th>Process</th><th>Email</th><th>Last Fired</th><th></th></tr></thead>
+            <thead class="sticky-top"><tr><th>Type</th><th>Threshold</th><th>Process</th><th>Email</th><th>Last Fired</th><th></th></tr></thead>
             <tbody id="alr-tbody"></tbody>
           </table>
         </div>
@@ -568,6 +568,7 @@ let agentTzOffsetH = {{ tz_offset_h }};  // only used to pick the right calendar
 
 <style>
 .ee-thumb { transition: transform .15s; }
+thead.sticky-top th { background: var(--surface-2); }
 .ee-thumb:hover { transform: scale(1.04); z-index:1; }
 </style>
 {% endblock %}

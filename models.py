@@ -1245,6 +1245,33 @@ class InstalledApp(db.Model):
     recorded_at = db.Column(db.DateTime(timezone=True))
 
 
+class CommandLedger(db.Model):
+    """Immutable ledger of every attempted agent/automation action — the audit, debug,
+    training, and trust spine of the Agentic IT-OS. One row per action; only the action's
+    own lifecycle fields (status/verification/rollback/completed_at) ever update — history
+    is never rewritten. See docs/AGENTIC_IT_OS_GAMEPLAN.md."""
+    __tablename__ = 'command_ledger'
+    id = db.Column(db.BigInteger, primary_key=True)
+    correlation_id = db.Column(db.String(64), index=True)   # ties multi-step workflows together
+    requested_by = db.Column(db.String(120))                # human username/email or 'system'
+    planned_by = db.Column(db.String(120))                  # agent/runtime that planned it (nullable)
+    tool = db.Column(db.String(120))                        # e.g. rmm.run_script, ldap.disable_user
+    object_type = db.Column(db.String(60))                  # asset | employee | license | ...
+    object_id = db.Column(db.String(120))
+    action_type = db.Column(db.String(80))
+    risk_tier = db.Column(db.String(20), default='low')     # low | medium | high | critical
+    approval_status = db.Column(db.String(20), default='auto')  # auto | pending | approved | rejected
+    before_state = db.Column(db.JSON)                       # snapshot for rollback
+    after_state = db.Column(db.JSON)
+    verification_status = db.Column(db.String(20), default='pending')  # pending|verified|failed|unverifiable
+    verification_detail = db.Column(db.Text)
+    rollback_available = db.Column(db.Boolean, default=False)
+    rolled_back_at = db.Column(db.DateTime(timezone=True))
+    status = db.Column(db.String(20), default='planned')    # planned|dispatched|succeeded|failed
+    created_at = db.Column(db.DateTime(timezone=True), default=now_mst)
+    completed_at = db.Column(db.DateTime(timezone=True))
+
+
 for _model, _etype in [(Asset, 'asset'), (Employee, 'employee'), (Policy, 'policy')]:
     _ins, _upd, _del = _make_audit_listener(_etype)
     _sa_event.listen(_model, 'after_insert', _ins)

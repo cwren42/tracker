@@ -25,6 +25,23 @@
 </a>
 {% endif %}
 
+{% if timeline %}
+<div class="card mb-3"><div class="card-body">
+  <h2 class="h6 mb-3"><i class="bi bi-activity me-2 text-muted"></i>Brain activity</h2>
+  <ul class="list-unstyled mb-0 small">
+    {% for t in timeline %}
+    <li class="d-flex align-items-center gap-2 py-1" style="border-bottom:1px solid var(--border);">
+      <i class="bi {{ t.icon }}" style="color:var(--accent);width:1rem;"></i>
+      <span class="text-muted" style="width:auto;min-width:2.8rem;font-size:.72rem;">{{ t.kind }}</span>
+      <span class="flex-grow-1">{% if t.link %}<a href="{{ t.link }}" class="text-decoration-none">{{ t.text }}</a>{% else %}{{ t.text }}{% endif %}</span>
+      {% if t.status %}<span class="small" style="color:{{ st_color.get(t.status,'var(--muted)') }}">{{ t.status }}</span>{% endif %}
+      <span class="text-muted" style="font-size:.72rem;min-width:5.5rem;text-align:right;">{{ t.ts.strftime('%b %d %H:%M:%S') if t.ts else '' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div></div>
+{% endif %}
+
 <div class="row g-3">
 
   <!-- World model -->

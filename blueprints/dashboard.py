@@ -1068,12 +1068,28 @@ def mission_control():
     except Exception:
         db.session.rollback()
 
+    # Unified activity timeline — merge actions + events + runs, newest first.
+    timeline = []
+    for a in recent_actions:
+        timeline.append({'ts': a.created_at, 'kind': 'action', 'icon': 'bi-lightning-charge',
+                         'text': a.action_type.replace('_', ' ') + (f" → {a.object_id}" if a.object_id else ''),
+                         'status': a.status, 'link': url_for('dashboard.ledger_detail', row_id=a.id)})
+    for e in recent_events:
+        timeline.append({'ts': e.get('created_at'), 'kind': 'event', 'icon': 'bi-broadcast-pin',
+                         'text': e.get('event_type'), 'status': e.get('status'),
+                         'link': url_for('dashboard.events')})
+    for r in recent_runs:
+        timeline.append({'ts': r.get('started_at'), 'kind': 'run', 'icon': 'bi-diagram-2',
+                         'text': (r.get('name') or 'Workflow') + f" #{r.get('id')}",
+                         'status': r.get('status'), 'link': None})
+    timeline = sorted([t for t in timeline if t['ts']], key=lambda t: t['ts'], reverse=True)[:15]
+
     return render_template('mission_control.html',
                            world=world, pending=pending, pending_n=pending_n,
                            recent_actions=recent_actions, ledger_counts=ledger_counts,
                            event_counts=event_counts, recent_events=recent_events,
                            wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs,
-                           automations=automations, kb=kb)
+                           automations=automations, kb=kb, timeline=timeline)
 
 
 # ── Knowledge Agent — semantic search + RAG over ISMS/system docs ────────────────

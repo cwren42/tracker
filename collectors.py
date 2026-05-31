@@ -38,8 +38,11 @@ function CountGroup($n){ try { @(Get-ADGroupMember $n -Recursive -ErrorAction St
   users_total=($en.Count+$dis); users_enabled=$en.Count; users_disabled=$dis; users_stale_90d=$stale;
   domain_admins=(CountGroup 'Domain Admins'); enterprise_admins=(CountGroup 'Enterprise Admins');
   computers=@(Get-ADComputer -Filter * -ResultSetSize 5000).Count;
-  pwd_min_length=$pp.MinPasswordLength; pwd_max_age_days=$pp.MaxPasswordAge.Days;
-  pwd_history=$pp.PasswordHistoryCount; lockout_threshold=$pp.LockoutThreshold
+  pwd_complexity=$pp.ComplexityEnabled; pwd_min_length=$pp.MinPasswordLength;
+  pwd_min_age_days=$pp.MinPasswordAge.Days; pwd_max_age_days=$pp.MaxPasswordAge.Days;
+  pwd_history=$pp.PasswordHistoryCount; pwd_reversible_encryption=$pp.ReversibleEncryptionEnabled;
+  lockout_threshold=$pp.LockoutThreshold; lockout_duration_min=[int]$pp.LockoutDuration.TotalMinutes;
+  lockout_window_min=[int]$pp.LockoutObservationWindow.TotalMinutes
 } | ConvertTo-Json -Compress
 """
 
@@ -120,7 +123,9 @@ def _ad_parse(o):
                    'fsmo_pdc', 'fsmo_rid', 'fsmo_infrastructure', 'fsmo_schema', 'fsmo_domain_naming',
                    'users_total', 'users_enabled', 'users_disabled', 'users_stale_90d',
                    'domain_admins', 'enterprise_admins', 'computers',
-                   'pwd_min_length', 'pwd_max_age_days', 'pwd_history', 'lockout_threshold')
+                   'pwd_complexity', 'pwd_min_length', 'pwd_min_age_days', 'pwd_max_age_days',
+                   'pwd_history', 'pwd_reversible_encryption',
+                   'lockout_threshold', 'lockout_duration_min', 'lockout_window_min')
     facts = {k: o.get(k) for k in scalar_keys if k in o}
     extra = []
     if o.get('writable_dcs'):

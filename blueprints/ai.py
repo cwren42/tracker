@@ -96,24 +96,18 @@ def api_ai_test():
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin only'}), 403
     try:
-        import openai as _oai
-        db_conn = get_db()
-        row = db_conn.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
-        model_row = db_conn.execute("SELECT value FROM setting WHERE key='openai_model'").fetchone()
-        db_conn.close()
-        from secret_store import decrypt_secret
-        api_key = decrypt_secret(row['value']) if row else None
-        model   = (model_row['value'] if model_row else None) or 'gpt-4o'
-        if not api_key:
-            return jsonify({'ok': False, 'error': 'No API key saved. Add your key and hit Save first.'}), 400
-        client = _oai.OpenAI(api_key=api_key)
+        import openai as _oai, ai_config
+        if not ai_config.ready():
+            return jsonify({'ok': False, 'error': 'No provider configured. Set an OpenAI key, or point AI base URL at Ollama, and Save first.'}), 400
+        base, key, model = ai_config.base_url(), ai_config.api_key(), ai_config.chat_model()
+        client = _oai.OpenAI(api_key=key, base_url=base)
         resp   = client.chat.completions.create(
             model=model,
             messages=[{'role':'user', 'content':'Reply with just the word OK.'}],
             max_tokens=5
         )
         reply = resp.choices[0].message.content.strip()
-        return jsonify({'ok': True, 'model': model, 'reply': reply})
+        return jsonify({'ok': True, 'model': model, 'provider': ('Ollama' if ai_config.is_ollama() else 'OpenAI'), 'reply': reply})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
@@ -459,8 +453,8 @@ def api_ai_settings_get():
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin only'}), 403
     db_conn = get_db()
-    keys = ['openai_api_key', 'openai_model', 'ai_ticket_enabled',
-            'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
+    keys = ['openai_api_key', 'openai_model', 'ai_base_url', 'openai_embed_model',
+            'ai_ticket_enabled', 'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
     result = {}
     for key in keys:
         row = db_conn.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
@@ -481,8 +475,8 @@ def api_ai_settings_save():
         return jsonify({'error': 'Admin only'}), 403
     data    = request.get_json()
     db_conn = get_db()
-    allowed = ['openai_api_key', 'openai_model', 'ai_ticket_enabled',
-               'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
+    allowed = ['openai_api_key', 'openai_model', 'ai_base_url', 'openai_embed_model',
+               'ai_ticket_enabled', 'ai_ticket_auto_mode', 'ai_security_monitor_enabled']
     for key in allowed:
         if key in data:
             if key == 'openai_api_key' and '…' in str(data[key]):

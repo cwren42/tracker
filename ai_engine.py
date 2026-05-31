@@ -20,11 +20,11 @@ def _now():
 
 
 def _get_api_key() -> str | None:
-    from secret_store import decrypt_secret
-    db = _db()
-    row = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
-    db.close()
-    return decrypt_secret(row["value"]) if row and row["value"] else None
+    # Delegates to the central provider config so it works for OpenAI AND on-site Ollama.
+    # Returns a usable bearer when AI is configured (a dummy for keyless local endpoints),
+    # else None so the "is AI available?" gates behave correctly.
+    import ai_config
+    return ai_config.api_key() if ai_config.ready() else None
 
 
 def _get_setting(key: str, default: str = "") -> str:
@@ -60,18 +60,19 @@ def _loads_lenient(raw):
 
 
 def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> str:
-    """Call OpenAI chat completions. Raises on failure."""
-    api_key = _get_api_key()
-    if not api_key:
-        raise ValueError("OpenAI API key not configured — add it in Settings → AI tab")
-    model = model or _get_setting("openai_model", "gpt-4o")
+    """Call the configured chat endpoint (OpenAI or on-site Ollama). Raises on failure."""
+    import ai_config
+    if not ai_config.ready():
+        raise ValueError("AI not configured — set an OpenAI key or point ai_base_url at Ollama (Settings → AI)")
+    api_key = ai_config.api_key()
+    model = model or ai_config.chat_model()
     payload = json.dumps({
         "model":      model,
         "messages":   messages,
         "max_tokens": max_tokens,
     }).encode()
     req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
+        ai_config.base_url() + "/chat/completions",
         data=payload,
         headers={
             "Content-Type":  "application/json",
@@ -79,7 +80,7 @@ def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> st
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=120) as r:
         resp = json.loads(r.read())
     return resp["choices"][0]["message"]["content"].strip()
 

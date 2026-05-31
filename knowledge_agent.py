@@ -55,31 +55,28 @@ def ensure_schema():
 
 
 def _api_key():
-    """OpenAI key from settings, decrypted. Context-free (raw pg_db + secret_store) so this
-    works inside workflow daemon threads that have no Flask app context."""
-    from secret_store import decrypt_secret
-    db = _db()
-    try:
-        row = db.execute("SELECT value FROM setting WHERE key='openai_api_key'").fetchone()
-    finally:
-        db.close()
-    if not row or not row["value"]:
-        raise ValueError("OpenAI API key not configured — add it in Settings → AI")
-    return decrypt_secret(row["value"])
+    """Bearer for the configured provider (OpenAI or on-site Ollama). Context-free."""
+    import ai_config
+    if not ai_config.ready():
+        raise ValueError("AI not configured — set an OpenAI key or point ai_base_url at Ollama (Settings → AI)")
+    return ai_config.api_key()
 
 
 def _embed(texts):
-    """Embed a list of strings -> list of float vectors. Batched."""
+    """Embed a list of strings -> list of float vectors, via the configured provider. Batched."""
     if not texts:
         return []
+    import ai_config
     key = _api_key()
+    url = ai_config.base_url() + "/embeddings"
+    model = ai_config.embed_model()
     out = []
     for i in range(0, len(texts), EMBED_BATCH):
         batch = [t[:8000] for t in texts[i:i + EMBED_BATCH]]  # cap per-input length
         resp = _http.post(
-            EMBED_URL, json={"model": EMBED_MODEL, "input": batch},
+            url, json={"model": model, "input": batch},
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=60,
+            timeout=120,
         )
         resp.raise_for_status()
         out.extend([d["embedding"] for d in resp.json()["data"]])
@@ -150,6 +147,34 @@ def reindex():
         db.close()
     log.info("knowledge reindex: %d chunks", len(items))
     return len(items)
+
+
+def reembed_all():
+    """Re-embed EVERY chunk with the CURRENT provider/model. Required after switching embedding
+    providers — OpenAI (1536-dim) and Ollama models (e.g. 768/1024-dim) aren't comparable, so a
+    mixed corpus would break cosine search. One-time, best-effort per chunk."""
+    db = _db()
+    try:
+        rows = db.execute("SELECT id, title, content FROM knowledge_chunk").fetchall()
+    finally:
+        db.close()
+    n = 0
+    for r in rows:
+        try:
+            vec = _embed([f"{r['title']}\n\n{r['content']}"])[0]
+        except Exception:
+            log.exception("re-embed failed for chunk %s", r["id"])
+            continue
+        d2 = _db()
+        try:
+            d2.execute("UPDATE knowledge_chunk SET embedding=?, updated_at=? WHERE id=?",
+                       (json.dumps(vec), _now(), r["id"]))
+            d2.commit()
+        finally:
+            d2.close()
+        n += 1
+    log.info("re-embedded %d chunks", n)
+    return n
 
 
 def _cosine(a, b):

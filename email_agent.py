@@ -26,14 +26,11 @@ MAILBOX_MESSAGE_STATUSES = {"Delivered", "Junk", "Released"}
 
 
 def get_openai_config():
-    """(api_key, model) from the Setting table. Raises ValueError if no key configured."""
-    api_key_row = Setting.query.filter_by(key="openai_api_key").first()
-    api_key = decrypt_secret(api_key_row.value) if api_key_row else None
-    if not api_key:
-        raise ValueError("OpenAI API key not configured — add it in Settings → AI")
-    model_row = Setting.query.filter_by(key="openai_model").first()
-    model = (model_row.value if model_row and model_row.value else None) or "gpt-4o"
-    return api_key, model
+    """(api_key, chat_model) for the configured provider (OpenAI or on-site Ollama)."""
+    import ai_config
+    if not ai_config.ready():
+        raise ValueError("AI not configured — set an OpenAI key, or point ai_base_url at Ollama, in Settings → AI")
+    return ai_config.api_key(), ai_config.chat_model()
 
 
 def build_message_summary(msg: QuarantineMessage, include_headers: bool = True) -> str:
@@ -71,11 +68,12 @@ def run_chat(system_prompt: str, user_prompt: str, max_tokens: int = 700, json_m
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    import ai_config
     resp = _http.post(
-        "https://api.openai.com/v1/chat/completions",
+        ai_config.base_url() + "/chat/completions",
         json=body,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout=30,
+        timeout=120,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip(), model

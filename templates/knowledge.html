@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Knowledge Agent{% endblock %}
 {% block content %}
-{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)'} %}
+{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)','runbook':'var(--warning)'} %}
 
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
   <div>
     <h1 class="h4 mb-0"><i class="bi bi-journal-richtext me-2" style="color:var(--accent)"></i>Knowledge Agent
       <span class="text-muted fw-normal fs-6">— ask the ISMS &amp; system docs</span></h1>
-    <div class="small text-muted">Semantic search + grounded answers with citations · {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}</div>
+    <div class="small text-muted">Semantic search + grounded answers with citations · {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}{% if runbook_count %} · <span style="color:var(--success)">{{ runbook_count }} learned runbook{{ 's' if runbook_count != 1 }}</span>{% endif %}</div>
   </div>
   <form method="post" action="{{ url_for('dashboard.knowledge_reindex') }}"
         onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Indexing…';">

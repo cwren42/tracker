@@ -438,6 +438,23 @@ def set_ticket_status(ticket_id):
         db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
                                       action='status_changed', detail=f'{old} → {new_status}'))
         db.session.commit()
+
+        # On resolution: emit a bus event + run the brain's "Learn" step — distill the
+        # ticket into a reusable runbook for the Knowledge Agent. Both best-effort.
+        if new_status == 'Closed' and old != 'Closed':
+            try:
+                import event_bus
+                event_bus.publish('ticket.resolved', {
+                    'ticket_id': ticket.id, 'subject': ticket.subject,
+                    'category': ticket.category, 'closed_by': current_user.username,
+                }, source='tickets')
+            except Exception as _e:
+                logger.warning(f'Failed to publish ticket.resolved event: {_e}')
+            try:
+                import knowledge_agent
+                knowledge_agent.learn_from_ticket_async(current_app._get_current_object(), ticket.id)
+            except Exception as _e:
+                logger.warning(f'Failed to start learn-from-ticket: {_e}')
     return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
 
 

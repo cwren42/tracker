@@ -126,7 +126,8 @@ def reindex():
     vectors = _embed([f"{t}\n\n{c}" for (_st, _sid, t, c) in items])
     db = _db()
     try:
-        db.execute("DELETE FROM knowledge_chunk")
+        # Preserve learned runbooks (source_type='runbook') — only the static corpus is rebuilt.
+        db.execute("DELETE FROM knowledge_chunk WHERE source_type <> 'runbook'")
         for (st, sid, title, content), vec in zip(items, vectors):
             db.execute(
                 "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
@@ -191,13 +192,87 @@ def answer(query, k=TOP_K):
     return {"answer": content, "sources": hits}
 
 
-def count():
+def count(source_type=None):
     try:
         db = _db()
         try:
-            row = db.execute("SELECT COUNT(*) AS n FROM knowledge_chunk").fetchone()
+            if source_type:
+                row = db.execute("SELECT COUNT(*) AS n FROM knowledge_chunk WHERE source_type=?",
+                                 (source_type,)).fetchone()
+            else:
+                row = db.execute("SELECT COUNT(*) AS n FROM knowledge_chunk").fetchone()
             return row["n"] if row else 0
         finally:
             db.close()
     except Exception:
         return 0
+
+
+def learn_from_ticket(ticket_id):
+    """The 'Learn' step — distill a resolved ticket into a reusable runbook and file it into
+    the knowledge base, so the corpus compounds from real operations. Best-effort; returns
+    the runbook title or None (None when the AI judges the ticket not runbook-worthy). App
+    context required (reads the ORM + calls the AI)."""
+    from models import SupportTicket, TicketNote
+    t = SupportTicket.query.get(ticket_id)
+    if not t:
+        return None
+    notes = (TicketNote.query.filter_by(ticket_id=ticket_id)
+             .order_by(TicketNote.created_at).all())
+    convo = "\n".join(f"- {'[internal] ' if n.is_internal else ''}{n.content}"
+                      for n in notes if (n.content or '').strip())
+    body = (f"Subject: {t.subject}\nCategory: {t.category}\n"
+            f"Description: {t.description or ''}\n\nResolution thread:\n{convo or '(no notes recorded)'}")
+
+    from email_agent import run_chat
+    system = (
+        "You curate an IT runbook library. Turn this RESOLVED support ticket into a concise, reusable "
+        "runbook for next time. DEFAULT to writing one. Reply with exactly 'SKIP' ONLY when there is "
+        "nothing reusable to capture — i.e. no actual resolution was recorded, or it's a pure one-off with "
+        "no generalizable procedure (e.g. a hardware swap). When you write it, generalize away the specific "
+        "person/asset and reply in Markdown with: a single short title line, then '## Problem', "
+        "'## Resolution' (numbered steps), and '## Notes'. No preamble."
+    )
+    try:
+        content, _model = run_chat(system, body, max_tokens=500)
+    except Exception:
+        log.exception("learn_from_ticket: AI call failed for ticket %s", ticket_id)
+        return None
+    content = (content or "").strip()
+    if not content or content.upper().startswith("SKIP"):
+        return None
+    title = (content.splitlines()[0].lstrip("# ").strip() or f"Runbook: {t.subject}")[:200]
+    try:
+        vec = _embed([f"{title}\n\n{content}"])[0]
+    except Exception:
+        log.exception("learn_from_ticket: embed failed for ticket %s", ticket_id)
+        return None
+    db = _db()
+    try:
+        # Upsert: replace any prior runbook learned from this same ticket.
+        db.execute("DELETE FROM knowledge_chunk WHERE source_type='runbook' AND source_id=?",
+                   (f"ticket:{ticket_id}",))
+        db.execute(
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+            "VALUES ('runbook',?,?,?,?,?)",
+            (f"ticket:{ticket_id}", title, content, json.dumps(vec), _now()),
+        )
+        db.commit()
+    finally:
+        db.close()
+    log.info("learned runbook from ticket %s: %s", ticket_id, title)
+    return title
+
+
+def learn_from_ticket_async(flask_app, ticket_id):
+    """Fire-and-forget the learn step in a background thread with an app context."""
+    import threading
+
+    def _run():
+        try:
+            with flask_app.app_context():
+                learn_from_ticket(ticket_id)
+        except Exception:
+            log.exception("learn_from_ticket_async failed for ticket %s", ticket_id)
+
+    threading.Thread(target=_run, daemon=True, name=f"learn-ticket-{ticket_id}").start()

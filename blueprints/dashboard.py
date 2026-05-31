@@ -1004,6 +1004,7 @@ def knowledge():
     query = (request.form.get('q') or request.args.get('q') or '').strip()
     result, answer_html = None, None
     chunk_count = knowledge_agent.count()
+    runbook_count = knowledge_agent.count('runbook')
     if query:
         try:
             result = knowledge_agent.answer(query)
@@ -1014,7 +1015,8 @@ def knowledge():
         except Exception as e:
             flash(f'Knowledge search failed: {e}', 'danger')
     return render_template('knowledge.html', query=query, result=result,
-                           answer_html=answer_html, chunk_count=chunk_count)
+                           answer_html=answer_html, chunk_count=chunk_count,
+                           runbook_count=runbook_count)
 
 
 @bp.route('/knowledge/reindex', methods=['POST'])

@@ -82,9 +82,12 @@ def _cert_parse(o):
 
 def _is_ad(s):
     n = (s.name or '').lower()
-    return 'active directory' in n and 'certificate' not in n
+    return 'active directory' in n and 'certificate' not in n and 'sync' not in n and 'entra' not in n
 def _is_cert(s):
     return 'cert' in (s.name or '').lower()
+def _is_entra(s):
+    n = (s.name or '').lower()
+    return 'entra' in n or 'aad connect' in n or 'ad connect' in n or ('azure' in n and 'sync' in n)
 
 
 PROBES = [
@@ -95,7 +98,7 @@ PROBES = [
     {'key': 'certs', 'label': 'Certificate expiry', 'kind': 'collect', 'shell': 'powershell',
      'applies': lambda s: _is_cert(s) or _is_ad(s), 'script': CERT_PS, 'parse': _cert_parse},
     {'key': 'entra_sync', 'label': 'Run Entra (AAD Connect) delta sync', 'kind': 'action', 'shell': 'powershell',
-     'applies': _is_ad, 'script': ENTRA_SYNC_PS},
+     'applies': _is_entra, 'script': ENTRA_SYNC_PS},
 ]
 
 

@@ -712,13 +712,13 @@ function downloadPhishScript() {
 <!-- Phish Block Modal -->
 <div class="modal fade" id="phishBlockModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-xl modal-dialog-scrollable">
-    <div class="modal-content" style="background:#0d1117;border:1px solid #dc3545;">
-      <div class="modal-header" style="border-bottom:1px solid #2a2f3a;">
+    <div class="modal-content" style="background:var(--surface);border:1px solid #dc3545;">
+      <div class="modal-header" style="border-bottom:1px solid var(--border);">
         <div>
           <h5 class="modal-title fw-bold"><i class="bi bi-shield-fill-x text-danger me-2"></i>Credential Phishing — Block Script</h5>
           <div class="text-muted" style="font-size:.75rem;" id="phish-modal-subtitle">Loading…</div>
         </div>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" style="padding:0;">
         <div id="phish-loading" class="text-center py-5">
@@ -733,7 +733,7 @@ function downloadPhishScript() {
           </div>
         </div>
         <div id="phish-script-wrap" style="display:none;">
-          <div class="d-flex flex-wrap gap-4 px-4 pt-3 pb-2" style="border-bottom:1px solid #1a2030;font-size:.8rem;">
+          <div class="d-flex flex-wrap gap-4 px-4 pt-3 pb-2" style="border-bottom:1px solid var(--border);font-size:.8rem;">
             <div><span class="text-muted">Phish messages: </span><span class="fw-bold text-danger" id="ph-msg-count">—</span></div>
             <div><span class="text-muted">Sender domains: </span><span class="fw-bold text-warning" id="ph-dom-count">—</span></div>
             <div><span class="text-muted">Sender addresses: </span><span class="fw-bold text-warning" id="ph-addr-count">—</span></div>
@@ -753,7 +753,7 @@ function downloadPhishScript() {
                       max-height:480px;overflow-y:auto;"></pre>
         </div>
       </div>
-      <div class="modal-footer" style="border-top:1px solid #2a2f3a;gap:.5rem;">
+      <div class="modal-footer" style="border-top:1px solid var(--border);gap:.5rem;">
         <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button>
         <button class="btn btn-sm btn-outline-secondary" id="ph-copy-btn" onclick="copyPhishScript()" style="display:none;">
           <i class="bi bi-clipboard me-1"></i>Copy Script

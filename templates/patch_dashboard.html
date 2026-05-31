@@ -24,16 +24,16 @@
 
   <!-- Summary cards -->
   <div class="row g-2 mb-3" id="summaryCards">
-    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+    <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
       <div class="fs-3 fw-bold" id="sumTotal">—</div><div class="text-muted small">Pending Updates</div>
     </div></div>
-    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+    <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
       <div class="fs-3 fw-bold text-danger" id="sumCritical">—</div><div class="text-muted small">Critical</div>
     </div></div>
-    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+    <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
       <div class="fs-3 fw-bold text-warning" id="sumImportant">—</div><div class="text-muted small">Important</div>
     </div></div>
-    <div class="col-6 col-md-3"><div class="card bg-dark border-0 text-center py-2">
+    <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
       <div class="fs-3 fw-bold text-info" id="sumDevices">—</div><div class="text-muted small">Devices Affected</div>
     </div></div>
   </div>
@@ -73,7 +73,7 @@
     </div>
 
     <div class="table-responsive">
-      <table class="table table-dark table-hover table-sm mb-0" id="updatesTable">
+      <table class="table table-hover table-sm mb-0" id="updatesTable">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="checkAll" onchange="checkAllVisible(this.checked)"></th>
           <th>Title</th>
@@ -107,7 +107,7 @@
       </div>
     </div>
     <div class="table-responsive">
-      <table class="table table-dark table-hover table-sm mb-0">
+      <table class="table table-hover table-sm mb-0">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="checkAllDev" onchange="checkAllDevices(this.checked)"></th>
           <th>Device</th>
@@ -133,12 +133,12 @@
 <!-- ── DEPLOY CONFIRM / PROGRESS MODAL ────────────────────────── -->
 <div class="modal fade" id="deployModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog">
-    <div class="modal-content bg-dark text-white">
+    <div class="modal-content">
       <div class="modal-header border-secondary">
         <h5 class="modal-title" id="deployModalTitle">
           <i class="bi bi-cloud-upload me-2"></i>Deploy Patches
         </h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" id="deployModalClose"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" id="deployModalClose"></button>
       </div>
       <div class="modal-body" id="deployModalBody"></div>
       <div class="modal-footer border-secondary" id="deployModalFooter"></div>
@@ -149,10 +149,10 @@
 <!-- ── AUTO-APPROVE RULES MODAL ────────────────────────────────── -->
 <div class="modal fade" id="autoApproveModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
-    <div class="modal-content bg-dark text-white">
+    <div class="modal-content">
       <div class="modal-header border-secondary">
         <h5 class="modal-title"><i class="bi bi-robot me-2"></i>Auto-Approve Rules</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <p class="text-muted small mb-3">
@@ -171,10 +171,10 @@
 <!-- ── DEVICE LIST MODAL (for single update) ───────────────────── -->
 <div class="modal fade" id="deviceListModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
-    <div class="modal-content bg-dark text-white">
+    <div class="modal-content">
       <div class="modal-header border-secondary">
         <h5 class="modal-title" id="deviceListTitle">Affected Devices</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="deviceListBody"></div>
       <div class="modal-footer border-secondary">
@@ -436,7 +436,7 @@ function showDeployConfirm(payload, devices) {
   _pendingDeployDevices = devices;
 
   document.getElementById('deployModalBody').innerHTML = `
-    <p class="mb-2 text-muted small">Ready to dispatch to <strong class="text-white">${devices.length}</strong> device(s):</p>
+    <p class="mb-2 text-muted small">Ready to dispatch to <strong>${devices.length}</strong> device(s):</p>
     <ul class="list-unstyled mb-0">
       ${devices.map(d => `
         <li class="d-flex align-items-center gap-2 py-1 border-bottom border-secondary" id="ddv-${CSS.escape(d.agent_id)}">
@@ -673,7 +673,7 @@ function showToast(msg, type) {
   const el = document.createElement('div');
   el.innerHTML = `<div id="${id}" class="toast align-items-center text-white ${color} border-0 show mb-2" role="alert">
     <div class="d-flex"><div class="toast-body">${escHtml(msg)}</div>
-    <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.toast').remove()"></button>
+    <button type="button" class="btn-close me-2 m-auto" onclick="this.closest('.toast').remove()"></button>
     </div></div>`;
   let tc = document.getElementById('toastContainer');
   if (!tc) {

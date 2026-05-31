@@ -121,6 +121,47 @@ steps, prior-state snapshot before destructive writes (one-click reversible), gr
 8. Group graph (`group_node`/`group_membership`/`group_grants`) + sync + `who_loses_access` view.
    *(Offboarding saga follows in Months 4-6.)*
 
+## Sprint 1 — REFINED (operator decision: two parallel tracks + command ledger)
+
+Sprint 1 runs as **two independent tracks** (do in parallel; together they are the first real "brain"):
+
+**Track A — Execution substrate (the biggest unlock; until this works, "agentic" is theater).**
+Goal: *Admin clicks "run workflow" → RMM action executes → result comes back → `workflow_run` shows
+success/failure.* Steps: (1) fix the broken `rmm_event` INSERTs → gateway `/send-msg` + `rmm_commands`
+fallback; (2) prove ONE device action runs end-to-end on one online agent; (3) workflow run records;
+(4) verification status; (5) failure visibility. **The live end-to-end run executes on a real machine —
+operator picks the agent + approves, like the scripts test-button.**
+
+**Track B — Identity graph (trust foundation).**
+Goal: *Ask "what does this person have access to?" and get a trustworthy answer.* Backfill
+`m365_user.employee_id`, `intune_device.asset_id`, group memberships, app grants, device ownership.
+Pure additive DB work — safe, no execution.
+
+### Command ledger (NEW first-class component — overrides "defer the ledger")
+Every attempted action gets an **immutable** record from action #1 — this is the audit trail, debugging
+layer, training data, and trust layer all at once. Build it in Sprint 1, not at Mission Control.
+```
+command_ledger(
+  id, correlation_id,
+  requested_by,           -- human or 'system'
+  planned_by,             -- which agent/runtime planned it (nullable for manual)
+  tool,                   -- e.g. rmm.send_msg:run_script, ldap.disable_user, graph.assign_license
+  object_type, object_id, -- what it acted on (asset/employee/license/...)
+  action_type, risk_tier,
+  approval_status,        -- auto | pending | approved | rejected
+  before_state jsonb,     -- snapshot for rollback
+  after_state jsonb,
+  verification_status,    -- pending | verified | failed | unverifiable
+  verification_detail,
+  rollback_available bool, rolled_back_at,
+  status,                 -- planned | dispatched | succeeded | failed
+  created_at, completed_at
+)
+```
+Append-only (no UPDATE of historical rows except the action's own lifecycle fields). Every Execute step
+writes one row; Verify updates its verification_status; the approval engine references it. PII/retention
+policy applies (you hold SOC2/ISMS). This is the spine the master brain learns from.
+
 ## Hard parts honored
 PII/retention on the append-only `events` log (you hold SOC2/ISMS — define retention + read-access first);
 saga safety (idempotency, partial-failure resume, rollback snapshots); dispatcher operational surface

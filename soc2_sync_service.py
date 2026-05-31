@@ -404,6 +404,16 @@ class SOC2SyncService:
             'devices': self.sync_intune_devices(),
             'software': self.sync_software_inventory()
         }
-        
+
+        # IT-graph: link freshly-synced M365 users -> employees and Intune devices -> assets
+        # (idempotent; only fills NULL FKs). Track B of the Agentic IT-OS gameplan.
+        try:
+            from identity_graph import resolve_identity_links
+            results['identity_links'] = resolve_identity_links(commit=True)
+        except Exception as e:
+            self.db.session.rollback()  # don't leave a broken txn for a later commit to inherit
+            logger.exception("identity link resolution failed (non-fatal)")
+            results['identity_links'] = {'error': str(e)}
+
         logger.info("Full SOC2 sync completed")
         return results

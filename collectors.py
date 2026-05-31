@@ -81,10 +81,20 @@ $list=foreach($p in $ps){
 REPL_PS = r"""
 $ErrorActionPreference='Stop'
 $dcs=@((Get-ADDomainController -Filter *).HostName)
+# Bound EACH DC query (the Taiwan RODC has latency) so one slow/unreachable DC can't stall
+# the whole collector. failures=-1 means no response within 25s (treated as a latency flag).
 $rep=foreach($dc in $dcs){
-  $f=@(Get-ADReplicationFailure -Target $dc -ErrorAction SilentlyContinue)
-  [pscustomobject]@{ dc=$dc; failures=$f.Count; last_error=($f|Select-Object -First 1 -ExpandProperty FailureType -ErrorAction SilentlyContinue) } }
-[pscustomobject]@{ dc_count=$dcs.Count; total_failures=(@($rep|Measure-Object -Property failures -Sum).Sum); replication=@($rep) } | ConvertTo-Json -Compress -Depth 4
+  $j=Start-Job -ScriptBlock { param($d) @(Get-ADReplicationFailure -Target $d -ErrorAction SilentlyContinue).Count } -ArgumentList $dc
+  if(Wait-Job $j -Timeout 25){ $c=[int](Receive-Job $j) } else { $c=-1; Stop-Job $j -ErrorAction SilentlyContinue }
+  Remove-Job $j -Force -ErrorAction SilentlyContinue
+  [pscustomobject]@{ dc=$dc; failures=$c }
+}
+[pscustomobject]@{
+  dc_count=$dcs.Count;
+  total_failures=(@($rep|Where-Object{$_.failures -gt 0}|Measure-Object -Property failures -Sum).Sum);
+  unreachable=@($rep|Where-Object{$_.failures -lt 0}).Count;
+  replication=@($rep)
+} | ConvertTo-Json -Compress -Depth 4
 """
 
 CERT_PS = r"""
@@ -150,11 +160,17 @@ def _fgpp_parse(o):
 
 
 def _repl_parse(o):
-    facts = {'dc_count': o.get('dc_count'), 'replication_failures': o.get('total_failures')}
+    facts = {'dc_count': o.get('dc_count'), 'replication_failures': o.get('total_failures'),
+             'dcs_unreachable': o.get('unreachable')}
     extra = ["## Replication health by DC", ""]
     for r in (o.get('replication') or []):
-        flag = ' ⚠️' if r.get('failures') else ' ✓'
-        extra.append(f"- {r.get('dc')}: {r.get('failures')} failures{(' — ' + str(r.get('last_error'))) if r.get('last_error') else ''}{flag}")
+        n = r.get('failures')
+        if n is not None and n < 0:
+            extra.append(f"- {r.get('dc')}: ⏳ no response in 25s (latency — e.g. Taiwan RODC)")
+        elif n:
+            extra.append(f"- {r.get('dc')}: {n} replication failures ⚠️")
+        else:
+            extra.append(f"- {r.get('dc')}: healthy ✓")
     return facts, _facts_doc("Active Directory — replication health", facts, extra)
 
 

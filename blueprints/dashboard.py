@@ -1023,8 +1023,22 @@ def mission_control():
     except Exception:
         db.session.rollback()
 
-    # Workflows — enabled + run status mix + recent runs.
+    # Workflows — enabled + run status mix + recent runs + the wired automations list.
     wf_enabled = _scalar("SELECT COUNT(*) FROM workflow_definitions WHERE enabled=true")
+    automations = []
+    try:
+        automations = [dict(r._mapping) for r in db.session.execute(text(
+            "SELECT id, name, trigger_type, enabled FROM workflow_definitions ORDER BY enabled DESC, id"))]
+    except Exception:
+        db.session.rollback()
+    # Knowledge base size (static + learned + manual).
+    kb = {'total': 0, 'runbook': 0, 'manual': 0}
+    try:
+        import knowledge_agent
+        kb = {'total': knowledge_agent.count(), 'runbook': knowledge_agent.count('runbook'),
+              'manual': knowledge_agent.count('manual')}
+    except Exception:
+        pass
     run_counts, recent_runs = {}, []
     try:
         for r in db.session.execute(text("SELECT status, COUNT(*) AS n FROM workflow_runs GROUP BY status")):
@@ -1040,7 +1054,8 @@ def mission_control():
                            world=world, pending=pending, pending_n=pending_n,
                            recent_actions=recent_actions, ledger_counts=ledger_counts,
                            event_counts=event_counts, recent_events=recent_events,
-                           wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs)
+                           wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs,
+                           automations=automations, kb=kb)
 
 
 # ── Knowledge Agent — semantic search + RAG over ISMS/system docs ────────────────

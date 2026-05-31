@@ -113,6 +113,38 @@
     </div></div>
   </div>
 
+  <!-- Wired automations -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-robot me-2 text-muted"></i>Wired automations</h2>
+      <ul class="list-unstyled small mb-0">
+        {% for a in automations %}
+        <li class="d-flex justify-content-between align-items-center mb-1">
+          <span>{{ a.name }} <code class="text-muted">{{ a.trigger_type }}</code></span>
+          {% if a.enabled %}<span class="badge" style="background:var(--success-bg,#1f3d2b);color:var(--success);">enabled</span>
+          {% else %}<span class="badge" style="background:var(--surface-2);color:var(--muted);">disabled</span>{% endif %}
+        </li>
+        {% else %}<li class="text-muted">No workflows defined.</li>{% endfor %}
+      </ul>
+    </div></div>
+  </div>
+
+  <!-- Knowledge base -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100"><div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 mb-0"><i class="bi bi-journal-richtext me-2 text-muted"></i>Knowledge base</h2>
+        <a href="{{ url_for('dashboard.knowledge') }}" class="small">Open →</a>
+      </div>
+      <div class="row g-2 text-center">
+        <div class="col"><div class="h4 mb-0">{{ kb.total }}</div><div class="small text-muted">indexed chunks</div></div>
+        <div class="col"><div class="h4 mb-0" style="color:var(--warning)">{{ kb.runbook }}</div><div class="small text-muted">learned runbooks</div></div>
+        <div class="col"><div class="h4 mb-0" style="color:var(--accent)">{{ kb.manual }}</div><div class="small text-muted">authored notes</div></div>
+      </div>
+      <div class="small text-muted mt-2"><i class="bi bi-arrow-repeat me-1"></i>Grows from resolved tickets + notes you add.</div>
+    </div></div>
+  </div>
+
   <!-- Command ledger -->
   <div class="col-12">
     <div class="card"><div class="card-body">

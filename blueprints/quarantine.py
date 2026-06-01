@@ -262,9 +262,15 @@ def _upsert_messages(messages: list[dict]) -> tuple[int, int]:
                 rt = None
 
         if existing:
-            # Update mutable fields only
+            # Update mutable fields only. These are all re-derived from Defender each
+            # sync, so refreshing them lets a re-sync correct historically mislabelled
+            # rows (e.g. blocks that showed reason "Unknown" before we projected the
+            # transport-rule field).
             existing.last_synced = datetime.utcnow()
             existing.release_status = m.get("release_status", existing.release_status)
+            existing.policy_type = m.get("policy_type", existing.policy_type)
+            existing.quarantine_reason = m.get("quarantine_reason", existing.quarantine_reason)
+            existing.threat_type = m.get("threat_type", existing.threat_type)
             existing.spf_result = m.get("spf_result", existing.spf_result)
             existing.dkim_result = m.get("dkim_result", existing.dkim_result)
             existing.dmarc_result = m.get("dmarc_result", existing.dmarc_result)

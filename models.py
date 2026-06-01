@@ -228,8 +228,8 @@ class SupportTicket(db.Model):
     closed_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     merged_into_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_mst)  # server-local; utcnow() displayed +6h
+    updated_at = db.Column(db.DateTime, default=now_mst, onupdate=now_mst)
     closed_at = db.Column(db.DateTime)
 
     asset = db.relationship('Asset', foreign_keys=[asset_id])
@@ -264,13 +264,13 @@ class SupportTicket(db.Model):
     def sla_elapsed_hours(self):
         if not self.created_at:
             return 0.0
-        return (datetime.utcnow() - self.created_at).total_seconds() / 3600
+        return (now_mst() - self.created_at).total_seconds() / 3600
 
     @property
     def sla_hours_remaining(self):
         if not self.created_at:
             return self.sla_target_hours
-        elapsed = (datetime.utcnow() - self.created_at).total_seconds() / 3600
+        elapsed = (now_mst() - self.created_at).total_seconds() / 3600
         return max(0.0, self.sla_target_hours - elapsed)
 
     @property
@@ -289,7 +289,7 @@ class TicketNote(db.Model):
     is_internal = db.Column(db.Boolean, default=False, nullable=False)
     is_reply = db.Column(db.Boolean, default=False, nullable=False)
     reply_to = db.Column(db.Text)   # email address the reply was sent to
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_mst)  # server-local; see now_mst()
 
     author = db.relationship('User', foreign_keys=[user_id])
 
@@ -301,7 +301,7 @@ class TicketActivity(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     action = db.Column(db.String(50), nullable=False)
     detail = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_mst)  # server-local; see now_mst()
 
     user = db.relationship('User', foreign_keys=[user_id])
 
@@ -334,7 +334,7 @@ class TicketLink(db.Model):
     ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), nullable=False)
     linked_ticket_id = db.Column(db.Integer, db.ForeignKey('support_ticket.id', ondelete='CASCADE'), nullable=False)
     link_type = db.Column(db.String(20), nullable=False, default='related')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_mst)  # server-local; see now_mst()
     linked_ticket = db.relationship('SupportTicket', foreign_keys=[linked_ticket_id])
 
 

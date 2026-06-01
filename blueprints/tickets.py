@@ -66,7 +66,7 @@ def tickets():
                                avg_hours=None, resolution_by_priority=[],
                                techs=[], f_status='', f_priority='', f_source='',
                                f_category='', f_assignee='', f_type='',
-                               base_user_mode=True, now=datetime.utcnow())
+                               base_user_mode=True, now=datetime.now())
     # ── Read filter params ────────────────────────────────────────────────────
     f_status   = request.args.get('status',   '').strip()
     f_priority = request.args.get('priority', '').strip()
@@ -98,7 +98,7 @@ def tickets():
         SupportTicket.status.notin_(['Closed', 'Merged'])
     ).count()
     total_closed = SupportTicket.query.filter_by(status='Closed').count()
-    today_date = datetime.utcnow().date()
+    today_date = date.today()  # server-local; compared against local-stored updated_at
 
     # ── Build filtered query ──────────────────────────────────────────────────
     q = SupportTicket.query
@@ -139,7 +139,7 @@ def tickets():
                       .order_by(User.full_name).all()
 
     # ── Chart: tickets created per day for last 30 days ───────────────────────
-    today = datetime.utcnow().date()
+    today = date.today()  # server-local; buckets local-stored created_at
     chart_labels = [
         (today - timedelta(days=29 - i)).strftime('%Y-%m-%d') for i in range(30)
     ]
@@ -225,7 +225,7 @@ def tickets():
                            techs=techs,
                            f_status=f_status, f_priority=f_priority, f_source=f_source,
                            f_category=f_category, f_assignee=f_assignee, f_type=f_type,
-                           now=datetime.utcnow())
+                           now=datetime.now())
 
 
 @bp.route('/tickets/new', methods=['GET', 'POST'])
@@ -262,8 +262,8 @@ def new_ticket():
             asset_tag=asset.asset_tag if asset else None,
             hostname=asset.name if asset else None,
             created_by_user_id=current_user.id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(),  # server-local (TZ=America/Denver); utcnow() displayed +6h. See now_mst().
+            updated_at=datetime.now(),
         )
         db.session.add(ticket)
         db.session.commit()
@@ -397,7 +397,7 @@ def view_ticket(ticket_id):
         _notes_q = [n for n in _notes_q if not n.is_internal]
     notes = [{'type': 'note', 'obj': n, 'ts': n.created_at} for n in _notes_q]
     acts = [{'type': 'activity', 'obj': a, 'ts': a.created_at} for a in ticket.activity.order_by(TicketActivity.created_at).all()]
-    timeline = sorted(notes + acts, key=lambda x: x['ts'] or datetime.utcnow())
+    timeline = sorted(notes + acts, key=lambda x: x['ts'] or datetime.now())
     all_tags = TicketTag.query.order_by(TicketTag.name).all()
     watcher_ids = {w.user_id for w in ticket.watchers.all()}
     all_users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])) \
@@ -433,7 +433,7 @@ def set_ticket_status(ticket_id):
         old = ticket.status
         ticket.status = new_status
         if new_status == 'Closed':
-            ticket.closed_at = datetime.utcnow()
+            ticket.closed_at = datetime.now()  # server-local; see now_mst()
             ticket.closed_by_user_id = current_user.id
         db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
                                       action='status_changed', detail=f'{old} → {new_status}'))
@@ -690,7 +690,7 @@ def bulk_action():
         for t in bulk_tickets:
             if t.status not in ('Closed', 'Merged'):
                 t.status = 'Closed'
-                t.closed_at = datetime.utcnow()
+                t.closed_at = datetime.now()  # server-local; see now_mst()
                 t.closed_by_user_id = current_user.id
                 db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                               action='closed', detail='Bulk closed'))
@@ -721,7 +721,7 @@ def bulk_action():
                 continue
             t.status = status
             if status == 'Closed' and t.closed_at is None:
-                t.closed_at = datetime.utcnow()
+                t.closed_at = datetime.now()  # server-local; see now_mst()
                 t.closed_by_user_id = current_user.id
             db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                           action='status_changed',
@@ -779,7 +779,7 @@ def close_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
     if ticket.status != 'Closed':
         ticket.status = 'Closed'
-        ticket.closed_at = datetime.utcnow()
+        ticket.closed_at = datetime.now()  # server-local; see now_mst()
         ticket.closed_by_user_id = current_user.id
         # Generate CSAT token and send survey email if reporter email is known
         if ticket.reporter_email and not ticket.csat_token:
@@ -1048,8 +1048,8 @@ def api_create_support_ticket():
         asset_id=asset_id,
         asset_tag=asset_tag,
         created_by_user_id=created_by_user_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(),  # server-local (TZ=America/Denver); utcnow() displayed +6h. See now_mst().
+        updated_at=datetime.now(),
     )
     db.session.add(ticket)
     db.session.commit()
@@ -1119,7 +1119,7 @@ def _do_sla_pass(flask_app):
             db.or_(SupportTicket.source.is_(None),
                    ~SupportTicket.source.in_(['system', 'alert']))
         ).all()
-        now = datetime.utcnow()
+        now = datetime.now()  # match how created_at is stored (server-local naive); see now_mst()
         escalated = []
         for t in open_tickets:
             hours = SLA_HOURS.get(t.priority, 72)

@@ -222,7 +222,16 @@ EmailEvents
         }
 
     def _detect_release_status(self, row: dict) -> str:
-        """Map Defender delivery fields to a unified status: Delivered|Junk|Quarantined|Blocked|Released|Deleted."""
+        """Map Defender delivery fields to a unified status: Delivered|Junk|Quarantined|Blocked|Released|Deleted.
+
+        Order matters: the *action* is authoritative, the *location* is a folder name.
+        Critically, "Deleted Items" is a normal mailbox folder (where a junked or ZAP'd
+        message lands) — NOT quarantine and NOT a deletion. Earlier this method matched
+        the substring "deleted" in the location and mislabelled delivered-to-junk mail as
+        "Deleted" (which the stat cards bucket under Quarantined), so messages Microsoft
+        actually delivered showed up as quarantined. We now key Deleted off an explicit
+        delete *action* only, and treat the Junk/Deleted-Items folders as Junk delivery.
+        """
         action      = (row.get("LatestDeliveryAction") or "").lower()
         loc         = (row.get("LatestDeliveryLocation") or "").lower()
         orig_action = (row.get("DeliveryAction") or "").lower()
@@ -230,18 +239,22 @@ EmailEvents
         # Blocked — never entered the mailbox
         if "block" in action or "block" in orig_action:
             return "Blocked"
-        # Deleted — removed from quarantine
-        if "delete" in action or "deleted" in loc:
-            return "Deleted"
-        # Released from quarantine back to inbox
-        if "release" in action:
-            return "Released"
-        # Quarantined
+        # Quarantined — held by Defender (authoritative; check before folder names)
         if "quarantine" in action or "quarantine" in loc or "quarantine" in orig_loc:
             return "Quarantined"
-        # Junk folder delivery
-        if "junk" in loc or "junk" in orig_loc:
+        # Released from quarantine back to the mailbox
+        if "release" in action:
+            return "Released"
+        # Junked — DELIVERED to a junk-type folder. Action "Junked" is authoritative;
+        # the Junk Email and Deleted Items folders both count (a junked/ZAP'd message
+        # lands in one of them). Tested before the delete-action check so the folder
+        # name "Deleted Items" is never misread as a deletion.
+        if "junk" in action or "junk" in loc or "junk" in orig_loc \
+                or "deleted items" in loc or "deleted items" in orig_loc:
             return "Junk"
+        # Deleted — an explicit delete ACTION (e.g. removed from quarantine), never a folder name
+        if "delete" in action:
+            return "Deleted"
         # Normal delivery to inbox / folders
         if "inbox" in loc or "inbox" in orig_loc or "folder" in loc or "deliver" in action:
             return "Delivered"

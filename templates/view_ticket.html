@@ -166,7 +166,7 @@
           <div class="btn-group btn-group-sm mb-3" role="group" aria-label="Note type">
             <input type="radio" class="btn-check" name="noteType" id="ntNote" autocomplete="off" checked>
             <label class="btn btn-outline-secondary" for="ntNote"><i class="bi bi-sticky me-1"></i>Note</label>
-            {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
+            {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
             <input type="radio" class="btn-check" name="noteType" id="ntReply" autocomplete="off">
             <label class="btn btn-outline-secondary" for="ntReply"><i class="bi bi-reply me-1"></i>Reply to User</label>
             {% endif %}
@@ -176,10 +176,15 @@
             {% endif %}
           </div>
 
-          {% if ticket.reporter_email and current_user.role not in ['base_user', 'eagle_eyes'] %}
+          {% if current_user.role not in ['base_user', 'eagle_eyes'] %}
           <div class="mb-2 d-none" id="nfToWrap">
             <label class="form-label small fw-semibold text-muted mb-1">To</label>
-            <input type="email" name="reply_to" class="form-control form-control-sm" value="{{ ticket.reporter_email }}">
+            <input type="email" name="reply_to" class="form-control form-control-sm"
+                   value="{{ ticket.reporter_email or '' }}"
+                   placeholder="{{ ticket.reporter_name or 'recipient' }}'s email address…">
+            {% if not ticket.reporter_email %}
+            <div class="form-text small">No email on file for {{ ticket.reporter_name or 'this reporter' }} — enter one to send the reply.</div>
+            {% endif %}
           </div>
           {% endif %}
 
@@ -199,10 +204,13 @@
       var reply=document.getElementById('nfReply'), internal=document.getElementById('nfInternal'),
           toWrap=document.getElementById('nfToWrap'), content=document.getElementById('nfContent'),
           submit=document.getElementById('nfSubmit'), hint=document.getElementById('nfHint');
+      var toInput=toWrap ? toWrap.querySelector('input[name="reply_to"]') : null;
       function set(type){
         reply.value    = type==='reply'    ? '1' : '';
         internal.value = type==='internal' ? '1' : '';
         if(toWrap) toWrap.classList.toggle('d-none', type!=='reply');
+        // Only require the recipient when replying (a required hidden field blocks submit otherwise)
+        if(toInput) toInput.required = (type==='reply');
         if(hint)   hint.classList.toggle('d-none', type!=='reply');
         if(type==='reply'){    submit.innerHTML='<i class="bi bi-envelope me-1"></i>Send Reply';      content.placeholder='Write your reply to the user…'; }
         else if(type==='internal'){ submit.innerHTML='<i class="bi bi-lock me-1"></i>Add Internal Note'; content.placeholder='Internal note — only visible to technicians…'; }
@@ -212,6 +220,7 @@
       if(n) n.addEventListener('change',function(){ if(this.checked) set('note'); });
       if(r) r.addEventListener('change',function(){ if(this.checked) set('reply'); });
       if(i) i.addEventListener('change',function(){ if(this.checked) set('internal'); });
+      set('note');  // establish baseline (clears any stray required on the hidden recipient field)
     })();
     </script>
   </div>

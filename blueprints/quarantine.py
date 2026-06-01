@@ -338,7 +338,16 @@ def quarantine_list():
     policy_filter = request.args.get("policy", "").strip()
     status_filter = request.args.get("status", "").strip()
     days_filter   = request.args.get("days", "30")
-    view_filter   = request.args.get("view", "quarantined")  # all|delivered|quarantined|blocked|junk|threats
+    view_explicit = request.args.get("view", "").strip()
+    view_filter   = view_explicit or "quarantined"  # all|delivered|quarantined|blocked|junk|threats
+
+    # The default landing tab is "quarantined", which only covers a small slice of
+    # all mail. If a content filter (threat/policy/search) is applied without the
+    # user explicitly picking a tab, scope across ALL mail instead of silently
+    # confining the filter to the quarantined subset (which makes filters look
+    # broken / empty). An explicit tab click or status filter still wins.
+    if not view_explicit and not status_filter and (search or threat_filter or policy_filter):
+        view_filter = "all"
 
     # Base date-bounded query for stats
     base_q = QuarantineMessage.query

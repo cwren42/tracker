@@ -144,7 +144,7 @@
     </select>
     <select name="policy" class="form-select form-select-sm" style="max-width:160px;" onchange="this.form.submit()">
       <option value="">All Policies</option>
-      {% for p in ['Anti-Phish','Anti-Malware','Anti-Spam','Unknown'] %}
+      {% for p in ['Anti-Phish','Anti-Malware','Anti-Spam','Transport Rule','Unknown'] %}
       <option value="{{ p }}" {% if policy_filter == p %}selected{% endif %}>{{ p }}</option>
       {% endfor %}
     </select>

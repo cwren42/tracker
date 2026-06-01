@@ -27,6 +27,34 @@ from .db import (
     validate_session_token,
 )
 
+import time as _time
+
+# --- Eagle Eyes config cache (per-agent, short TTL) ---------------------------
+# Event ingest is gated on the live `enabled` flag, but events are frequent, so a
+# fresh DB read on every event would hammer the DB. Cache get_eagle_config per
+# agent_id for a short window. TTL is short enough that a disable takes effect
+# within ~1 min on its own; an explicit config PUSH also invalidates the entry
+# (see _invalidate_eagle_cache) so a disable is reflected immediately.
+_EAGLE_CFG_TTL_S = 45
+_eagle_cfg_cache: Dict[str, tuple] = {}  # agent_id -> (expires_at_epoch, config_dict)
+
+
+def get_eagle_config_cached(agent_id: str) -> dict:
+    """get_eagle_config with a short in-process TTL cache (for hot event ingest)."""
+    now = _time.monotonic()
+    hit = _eagle_cfg_cache.get(agent_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    cfg = get_eagle_config(agent_id)
+    _eagle_cfg_cache[agent_id] = (now + _EAGLE_CFG_TTL_S, cfg)
+    return cfg
+
+
+def _invalidate_eagle_cache(agent_id: str) -> None:
+    """Drop the cached config so the next ingest re-reads from the DB."""
+    _eagle_cfg_cache.pop(agent_id, None)
+
+
 async def _dispatch_next_product(websocket, agent_id: str) -> bool:
     """Dispatch the next queued product (fewest CVEs first) to the agent.
     Returns True if a product was dispatched, False if nothing queued."""
@@ -250,6 +278,10 @@ def list_agents():
 @app.post("/eagle-eyes/{agent_id}/push")
 async def push_eagle_config(agent_id: str, request: Request):
     """Flask calls this to push eagle_eyes_config to a connected agent."""
+    # Invalidate the cached config FIRST (even if the agent isn't connected) so the
+    # per-event/screenshot ingest gate re-reads the new enabled/screenshots_enabled
+    # state immediately rather than waiting out the TTL.
+    _invalidate_eagle_cache(agent_id)
     agent_ws = agents.get(agent_id)
     if not agent_ws:
         return JSONResponse({"ok": False, "error": "Agent not connected"}, status_code=404)
@@ -262,7 +294,7 @@ async def push_eagle_config(agent_id: str, request: Request):
             "type": "eagle_eyes_config",
             "enabled": bool(body.get("enabled", False)),
             "screenshot_interval_min": int(body.get("screenshot_interval_min", 30)),
-            "screenshots_enabled": bool(body.get("screenshots_enabled", True)),
+            "screenshots_enabled": bool(body.get("screenshots_enabled", False)),
         }))
         return JSONResponse({"ok": True})
     except Exception as e:
@@ -348,17 +380,21 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
         except Exception as _e:
             print(f"[gw] agent_config push error: {_e}", flush=True)
 
-        # Auto-push eagle config on (re)connect so monitoring survives gateway restarts
+        # Auto-push eagle config on (re)connect so monitoring survives gateway restarts.
+        # Push the CURRENT stored config REGARDLESS of enabled: an agent that was enabled,
+        # then disabled while offline, must receive enabled=false on reconnect so it
+        # cancels its in-memory monitor loop (agent handler stops the loop on enabled=false).
+        # Refresh the cache so the per-event gate reflects current state immediately.
         try:
+            _invalidate_eagle_cache(agent_id)
             ecfg = get_eagle_config(agent_id)
-            if ecfg.get("enabled"):
-                await websocket.send_text(json.dumps({
-                    "type": "eagle_eyes_config",
-                    "enabled": True,
-                    "screenshot_interval_min": ecfg.get("screenshot_interval_min", 30),
-                    "screenshots_enabled": ecfg.get("screenshots_enabled", True),
-                }))
-                print(f"[gw] pushed eagle_eyes_config to {agent_id} on connect", flush=True)
+            await websocket.send_text(json.dumps({
+                "type": "eagle_eyes_config",
+                "enabled": bool(ecfg.get("enabled", False)),
+                "screenshot_interval_min": ecfg.get("screenshot_interval_min", 30),
+                "screenshots_enabled": bool(ecfg.get("screenshots_enabled", False)),
+            }))
+            print(f"[gw] pushed eagle_eyes_config to {agent_id} on connect (enabled={ecfg.get('enabled')})", flush=True)
         except Exception as _e:
             print(f"[gw] eagle auto-push error: {_e}", flush=True)
 
@@ -445,6 +481,18 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
 
             # --- Eagle Eyes: window focus event ---
             if msg_type == "eagle_event":
+                # Server-side enforcement: a DISABLED device must never store events,
+                # regardless of what a stale/old agent still streams. Gated on `enabled`
+                # only (NOT screenshots_enabled — CHRIS-DESKTOP has screenshots off but
+                # events must keep flowing). Uses the short TTL cache to avoid hammering
+                # the DB on every event. Fails CLOSED on lookup error.
+                try:
+                    if not get_eagle_config_cached(agent_id).get("enabled", False):
+                        print(f"[gw] dropped eagle_event for {agent_id}: enabled=False", flush=True)
+                        continue
+                except Exception as e:
+                    print(f"[gw] eagle_event gate error for {agent_id} (dropping): {e}", flush=True)
+                    continue
                 print(f"[gw] eagle_event from {agent_id}: {payload.get('process')} | {payload.get('title')}", flush=True)
                 try:
                     store_eagle_event(
@@ -462,14 +510,21 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
 
             # --- Eagle Eyes: periodic screenshot ---
             if msg_type == "eagle_screenshot":
-                # Defense in depth: drop the shot if screenshots are disabled for this
-                # agent server-side, regardless of what a stale agent still uploads.
+                # Defense in depth: drop the shot if monitoring is OFF (enabled=false)
+                # OR screenshots are disabled for this agent server-side, regardless of
+                # what a stale agent still uploads. Fails CLOSED — a missing/None flag is
+                # treated as false (don't store). Uses the short TTL cache.
                 try:
-                    if not get_eagle_config(agent_id).get("screenshots_enabled", True):
+                    _ecfg = get_eagle_config_cached(agent_id)
+                    if not _ecfg.get("enabled", False):
+                        print(f"[gw] dropped eagle_screenshot for {agent_id}: enabled=False", flush=True)
+                        continue
+                    if not _ecfg.get("screenshots_enabled", False):
                         print(f"[gw] dropped eagle_screenshot for {agent_id}: screenshots_enabled=False", flush=True)
                         continue
                 except Exception as e:
-                    print(f"[gw] eagle_screenshot gate error: {e}", flush=True)
+                    print(f"[gw] eagle_screenshot gate error for {agent_id} (dropping): {e}", flush=True)
+                    continue
                 if payload.get("data"):
                     try:
                         store_screenshot(

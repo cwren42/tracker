@@ -493,7 +493,8 @@ def get_eagle_config(agent_id: str) -> dict:
                 "screenshot_interval_min": int(row["screenshot_interval_min"]),
                 "screenshots_enabled": bool(row["screenshots_enabled"]),
             }
-        return {"enabled": False, "screenshot_interval_min": 30, "screenshots_enabled": True}
+        # Fail-closed: a missing config row must never mean "capture". Both flags off.
+        return {"enabled": False, "screenshot_interval_min": 30, "screenshots_enabled": False}
     finally:
         conn.close()
 

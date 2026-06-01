@@ -121,7 +121,8 @@ def api_rmm_eagle_eyes(agent_id):
         ).fetchone()
         if row:
             return jsonify({'ok': True, 'enabled': bool(row[0]), 'screenshot_interval_min': row[1], 'screenshots_enabled': bool(row[2])})
-        return jsonify({'ok': True, 'enabled': False, 'screenshot_interval_min': 30, 'screenshots_enabled': True})
+        # Fail-closed: no config row -> monitoring off and screenshots off.
+        return jsonify({'ok': True, 'enabled': False, 'screenshot_interval_min': 30, 'screenshots_enabled': False})
 
     # POST — update config and push to gateway
     data = request.get_json(force=True) or {}

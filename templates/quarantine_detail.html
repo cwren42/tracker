@@ -223,12 +223,21 @@
             </div>
             {% endif %}
             <div class="d-flex justify-content-between align-items-center mb-1">
-              <span class="text-muted small">PowerShell</span>
-              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyPS('qd-ps-{{ loop.index0 }}')">
+              <span class="small fw-semibold text-success"><i class="bi bi-1-circle me-1"></i>Test — read-only, run this first</span>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyPS('qd-test-{{ loop.index0 }}')">
                 <i class="bi bi-clipboard me-1"></i>Copy
               </button>
             </div>
-            <pre id="qd-ps-{{ loop.index0 }}" style="background:#0d1117;color:#e6edf3;padding:.75rem;border-radius:6px;font-size:.78rem;line-height:1.45;overflow:auto;white-space:pre-wrap;word-break:break-word;"><code>{{ m.remediation }}</code></pre>
+            <pre id="qd-test-{{ loop.index0 }}" style="background:#0d1117;color:#e6edf3;padding:.75rem;border-radius:6px;font-size:.78rem;line-height:1.45;overflow:auto;white-space:pre-wrap;word-break:break-word;"><code>{{ m.test_ps }}</code></pre>
+            {% if m.live_ps %}
+            <div class="d-flex justify-content-between align-items-center mb-1 mt-2">
+              <span class="small fw-semibold text-warning"><i class="bi bi-2-circle me-1"></i>Run live — only after Test reports OK</span>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyPS('qd-live-{{ loop.index0 }}')">
+                <i class="bi bi-clipboard me-1"></i>Copy
+              </button>
+            </div>
+            <pre id="qd-live-{{ loop.index0 }}" style="background:#1a1206;color:#ffe9c7;padding:.75rem;border-radius:6px;font-size:.78rem;line-height:1.45;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid #5a3a10;"><code>{{ m.live_ps }}</code></pre>
+            {% endif %}
           </div>
           {% endfor %}
           {% else %}

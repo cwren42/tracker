@@ -907,10 +907,13 @@ def _detect_block_mechanisms(domain):
     mechanisms = []
     for (sdom, reason), agg in by_key.items():
         safe = _safe_domain(sdom) or req_safe
-        header = (
-            f"# Domain: {safe}\n"
-            f"# Reviewed, MANUAL step — run in an Exchange Online PowerShell session\n"
-            f"# (Connect-ExchangeOnline). Nothing here is executed automatically.\n"
+        thdr = (
+            f"# TEST — read-only, changes NOTHING. Run this FIRST in an Exchange Online\n"
+            f"# PowerShell session (Connect-ExchangeOnline). Sender: {safe}\n"
+        )
+        lhdr = (
+            f"# LIVE — applies the change, then re-verifies. Run ONLY after the TEST above\n"
+            f"# reports VALIDATION OK / shows the entry. Sender: {safe}\n"
         )
         policy_type = (agg["policy_type"] or "").strip()
         count = agg["count"]
@@ -939,40 +942,55 @@ def _detect_block_mechanisms(domain):
         else:
             kind = "unknown"
 
+        live_ps = None
         if kind == "transport_rule":
-            safe_rule = (rule_name or "").replace('"', "")
-            remediation = (
-                header +
-                f'$rule   = "{safe_rule}"\n'
+            rule = (rule_name or "").replace('"', "")
+            test_ps = (
+                thdr +
+                f'$rule   = "{rule}"\n'
                 f'$sender = "{safe}"\n'
                 f'$r = Get-TransportRule $rule\n'
-                f'# SenderDomainIs matches a domain AND its subdomains, so the entry blocking\n'
-                f'# this sender is usually a PARENT (e.g. bill.com / hq.bill.com), not the\n'
-                f'# literal subdomain. Find the entry that actually matches:\n'
+                f'# SenderDomainIs matches a domain AND its subdomains, so the blocking entry is\n'
+                f'# usually a PARENT (e.g. hq.bill.com), not the literal subdomain. Find the match:\n'
                 f'$match = @($r.SenderDomainIs | Where-Object {{ $sender -eq $_ -or $sender.EndsWith("." + $_) }})\n'
-                f'"Blocking entry(s): $($match -join \', \')"\n'
-                f'\n'
-                f'# Option A (recommended) — unblock ONLY this sender, keep the parent blacklisted:\n'
-                f'$ex = @($r.ExceptIfSenderDomainIs) + $sender | Where-Object {{ $_ }} | Select-Object -Unique\n'
-                f'Set-TransportRule $rule -ExceptIfSenderDomainIs $ex\n'
-                f'\n'
-                f'# Option B — remove the matched parent entry (unblocks it AND all its subdomains):\n'
-                f'# $kept = @($r.SenderDomainIs | Where-Object {{ $match -notcontains $_ }})\n'
-                f'# Set-TransportRule $rule -SenderDomainIs $kept\n'
-                f'\n'
-                f'# If $match is empty, the rule matches via a different condition\n'
-                f'# (From / FromAddressContainsWords) — inspect: Get-TransportRule $rule | Format-List *Sender*,From*'
+                f'if (-not $match) {{\n'
+                f'  "NOT matched via SenderDomainIs on \'$rule\' — check another condition/rule:"\n'
+                f'  Get-TransportRule $rule | Format-List Name,SenderDomainIs,From,FromAddressContainsWords\n'
+                f'}} else {{\n'
+                f'  "CONFIRMED blocked: \'$sender\' matches [$($match -join \', \')] on \'$rule\'."\n'
+                f'  $kept = @($r.SenderDomainIs | Where-Object {{ $match -notcontains $_ }})\n'
+                f'  Set-TransportRule $rule -SenderDomainIs $kept -WhatIf   # dry-run, no commit\n'
+                f'  $still = @($kept | Where-Object {{ $sender -eq $_ -or $sender.EndsWith("." + $_) }})\n'
+                f'  if ($still) {{ "VALIDATION FAILED — would still match: $($still -join \', \')" }}\n'
+                f'  else {{ "VALIDATION OK — removing [$($match -join \', \')] unblocks \'$sender\' (and its subdomains). Safe to run LIVE." }}\n'
+                f'}}'
+            )
+            live_ps = (
+                lhdr +
+                f'$rule   = "{rule}"\n'
+                f'$sender = "{safe}"\n'
+                f'$r = Get-TransportRule $rule\n'
+                f'$match = @($r.SenderDomainIs | Where-Object {{ $sender -eq $_ -or $sender.EndsWith("." + $_) }})\n'
+                f'if (-not $match) {{\n'
+                f'  "Nothing matched via SenderDomainIs — STOP, re-run TEST / check other conditions."\n'
+                f'}} else {{\n'
+                f'  $kept = @($r.SenderDomainIs | Where-Object {{ $match -notcontains $_ }})\n'
+                f'  Set-TransportRule $rule -SenderDomainIs $kept\n'
+                f'  $after = @((Get-TransportRule $rule).SenderDomainIs | Where-Object {{ $sender -eq $_ -or $sender.EndsWith("." + $_) }})\n'
+                f'  if ($after) {{ "STILL BLOCKED — remaining: $($after -join \', \')" }} else {{ "UNBLOCKED — \'$sender\' no longer matches \'$rule\'." }}\n'
+                f'}}'
             )
 
         elif kind == "dmarc":
-            safe_rule = (rule_name or "").replace('"', "")
-            remediation = (
-                header +
-                f'# NO automatic unblock command for a DMARC-fail rule.\n'
-                f'# Inspect the message authentication first:\n'
-                f'Get-TransportRule "{safe_rule}" | Format-List Name,Description,*Dmarc*,*Header*\n'
-                f'# Verify the sender\'s SPF/DKIM/DMARC before considering any narrow exception.'
+            rule = (rule_name or "").replace('"', "")
+            test_ps = (
+                thdr +
+                f'# DMARC failure is a REAL auth problem — inspect, do NOT blindly unblock.\n'
+                f'Get-TransportRule "{rule}" | Format-List Name,Description\n'
+                f'Get-MessageTraceV2 -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date) |\n'
+                f'  Select-Object Received,SenderAddress,Status -First 20'
             )
+            live_ps = None  # no safe blind unblock for a DMARC-fail rule
             caveat = (
                 "This domain is blocked because its mail FAILS DMARC. Unblocking masks a real "
                 "authentication failure — verify the sender's SPF/DKIM/DMARC before overriding; "
@@ -980,33 +998,46 @@ def _detect_block_mechanisms(domain):
             )
 
         elif kind == "tabl":
-            remediation = (
-                header +
-                f'Get-TenantAllowBlockListItems -ListType Domain -Entry "{safe}"\n'
+            test_ps = (
+                thdr +
+                f'"Domain list:"; Get-TenantAllowBlockListItems -ListType Domain | Where-Object {{ $_.Value -like "*{safe}*" }}\n'
+                f'"Sender list:"; Get-TenantAllowBlockListItems -ListType Sender | Where-Object {{ $_.Value -like "*{safe}*" }}'
+            )
+            live_ps = (
+                lhdr +
                 f'Remove-TenantAllowBlockListItems -ListType Domain -Entries "{safe}"\n'
-                f'# also check the Sender list (TABL "sender email address block" can live here):\n'
-                f'Get-TenantAllowBlockListItems -ListType Sender | Where-Object {{ $_.Value -like "*{safe}*" }}'
+                f'# If TEST showed it on the SENDER list instead, remove it there:\n'
+                f'# Get-TenantAllowBlockListItems -ListType Sender | ? {{ $_.Value -like "*{safe}*" }} | Remove-TenantAllowBlockListItems -ListType Sender\n'
+                f'# Re-verify (should return nothing):\n'
+                f'Get-TenantAllowBlockListItems -ListType Domain | Where-Object {{ $_.Value -like "*{safe}*" }}'
             )
 
         elif kind in ("anti_spam", "anti_phish"):
-            remediation = (
-                header +
-                f'# Allow this domain via the Tenant Allow/Block List (preferred over loosening the policy):\n'
-                f'New-TenantAllowBlockListItems -ListType Domain -Allow -Entries "{safe}" -NoExpiration'
+            test_ps = (
+                thdr +
+                f'# Confirm there is no existing allow entry (adding an Allow beats loosening the policy):\n'
+                f'Get-TenantAllowBlockListItems -ListType Domain | Where-Object {{ $_.Value -like "*{safe}*" }}'
+            )
+            live_ps = (
+                lhdr +
+                f'New-TenantAllowBlockListItems -ListType Domain -Allow -Entries "{safe}" -NoExpiration\n'
+                f'# Re-verify:\n'
+                f'Get-TenantAllowBlockListItems -ListType Domain -Allow | Where-Object {{ $_.Value -like "*{safe}*" }}'
             )
 
         else:  # unknown
-            remediation = (
-                header +
-                f'# Defender reported no specific reason. Find the blocking agent for a sample message:\n'
-                f'$msgs = Get-MessageTrace -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date)\n'
+            test_ps = (
+                thdr +
+                f'# No specific reason stored — find the blocking agent from message trace:\n'
+                f'$msgs = Get-MessageTraceV2 -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date)\n'
                 f'$m = $msgs | Select-Object -First 1\n'
-                f'Get-MessageTraceDetailV2 -MessageTraceId $m.MessageTraceId -RecipientAddress $m.RecipientAddress | Format-List\n'
-                f'# Identify the blocking agent before changing anything.'
+                f'if ($m) {{ Get-MessageTraceDetailV2 -MessageTraceId $m.MessageTraceId -RecipientAddress $m.RecipientAddress | Format-List Date,Event,Action,Detail }}\n'
+                f'else {{ "No recent messages from {safe} in message trace." }}'
             )
+            live_ps = None  # can't write a safe unblock without knowing the agent
             caveat = (
-                "Defender reported no specific reason. Run Get-MessageTraceDetailV2 for a sample "
-                "message to find the blocking agent before changing anything."
+                "Defender reported no specific reason. Run the TEST to find the blocking agent "
+                "before changing anything — there is no safe blind unblock."
             )
 
         mechanisms.append({
@@ -1015,7 +1046,8 @@ def _detect_block_mechanisms(domain):
             "rule_name": rule_name,
             "blocked_domain": sdom,
             "count": count,
-            "remediation": remediation,
+            "test_ps": test_ps,
+            "live_ps": live_ps,
             "caveat": caveat,
         })
 

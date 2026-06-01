@@ -138,12 +138,21 @@
                   {% endif %}
                   <div class="position-relative">
                     <div class="d-flex justify-content-between align-items-center mb-1">
-                      <span class="text-muted small">Reviewed manual step — run in Exchange Online PowerShell</span>
-                      <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-{{ r.id }}-{{ loop.index0 }}')">
+                      <span class="small fw-semibold text-success"><i class="bi bi-1-circle me-1"></i>Test — read-only, run first (Exchange Online PowerShell)</span>
+                      <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-test-{{ r.id }}-{{ loop.index0 }}')">
                         <i class="bi bi-clipboard me-1"></i>Copy
                       </button>
                     </div>
-                    <pre id="ps-{{ r.id }}-{{ loop.index0 }}" class="ps-panel"><code>{{ m.remediation }}</code></pre>
+                    <pre id="ps-test-{{ r.id }}-{{ loop.index0 }}" class="ps-panel"><code>{{ m.test_ps }}</code></pre>
+                    {% if m.live_ps %}
+                    <div class="d-flex justify-content-between align-items-center mb-1 mt-2">
+                      <span class="small fw-semibold text-warning"><i class="bi bi-2-circle me-1"></i>Run live — only after Test reports OK</span>
+                      <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-live-{{ r.id }}-{{ loop.index0 }}')">
+                        <i class="bi bi-clipboard me-1"></i>Copy
+                      </button>
+                    </div>
+                    <pre id="ps-live-{{ r.id }}-{{ loop.index0 }}" class="ps-panel" style="border:1px solid #5a3a10;"><code>{{ m.live_ps }}</code></pre>
+                    {% endif %}
                   </div>
                 </div>
                 {% endfor %}

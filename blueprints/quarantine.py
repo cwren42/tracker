@@ -943,13 +943,25 @@ def _detect_block_mechanisms(domain):
             safe_rule = (rule_name or "").replace('"', "")
             remediation = (
                 header +
-                f'# Inspect which condition holds the domain, then remove just this domain:\n'
-                f'Get-TransportRule "{safe_rule}" | Format-List Name,SenderDomainIs,From,FromAddressContainsWords\n'
-                f'$r = Get-TransportRule "{safe_rule}"\n'
-                f'$kept = @($r.SenderDomainIs | Where-Object {{ $_ -ne "{safe}" }})\n'
-                f'Set-TransportRule "{safe_rule}" -SenderDomainIs $kept\n'
-                f'# (If the domain is matched via a different condition (From/FromAddressContainsWords),\n'
-                f'#  amend that property instead — SenderDomainIs may not be where it lives.)'
+                f'$rule   = "{safe_rule}"\n'
+                f'$sender = "{safe}"\n'
+                f'$r = Get-TransportRule $rule\n'
+                f'# SenderDomainIs matches a domain AND its subdomains, so the entry blocking\n'
+                f'# this sender is usually a PARENT (e.g. bill.com / hq.bill.com), not the\n'
+                f'# literal subdomain. Find the entry that actually matches:\n'
+                f'$match = @($r.SenderDomainIs | Where-Object {{ $sender -eq $_ -or $sender.EndsWith("." + $_) }})\n'
+                f'"Blocking entry(s): $($match -join \', \')"\n'
+                f'\n'
+                f'# Option A (recommended) — unblock ONLY this sender, keep the parent blacklisted:\n'
+                f'$ex = @($r.ExceptIfSenderDomainIs) + $sender | Where-Object {{ $_ }} | Select-Object -Unique\n'
+                f'Set-TransportRule $rule -ExceptIfSenderDomainIs $ex\n'
+                f'\n'
+                f'# Option B — remove the matched parent entry (unblocks it AND all its subdomains):\n'
+                f'# $kept = @($r.SenderDomainIs | Where-Object {{ $match -notcontains $_ }})\n'
+                f'# Set-TransportRule $rule -SenderDomainIs $kept\n'
+                f'\n'
+                f'# If $match is empty, the rule matches via a different condition\n'
+                f'# (From / FromAddressContainsWords) — inspect: Get-TransportRule $rule | Format-List *Sender*,From*'
             )
 
         elif kind == "dmarc":

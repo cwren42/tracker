@@ -53,7 +53,7 @@ from blueprints.rmm import bp, _dt_iso, _agent_tz_offset_minutes, _eagle_date_pa
 
 
 def _excluded_agent_ids():
-    """Set of agent_ids on the Eagle Eyes exclusion list (one query).
+    """Set of agent_ids on the manual Eagle Eyes exclusion list (one query).
 
     Keyed/compared by exact agent_id, matching settings_eagleeye.
     """
@@ -62,13 +62,31 @@ def _excluded_agent_ids():
     ).fetchall()}
 
 
+def _server_class_agent_ids():
+    """agent_ids whose linked asset is server-class (Windows Server / category Server).
+
+    Servers/DCs are never user-activity-monitoring candidates, so they're auto-excluded
+    from Eagle Eyes for the eagle_eyes role — no manual upkeep as new servers enroll.
+    """
+    return {r[0] for r in db.session.execute(text(
+        """SELECT ra.agent_id
+           FROM rmm_agent ra JOIN asset a ON a.id = ra.asset_id
+           WHERE a.device_type ILIKE '%server%' OR a.category = 'Server'"""
+    )).fetchall()}
+
+
+def _ee_hidden_ids():
+    """All agent_ids hidden from the eagle_eyes role: manual exclusions + servers."""
+    return _excluded_agent_ids() | _server_class_agent_ids()
+
+
 def _ee_denied(agent_id):
-    """True when the current user is an eagle_eyes (non-admin) user AND the
-    requested agent_id is on the exclusion list. Admins are exempt (see all).
+    """True when the current user is an eagle_eyes (non-admin) user AND the requested
+    agent is hidden (manual exclusion OR server-class). Admins are exempt (see all).
     """
     if current_user.role != 'eagle_eyes':
         return False
-    return agent_id in _excluded_agent_ids()
+    return agent_id in _ee_hidden_ids()
 
 
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])
@@ -729,11 +747,11 @@ def api_eagle_fleet():
             ORDER BY COALESCE(t.logged_in_user, ec.agent_id)
         """)).mappings().fetchall()
 
-        # Filter out excluded agents for non-admins (eagle_eyes + lesser roles).
-        # Admins manage the exclusion list and see every device, even enabled ones.
+        # Filter out hidden agents (manual exclusions + servers) for non-admins.
+        # Admins manage the list and see every device, even enabled ones.
         if current_user.role != 'admin':
-            excluded_ids = _excluded_agent_ids()
-            agents_q = [r for r in agents_q if r['agent_id'] not in excluded_ids]
+            hidden_ids = _ee_hidden_ids()
+            agents_q = [r for r in agents_q if r['agent_id'] not in hidden_ids]
 
         # Today's active seconds per agent (Mountain Time day)
         today_q = db.session.execute(text(f"""
@@ -807,12 +825,7 @@ def api_eagle_all_agents():
     if current_user.role not in ('admin', 'eagle_eyes'):
         return jsonify(ok=False, error='forbidden'), 403
     try:
-        # eagle_eyes (non-admin) users must not see excluded devices in the picker;
-        # admins manage the exclusion list and see everything.
-        excl_clause = ""
-        if current_user.role == 'eagle_eyes':
-            excl_clause = "WHERE ra.agent_id NOT IN (SELECT agent_id FROM eagle_eyes_exclusions)"
-        rows = db.session.execute(text(f"""
+        rows = db.session.execute(text("""
             SELECT
                 ra.agent_id,
                 COALESCE(NULLIF(t.hostname, ''), ra.agent_id) AS hostname,
@@ -822,13 +835,18 @@ def api_eagle_all_agents():
             FROM rmm_agent ra
             LEFT JOIN rmm_eagle_config ec ON ec.agent_id = ra.agent_id
             LEFT JOIN rmm_telemetry t     ON t.agent_id  = ra.agent_id
-            {excl_clause}
             ORDER BY COALESCE(NULLIF(t.hostname, ''), ra.agent_id)
         """)).mappings().fetchall()
+
+        # eagle_eyes (non-admin) users must not see hidden devices (manual exclusions
+        # + servers); admins see everything.
+        hidden_ids = _ee_hidden_ids() if current_user.role == 'eagle_eyes' else set()
 
         now_utc = datetime.utcnow()
         agents = []
         for r in rows:
+            if r['agent_id'] in hidden_ids:
+                continue
             last_seen = r['last_seen_at']
             online = False
             if last_seen:

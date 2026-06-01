@@ -40,6 +40,66 @@ bp = Blueprint('tickets', __name__)
 
 # ==================== SUPPORT TICKETS ====================
 
+
+def _resolve_reporter_email(name, hostname=None, asset_id=None):
+    """Resolve a reporter's email from the Employee directory.
+
+    The tray client submits reporter_name but no reporter_email, so we look the
+    person up in the Employee directory. Returns a confident single match or None.
+
+    Match order (read-only, indexed-ish, no full scans):
+      1. Case-insensitive exact full-name match on Employee.name. If exactly one
+         Employee matches AND has an email, use it. If 2+ names match, we do NOT
+         guess (return None) to avoid leaking the wrong person's email.
+      2. Asset-owner fallback: if asset_id (or hostname) resolves to an Asset that
+         has an assigned Employee with an email, use that. This is a strong signal
+         because the ticket was filed from that machine.
+
+    Never returns an empty string; returns None when no confident match.
+    """
+    name = (name or '').strip()
+
+    # 1) Exact (case-insensitive) full-name match in the Employee directory.
+    if name:
+        try:
+            matches = Employee.query.filter(
+                func.lower(Employee.name) == name.lower()
+            ).limit(2).all()
+            if len(matches) == 1:
+                email = (matches[0].email or '').strip()
+                if email:
+                    return email
+            # len == 0 -> fall through to asset owner; len >= 2 -> ambiguous,
+            # do not guess by name, but the asset owner below is still a safe signal.
+        except Exception as _e:
+            logger.warning(f'_resolve_reporter_email name lookup failed: {_e}')
+
+    # 2) Asset-owner fallback — the machine the ticket was filed from.
+    asset = None
+    try:
+        if asset_id:
+            asset = Asset.query.get(int(asset_id))
+        if asset is None and hostname:
+            asset = Asset.query.filter(
+                func.lower(Asset.name) == hostname.strip().lower()
+            ).first()
+    except Exception as _e:
+        logger.warning(f'_resolve_reporter_email asset lookup failed: {_e}')
+        asset = None
+
+    if asset is not None and asset.employee_id:
+        try:
+            owner = Employee.query.get(asset.employee_id)
+            if owner:
+                email = (owner.email or '').strip()
+                if email:
+                    return email
+        except Exception as _e:
+            logger.warning(f'_resolve_reporter_email asset-owner lookup failed: {_e}')
+
+    return None
+
+
 # ─── Ticket SLA Escalation Background Thread ─────────────────────────────────
 
 
@@ -250,6 +310,15 @@ def new_ticket():
         asset_id = request.form.get('asset_id')
         asset = Asset.query.get(int(asset_id)) if asset_id else None
 
+        # Auto-resolve reporter email from the Employee directory when not given,
+        # so the value is persisted for future replies. None if no confident match.
+        if not reporter_email:
+            reporter_email = _resolve_reporter_email(
+                reporter_name,
+                hostname=(asset.name if asset else None),
+                asset_id=(asset.id if asset else None),
+            )
+
         ticket = SupportTicket(
             status='Open',
             priority=priority,
@@ -403,9 +472,17 @@ def view_ticket(ticket_id):
     all_users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])) \
                           .order_by(db.func.coalesce(User.full_name, User.username)).all()
     linked = ticket.links.all()
+    # Prefill the reply "To" field even for older tickets whose reporter_email is
+    # NULL (e.g. tray tickets created before auto-resolution). Read-only: we do
+    # NOT write this back to the column on a page view — the reply handler stores
+    # reply_to when a reply is actually sent.
+    effective_reporter_email = ticket.reporter_email or _resolve_reporter_email(
+        ticket.reporter_name, hostname=ticket.hostname, asset_id=ticket.asset_id,
+    )
     return render_template('view_ticket.html', ticket=ticket, techs=techs, timeline=timeline,
                            today=date.today(), all_tags=all_tags, watcher_ids=watcher_ids,
-                           all_users=all_users, linked=linked)
+                           all_users=all_users, linked=linked,
+                           effective_reporter_email=effective_reporter_email)
 
 
 @bp.route('/tickets/<int:ticket_id>/delete', methods=['POST'])
@@ -1034,6 +1111,14 @@ def api_create_support_ticket():
         asset_tag = asset.asset_tag
         if not hostname:
             hostname = asset.name
+
+    # The tray client submits reporter_name but no reporter_email. Auto-resolve
+    # it from the Employee directory (or the filing asset's owner) and persist it
+    # so future replies prefill. None when there's no confident single match.
+    if not reporter_email:
+        reporter_email = _resolve_reporter_email(
+            reporter_name, hostname=hostname, asset_id=asset_id,
+        )
 
     created_by_user_id = getattr(request, 'api_user_id', None)
     ticket = SupportTicket(

@@ -180,9 +180,9 @@
           <div class="mb-2 d-none" id="nfToWrap">
             <label class="form-label small fw-semibold text-muted mb-1">To</label>
             <input type="email" name="reply_to" class="form-control form-control-sm"
-                   value="{{ ticket.reporter_email or '' }}"
+                   value="{{ effective_reporter_email or '' }}"
                    placeholder="{{ ticket.reporter_name or 'recipient' }}'s email address…">
-            {% if not ticket.reporter_email %}
+            {% if not effective_reporter_email %}
             <div class="form-text small">No email on file for {{ ticket.reporter_name or 'this reporter' }} — enter one to send the reply.</div>
             {% endif %}
           </div>
@@ -372,8 +372,8 @@
         <div>
           <div class="text-muted mb-1"><i class="bi bi-person me-1"></i>User Submitter</div>
           {% if ticket.reporter_name %}<div>{{ ticket.reporter_name }}</div>{% endif %}
-          {% if ticket.reporter_email %}<div><a href="mailto:{{ ticket.reporter_email }}">{{ ticket.reporter_email }}</a></div>{% endif %}
-          {% if not ticket.reporter_name and not ticket.reporter_email %}<div class="text-muted">Unknown</div>{% endif %}
+          {% if effective_reporter_email %}<div><a href="mailto:{{ effective_reporter_email }}">{{ effective_reporter_email }}</a>{% if not ticket.reporter_email %} <span class="text-muted">(from directory)</span>{% endif %}</div>{% endif %}
+          {% if not ticket.reporter_name and not effective_reporter_email %}<div class="text-muted">Unknown</div>{% endif %}
         </div>
         <div>
           <div class="text-muted mb-1"><i class="bi bi-laptop me-1"></i>Asset</div>

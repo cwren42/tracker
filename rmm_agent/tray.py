@@ -52,6 +52,16 @@ _PNG_B64 = """iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAW8klEQVR4nLVbe5RcZZ
 # ── config ──────────────────────────────────────────────────────────────────
 _CONFIG_PATH = r'C:\CirqueRMM\tray_config.json'
 
+# Local spool for tickets that couldn't be sent (offline / server unreachable).
+# Lives in the same dir the agent already uses for tray_config.json so we don't
+# invent a new state location.  JSON-lines: one ticket payload (wrapped with a
+# little metadata) per line, appended on failure and rewritten on a successful
+# flush.
+_SPOOL_PATH = r'C:\CirqueRMM\ticket_spool.jsonl'
+_SPOOL_MAX_ENTRIES = 200          # hard cap so a long outage can't grow forever
+_SPOOL_MAX_AGE_DAYS = 14          # drop tickets older than this on flush
+_spool_lock = threading.Lock()    # serialise read/append/rewrite of the spool
+
 
 def _load_config() -> dict:
     try:
@@ -184,6 +194,159 @@ def _toast(title: str, message: str) -> None:
         pass
 
 
+# ── ticket transport + offline spool ─────────────────────────────────────────
+
+def _ssl_ctx():
+    """Match the agent's existing TLS posture (CERT_NONE — do not change)."""
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _post_ticket(tracker_url: str, api_key: str, payload: dict, timeout: int = 15) -> int:
+    """POST one ticket payload. Returns the new ticket id on a 2xx.
+
+    Raises on any transport error or non-2xx so callers can decide to spool.
+    """
+    req = urllib.request.Request(
+        f'{tracker_url}/api/support-tickets',
+        data=json.dumps(payload).encode(),
+        headers={'Content-Type': 'application/json',
+                 'Authorization': f'Bearer {api_key}'},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
+        body = json.loads(resp.read())
+    return body.get('ticket_id') or body.get('id', '')
+
+
+def _spool_ticket(payload: dict) -> None:
+    """Append a ticket payload to the local spool so it isn't lost.
+
+    Wrapped with a 'queued_at' epoch + a random 'spool_id' for age-capping and
+    de-dup safety. Enforces the entry cap by dropping the oldest lines.
+    """
+    import time as _t
+    entry = {
+        'spool_id': base64.b16encode(os.urandom(8)).decode('ascii'),
+        'queued_at': _t.time(),
+        'payload': payload,
+    }
+    with _spool_lock:
+        try:
+            os.makedirs(os.path.dirname(_SPOOL_PATH), exist_ok=True)
+            existing = _read_spool_locked()
+            existing.append(entry)
+            # Cap: keep only the most recent _SPOOL_MAX_ENTRIES
+            if len(existing) > _SPOOL_MAX_ENTRIES:
+                existing = existing[-_SPOOL_MAX_ENTRIES:]
+            _write_spool_locked(existing)
+        except Exception as e:
+            _log(f'spool write failed: {e}')
+
+
+def _read_spool_locked() -> list:
+    """Read all valid spool entries. Tolerates a missing file and skips any
+    corrupt / unparseable lines instead of crashing. Caller holds _spool_lock."""
+    entries = []
+    if not os.path.isfile(_SPOOL_PATH):
+        return entries
+    try:
+        with open(_SPOOL_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict) and isinstance(obj.get('payload'), dict):
+                        entries.append(obj)
+                except Exception:
+                    # Corrupt line — skip it, keep going.
+                    continue
+    except Exception as e:
+        _log(f'spool read failed: {e}')
+    return entries
+
+
+def _write_spool_locked(entries: list) -> None:
+    """Atomically rewrite the spool from a list of entries. Caller holds lock."""
+    tmp = _SPOOL_PATH + '.tmp'
+    if not entries:
+        # Nothing left — remove the spool file entirely.
+        for p in (tmp, _SPOOL_PATH):
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except OSError:
+                pass
+        return
+    with open(tmp, 'w', encoding='utf-8') as f:
+        for e in entries:
+            f.write(json.dumps(e) + '\n')
+    os.replace(tmp, _SPOOL_PATH)
+
+
+def _flush_spool(tracker_url: str, api_key: str) -> int:
+    """Try to send every queued ticket. Returns the count successfully sent.
+
+    Idempotency: an entry is dropped only after a confirmed 2xx. Entries older
+    than _SPOOL_MAX_AGE_DAYS are discarded without sending. On a transport
+    failure we stop (likely still offline) and keep the remaining entries.
+    """
+    import time as _t
+    if not tracker_url or not api_key:
+        return 0
+    with _spool_lock:
+        entries = _read_spool_locked()
+        if not entries:
+            return 0
+        cutoff = _t.time() - (_SPOOL_MAX_AGE_DAYS * 86400)
+        remaining = []
+        sent = 0
+        stop = False
+        for e in entries:
+            if stop:
+                remaining.append(e)
+                continue
+            if e.get('queued_at', 0) < cutoff:
+                _log(f"dropping stale spooled ticket {e.get('spool_id')}")
+                continue  # too old — drop silently
+            try:
+                tid = _post_ticket(tracker_url, api_key, e['payload'])
+                sent += 1
+                _log(f"flushed spooled ticket {e.get('spool_id')} -> #{tid}")
+            except Exception as ex:
+                # Still unreachable (or rejected) — keep this and the rest,
+                # we'll try again on the next timer tick.
+                _log(f"spool flush stopped at {e.get('spool_id')}: {ex}")
+                remaining.append(e)
+                stop = True
+        _write_spool_locked(remaining)
+        return sent
+
+
+def _flush_spool_loop() -> None:
+    """Background thread (started from the persistent tray process): every few
+    minutes, resolve the current best URL/key from config and flush the spool."""
+    import time as _t
+    INTERVAL = 180  # 3 minutes
+    while True:
+        _t.sleep(INTERVAL)
+        try:
+            cfg = _load_config()
+            url = _resolve_tracker_url(cfg)
+            key = cfg.get('tray_api_key', '')
+            n = _flush_spool(url, key)
+            if n:
+                _toast('Tickets Sent',
+                       f"{n} ticket(s) saved while offline have now reached IT.")
+        except Exception as e:
+            _log(f'flush loop error: {e}')
+
+
 # ── ticket form ─────────────────────────────────────────────────────────────
 
 def _show_ticket_form(config: dict) -> None:
@@ -282,25 +445,22 @@ def _show_ticket_form(config: dict) -> None:
             'asset_id':     asset_id or None,
         }
         try:
-            req = urllib.request.Request(
-                f'{tracker_url}/api/support-tickets',
-                data=json.dumps(payload).encode(),
-                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
-                method='POST'
-            )
-            import ssl
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                body = json.loads(resp.read())
-            ticket_id = body.get('ticket_id') or body.get('id', '')
+            ticket_id = _post_ticket(tracker_url, api_key, payload)
             status_var.set(f'✓ Ticket #{ticket_id} submitted!')
             _toast('Ticket Submitted', f"IT received your request (#{ticket_id}). We'll be in touch soon.")
+            # Opportunistic: connectivity is clearly up, so drain anything that
+            # was queued during an earlier outage.
+            _run_in_thread(_flush_spool, tracker_url, api_key)
             root.after(1800, root.destroy)
         except Exception as e:
-            status_var.set(f'Error: {e}')
-            btn_submit.config(state='normal', text='Submit Ticket')
+            # Server unreachable / timeout / non-2xx — never lose the ticket.
+            _log(f'submit failed, spooling: {e}')
+            _spool_ticket(payload)
+            status_var.set("No connection to IT right now — saved, will send when you're back online.")
+            _toast('Ticket Saved',
+                   "No connection to IT right now — your ticket is saved and "
+                   "will send automatically once you're back online.")
+            root.after(2600, root.destroy)
 
     # Buttons
     btn_frame = tk.Frame(f)
@@ -431,6 +591,11 @@ def main():
 
     config = _load_config()
     reboot = _pending_reboot()
+
+    # Background retry: flush any tickets that were spooled during an outage.
+    # The tray is a persistent process (pystray icon below blocks on icon.run()),
+    # so this daemon thread lives for the whole session and retries on a timer.
+    threading.Thread(target=_flush_spool_loop, daemon=True, name='ticket-flush').start()
 
     # Build menu
     reboot_label = '⚠ Pending Reboot!' if reboot else 'Check for Updates'

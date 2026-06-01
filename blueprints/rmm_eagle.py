@@ -755,6 +755,57 @@ def api_eagle_fleet():
         return jsonify(ok=False, error=str(e))
 
 
+@bp.route('/api/rmm/eagle-eyes/all-agents')
+@login_required
+def api_eagle_all_agents():
+    """List EVERY RMM agent with its Eagle Eyes state — for the fleet "Add device" picker.
+
+    Unlike the /fleet endpoint (which only returns ec.enabled = true), this returns
+    all agents incl. ones not yet monitored, so an admin/eagle_eyes user can enable a
+    new device. Gated inline (NOT @eagle_eyes_required) so a forbidden user gets a JSON
+    403 instead of a 302 redirect that would break fetch().
+    """
+    if current_user.role not in ('admin', 'eagle_eyes'):
+        return jsonify(ok=False, error='forbidden'), 403
+    try:
+        rows = db.session.execute(text("""
+            SELECT
+                ra.agent_id,
+                COALESCE(NULLIF(t.hostname, ''), ra.agent_id) AS hostname,
+                ec.enabled              AS eagle_enabled,
+                ec.screenshots_enabled  AS screenshots_enabled,
+                ra.last_seen_at
+            FROM rmm_agent ra
+            LEFT JOIN rmm_eagle_config ec ON ec.agent_id = ra.agent_id
+            LEFT JOIN rmm_telemetry t     ON t.agent_id  = ra.agent_id
+            ORDER BY COALESCE(NULLIF(t.hostname, ''), ra.agent_id)
+        """)).mappings().fetchall()
+
+        now_utc = datetime.utcnow()
+        agents = []
+        for r in rows:
+            last_seen = r['last_seen_at']
+            online = False
+            if last_seen:
+                if hasattr(last_seen, 'tzinfo') and last_seen.tzinfo:
+                    from datetime import timezone as _tz
+                    diff = (datetime.now(_tz.utc) - last_seen).total_seconds()
+                else:
+                    diff = (now_utc - last_seen).total_seconds()
+                online = diff < 300
+            agents.append({
+                'agent_id':            r['agent_id'],
+                'hostname':            r['hostname'],
+                'eagle_enabled':       bool(r['eagle_enabled']),
+                'screenshots_enabled': bool(r['screenshots_enabled']),
+                'online':              online,
+                'last_seen':           _dt_iso(last_seen),
+            })
+        return jsonify(ok=True, agents=agents, total=len(agents))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
 @bp.route('/rmm/eagle-eyes/compare')
 @login_required
 @eagle_eyes_required

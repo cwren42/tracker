@@ -267,7 +267,111 @@
     }
   }
 
+  // ── add-device picker ───────────────────────────────────────────────────────
+  let _allAgents = [], _addModal = null;
+
+  function openAddDevice() {
+    if (!_addModal) {
+      const el = document.getElementById('addDeviceModal');
+      _addModal = bootstrap.Modal.getOrCreateInstance(el);
+    }
+    _addModal.show();
+    loadAllAgents();
+  }
+
+  function loadAllAgents() {
+    const tb = document.getElementById('add-device-tbody');
+    tb.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">'
+      + '<div class="spinner-border spinner-border-sm me-2"></div>Loading…</td></tr>';
+    fetch('/api/rmm/eagle-eyes/all-agents')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) {
+          tb.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">'
+            + 'Failed to load: ' + escHtml(data.error || 'unknown error') + '</td></tr>';
+          return;
+        }
+        _allAgents = data.agents || [];
+        renderAddDeviceList();
+      })
+      .catch(err => {
+        tb.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">'
+          + 'Failed to load device list</td></tr>';
+        console.error('all-agents load error:', err);
+      });
+  }
+
+  function renderAddDeviceList() {
+    const q = (document.getElementById('add-device-search').value || '').toLowerCase();
+    const rows = _allAgents.filter(a =>
+      (a.hostname||'').toLowerCase().includes(q) ||
+      (a.agent_id||'').toLowerCase().includes(q)
+    );
+    const tb = document.getElementById('add-device-tbody');
+    document.getElementById('add-device-count').textContent =
+      rows.length + ' device' + (rows.length !== 1 ? 's' : '');
+
+    if (rows.length === 0) {
+      tb.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">No devices found</td></tr>';
+      return;
+    }
+
+    tb.innerHTML = rows.map(a => {
+      const dot = a.online
+        ? '<i class="bi bi-circle-fill text-success" style="font-size:.65rem;" title="Online"></i>'
+        : '<i class="bi bi-circle text-muted" style="font-size:.65rem;" title="Offline"></i>';
+      const aidArg = JSON.stringify(a.agent_id);
+      const ctrl = a.eagle_enabled
+        ? `<span class="badge text-bg-success me-1" style="font-size:.68rem;"><i class="bi bi-check-lg me-1"></i>Enabled</span>`
+          + `<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick='setAddDeviceEagle(${aidArg}, false)'>Disable</button>`
+        : `<button class="btn btn-sm btn-success py-0 px-2" onclick='setAddDeviceEagle(${aidArg}, true)'>`
+          + `<i class="bi bi-plus-lg me-1"></i>Enable</button>`;
+      return `<tr>
+        <td>${dot}</td>
+        <td><span class="fw-semibold">${escHtml(a.hostname)}</span>
+          <div class="text-muted x-small">${escHtml(a.agent_id)}</div></td>
+        <td class="text-end">${ctrl}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function setAddDeviceEagle(agentId, enable) {
+    // Find the clicked button(s) for this row and disable while in-flight.
+    const tb = document.getElementById('add-device-tbody');
+    tb.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        enabled: enable,
+        screenshot_interval_min: 30,
+        screenshots_enabled: false,   // privacy-safe default: activity on, screenshots off
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.ok) {
+          const agent = _allAgents.find(a => a.agent_id === agentId);
+          if (agent) {
+            agent.eagle_enabled = enable;
+            if (!enable) agent.screenshots_enabled = false;
+          }
+        } else {
+          console.error('enable/disable failed:', data && data.error);
+        }
+        renderAddDeviceList();
+        fleetLoad();   // refresh the main fleet table
+      })
+      .catch(err => {
+        console.error('enable/disable error:', err);
+        renderAddDeviceList();
+      });
+  }
+
   // ── kick off ───────────────────────────────────────────────────────────────
+  window.openAddDevice = openAddDevice;
+  window.renderAddDeviceList = renderAddDeviceList;
+  window.setAddDeviceEagle = setAddDeviceEagle;
   window.fleetLoad = fleetLoad;
   window.toggleAutoRefresh = toggleAutoRefresh;
   window.filterTable = filterTable;

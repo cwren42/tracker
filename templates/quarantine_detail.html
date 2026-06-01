@@ -189,6 +189,59 @@
       </div>
       {% endif %}
 
+      <!-- How this sender is blocked + the reviewed manual unblock (admin only) -->
+      {% if is_admin and msg.release_status == 'Blocked' %}
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">
+          <i class="bi bi-shield-lock me-2 text-warning"></i>How this is blocked &amp; how to unblock
+        </div>
+        <div class="card-body">
+          {% if block_mechanisms %}
+          <p class="small text-muted mb-3">
+            Reviewed, manual steps — run in an Exchange Online PowerShell session
+            (<code>Connect-ExchangeOnline</code>). Nothing here runs automatically.
+          </p>
+          {% for m in block_mechanisms %}
+          {% set kind_meta = {
+            'transport_rule': ('bg-info text-dark', 'Transport rule'),
+            'dmarc':          ('bg-danger', 'DMARC rule'),
+            'tabl':           ('bg-primary', 'Tenant Allow/Block List'),
+            'anti_spam':      ('bg-warning text-dark', 'Anti-Spam policy'),
+            'anti_phish':     ('bg-warning text-dark', 'Anti-Phish policy'),
+            'unknown':        ('bg-secondary', 'Unknown'),
+          }[m.kind] %}
+          <div class="mb-3">
+            <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+              <span class="badge {{ kind_meta[0] }}">{{ kind_meta[1] }}</span>
+              {% if m.rule_name %}<span class="small fw-semibold" style="font-family:monospace;">{{ m.rule_name }}</span>{% endif %}
+              {% if m.blocked_domain and m.blocked_domain != msg.sender_domain %}<span class="badge bg-dark" title="The actual blocked sending (sub)domain — the command targets this exact value">on {{ m.blocked_domain }}</span>{% endif %}
+              <span class="text-muted small">· {{ m.count }} blocked msg{{ 's' if m.count != 1 else '' }}</span>
+            </div>
+            {% if m.caveat %}
+            <div class="alert {{ 'alert-danger' if m.kind == 'dmarc' else 'alert-warning' }} py-2 px-3 small mb-2" role="alert">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ m.caveat }}
+            </div>
+            {% endif %}
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <span class="text-muted small">PowerShell</span>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyPS('qd-ps-{{ loop.index0 }}')">
+                <i class="bi bi-clipboard me-1"></i>Copy
+              </button>
+            </div>
+            <pre id="qd-ps-{{ loop.index0 }}" style="background:#0d1117;color:#e6edf3;padding:.75rem;border-radius:6px;font-size:.78rem;line-height:1.45;overflow:auto;white-space:pre-wrap;word-break:break-word;"><code>{{ m.remediation }}</code></pre>
+          </div>
+          {% endfor %}
+          {% else %}
+          <p class="small text-muted mb-0">
+            <i class="bi bi-info-circle me-1"></i>This message is Blocked, but the Tracker has no
+            stored reason to map to a mechanism (older than Defender's 30-day retention, or no
+            reason reported). Run an Exchange Online message trace to find the blocking agent.
+          </p>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
     </div>
 
     <!-- ── RIGHT COLUMN ── -->
@@ -438,6 +491,17 @@
 function toggleHeaders() {
   const p = document.getElementById('headers-panel');
   if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
+}
+
+// Copy a reviewed unblock PowerShell snippet (textContent un-escapes the HTML entities).
+function copyPS(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function () {
+    showToast('PowerShell copied to clipboard', 'success');
+  }, function () {
+    showToast('Copy failed — select the text manually', 'danger');
+  });
 }
 
 // ── Shared preview utilities ──────────────────────────────────────────────────

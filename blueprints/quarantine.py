@@ -543,6 +543,13 @@ def quarantine_detail(message_id):
         .all()
     ) if (current_user.role == "admin" and msg.campaign_id) else []
 
+    # How is this sender blocked, and what's the reviewed manual unblock? Admin-only;
+    # only meaningful for messages that were actually blocked. Surfaced right here on the
+    # message so an admin doesn't have to file an unblock request to see the mechanism.
+    block_mechanisms = []
+    if current_user.role == "admin" and msg.release_status == "Blocked" and msg.sender_domain:
+        block_mechanisms = _detect_block_mechanisms(msg.sender_domain)
+
     return render_template(
         "quarantine_detail.html",
         msg=msg,
@@ -550,6 +557,7 @@ def quarantine_detail(message_id):
         parsed_headers=parsed_headers,
         domain_count=domain_count,
         related=related,
+        block_mechanisms=block_mechanisms,
         now=datetime.utcnow(),
         is_admin=(current_user.role == "admin"),
     )

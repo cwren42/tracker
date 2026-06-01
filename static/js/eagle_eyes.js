@@ -208,9 +208,11 @@ function renderUsage(summary) {
   if (!summary.length) { spinSet('ee-usage','empty'); return; }
   const top = summary.slice(0,15);
   document.getElementById('ee-usage-range').textContent = top.length + ' apps';
-  spinSet('ee-usage','chart');
-  const el = document.getElementById('ee-usage-chart');
-  el.style.height = Math.max(200, top.length*28+50) + 'px';
+  spinSet('ee-usage','wrap');
+  // Size the relative wrapper (not the canvas): with maintainAspectRatio:false
+  // Chart.js sizes the canvas to its parent box, so the fixed height must live
+  // on the container or the canvas grows unbounded on every resize tick.
+  document.getElementById('ee-usage-wrap').style.height = Math.max(200, top.length*28+50) + 'px';
   mkChart('ee-usage-chart', {
     type:'bar',
     data:{ labels: top.map(r=>r.process_name||'unknown'),
@@ -321,9 +323,9 @@ function renderEvents(events) {
 function renderTopSites(sites) {
   if (!sites.length) { spinSet('ee-sites','empty'); return; }
   document.getElementById('ee-sites-range').textContent = sites.length + ' sites';
-  spinSet('ee-sites','chart');
-  const el = document.getElementById('ee-sites-chart');
-  el.style.height = Math.max(120, sites.length*22+40)+'px';
+  spinSet('ee-sites','wrap');
+  // Fixed height on the relative wrapper, not the responsive canvas (see renderUsage).
+  document.getElementById('ee-sites-wrap').style.height = Math.max(120, sites.length*22+40)+'px';
   mkChart('ee-sites-chart',{
     type:'bar',
     data:{ labels:sites.map(s=>s.site),

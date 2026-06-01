@@ -136,6 +136,10 @@ EmailEvents
     LatestDeliveryLocation,
     OrgLevelPolicy,
     UserLevelPolicy,
+    OrgLevelAction,
+    UserLevelAction,
+    ExchangeTransportRule,
+    ConfidenceLevel,
     BulkComplaintLevel,
     AuthenticationDetails,
     UrlCount,
@@ -192,9 +196,24 @@ EmailEvents
         domain = row.get("SenderMailFromDomain") or (sender.split("@")[-1] if "@" in sender else "")
         policy_type = self._detect_policy_type(row)
 
-        # Quarantine reason: prefer policy name, fall back to type detection
+        # Quarantine reason — accurate, actionable text instead of a bare "Unknown".
+        # Priority: the firing mail-flow (transport) rule, which is the real reason for
+        # rule-driven blocks (e.g. a custom domain blacklist) and is NOT carried in the
+        # threat/policy fields > the Defender policy name > an honest "blocked, no reason
+        # reported" when Defender returned no threat/policy at all > the derived type.
+        transport_rule = self._parse_transport_rule(row.get("ExchangeTransportRule"))
         policy_name = row.get("OrgLevelPolicy") or row.get("UserLevelPolicy") or ""
-        quarantine_reason = policy_name if policy_name else policy_type
+        release_status = self._detect_release_status(row)
+        if transport_rule:
+            quarantine_reason = f"Transport rule: {transport_rule}"
+        elif policy_name:
+            quarantine_reason = policy_name
+        elif release_status == "Blocked":
+            loc = row.get("LatestDeliveryLocation") or row.get("DeliveryLocation") or ""
+            quarantine_reason = (f"Blocked ({loc} — no reason reported by Defender)"
+                                 if loc else "Blocked (no reason reported by Defender)")
+        else:
+            quarantine_reason = policy_type
 
         return {
             "message_id": row.get("NetworkMessageId", ""),
@@ -216,7 +235,7 @@ EmailEvents
             "attachment_count": int(row.get("AttachmentCount") or 0),
             "sender_ip": row.get("SenderIPv4") or row.get("SenderIPv6") or "",
             "email_direction": row.get("EmailDirection") or "",
-            "release_status": self._detect_release_status(row),
+            "release_status": release_status,
             "latest_delivery_action": row.get("LatestDeliveryAction", ""),
             "latest_delivery_location": row.get("LatestDeliveryLocation", ""),
         }
@@ -280,7 +299,28 @@ EmailEvents
         m = pattern.search(auth_str)
         return m.group(1).lower() if m else "none"
 
+    @staticmethod
+    def _parse_transport_rule(raw) -> str:
+        """ExchangeTransportRule is a JSON map {guid: "rule name"}; return the rule name(s).
+
+        This is the authoritative reason for any mail-flow-rule block (e.g. a custom domain
+        blacklist) and is the single most useful reason field Defender exposes for such blocks.
+        """
+        if not raw:
+            return ""
+        try:
+            d = json.loads(raw)
+            if isinstance(d, dict):
+                return ", ".join(str(v) for v in d.values() if v)
+            return str(raw)
+        except (ValueError, TypeError):
+            return str(raw)
+
     def _detect_policy_type(self, row: dict) -> str:
+        # A custom mail-flow (transport) rule names itself in ExchangeTransportRule — the
+        # authoritative reason for rule-driven blocks, absent from the threat/policy fields.
+        if (row.get("ExchangeTransportRule") or "").strip():
+            return "Transport Rule"
         threat = (row.get("ThreatTypes") or "").lower()
         threat_names = (row.get("ThreatNames") or "").lower()
         detection = (row.get("DetectionMethods") or "").lower()

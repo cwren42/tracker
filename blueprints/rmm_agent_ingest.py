@@ -55,7 +55,13 @@ def api_rmm_screenshot_request(agent_id):
     """Ask the gateway to request a screenshot from the agent.
     The gateway must have an agent session open.
     POSTs a JSON command to the gateway internal HTTP endpoint.
+
+    On-demand capture is an Eagle Eyes action, so gate it to admin + eagle_eyes
+    (matches the config toggle); lesser roles must not be able to trigger a
+    surveillance screenshot even though they're authenticated.
     """
+    if current_user.role not in ('admin', 'eagle_eyes'):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     gw_internal = RMM_GATEWAY_INTERNAL
     try:
         import urllib.request as _ur, json as _json

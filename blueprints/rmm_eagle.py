@@ -55,8 +55,16 @@ from blueprints.rmm import bp, _dt_iso, _agent_tz_offset_minutes, _eagle_date_pa
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])
 @login_required
 def api_rmm_eagle_eyes(agent_id):
-    """GET: return current Eagle Eyes config.  POST: enable/disable and push to agent."""
+    """GET: return current Eagle Eyes config.  POST: enable/disable and push to agent.
+
+    Gated to admin + eagle_eyes (matches the page-render routes). The POST mutates
+    Eagle Eyes config (enable/disable, screenshots, interval) and pushes to the gateway,
+    so lesser roles (base_user/manager/viewer) must not reach it. Returns JSON 403
+    rather than a redirect so the toggle UI gets a clean error.
+    """
     import json as _json
+    if current_user.role not in ('admin', 'eagle_eyes'):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if request.method == 'GET':
         row = db.session.execute(
             text("SELECT enabled, screenshot_interval_min, screenshots_enabled FROM rmm_eagle_config WHERE agent_id = :aid"),

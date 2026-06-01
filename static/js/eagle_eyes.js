@@ -94,6 +94,59 @@ async function setScreenshotInterval() {
   } catch(_){}
 }
 
+/* ── Eagle Eyes on/off for this device ────────────────────────────────── */
+let _eeMonState = null;  // {enabled, screenshots_enabled, screenshot_interval_min}
+
+function _setMonitorUi(enabled) {
+  const chk = document.getElementById('ee-monitor-toggle');
+  const lbl = document.getElementById('ee-monitor-label');
+  if (chk) chk.checked = !!enabled;
+  if (lbl) {
+    lbl.textContent = enabled ? 'Monitoring ON' : 'Monitoring OFF';
+    lbl.className = 'form-check-label small ' + (enabled ? 'text-success' : 'text-muted');
+  }
+}
+
+async function loadMonitorState() {
+  try {
+    const res = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`);
+    const data = await res.json();
+    if (data && data.ok) {
+      _eeMonState = data;
+      _setMonitorUi(data.enabled);
+    }
+  } catch(_) {}
+}
+
+async function toggleMonitoring(turnOn) {
+  const chk = document.getElementById('ee-monitor-toggle');
+  if (chk) chk.disabled = true;
+  // Preserve interval; when turning OFF also disable screenshots. When turning ON,
+  // leave screenshots as-is (privacy-safe: never silently enable screenshots).
+  const interval = (_eeMonState && _eeMonState.screenshot_interval_min) || 30;
+  const ss = turnOn ? (_eeMonState ? !!_eeMonState.screenshots_enabled : false) : false;
+  try {
+    const res = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: turnOn, screenshots_enabled: ss, screenshot_interval_min: interval}),
+    });
+    const data = await res.json();
+    if (data && data.ok) {
+      _eeMonState = data;
+      _setMonitorUi(data.enabled);
+    } else {
+      alert('Could not change monitoring: ' + ((data && data.error) || 'unknown error'));
+      _setMonitorUi(_eeMonState ? _eeMonState.enabled : !turnOn);  // revert UI
+    }
+  } catch(e) {
+    alert('Could not change monitoring (network error).');
+    _setMonitorUi(_eeMonState ? _eeMonState.enabled : !turnOn);
+  } finally {
+    if (chk) chk.disabled = false;
+  }
+}
+
 /* ── App category map ─────────────────────────────────────────────────── */
 const CAT = {
   browser: { label:'Browser',       color:'#4dabf7', procs:['msedge','chrome','firefox','brave','opera','iexplore','safari','vivaldi','arc'] },
@@ -909,6 +962,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   eeLoad();
   eeLoadCurrent();
+  loadMonitorState();   // reflect current Eagle Eyes on/off state in the header toggle
   setInterval(eeLoadCurrent, 30000);  // live poll every 30s
 
   // Lazy-load modals on first open

@@ -108,7 +108,68 @@
 
     bar.querySelectorAll('button').forEach(b => { b.disabled = false; });
     clearSelection();
-    renderTable();
+    fleetLoad();
+  }
+
+  // Bulk: stop Eagle Eyes monitoring (disable) for all selected rows.
+  async function bulkStopMonitoring() {
+    if (_selected.size === 0) return;
+    if (!confirm('Stop Eagle Eyes monitoring on ' + _selected.size
+        + ' device(s)? They will drop off this list. You can re-enable them via "Add device".')) return;
+    const ids = [..._selected];
+    const bar = document.getElementById('fleet-bulk-bar');
+    bar.querySelectorAll('button').forEach(b => { b.disabled = true; });
+
+    let failed = 0;
+    for (const agentId of ids) {
+      try {
+        const agent = _agents.find(a => a.agent_id === agentId);
+        const resp = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            enabled: false,
+            screenshots_enabled: false,
+            screenshot_interval_min: agent ? (agent.screenshot_interval_min || 30) : 30,
+          }),
+        });
+        const data = await resp.json();
+        if (!data || !data.ok) failed++;
+      } catch(e) { failed++; }
+    }
+
+    bar.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    clearSelection();
+    fleetLoad();
+    if (failed) alert(failed + ' device(s) could not be stopped (they may be excluded from Eagle Eyes).');
+  }
+
+  // Per-row: stop Eagle Eyes monitoring for a single device.
+  async function stopMonitoring(agentId, btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    const agent = _agents.find(a => a.agent_id === agentId);
+    try {
+      const resp = await fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          enabled: false,
+          screenshots_enabled: false,
+          screenshot_interval_min: agent ? (agent.screenshot_interval_min || 30) : 30,
+        }),
+      });
+      const data = await resp.json();
+      if (!data || !data.ok) {
+        alert('Could not stop monitoring: ' + ((data && data.error) || 'unknown error')
+          + (data && data.error === 'forbidden' ? ' (device is excluded from Eagle Eyes).' : ''));
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-stop-circle me-1"></i>Stop'; }
+        return;
+      }
+      fleetLoad();   // row drops off (fleet lists enabled=true only)
+    } catch(e) {
+      alert('Could not stop monitoring (network error).');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-stop-circle me-1"></i>Stop'; }
+    }
   }
 
   function fleetLoad() {
@@ -179,7 +240,7 @@
     _lastRenderedIds = rows.map(a => a.agent_id);
 
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No monitored devices found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No monitored devices found</td></tr>';
       updateBulkBar();
       return;
     }
@@ -213,6 +274,10 @@
         <td>${topApp}</td>
         <td class="small">${timeAgo(a.last_event)}</td>
         <td>${ssBadge}</td>
+        <td><button class="btn btn-sm btn-outline-danger py-0 px-2" title="Stop Eagle Eyes monitoring for this device"
+          onclick='stopMonitoring(${JSON.stringify(a.agent_id)}, this)'>
+          <i class="bi bi-stop-circle me-1"></i>Stop
+        </button></td>
         <td class="pe-3"><a href="/rmm/eagle-eyes/${encodeURIComponent(a.agent_id)}" class="btn btn-sm btn-outline-warning py-0 px-2">
           <i class="bi bi-eye me-1"></i>View
         </a></td>
@@ -379,5 +444,7 @@
   window.toggleRow = toggleRow;
   window.clearSelection = clearSelection;
   window.bulkSetScreenshots = bulkSetScreenshots;
+  window.bulkStopMonitoring = bulkStopMonitoring;
+  window.stopMonitoring = stopMonitoring;
   fleetLoad();
 })();

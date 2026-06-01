@@ -84,6 +84,10 @@
         <button class="btn btn-sm btn-secondary py-0" onclick="bulkSetScreenshots(false)">
           <i class="bi bi-camera-video-off me-1"></i>Disable Screenshots
         </button>
+        <button class="btn btn-sm btn-outline-danger py-0" onclick="bulkStopMonitoring()"
+          title="Disable Eagle Eyes monitoring on the selected devices">
+          <i class="bi bi-stop-circle me-1"></i>Stop monitoring
+        </button>
         <button class="btn btn-sm btn-outline-secondary py-0 ms-auto" onclick="clearSelection()">
           <i class="bi bi-x me-1"></i>Clear selection
         </button>
@@ -105,11 +109,12 @@
               <th class="sortable" data-col="5" style="cursor:pointer;">Top App Today <i class="bi bi-chevron-expand text-secondary small"></i></th>
               <th class="sortable" data-col="6" style="cursor:pointer;">Last Event <i class="bi bi-chevron-expand text-secondary small"></i></th>
               <th>Screenshots</th>
+              <th>Monitoring</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="fleet-tbody">
-            <tr><td colspan="10" class="text-center text-muted py-4">
+            <tr><td colspan="11" class="text-center text-muted py-4">
               <div class="spinner-border spinner-border-sm me-2"></div>Loading…
             </td></tr>
           </tbody>

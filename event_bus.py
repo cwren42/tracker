@@ -31,6 +31,14 @@ _RETENTION_DAYS = 30       # prune dispatched/error rows older than this
 _PRUNE_EVERY = 720         # ~ every hour (720 * 5s); prune runs on the leader only
 _REINDEX_EVERY = 120960    # ~ weekly (7d * 86400 / 5s); knowledge auto-reindex, leader only
 _COLLECT_EVERY = 17283     # ~ daily (offset so it doesn't collide with prune/reindex ticks)
+_EAGLE_PURGE_EVERY = 17299 # ~ daily (prime-ish offset so it doesn't collide with the others)
+
+# Eagle Eyes activity-event retention. rmm_eagle_event is an unbounded surveillance store
+# (2M+ rows); without a bound it grows forever. Retention is TIME-BASED and fleet-wide — we
+# delete strictly by AGE, never by enable/exclude state (an enabled-but-excluded test box's
+# data is kept while it's inside the window). Configurable via Setting 'eagle_event_retention_days'.
+_EAGLE_RETENTION_DEFAULT_DAYS = 90
+_EAGLE_PURGE_BATCH = 50000   # bounded chunk size so a large delete doesn't hold a long lock
 _started = False           # per-process guard (mirrors sync_scheduler/workflow_engine)
 
 # Defense-in-depth: never let a publisher persist an obvious secret in cleartext JSONB.
@@ -163,6 +171,65 @@ def _prune():
         log.exception("event_outbox prune failed")
 
 
+def _eagle_retention_days():
+    """Read Setting 'eagle_event_retention_days' (fallback 90). Raw SQL on the shim
+    connection — keeps this leader-loop step out of the Flask app context, matching _prune."""
+    try:
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT value FROM setting WHERE key = ?", ("eagle_event_retention_days",)
+            ).fetchone()
+        finally:
+            db.close()
+        if row is not None:
+            v = row[0] if not isinstance(row, dict) else row.get("value")
+            n = int(str(v).strip())
+            if n > 0:
+                return n
+    except Exception:
+        log.exception("eagle retention-days read failed; using default")
+    return _EAGLE_RETENTION_DEFAULT_DAYS
+
+
+def _purge_eagle_events():
+    """Delete rmm_eagle_event rows older than the retention window (captured_at < now - N days).
+
+    TIME-BASED + fleet-wide: deletes ONLY by age, never by enable/exclude state. Batched so a
+    large backlog delete doesn't hold a long table lock. captured_at is indexed
+    (idx_17063_idx_rmm_eagle_event_date), so the age filter is index-supported. Leader-only,
+    best-effort. rmm_eagle_current is one-row-per-agent live state (not history) — intentionally
+    left untouched. Returns total rows deleted."""
+    days = _eagle_retention_days()
+    total = 0
+    try:
+        while True:
+            db = _db()
+            try:
+                # Bounded chunk: delete the oldest matching ids, batch at a time.
+                cur = db.execute(
+                    "DELETE FROM rmm_eagle_event WHERE id IN ("
+                    "  SELECT id FROM rmm_eagle_event"
+                    "  WHERE captured_at < NOW() - ?::interval"
+                    "  ORDER BY captured_at ASC LIMIT ?)",
+                    (f"{days} days", _EAGLE_PURGE_BATCH),
+                )
+                n = cur.rowcount or 0
+                db.commit()
+            finally:
+                db.close()
+            total += n
+            if n < _EAGLE_PURGE_BATCH:
+                break
+        if total:
+            log.info("eagle event purge: deleted %s rows older than %s days", total, days)
+        else:
+            log.info("eagle event purge: 0 rows older than %s days (nothing to delete)", days)
+    except Exception:
+        log.exception("eagle event purge failed")
+    return total
+
+
 def _collect_all(flask_app):
     """Nightly refresh of Layer-3 live facts: run every read-only collector on each system
     that has a host asset. Actions (e.g. entra_sync) are NOT auto-run. Leader-only, best-effort."""
@@ -257,6 +324,8 @@ def start_event_dispatcher(flask_app):
                                 log.exception("scheduled knowledge reindex failed")
                         if ticks % _COLLECT_EVERY == 0:
                             _collect_all(flask_app)
+                        if ticks % _EAGLE_PURGE_EVERY == 0:
+                            _purge_eagle_events()
             except Exception:
                 log.exception("event dispatcher loop error")
 

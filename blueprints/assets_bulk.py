@@ -32,7 +32,7 @@ from models import (
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
-    AssetLoan, InstalledApp, RmmBackupPolicy, RmmAgentBackupPolicy,
+    AssetLoan, InstalledApp, RmmBackupPolicy, RmmAgentBackupPolicy, _log_audit,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
@@ -91,6 +91,12 @@ def bulk_eagle_eyes():
             {'aid': agent_id, 'en': enabled}
         )
         count += 1
+    # Audit: one row for the bulk surveillance toggle (actor, new state, affected agents/count).
+    _log_audit('rmm_eagle_config', 0, 'eagle_eyes.bulk_config', {
+        'enabled': enabled,
+        'count': count,
+        'agent_ids': [r[1] for r in rows],
+    })
     db.session.commit()
     # Push updated config to each connected agent via gateway (best-effort)
     import urllib.request as _ur

@@ -165,6 +165,10 @@ class _Cursor:
         r = self._c.fetchone()
         return r["id"] if r else None
 
+    @property
+    def rowcount(self):
+        return self._c.rowcount
+
     def __iter__(self):
         return (_Row(r) for r in self._c)
 

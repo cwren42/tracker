@@ -27,7 +27,7 @@ from models import (
     MonitoringAlert, MonitoringCheck, MonitoringProfile, Policy, PolicySection,
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
-    SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
+    SystemDescription, AzureIntegrationConfig, ControlRiskMapping, _log_audit,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
@@ -785,6 +785,9 @@ def api_eagle_exclusions_add():
                VALUES (:agent_id, :hostname, :notes, :added_by, now())
                ON CONFLICT (agent_id) DO UPDATE SET hostname=EXCLUDED.hostname, notes=EXCLUDED.notes, added_by=EXCLUDED.added_by, added_at=now()"""
         ), {'agent_id': agent_id, 'hostname': hostname, 'notes': notes, 'added_by': current_user.username})
+        # Audit: who excluded which device from Eagle Eyes visibility (rides this transaction).
+        _log_audit('eagle_eyes_exclusions', 0, 'eagle_eyes.exclusion_add',
+                   {'agent_id': agent_id, 'hostname': hostname, 'notes': notes})
         db.session.commit()
         return jsonify(ok=True)
     except Exception as e:
@@ -801,6 +804,9 @@ def api_eagle_exclusions_remove(agent_id):
         db.session.execute(text(
             "DELETE FROM eagle_eyes_exclusions WHERE agent_id = :aid"
         ), {'aid': agent_id})
+        # Audit: who REMOVED an Eagle Eyes exclusion (device becomes visible again).
+        _log_audit('eagle_eyes_exclusions', 0, 'eagle_eyes.exclusion_remove',
+                   {'agent_id': agent_id})
         db.session.commit()
         return jsonify(ok=True)
     except Exception as e:

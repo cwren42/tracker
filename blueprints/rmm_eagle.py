@@ -33,7 +33,7 @@ from models import (
     MonitoringAlert, MonitoringCheck, MonitoringProfile, Policy, PolicySection,
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
-    SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
+    SystemDescription, AzureIntegrationConfig, ControlRiskMapping, _log_audit,
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
@@ -129,6 +129,11 @@ def api_rmm_eagle_eyes(agent_id):
     enabled             = bool(data.get('enabled', False))
     interval            = int(data.get('screenshot_interval_min', 30))
     screenshots_enabled = bool(data.get('screenshots_enabled', True))
+    # Capture prior state for the audit trail (who changed monitoring/screenshots, old -> new).
+    _old = db.session.execute(
+        text("SELECT enabled, screenshot_interval_min, screenshots_enabled FROM rmm_eagle_config WHERE agent_id = :aid"),
+        {'aid': agent_id}
+    ).fetchone()
     db.session.execute(
         text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, screenshots_enabled, updated_at)
                 VALUES (:aid, :en, :iv, :se, NOW() - INTERVAL '7 hours')
@@ -139,6 +144,14 @@ def api_rmm_eagle_eyes(agent_id):
                     updated_at = excluded.updated_at"""),
         {'aid': agent_id, 'en': enabled, 'iv': interval, 'se': screenshots_enabled}
     )
+    # Audit: who changed monitoring config on whom (best-effort; rides this transaction).
+    _log_audit('rmm_eagle_config', 0, 'eagle_eyes.config', {
+        'agent_id': agent_id,
+        'old': ({'enabled': bool(_old[0]), 'screenshot_interval_min': _old[1],
+                 'screenshots_enabled': bool(_old[2])} if _old else None),
+        'new': {'enabled': enabled, 'screenshot_interval_min': interval,
+                'screenshots_enabled': screenshots_enabled},
+    })
     db.session.commit()
     # Push config to connected agent via gateway
     try:
@@ -435,6 +448,13 @@ def api_rmm_eagle_screenshot_image(shot_id):
     # screenshot by iterating integer shot_ids.
     if _ee_denied(row[0]):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    # Audit: who VIEWED whose screenshot (metadata only — never the image bytes). Key compliance.
+    try:
+        _log_audit('rmm_screenshot', int(shot_id), 'eagle_eyes.screenshot_view',
+                   {'agent_id': row[0], 'shot_id': int(shot_id)})
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     b64 = row[1]
     if not b64 and row[6] and _os.path.exists(row[6]):
         with open(row[6], 'rb') as fh:
@@ -463,7 +483,16 @@ def api_rmm_eagle_screenshot_download(shot_id):
     # shot_id-keyed: apply exclusion on the owning agent (see image route).
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
-    ts = (captured_at or 'unknown').replace(':', '').replace(' ', '_').replace('T', '_')
+    # Audit: who DOWNLOADED whose screenshot (metadata only — never the image bytes).
+    try:
+        _log_audit('rmm_screenshot', int(shot_id), 'eagle_eyes.screenshot_download',
+                   {'agent_id': agent_id, 'shot_id': int(shot_id)})
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    # captured_at is a datetime — stringify before sanitizing (calling .replace on a
+    # datetime raised TypeError and 500'd the download).
+    ts = (_dt_iso(captured_at) or 'unknown').replace(':', '').replace(' ', '_').replace('T', '_')
     fname = f"{agent_id}_{ts}.{fmt or 'jpeg'}"
     if file_path and _os.path.exists(file_path):
         return send_file(file_path, mimetype=f'image/{fmt or "jpeg"}',

@@ -86,6 +86,11 @@ def api_rmm_screenshot_request(agent_id):
 @login_required
 def api_rmm_screenshot_latest(agent_id):
     """Return the most recent stored screenshot for an agent."""
+    from blueprints.rmm_eagle import _ee_denied
+    if current_user.role not in ('admin', 'eagle_eyes'):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     row = db.session.execute(
         text("SELECT id, image_b64, image_format, width, height, captured_at FROM rmm_screenshot WHERE agent_id = :aid ORDER BY id DESC LIMIT 1"),
         {'aid': agent_id}

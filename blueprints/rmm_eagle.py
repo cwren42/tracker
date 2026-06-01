@@ -89,6 +89,16 @@ def _ee_denied(agent_id):
     return agent_id in _ee_hidden_ids()
 
 
+def _ee_role_ok():
+    """True iff the current user may reach ANY Eagle Eyes route (admin + eagle_eyes only).
+
+    Surveillance data (activity, screenshots) must never be reachable by lesser roles
+    (viewer/manager/base_user) even though they're authenticated. JSON/fetch routes use
+    this for an inline 403 (a 302 redirect from the decorator would break fetch()).
+    """
+    return current_user.role in ('admin', 'eagle_eyes')
+
+
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])
 @login_required
 def api_rmm_eagle_eyes(agent_id):
@@ -152,6 +162,8 @@ def api_rmm_eagle_eyes(agent_id):
 @login_required
 def api_rmm_eagle_events(agent_id):
     """Return Eagle Eyes window events. Query params: days/from_date/to_date, limit."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
@@ -173,6 +185,8 @@ def api_rmm_eagle_events(agent_id):
 @login_required
 def api_rmm_eagle_app_summary(agent_id):
     """Return total time per process for the requested day range."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
@@ -228,6 +242,8 @@ def api_rmm_eagle_app_summary(agent_id):
 @login_required
 def api_rmm_eagle_hourly(agent_id):
     """Return total active seconds per hour-of-day (0-23) grouped in server local time."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
@@ -252,6 +268,8 @@ def api_rmm_eagle_hourly(agent_id):
 def api_rmm_eagle_daily(agent_id):
     """Return total active seconds per calendar day grouped in server local time.
     Always returns the full date series for the requested period (zeros for empty days)."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     from_date_arg = request.args.get('from_date', '').strip()
@@ -302,6 +320,8 @@ def api_rmm_eagle_daily(agent_id):
 @login_required
 def api_rmm_eagle_top_sites(agent_id):
     """Return top browser sites derived from window titles."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     import re as _re_site
@@ -339,6 +359,18 @@ def api_rmm_eagle_top_sites(agent_id):
 @login_required
 def api_eagle_fleet_app_suggestions():
     """Return top unclassified process names seen across all agents in the last 7 days."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    # For the eagle_eyes role, exclude hidden devices' events from the aggregate so the
+    # suggestion list (and its agent counts) can't leak activity from servers/excluded
+    # devices. Admins see everything.
+    hidden_clause = ''
+    params = {}
+    if current_user.role == 'eagle_eyes':
+        hidden = _ee_hidden_ids()
+        if hidden:
+            hidden_clause = 'AND e.agent_id != ALL(:hidden)'
+            params['hidden'] = list(hidden)
     rows = db.session.execute(
         text(f"""
             SELECT LOWER(e.process_name) AS process_name,
@@ -348,6 +380,7 @@ def api_eagle_fleet_app_suggestions():
             WHERE e.captured_at > NOW() - INTERVAL '7 days'
               AND e.process_name IS NOT NULL AND e.process_name != ''
               {_EAGLE_SYSTEM_EXCL}
+              {hidden_clause}
               AND LOWER(e.process_name) NOT IN (
                   SELECT LOWER(process_pattern)
                   FROM rmm_eagle_app_class
@@ -356,7 +389,7 @@ def api_eagle_fleet_app_suggestions():
             GROUP BY LOWER(e.process_name)
             ORDER BY agent_count DESC, total_s DESC
             LIMIT 40
-        """)
+        """), params
     ).fetchall()
     result = [{'process_name': r[0], 'agent_count': int(r[1] or 0), 'total_s': int(r[2] or 0)} for r in rows]
     return jsonify(ok=True, suggestions=result)
@@ -366,6 +399,8 @@ def api_eagle_fleet_app_suggestions():
 @login_required
 def api_rmm_eagle_screenshots(agent_id):
     """Return Eagle Eyes screenshots metadata (no image data) for the gallery."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
@@ -386,12 +421,19 @@ def api_rmm_eagle_screenshots(agent_id):
 def api_rmm_eagle_screenshot_image(shot_id):
     """Return a single Eagle Eyes screenshot including the base64 image."""
     import base64 as _b64, os as _os
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     row = db.session.execute(
         text("SELECT agent_id, image_b64, image_format, width, height, captured_at, file_path FROM rmm_screenshot WHERE id = :id"),
         {'id': shot_id}
     ).fetchone()
     if not row:
         return jsonify({'ok': False, 'error': 'Not found'}), 404
+    # This route is keyed by shot_id, not agent_id — resolve the owning agent and apply
+    # the exclusion check so an eagle_eyes user can't pull an excluded/server device's
+    # screenshot by iterating integer shot_ids.
+    if _ee_denied(row[0]):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     b64 = row[1]
     if not b64 and row[6] and _os.path.exists(row[6]):
         with open(row[6], 'rb') as fh:
@@ -408,6 +450,8 @@ def api_rmm_eagle_screenshot_download(shot_id):
     """Download a screenshot as an image file attachment."""
     import base64 as _b64, io, os as _os
     from flask import send_file
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     row = db.session.execute(
         text("SELECT agent_id, image_b64, image_format, captured_at, file_path FROM rmm_screenshot WHERE id = :id"),
         {'id': shot_id}
@@ -415,6 +459,9 @@ def api_rmm_eagle_screenshot_download(shot_id):
     if not row:
         return jsonify({'ok': False, 'error': 'Not found'}), 404
     agent_id, b64_data, fmt, captured_at, file_path = row
+    # shot_id-keyed: apply exclusion on the owning agent (see image route).
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     ts = (captured_at or 'unknown').replace(':', '').replace(' ', '_').replace('T', '_')
     fname = f"{agent_id}_{ts}.{fmt or 'jpeg'}"
     if file_path and _os.path.exists(file_path):
@@ -461,6 +508,8 @@ def rmm_eagle_eyes_dashboard(agent_id):
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/current')
 @login_required
 def api_eagle_current(agent_id):
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if _ee_denied(agent_id):
         return jsonify(ok=False, error='forbidden'), 403
     try:
@@ -489,6 +538,8 @@ def api_eagle_current(agent_id):
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/focus-sessions')
 @login_required
 def api_eagle_focus_sessions(agent_id):
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if _ee_denied(agent_id):
         return jsonify(ok=False, error='forbidden'), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
@@ -534,6 +585,8 @@ def api_eagle_focus_sessions(agent_id):
 @bp.route('/api/rmm/eagle-eyes/app-classifications', methods=['GET', 'POST'])
 @login_required
 def api_eagle_app_classifications():
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if request.method == 'GET':
         try:
             agent_id_filter = (request.args.get('agent_id') or '').strip() or None
@@ -610,6 +663,8 @@ def api_eagle_app_classifications():
 @bp.route('/api/rmm/eagle-eyes/app-classifications/<int:cid>', methods=['DELETE'])
 @login_required
 def api_eagle_app_class_delete(cid):
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     try:
         db.session.execute(text("DELETE FROM rmm_eagle_app_class WHERE id = :id"), {'id': cid})
         db.session.commit()
@@ -621,6 +676,8 @@ def api_eagle_app_class_delete(cid):
 @bp.route('/api/rmm/eagle-eyes/alerts', methods=['GET', 'POST'])
 @login_required
 def api_eagle_alerts():
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if request.method == 'GET':
         try:
             rows = db.session.execute(
@@ -629,7 +686,16 @@ def api_eagle_alerts():
             logs = db.session.execute(
                 text("SELECT rule_id, agent_id, message, fired_at FROM rmm_eagle_alert_log ORDER BY fired_at DESC LIMIT 50")
             ).mappings().fetchall()
-            return jsonify(ok=True, rules=[dict(r) for r in rows], log=[dict(l) for l in logs])
+            rules = [dict(r) for r in rows]
+            log = [dict(l) for l in logs]
+            # For the eagle_eyes role, drop rules/log entries that reference hidden
+            # devices (servers/excluded) so their agent_ids don't leak. Rows with a
+            # NULL agent_id are fleet-wide and stay visible. Admins see everything.
+            if current_user.role == 'eagle_eyes':
+                hidden = _ee_hidden_ids()
+                rules = [r for r in rules if not (r.get('agent_id') and r['agent_id'] in hidden)]
+                log = [l for l in log if not (l.get('agent_id') and l['agent_id'] in hidden)]
+            return jsonify(ok=True, rules=rules, log=log)
         except Exception as e:
             return jsonify(ok=False, error=str(e))
     data = request.get_json() or {}
@@ -657,6 +723,8 @@ def api_eagle_alerts():
 @bp.route('/api/rmm/eagle-eyes/alerts/<int:rid>', methods=['PUT', 'DELETE'])
 @login_required
 def api_eagle_alert_rule(rid):
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if request.method == 'DELETE':
         try:
             db.session.execute(text("DELETE FROM rmm_eagle_alert_rule WHERE id = :id"), {'id': rid})
@@ -680,12 +748,20 @@ def api_eagle_alert_rule(rid):
 @bp.route('/api/rmm/eagle-eyes/report-schedules', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def api_eagle_report_schedules():
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if request.method == 'GET':
         try:
             rows = db.session.execute(
                 text("SELECT id, agent_id, frequency, day_of_week, send_time, email_to, last_sent_at, enabled, created_at FROM rmm_eagle_report_schedule ORDER BY id DESC")
             ).mappings().fetchall()
-            return jsonify(ok=True, schedules=[dict(r) for r in rows])
+            schedules = [dict(r) for r in rows]
+            # For the eagle_eyes role, drop schedules tied to a hidden device so its
+            # agent_id doesn't leak. NULL agent_id = fleet-wide, stays. Admins see all.
+            if current_user.role == 'eagle_eyes':
+                hidden = _ee_hidden_ids()
+                schedules = [s for s in schedules if not (s.get('agent_id') and s['agent_id'] in hidden)]
+            return jsonify(ok=True, schedules=schedules)
         except Exception as e:
             return jsonify(ok=False, error=str(e))
     if request.method == 'DELETE':
@@ -879,10 +955,16 @@ def rmm_eagle_compare():
                   FROM rmm_eagle_config ec
             LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
             WHERE ec.enabled = true
-              AND ec.agent_id NOT IN (SELECT agent_id FROM eagle_eyes_exclusions)
+            ORDER BY hostname
         """)
     ).mappings().fetchall()
-    return render_template('compare_agents.html', agents=[dict(a) for a in agents])
+    agents = [dict(a) for a in agents]
+    # Hide servers + excluded devices from the eagle_eyes role only; admins see all
+    # (consistent with the rest of Eagle Eyes).
+    if current_user.role == 'eagle_eyes':
+        hidden = _ee_hidden_ids()
+        agents = [a for a in agents if a['agent_id'] not in hidden]
+    return render_template('compare_agents.html', agents=agents)
 
 
 @bp.route('/api/rmm/eagle-eyes/compare-data')
@@ -894,9 +976,11 @@ def api_eagle_compare_data():
     days      = int(request.args.get('days', 7))
     if not agent_ids:
         return jsonify(ok=False, error='No agents specified')
-    # Strip out any excluded agents (defence-in-depth)
-    excluded = {r[0] for r in db.session.execute(text('SELECT agent_id FROM eagle_eyes_exclusions')).fetchall()}
-    agent_ids = [a for a in agent_ids if a not in excluded]
+    # For the eagle_eyes role, strip hidden agents (manual exclusions + servers) so they
+    # can't compare a server-class/excluded device. Admins see everything.
+    if current_user.role == 'eagle_eyes':
+        hidden = _ee_hidden_ids()
+        agent_ids = [a for a in agent_ids if a not in hidden]
     if not agent_ids:
         return jsonify(ok=False, error='No agents specified')
     results = {}
@@ -935,6 +1019,8 @@ def api_eagle_compare_data():
 @login_required
 def api_eagle_gantt(agent_id):
     """Return events for a specific day as a gantt-ready list."""
+    if not _ee_role_ok():
+        return jsonify(ok=False, error='forbidden'), 403
     if _ee_denied(agent_id):
         return jsonify(ok=False, error='forbidden'), 403
     day = request.args.get('day')  # YYYY-MM-DD

@@ -52,10 +52,17 @@ from blueprints.assets import bp, _asset_cascade_delete, _rmm_cascade_delete
 
 @bp.route('/assets/bulk/eagle-eyes', methods=['POST'])
 @login_required
-@manager_required
+@eagle_eyes_required
 @license_required
 def bulk_eagle_eyes():
-    """Bulk enable/disable Eagle Eyes for selected assets."""
+    """Bulk enable/disable Eagle Eyes for selected assets.
+
+    Gated to admin + eagle_eyes (a manager has no Eagle Eyes access per policy and
+    must not be able to bulk-toggle monitoring). For an eagle_eyes actor, any agent in
+    the hidden set (manual exclusions + servers) is skipped so they can't bulk-enable a
+    server/excluded device; admins are unaffected.
+    """
+    from blueprints.rmm_eagle import _ee_hidden_ids
     data = request.get_json(force=True) or {}
     asset_ids = data.get('asset_ids', [])
     enabled = bool(data.get('enabled', True))
@@ -68,6 +75,12 @@ def bulk_eagle_eyes():
     ).fetchall()
     if not rows:
         return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
+    # eagle_eyes actors cannot touch hidden devices; admins act on everything.
+    if current_user.role == 'eagle_eyes':
+        hidden = _ee_hidden_ids()
+        rows = [r for r in rows if r[1] not in hidden]
+        if not rows:
+            return jsonify({'success': False, 'message': 'Selected device(s) are not available for Eagle Eyes'}), 403
     count = 0
     for row in rows:
         agent_id = row[1]

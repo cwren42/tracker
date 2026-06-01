@@ -291,11 +291,10 @@ def settings_eagleeye():
             "SELECT agent_id, hostname FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
         )).mappings().fetchall()
         all_agents = db.session.execute(text(
-            """SELECT ec.agent_id, COALESCE(t.hostname, ec.agent_id) AS hostname
-               FROM rmm_eagle_config ec
-               LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
-               WHERE ec.enabled = true
-               ORDER BY COALESCE(t.hostname, ec.agent_id)"""
+            """SELECT ra.agent_id, COALESCE(t.hostname, ra.agent_id) AS hostname
+               FROM rmm_agent ra
+               LEFT JOIN rmm_telemetry t ON t.agent_id = ra.agent_id
+               ORDER BY COALESCE(t.hostname, ra.agent_id)"""
         )).mappings().fetchall()
         exclusions_list = [dict(r) for r in exclusions]
         all_agents_list = [dict(r) for r in all_agents]
@@ -750,11 +749,10 @@ def api_eagle_exclusions_list():
             "SELECT agent_id, hostname, notes, added_by, added_at FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
         )).mappings().fetchall()
         all_agents = db.session.execute(text(
-            """SELECT ec.agent_id, COALESCE(t.hostname, ec.agent_id) AS hostname
-               FROM rmm_eagle_config ec
-               LEFT JOIN rmm_telemetry t ON t.agent_id = ec.agent_id
-               WHERE ec.enabled = true
-               ORDER BY COALESCE(t.hostname, ec.agent_id)"""
+            """SELECT ra.agent_id, COALESCE(t.hostname, ra.agent_id) AS hostname
+               FROM rmm_agent ra
+               LEFT JOIN rmm_telemetry t ON t.agent_id = ra.agent_id
+               ORDER BY COALESCE(t.hostname, ra.agent_id)"""
         )).mappings().fetchall()
         excluded_ids = {r['agent_id'] for r in exclusions}
         return jsonify(

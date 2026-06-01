@@ -833,6 +833,176 @@ def _normalize_domain(value: str) -> str:
     return v.strip().strip(".")
 
 
+def _safe_domain(domain: str) -> str:
+    """Whitelist a normalized domain to [a-z0-9.-] before embedding in PowerShell.
+
+    The domain reaching here is already normalized, but this is the last gate
+    before it lands inside a copy-paste command, so strip anything unexpected.
+    """
+    return "".join(ch for ch in (domain or "").lower() if ch in
+                    "abcdefghijklmnopqrstuvwxyz0123456789.-")
+
+
+def _detect_block_mechanisms(domain):
+    """Read-only: for a blocked sender domain, report HOW it's blocked + the
+    precise, reviewed, copy-paste PowerShell to enact the unblock MANUALLY.
+
+    Aggregates the domain's Blocked quarantine_message rows by quarantine_reason
+    and returns a list of mechanism dicts (highest message count first):
+        { 'kind', 'reason', 'rule_name', 'count', 'remediation', 'caveat' }
+    Never mutates anything and never runs the commands — these are operator
+    playbook snippets to run in an Exchange Online PowerShell session.
+    """
+    domain = _normalize_domain(domain)
+    req_safe = _safe_domain(domain)
+    if not req_safe:
+        return []
+
+    try:
+        # Match the requested domain AND its subdomains — senders almost always
+        # arrive from an ESP subdomain (e.g. em5377.hq.bill.com) while the user
+        # requests the parent (hq.bill.com / bill.com). We group by the ACTUAL
+        # sender_domain so each remediation targets the real blocked (sub)domain,
+        # never the over-broad parent. (LIKE wildcards: req_safe is whitelisted to
+        # [a-z0-9.-], so it carries no % or _ metacharacters.)
+        rows = (
+            db.session.query(
+                QuarantineMessage.sender_domain,
+                QuarantineMessage.quarantine_reason,
+                QuarantineMessage.policy_type,
+                func.count(QuarantineMessage.id),
+            )
+            .filter(db.or_(
+                func.lower(QuarantineMessage.sender_domain) == req_safe,
+                func.lower(QuarantineMessage.sender_domain).like(f"%.{req_safe}"),
+            ))
+            .filter(QuarantineMessage.release_status == "Blocked")
+            .group_by(QuarantineMessage.sender_domain,
+                      QuarantineMessage.quarantine_reason,
+                      QuarantineMessage.policy_type)
+            .all()
+        )
+    except Exception:
+        logger.exception("block-mechanism lookup failed for %s", domain)
+        return []
+
+    # One entry per (actual blocked sender domain, reason), summing across
+    # policy_type and keeping a representative policy_type for classification.
+    by_key = {}
+    for sdom, reason, policy_type, count in rows:
+        key = ((sdom or "").lower(), reason or "Unknown")
+        agg = by_key.setdefault(key, {"count": 0, "policy_type": policy_type})
+        agg["count"] += int(count or 0)
+        if not agg["policy_type"] and policy_type:
+            agg["policy_type"] = policy_type
+
+    mechanisms = []
+    for (sdom, reason), agg in by_key.items():
+        safe = _safe_domain(sdom) or req_safe
+        header = (
+            f"# Domain: {safe}\n"
+            f"# Reviewed, MANUAL step — run in an Exchange Online PowerShell session\n"
+            f"# (Connect-ExchangeOnline). Nothing here is executed automatically.\n"
+        )
+        policy_type = (agg["policy_type"] or "").strip()
+        count = agg["count"]
+        rule_name = None
+        caveat = None
+
+        if reason.startswith("Transport rule:"):
+            rule_name = reason.split(":", 1)[1].strip() or None
+            if rule_name and "DMARC" in rule_name.upper():
+                kind = "dmarc"
+            else:
+                kind = "transport_rule"
+        elif "Tenant Allow/Block List" in reason:
+            kind = "tabl"
+        elif reason == "Anti-Spam" or policy_type == "Anti-Spam":
+            kind = "anti_spam"
+        elif reason == "Anti-Phish" or policy_type == "Anti-Phish":
+            kind = "anti_phish"
+        elif (
+            "no reason reported" in reason
+            or reason == "Unknown"
+            or policy_type == "Unknown"
+            or not reason
+        ):
+            kind = "unknown"
+        else:
+            kind = "unknown"
+
+        if kind == "transport_rule":
+            safe_rule = (rule_name or "").replace('"', "")
+            remediation = (
+                header +
+                f'# Inspect which condition holds the domain, then remove just this domain:\n'
+                f'Get-TransportRule "{safe_rule}" | Format-List Name,SenderDomainIs,From,FromAddressContainsWords\n'
+                f'$r = Get-TransportRule "{safe_rule}"\n'
+                f'$kept = @($r.SenderDomainIs | Where-Object {{ $_ -ne "{safe}" }})\n'
+                f'Set-TransportRule "{safe_rule}" -SenderDomainIs $kept\n'
+                f'# (If the domain is matched via a different condition (From/FromAddressContainsWords),\n'
+                f'#  amend that property instead — SenderDomainIs may not be where it lives.)'
+            )
+
+        elif kind == "dmarc":
+            safe_rule = (rule_name or "").replace('"', "")
+            remediation = (
+                header +
+                f'# NO automatic unblock command for a DMARC-fail rule.\n'
+                f'# Inspect the message authentication first:\n'
+                f'Get-TransportRule "{safe_rule}" | Format-List Name,Description,*Dmarc*,*Header*\n'
+                f'# Verify the sender\'s SPF/DKIM/DMARC before considering any narrow exception.'
+            )
+            caveat = (
+                "This domain is blocked because its mail FAILS DMARC. Unblocking masks a real "
+                "authentication failure — verify the sender's SPF/DKIM/DMARC before overriding; "
+                "if you must allow it, scope a narrow exception rather than removing the DMARC rule."
+            )
+
+        elif kind == "tabl":
+            remediation = (
+                header +
+                f'Get-TenantAllowBlockListItems -ListType Domain -Entry "{safe}"\n'
+                f'Remove-TenantAllowBlockListItems -ListType Domain -Entries "{safe}"\n'
+                f'# also check the Sender list (TABL "sender email address block" can live here):\n'
+                f'Get-TenantAllowBlockListItems -ListType Sender | Where-Object {{ $_.Value -like "*{safe}*" }}'
+            )
+
+        elif kind in ("anti_spam", "anti_phish"):
+            remediation = (
+                header +
+                f'# Allow this domain via the Tenant Allow/Block List (preferred over loosening the policy):\n'
+                f'New-TenantAllowBlockListItems -ListType Domain -Allow -Entries "{safe}" -NoExpiration'
+            )
+
+        else:  # unknown
+            remediation = (
+                header +
+                f'# Defender reported no specific reason. Find the blocking agent for a sample message:\n'
+                f'$msgs = Get-MessageTrace -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date)\n'
+                f'$m = $msgs | Select-Object -First 1\n'
+                f'Get-MessageTraceDetailV2 -MessageTraceId $m.MessageTraceId -RecipientAddress $m.RecipientAddress | Format-List\n'
+                f'# Identify the blocking agent before changing anything.'
+            )
+            caveat = (
+                "Defender reported no specific reason. Run Get-MessageTraceDetailV2 for a sample "
+                "message to find the blocking agent before changing anything."
+            )
+
+        mechanisms.append({
+            "kind": kind,
+            "reason": reason,
+            "rule_name": rule_name,
+            "blocked_domain": sdom,
+            "count": count,
+            "remediation": remediation,
+            "caveat": caveat,
+        })
+
+    mechanisms.sort(key=lambda m: m["count"], reverse=True)
+    return mechanisms
+
+
 @bp.route("/quarantine/domain/<path:domain>/request-unblock", methods=["POST"])
 @login_required
 @email_access_required
@@ -895,6 +1065,30 @@ def quarantine_request_unblock(domain):
     except Exception:
         blocked_count = 0
 
+    # Detected blocking mechanism(s) — surfaced up front so the admin knows what
+    # they'd be overriding before opening the review page.
+    try:
+        mechanisms = _detect_block_mechanisms(domain)
+    except Exception:
+        mechanisms = []
+    if mechanisms:
+        _labels = {
+            "transport_rule": "Transport rule", "dmarc": "DMARC transport rule",
+            "tabl": "Tenant Allow/Block List", "anti_spam": "Anti-Spam policy",
+            "anti_phish": "Anti-Phish policy", "unknown": "Unknown",
+        }
+        _parts = []
+        for m in mechanisms:
+            label = _labels.get(m["kind"], m["kind"])
+            if m["rule_name"]:
+                label = f"{label} {m['rule_name']}"
+            _parts.append(f"{label} ({m['count']} msgs)")
+        blocked_by_html = (
+            f"<li><strong>Blocked by:</strong> {'; '.join(_parts)}</li>"
+        )
+    else:
+        blocked_by_html = ""
+
     requester = getattr(current_user, "display_name", None) or current_user.username
     try:
         review_url = url_for("quarantine.quarantine_unblock_requests", _external=True)
@@ -907,6 +1101,7 @@ def quarantine_request_unblock(domain):
         f"<ul>"
         f"<li><strong>Domain:</strong> {domain}</li>"
         f"<li><strong>Blocked messages from this domain:</strong> {blocked_count}</li>"
+        f"{blocked_by_html}"
         f"<li><strong>Requested by:</strong> {requester} ({current_user.email})</li>"
         f"<li><strong>Reason:</strong> {reason or '(none provided)'}</li>"
         f"</ul>"
@@ -933,6 +1128,17 @@ def quarantine_unblock_requests():
         DomainUnblockRequest.created_at.desc(),
     ).all()
     pending_count = DomainUnblockRequest.query.filter_by(status="pending").count()
+
+    # Attach the detected block mechanism(s) per request so the template can show
+    # WHICH mechanism blocks the domain + the precise manual-unblock PowerShell.
+    # One lookup per distinct (normalized) domain.
+    mech_cache = {}
+    for r in requests_list:
+        key = _normalize_domain(r.domain)
+        if key not in mech_cache:
+            mech_cache[key] = _detect_block_mechanisms(key)
+        r.mechanisms = mech_cache[key]
+
     return render_template(
         "quarantine_unblock_requests.html",
         requests=requests_list,

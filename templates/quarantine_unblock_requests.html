@@ -1,6 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Domain Unblock Requests{% endblock %}
 
+{% block styles %}
+<style>
+/* Block-mechanism panel — script blocks stay dark by design (operator console). */
+.mech-kind {
+  font-size:.7rem; letter-spacing:.02em; text-transform:uppercase; font-weight:600;
+}
+.ps-panel {
+  font-family:'Consolas','Courier New',monospace; font-size:.78rem;
+  background:#0d0f17; border:1px solid #2a2f3a; border-radius:8px;
+  padding:.85rem 1.1rem; white-space:pre-wrap; word-break:break-all;
+  color:#c3e88d; line-height:1.6; max-height:360px; overflow-y:auto; margin-bottom:0;
+}
+.copy-btn { font-size:.72rem; padding:3px 10px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="content py-3">
 
@@ -85,6 +101,55 @@
               {% endif %}
             </td>
           </tr>
+          <!-- How this domain is blocked -->
+          <tr class="table-light">
+            <td colspan="6" class="py-3">
+              <div class="small fw-semibold text-muted mb-2">
+                <i class="bi bi-shield-exclamation me-1"></i>How <span style="font-family:monospace;">{{ r.domain }}</span> is blocked
+              </div>
+              {% set mechs = r.mechanisms or [] %}
+              {% if not mechs %}
+                <div class="text-muted small fst-italic">
+                  No Blocked messages from this domain in the Tracker — nothing to map to a mechanism.
+                  Confirm via Exchange Online message trace before changing any policy.
+                </div>
+              {% else %}
+                {% for m in mechs %}
+                {% set kind_meta = {
+                  'transport_rule': ('bg-info text-dark', 'Transport rule'),
+                  'dmarc':          ('bg-danger', 'DMARC rule'),
+                  'tabl':           ('bg-primary', 'Tenant Allow/Block List'),
+                  'anti_spam':      ('bg-warning text-dark', 'Anti-Spam policy'),
+                  'anti_phish':     ('bg-warning text-dark', 'Anti-Phish policy'),
+                  'unknown':        ('bg-secondary', 'Unknown'),
+                }[m.kind] %}
+                <div class="mb-3">
+                  <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+                    <span class="badge mech-kind {{ kind_meta[0] }}">{{ kind_meta[1] }}</span>
+                    {% if m.rule_name %}<span class="small fw-semibold" style="font-family:monospace;">{{ m.rule_name }}</span>{% endif %}
+                    {% if m.blocked_domain and m.blocked_domain != r.domain %}<span class="badge bg-dark" title="The actual blocked sending (sub)domain — the remediation targets this exact value">on {{ m.blocked_domain }}</span>{% endif %}
+                    <span class="text-muted small">· {{ m.count }} blocked msg{{ 's' if m.count != 1 else '' }}</span>
+                    <span class="text-muted small">· <span style="font-family:monospace;">{{ m.reason }}</span></span>
+                  </div>
+                  {% if m.caveat %}
+                  <div class="alert {{ 'alert-danger' if m.kind == 'dmarc' else 'alert-warning' }} py-2 px-3 small mb-2" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ m.caveat }}
+                  </div>
+                  {% endif %}
+                  <div class="position-relative">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                      <span class="text-muted small">Reviewed manual step — run in Exchange Online PowerShell</span>
+                      <button class="btn btn-outline-secondary copy-btn" onclick="copyPS('ps-{{ r.id }}-{{ loop.index0 }}')">
+                        <i class="bi bi-clipboard me-1"></i>Copy
+                      </button>
+                    </div>
+                    <pre id="ps-{{ r.id }}-{{ loop.index0 }}" class="ps-panel"><code>{{ m.remediation }}</code></pre>
+                  </div>
+                </div>
+                {% endfor %}
+              {% endif %}
+            </td>
+          </tr>
           {% else %}
           <tr>
             <td colspan="6" class="text-center text-muted py-5">
@@ -101,6 +166,17 @@
 </div>
 
 <script>
+function copyPS(id) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target.closest('button');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied!';
+    btn.classList.add('btn-success'); btn.classList.remove('btn-outline-secondary');
+    setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('btn-success'); btn.classList.add('btn-outline-secondary'); }, 2000);
+  });
+}
+
 async function decideUnblock(reqId, decision, btn) {
   const verb = decision === 'approve' ? 'approve' : 'deny';
   const note = prompt('Optional note for this ' + verb + ' decision:') || '';

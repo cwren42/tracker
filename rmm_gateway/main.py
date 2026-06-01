@@ -462,6 +462,14 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
 
             # --- Eagle Eyes: periodic screenshot ---
             if msg_type == "eagle_screenshot":
+                # Defense in depth: drop the shot if screenshots are disabled for this
+                # agent server-side, regardless of what a stale agent still uploads.
+                try:
+                    if not get_eagle_config(agent_id).get("screenshots_enabled", True):
+                        print(f"[gw] dropped eagle_screenshot for {agent_id}: screenshots_enabled=False", flush=True)
+                        continue
+                except Exception as e:
+                    print(f"[gw] eagle_screenshot gate error: {e}", flush=True)
                 if payload.get("data"):
                     try:
                         store_screenshot(

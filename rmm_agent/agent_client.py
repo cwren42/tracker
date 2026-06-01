@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.5"
+AGENT_VERSION = "2.9.6"
 
 import asyncio
 import base64
@@ -4464,7 +4464,7 @@ async def main() -> None:
 
                 # Eagle Eyes monitoring task (started on demand via eagle_eyes_config)
                 eagle_task: Optional[asyncio.Task] = None
-                _eagle_cfg: dict = {"enabled": False, "screenshot_interval_min": 30}
+                _eagle_cfg: dict = {"enabled": False, "screenshot_interval_min": 30, "screenshots_enabled": True}
 
                 async def eagle_monitor_loop():
                     """Poll active window every 10s; screenshot every N minutes.
@@ -4564,9 +4564,12 @@ async def main() -> None:
                             except Exception:
                                 return
 
-                        # Periodic screenshot
+                        # Periodic screenshot -- honor the latest screenshots_enabled flag
+                        # (re-read each cycle so toggling off in the UI takes effect
+                        #  without an agent restart; the server pushes eagle_eyes_config
+                        #  whenever the flag changes).
                         interval_s = _eagle_cfg.get("screenshot_interval_min", 30) * 60
-                        if (now - last_shot_at).total_seconds() >= interval_s:
+                        if _eagle_cfg.get("screenshots_enabled", True) and (now - last_shot_at).total_seconds() >= interval_s:
                             last_shot_at = now
                             try:
                                 result = await loop.run_in_executor(None, capture_screenshot)
@@ -4645,6 +4648,7 @@ async def main() -> None:
                         if msg_type == "eagle_eyes_config":
                             _eagle_cfg["enabled"] = bool(payload.get("enabled", False))
                             _eagle_cfg["screenshot_interval_min"] = int(payload.get("screenshot_interval_min", 30))
+                            _eagle_cfg["screenshots_enabled"] = bool(payload.get("screenshots_enabled", True))
                             if _eagle_cfg["enabled"]:
                                 if eagle_task is None or eagle_task.done():
                                     eagle_task = asyncio.create_task(eagle_monitor_loop())

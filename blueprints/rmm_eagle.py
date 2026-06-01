@@ -52,6 +52,25 @@ logger = logging.getLogger(__name__)
 from blueprints.rmm import bp, _dt_iso, _agent_tz_offset_minutes, _eagle_date_params, _EAGLE_SYSTEM_EXCL
 
 
+def _excluded_agent_ids():
+    """Set of agent_ids on the Eagle Eyes exclusion list (one query).
+
+    Keyed/compared by exact agent_id, matching settings_eagleeye.
+    """
+    return {r[0] for r in db.session.execute(
+        text("SELECT agent_id FROM eagle_eyes_exclusions")
+    ).fetchall()}
+
+
+def _ee_denied(agent_id):
+    """True when the current user is an eagle_eyes (non-admin) user AND the
+    requested agent_id is on the exclusion list. Admins are exempt (see all).
+    """
+    if current_user.role != 'eagle_eyes':
+        return False
+    return agent_id in _excluded_agent_ids()
+
+
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])
 @login_required
 def api_rmm_eagle_eyes(agent_id):
@@ -64,6 +83,8 @@ def api_rmm_eagle_eyes(agent_id):
     """
     import json as _json
     if current_user.role not in ('admin', 'eagle_eyes'):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if request.method == 'GET':
         row = db.session.execute(
@@ -113,6 +134,8 @@ def api_rmm_eagle_eyes(agent_id):
 @login_required
 def api_rmm_eagle_events(agent_id):
     """Return Eagle Eyes window events. Query params: days/from_date/to_date, limit."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
     limit = int(request.args.get('limit', 500))
     rows = db.session.execute(
@@ -132,6 +155,8 @@ def api_rmm_eagle_events(agent_id):
 @login_required
 def api_rmm_eagle_app_summary(agent_id):
     """Return total time per process for the requested day range."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
     wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
     # Use LATERAL joins so that for browser events, a window_title_pattern match
@@ -185,6 +210,8 @@ def api_rmm_eagle_app_summary(agent_id):
 @login_required
 def api_rmm_eagle_hourly(agent_id):
     """Return total active seconds per hour-of-day (0-23) grouped in server local time."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
     wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
     rows = db.session.execute(
@@ -207,6 +234,8 @@ def api_rmm_eagle_hourly(agent_id):
 def api_rmm_eagle_daily(agent_id):
     """Return total active seconds per calendar day grouped in server local time.
     Always returns the full date series for the requested period (zeros for empty days)."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     from_date_arg = request.args.get('from_date', '').strip()
     to_date_arg   = request.args.get('to_date', '').strip()
     date_clause, date_params = _eagle_date_params(default_days=30)
@@ -255,6 +284,8 @@ def api_rmm_eagle_daily(agent_id):
 @login_required
 def api_rmm_eagle_top_sites(agent_id):
     """Return top browser sites derived from window titles."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     import re as _re_site
     date_clause, date_params = _eagle_date_params(default_days=7)
     wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
@@ -317,6 +348,8 @@ def api_eagle_fleet_app_suggestions():
 @login_required
 def api_rmm_eagle_screenshots(agent_id):
     """Return Eagle Eyes screenshots metadata (no image data) for the gallery."""
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
     limit = int(request.args.get('limit', 200))
     rows = db.session.execute(
@@ -381,6 +414,9 @@ def api_rmm_eagle_screenshot_download(shot_id):
 @eagle_eyes_required
 def rmm_eagle_eyes_dashboard(agent_id):
     """Eagle Eyes dashboard page for a specific agent."""
+    if _ee_denied(agent_id):
+        flash('This device is not available.', 'warning')
+        return redirect(url_for('rmm.rmm_eagle_eyes_fleet'))
     row = db.session.execute(
         text("""SELECT ra.asset_id, COALESCE(a.name, ra.agent_id)
                 FROM rmm_agent ra
@@ -407,6 +443,8 @@ def rmm_eagle_eyes_dashboard(agent_id):
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/current')
 @login_required
 def api_eagle_current(agent_id):
+    if _ee_denied(agent_id):
+        return jsonify(ok=False, error='forbidden'), 403
     try:
         row = db.session.execute(
             text("SELECT process_name, window_title, idle_s, is_idle, captured_at FROM rmm_eagle_current WHERE agent_id = :aid"),
@@ -433,6 +471,8 @@ def api_eagle_current(agent_id):
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/focus-sessions')
 @login_required
 def api_eagle_focus_sessions(agent_id):
+    if _ee_denied(agent_id):
+        return jsonify(ok=False, error='forbidden'), 403
     date_clause, date_params = _eagle_date_params(default_days=7)
     try:
         rows = db.session.execute(
@@ -689,11 +729,10 @@ def api_eagle_fleet():
             ORDER BY COALESCE(t.logged_in_user, ec.agent_id)
         """)).mappings().fetchall()
 
-        # Filter out excluded agents for non-admins
+        # Filter out excluded agents for non-admins (eagle_eyes + lesser roles).
+        # Admins manage the exclusion list and see every device, even enabled ones.
         if current_user.role != 'admin':
-            excluded_ids = {r['agent_id'] for r in db.session.execute(text(
-                "SELECT agent_id FROM eagle_eyes_exclusions"
-            )).mappings().fetchall()}
+            excluded_ids = _excluded_agent_ids()
             agents_q = [r for r in agents_q if r['agent_id'] not in excluded_ids]
 
         # Today's active seconds per agent (Mountain Time day)
@@ -768,7 +807,12 @@ def api_eagle_all_agents():
     if current_user.role not in ('admin', 'eagle_eyes'):
         return jsonify(ok=False, error='forbidden'), 403
     try:
-        rows = db.session.execute(text("""
+        # eagle_eyes (non-admin) users must not see excluded devices in the picker;
+        # admins manage the exclusion list and see everything.
+        excl_clause = ""
+        if current_user.role == 'eagle_eyes':
+            excl_clause = "WHERE ra.agent_id NOT IN (SELECT agent_id FROM eagle_eyes_exclusions)"
+        rows = db.session.execute(text(f"""
             SELECT
                 ra.agent_id,
                 COALESCE(NULLIF(t.hostname, ''), ra.agent_id) AS hostname,
@@ -778,6 +822,7 @@ def api_eagle_all_agents():
             FROM rmm_agent ra
             LEFT JOIN rmm_eagle_config ec ON ec.agent_id = ra.agent_id
             LEFT JOIN rmm_telemetry t     ON t.agent_id  = ra.agent_id
+            {excl_clause}
             ORDER BY COALESCE(NULLIF(t.hostname, ''), ra.agent_id)
         """)).mappings().fetchall()
 
@@ -872,6 +917,8 @@ def api_eagle_compare_data():
 @login_required
 def api_eagle_gantt(agent_id):
     """Return events for a specific day as a gantt-ready list."""
+    if _ee_denied(agent_id):
+        return jsonify(ok=False, error='forbidden'), 403
     day = request.args.get('day')  # YYYY-MM-DD
     if not day:
         from datetime import date

@@ -636,14 +636,14 @@ def rmm_agent_heartbeat():
                 pass
 
         import time as _time
-        if _time.time() - last_alert_ts > 900:  # at most once per 15 minutes
+        if _time.time() - last_alert_ts > 86400:  # at most once per 24h (was 15min — chronic >30%-offline is normal and flooded the inbox ~96x/day)
             total, offline = db.session.execute(
                 text("""SELECT COUNT(*), COUNT(*) FILTER (
                           WHERE last_seen_at < NOW() - INTERVAL '10 minutes'
                             OR last_seen_at IS NULL)
                         FROM rmm_agent WHERE enabled = true""")
             ).fetchone()
-            if total and total > 0 and offline / total >= 0.30:
+            if total and total > 0 and offline / total >= 0.50:  # 50%+ down = a real outage, not normal sleep/offline
                 try:
                     from utils import send_admin_notification
                     send_admin_notification(

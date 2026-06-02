@@ -285,6 +285,21 @@ def _dispatch_once(flask_app):
             # trigger_type matches and runs them (risky actions park for approval).
             with flask_app.app_context():
                 workflow_engine.fire_trigger(etype, payload)
+                # Built-in subscriber: the Knowledge Agent's "Learn" step. This is the
+                # SINGLE place a resolved ticket is distilled into a runbook — every
+                # close path (UI status change, close button, bulk close, AND the brain
+                # auto-resolve in workflow_engine) publishes ticket.resolved, so wiring
+                # Learn here covers them all and can't drift. learn_from_ticket upserts
+                # by source_id='ticket:<id>' and returns None when not runbook-worthy, so
+                # at-least-once delivery just refreshes — safe to (re)run.
+                if etype == "ticket.resolved":
+                    tid = payload.get("ticket_id")
+                    if tid is not None:
+                        try:
+                            import knowledge_agent
+                            knowledge_agent.learn_from_ticket(int(tid))
+                        except Exception:
+                            log.exception("ticket.resolved: learn_from_ticket failed (ticket=%s)", tid)
             _mark_dispatched(eid)
             dispatched += 1
         except Exception as e:

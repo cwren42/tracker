@@ -38,6 +38,31 @@ from api_system import require_api_key
 bp = Blueprint('tickets', __name__)
 
 
+def _on_ticket_resolved(ticket):
+    """Single hook fired when a ticket transitions INTO a resolved (Closed) state.
+
+    Publishes a `ticket.resolved` bus event. The event dispatcher
+    (event_bus._dispatch_once) has a built-in subscriber that runs the Knowledge
+    Agent's "Learn" step — distilling the ticket into a reusable runbook — within an
+    app context. Routing Learn through the event keeps ONE source of truth across
+    every close path (UI status change, close button, bulk close) AND the brain's
+    auto-resolve in workflow_engine, which also publishes ticket.resolved. Learn is
+    idempotent (upserts by source_id='ticket:<id>'), so at-least-once delivery is safe.
+
+    Call this only on the actual transition into Closed (not on every status write).
+    Best-effort: never raises into the request.
+    """
+    try:
+        import event_bus
+        event_bus.publish('ticket.resolved', {
+            'ticket_id': ticket.id, 'subject': ticket.subject,
+            'category': ticket.category,
+            'closed_by': getattr(current_user, 'username', None),
+        }, source='tickets')
+    except Exception as _e:
+        logger.warning(f'Failed to publish ticket.resolved for ticket {ticket.id}: {_e}')
+
+
 # ==================== SUPPORT TICKETS ====================
 
 
@@ -523,22 +548,10 @@ def set_ticket_status(ticket_id):
                                       action='status_changed', detail=f'{old} → {new_status}'))
         db.session.commit()
 
-        # On resolution: emit a bus event + run the brain's "Learn" step — distill the
-        # ticket into a reusable runbook for the Knowledge Agent. Both best-effort.
+        # On resolution: distill the ticket into a reusable runbook (Knowledge Agent
+        # "Learn" step), routed through the centralized ticket.resolved hook.
         if new_status == 'Closed' and old != 'Closed':
-            try:
-                import event_bus
-                event_bus.publish('ticket.resolved', {
-                    'ticket_id': ticket.id, 'subject': ticket.subject,
-                    'category': ticket.category, 'closed_by': current_user.username,
-                }, source='tickets')
-            except Exception as _e:
-                logger.warning(f'Failed to publish ticket.resolved event: {_e}')
-            try:
-                import knowledge_agent
-                knowledge_agent.learn_from_ticket_async(current_app._get_current_object(), ticket.id)
-            except Exception as _e:
-                logger.warning(f'Failed to start learn-from-ticket: {_e}')
+            _on_ticket_resolved(ticket)
     return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
 
 
@@ -774,6 +787,8 @@ def bulk_action():
         abort(400)
     bulk_tickets = SupportTicket.query.filter(SupportTicket.id.in_(ids)).all()
     count = len(bulk_tickets)
+    # Tickets that transition INTO Closed here — fire the Learn hook once each, post-commit.
+    _resolved = []
     if action == 'close':
         for t in bulk_tickets:
             if t.status not in ('Closed', 'Merged'):
@@ -782,6 +797,7 @@ def bulk_action():
                 t.closed_by_user_id = current_user.id
                 db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                               action='closed', detail='Bulk closed'))
+                _resolved.append(t)
     elif action == 'assign':
         assignee_raw = request.form.get('bulk_assignee_id', '0')
         assignee_id = int(assignee_raw) if assignee_raw.isdigit() and assignee_raw != '0' else None
@@ -813,10 +829,13 @@ def bulk_action():
         for t in bulk_tickets:
             if t.status in ('Merged',):
                 continue
+            _was_closed = t.status == 'Closed'
             t.status = status
             if status == 'Closed' and t.closed_at is None:
                 t.closed_at = datetime.now()  # server-local; see now_mst()
                 t.closed_by_user_id = current_user.id
+            if status == 'Closed' and not _was_closed:
+                _resolved.append(t)
             db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                           action='status_changed',
                                           detail=f'Bulk: status → {status}'))
@@ -835,6 +854,9 @@ def bulk_action():
     else:
         abort(400)
     db.session.commit()
+    # Post-commit: Learn from each ticket that just transitioned into Closed.
+    for t in _resolved:
+        _on_ticket_resolved(t)
     flash(f'{count} ticket(s) updated.', 'success')
     return redirect(request.referrer or url_for('tickets.tickets'))
 
@@ -871,7 +893,8 @@ def merge_ticket(ticket_id):
 @license_required
 def close_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    if ticket.status != 'Closed':
+    _transitioned = ticket.status != 'Closed'
+    if _transitioned:
         ticket.status = 'Closed'
         ticket.closed_at = datetime.now()  # server-local; see now_mst()
         ticket.closed_by_user_id = current_user.id
@@ -899,6 +922,8 @@ def close_ticket(ticket_id):
                 logger.warning(f'CSAT email failed for ticket {ticket.id}: {_csat_err}')
         else:
             db.session.commit()
+    if _transitioned:
+        _on_ticket_resolved(ticket)
     _notify_watchers(ticket, f'Ticket #{ticket.id} Closed',
                      f'<p>Ticket <strong>#{ticket.id}: {ticket.subject}</strong> has been closed.</p>')
     flash(f'Ticket #{ticket.id} closed.', 'success')

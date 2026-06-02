@@ -29,7 +29,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(200), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     role = db.Column(db.String(20), default='viewer')  # admin, manager, viewer
-    theme = db.Column(db.String(30), default='dark')  # Theme preference
+    theme = db.Column(db.String(30), default='default')  # Theme preference (new light UI; 'dark' is the legacy theme)
     last_login = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     azure_id = db.Column(db.String(100))  # Azure AD user object ID

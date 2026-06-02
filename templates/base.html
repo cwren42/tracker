@@ -594,16 +594,16 @@
             const ts  = n.created_at ? n.created_at.slice(5,16).replace('T',' ') : '';
             const col = SEV_COLOR[n.color] || '#fcc419';
             const href = n.link || '/alerts/center';
-            return `<li style="border-bottom:1px solid #1a2535;">
+            return `<li style="border-bottom:1px solid #e9edf2;">
               <a href="${href}" class="d-flex align-items-start gap-2 px-3 py-2 text-decoration-none"
-                 style="background:${n.read_flag?'transparent':'rgba(77,171,247,.05)'};">
+                 style="background:${n.read_flag?'transparent':'rgba(13,110,253,.06)'};">
                 <i class="bi ${n.icon||'bi-bell'} mt-1 flex-shrink-0" style="color:${col};font-size:.9rem;"></i>
                 <div class="flex-grow-1 overflow-hidden">
                   <div class="d-flex justify-content-between align-items-center gap-1">
-                    <strong style="font-size:.78rem;color:#dde;">${n.title||'Alert'}</strong>
-                    <span class="text-muted flex-shrink-0" style="font-size:.65rem;">${ts}</span>
+                    <strong style="font-size:.78rem;color:#1f2d3d;">${n.title||'Alert'}</strong>
+                    <span class="flex-shrink-0" style="font-size:.65rem;color:#8a96a3;">${ts}</span>
                   </div>
-                  <div class="text-muted text-truncate" style="font-size:.72rem;">${n.body||''}</div>
+                  <div class="text-truncate" style="font-size:.72rem;color:#54606e;">${n.body||''}</div>
                 </div>
                 ${dot}
               </a>

@@ -1147,11 +1147,13 @@ def _detect_block_mechanisms(domain):
         else:  # unknown
             test_ps = (
                 thdr +
-                f'# No specific reason stored — find the blocking agent from message trace:\n'
-                f'$msgs = Get-MessageTraceV2 -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date)\n'
-                f'$m = $msgs | Select-Object -First 1\n'
-                f'if ($m) {{ Get-MessageTraceDetailV2 -MessageTraceId $m.MessageTraceId -RecipientAddress $m.RecipientAddress | Format-List Date,Event,Action,Detail }}\n'
-                f'else {{ "No recent messages from {safe} in message trace." }}'
+                f'# No specific reason stored. List recent messages from this sender WITH their\n'
+                f'# status (Delivered / FilteredAsSpam / Quarantined / Failed) so you can see which\n'
+                f'# were blocked vs delivered — a single sender often has both:\n'
+                f'Get-MessageTraceV2 -SenderAddress "*@{safe}" -StartDate (Get-Date).AddDays(-10) -EndDate (Get-Date) |\n'
+                f'  Select-Object Received, RecipientAddress, Status, Subject | Sort-Object Received -Descending | Format-Table -Auto\n'
+                f'# Then drill into a specific BLOCKED one for the agent/reason (paste its MessageTraceId + recipient):\n'
+                f'# Get-MessageTraceDetailV2 -MessageTraceId <id> -RecipientAddress <recipient> | Format-List Date,Event,Action,Detail'
             )
             live_ps = None  # can't write a safe unblock without knowing the agent
             caveat = (

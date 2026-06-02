@@ -516,11 +516,24 @@ def quarantine_detail(message_id):
         return redirect(url_for("quarantine.quarantine_list"))
     iocs = QuarantineIOC.query.filter_by(message_id=message_id).all()
 
-    # Attempt to fetch raw headers on-demand if not cached
-    if not msg.raw_headers:
+    # Fetch raw headers on-demand, SCOPED to this recipient. Multi-recipient messages share
+    # one NetworkMessageId, so an unscoped fetch (or a cache populated from a sibling
+    # recipient) can show the wrong RecipientEmailAddress. Re-fetch if missing OR the cached
+    # copy is for a different recipient than this row.
+    _cached_rcpt = None
+    if msg.raw_headers:
+        for _ln in msg.raw_headers.splitlines():
+            if _ln.startswith("RecipientEmailAddress:"):
+                _cached_rcpt = _ln.split(":", 1)[1].strip().lower()
+                break
+    _need_headers = (not msg.raw_headers) or (
+        bool(msg.recipient_address) and bool(_cached_rcpt)
+        and _cached_rcpt != msg.recipient_address.strip().lower()
+    )
+    if _need_headers:
         try:
             svc = _get_qsvc()
-            headers = svc.get_message_headers(message_id)
+            headers = svc.get_message_headers(message_id, recipient=msg.recipient_address)
             if headers:
                 msg.raw_headers = headers
                 db.session.commit()

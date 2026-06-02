@@ -449,15 +449,24 @@ EmailEvents
             logger.error("Mailbox delete error for %s / %s: %s", recipient, iid, e)
             return {"success": False, "error": str(e)}
 
-    def get_message_headers(self, message_id: str) -> str | None:
+    def get_message_headers(self, message_id: str, recipient: str | None = None) -> str | None:
         """
         Retrieve email headers via Advanced Hunting — no extra permissions needed.
         Pulls the AuthenticationDetails and other header fields from EmailEvents.
+
+        A multi-recipient message shares ONE NetworkMessageId (EmailEvents has a row per
+        recipient), so pass `recipient` to fetch THIS recipient's copy — otherwise `take 1`
+        returns an arbitrary sibling recipient's headers.
         """
+        rcpt_filter = ""
+        if recipient:
+            _r = recipient.replace('"', '').strip().lower()
+            if _r:
+                rcpt_filter = f'| where RecipientEmailAddress =~ "{_r}"\n'
         kql = f"""
 EmailEvents
 | where NetworkMessageId == "{message_id}"
-| project
+{rcpt_filter}| project
     NetworkMessageId,
     AuthenticationDetails,
     EmailDirection,

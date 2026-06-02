@@ -719,6 +719,7 @@ def download_agent_file(filename):
 
 @bp.route('/alerts/center')
 @login_required
+@admin_required
 def alert_center():
     users = db.session.execute(text('SELECT id, username, full_name FROM "user" ORDER BY username')).mappings().fetchall()
     return render_template('alert_center.html', users=[dict(u) for u in users])
@@ -726,6 +727,7 @@ def alert_center():
 
 @bp.route('/api/alerts/rules', methods=['GET', 'POST'])
 @login_required
+@admin_required
 def api_alert_rules():
     con = _alert_svc._get_db()
     try:
@@ -759,6 +761,7 @@ def api_alert_rules():
 
 @bp.route('/api/alerts/rules/<int:rid>', methods=['PUT', 'DELETE'])
 @login_required
+@admin_required
 def api_alert_rule(rid):
     con = _alert_svc._get_db()
     try:
@@ -788,6 +791,7 @@ def api_alert_rule(rid):
 
 @bp.route('/api/alerts/rules/<int:rid>/toggle', methods=['POST'])
 @login_required
+@admin_required
 def api_alert_rule_toggle(rid):
     con = _alert_svc._get_db()
     try:
@@ -804,6 +808,7 @@ def api_alert_rule_toggle(rid):
 
 @bp.route('/api/alerts/log')
 @login_required
+@admin_required
 def api_alert_log():
     con = _alert_svc._get_db()
     try:
@@ -824,6 +829,7 @@ def api_alert_log():
 
 @bp.route('/api/notifications/bell')
 @login_required
+@admin_required
 def api_notifications_bell():
     con = _alert_svc._get_db()
     try:
@@ -839,6 +845,7 @@ def api_notifications_bell():
 
 @bp.route('/api/notifications/mark-read', methods=['POST'])
 @login_required
+@admin_required
 def api_notifications_mark_read():
     con = _alert_svc._get_db()
     try:

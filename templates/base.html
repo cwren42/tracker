@@ -171,7 +171,7 @@
         <ul class="sidebar-submenu collapse {% if request.endpoint in _sec_eps %}show{% endif %}" id="sub-security">
             <li><a class="sidebar-link {% if request.endpoint == 'vulnerabilities.vulnerability_dashboard' %}active{% endif %}" href="{{ url_for('vulnerabilities.vulnerability_dashboard') }}"><i class="bi bi-bug"></i><span class="link-label">Vulnerabilities</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'patch_mgmt.patch_dashboard' %}active{% endif %}" href="{{ url_for('patch_mgmt.patch_dashboard') }}"><i class="bi bi-patch-check-fill text-warning"></i><span class="link-label">Patch Management</span></a></li>
-            <li><a class="sidebar-link {% if request.endpoint == 'monitoring.alert_center' %}active{% endif %}" href="{{ url_for('misc.alert_center') }}"><i class="bi bi-bell-fill"></i><span class="link-label">Alert Center</span></a></li>
+            {% if current_user.role == 'admin' %}<li><a class="sidebar-link {% if request.endpoint == 'monitoring.alert_center' %}active{% endif %}" href="{{ url_for('misc.alert_center') }}"><i class="bi bi-bell-fill"></i><span class="link-label">Alert Center</span></a></li>{% endif %}
             <li><a class="sidebar-link {% if request.endpoint == 'ai.workflows' %}active{% endif %}" href="{{ url_for('ai.workflows') }}"><i class="bi bi-diagram-3"></i><span class="link-label">Workflows</span></a></li>
         </ul>
 
@@ -281,7 +281,8 @@
             <i class="bi bi-shield-exclamation"></i><span class="d-none d-md-inline">Incident</span>
         </a>
 
-        <!-- Notification Bell -->
+        <!-- Notification Bell (admin-only: it's a global IT-alert feed) -->
+        {% if current_user.role == 'admin' %}
         <div class="dropdown" id="bell-nav">
             <a class="topbar-link position-relative" href="#" id="bellDropdown"
                data-bs-toggle="dropdown" aria-expanded="false">
@@ -299,6 +300,7 @@
                 <div id="bell-items"><li class="px-3 py-3 text-muted text-center" style="font-size:.8rem;">No notifications</li></div>
             </ul>
         </div>
+        {% endif %}
 
         <!-- User dropdown -->
         <div class="dropdown">

@@ -114,6 +114,7 @@ def api_ai_test():
 
 @bp.route('/api/ai/ask', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_ask():
     """Cross-module AI question answering."""
     data = request.get_json(force=True) or {}
@@ -132,6 +133,7 @@ def api_ai_ask():
 
 @bp.route('/api/ai/daily-briefing', methods=['GET'])
 @login_required
+@admin_required
 def api_ai_daily_briefing_get():
     """Return the cached 'what needs attention today' briefing, if any."""
     from models import Setting
@@ -146,6 +148,7 @@ def api_ai_daily_briefing_get():
 
 @bp.route('/api/ai/daily-briefing/generate', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_daily_briefing_generate():
     """Generate a fresh daily briefing from live ops data and cache it."""
     from models import Setting
@@ -172,6 +175,7 @@ def api_ai_daily_briefing_generate():
 
 @bp.route('/api/ai/predict-failures', methods=['GET'])
 @login_required
+@admin_required
 def api_ai_predict_failures():
     """Return risk-scored at-risk assets using AI predictive analysis."""
     try:
@@ -339,6 +343,7 @@ def api_workflow_run(wf_id):
 
 @bp.route('/api/workflows/<int:wf_id>/runs', methods=['GET'])
 @login_required
+@admin_required
 def api_workflow_runs(wf_id):
     db_conn = get_db()
     rows = db_conn.execute(
@@ -363,6 +368,7 @@ def api_workflow_ai_generate():
 
 @bp.route('/api/workflows/runs/<int:run_id>/steps', methods=['GET'])
 @login_required
+@admin_required
 def api_workflow_run_steps(run_id):
     db_conn = get_db()
     steps = db_conn.execute(
@@ -379,6 +385,7 @@ def api_workflow_run_steps(run_id):
 
 @bp.route('/api/ai/ticket/<int:ticket_id>/suggest', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_ticket_suggest(ticket_id):
     try:
         result = _ai_engine.suggest_ticket_resolution(ticket_id)
@@ -415,6 +422,7 @@ def api_ai_suggestion_dismiss(sug_id):
 
 @bp.route('/api/ai/ticket/<int:ticket_id>/suggestions', methods=['GET'])
 @login_required
+@admin_required
 def api_ai_ticket_suggestions(ticket_id):
     db_conn = get_db()
     rows = db_conn.execute(

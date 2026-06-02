@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required, current_user
 from sqlalchemy import text
 from extensions import db
-from utils import manager_required
+from utils import manager_required, admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ def _gw():
 # ─────────────────────────────────────────────────────────────
 @bp.route('/patches')
 @login_required
+@admin_required
 def patch_dashboard():
     return render_template('patch_dashboard.html')
 
@@ -32,6 +33,7 @@ def patch_dashboard():
 # ─────────────────────────────────────────────────────────────
 @bp.route('/api/patches/pending')
 @login_required
+@admin_required
 def api_patches_pending():
     """Return all pending updates grouped by update_id with affected agents."""
     try:
@@ -101,6 +103,7 @@ def api_patches_pending():
 # ─────────────────────────────────────────────────────────────
 @bp.route('/api/patches/by-device')
 @login_required
+@admin_required
 def api_patches_by_device():
     """Return all pending updates grouped by agent/device."""
     try:
@@ -157,6 +160,7 @@ def api_patches_by_device():
 # ─────────────────────────────────────────────────────────────
 @bp.route('/api/patches/auto-approve-rules')
 @login_required
+@admin_required
 def api_auto_approve_rules():
     row = db.session.execute(
         text("SELECT value FROM setting WHERE key='patch_auto_approve_rules'")
@@ -321,6 +325,7 @@ def api_patches_deploy():
 # ─────────────────────────────────────────────────────────────
 @bp.route('/api/patches/job-status')
 @login_required
+@admin_required
 def api_patches_job_status():
     """Return recent patch job status keyed by agent_id and update_id."""
     try:

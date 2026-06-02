@@ -493,6 +493,7 @@ def api_rmm_backup_complete(job_id):
 
 @bp.route('/api/rmm/backup-jobs/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_backup_jobs(agent_id):
     """Return the last 50 backup jobs for an agent (for the asset Backup tab)."""
     rows = db.session.execute(text("""

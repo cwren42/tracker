@@ -49,6 +49,7 @@ bp = Blueprint('reports', __name__)
 
 @bp.route('/reports/custom')
 @login_required
+@admin_required
 @license_required
 def custom_reports():
     """Custom report builder page"""
@@ -58,6 +59,7 @@ def custom_reports():
 
 @bp.route('/reports/custom/generate', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def generate_custom_report():
     """Generate custom report based on configuration"""
@@ -185,6 +187,7 @@ def generate_custom_report():
 
 @bp.route('/reports/custom/export', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def export_custom_report():
     """Export custom report to CSV"""
@@ -316,6 +319,7 @@ def export_custom_report():
 
 @bp.route('/reports/custom/save', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def save_custom_report():
     """Save a custom report"""
@@ -350,6 +354,7 @@ def save_custom_report():
 
 @bp.route('/reports/custom/list', methods=['GET'])
 @login_required
+@admin_required
 @license_required
 def list_custom_reports():
     """Get list of user's saved reports"""
@@ -378,6 +383,7 @@ def list_custom_reports():
 
 @bp.route('/reports/custom/delete/<int:report_id>', methods=['DELETE'])
 @login_required
+@admin_required
 @license_required
 def delete_custom_report(report_id):
     """Delete a custom report"""
@@ -398,6 +404,7 @@ def delete_custom_report(report_id):
 
 @bp.route('/reports')
 @login_required
+@admin_required
 @license_required
 def reports():
     # Category breakdown
@@ -502,12 +509,14 @@ def reports():
 
 @bp.route('/reports/advanced')
 @login_required
+@admin_required
 def reports_advanced():
     return render_template('reports_advanced.html')
 
 
 @bp.route('/api/reports/templates', methods=['GET'])
 @login_required
+@admin_required
 def api_report_templates():
     db_conn = get_db()
     rows = db_conn.execute(
@@ -519,6 +528,7 @@ def api_report_templates():
 
 @bp.route('/api/reports/runs', methods=['GET'])
 @login_required
+@admin_required
 def api_report_runs_list():
     db_conn = get_db()
     rows = db_conn.execute(
@@ -530,6 +540,7 @@ def api_report_runs_list():
 
 @bp.route('/api/reports/run', methods=['POST'])
 @login_required
+@admin_required
 def api_report_run():
     data    = request.get_json()
     rtype   = data.get('report_type')
@@ -555,6 +566,7 @@ def api_report_run():
 
 @bp.route('/api/reports/runs/<int:run_id>', methods=['GET'])
 @login_required
+@admin_required
 def api_report_run_status(run_id):
     db_conn = get_db()
     row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
@@ -566,6 +578,7 @@ def api_report_run_status(run_id):
 
 @bp.route('/api/reports/runs/<int:run_id>/data', methods=['GET'])
 @login_required
+@admin_required
 def api_report_run_data(run_id):
     db_conn = get_db()
     row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
@@ -585,6 +598,7 @@ def api_report_run_data(run_id):
 
 @bp.route('/api/reports/download/<string:filename>')
 @login_required
+@admin_required
 def api_report_download(filename):
     safe = os.path.basename(filename)
     path = os.path.join(_report_engine.REPORT_DIR, safe)

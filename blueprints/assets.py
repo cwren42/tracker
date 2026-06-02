@@ -558,6 +558,7 @@ def view_asset(asset_id):
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')
 @login_required
+@admin_required
 def rmm_section(asset_id, section):
     """Full-page view for an individual RMM management section."""
     ALLOWED = {'hw', 'sec', 'sysinfo', 'metrics', 'avail', 'patches',
@@ -1109,6 +1110,7 @@ def global_search():
 
 @bp.route('/asset/<int:asset_id>/unlink-agent', methods=['POST'])
 @login_required
+@admin_required
 def unlink_rmm_agent(asset_id):
     """Remove the RMM agent record linked to this asset without deleting the asset."""
     db.session.execute(
@@ -1122,6 +1124,7 @@ def unlink_rmm_agent(asset_id):
 
 @bp.route('/assets/<int:asset_id>/download-installer')
 @login_required
+@admin_required
 @license_required
 def download_asset_installer(asset_id):
     """Generate a ready-to-run PS1 installer pre-configured for a specific asset.

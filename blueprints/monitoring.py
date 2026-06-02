@@ -62,6 +62,7 @@ def get_db():
 
 @bp.route('/monitoring')
 @login_required
+@admin_required
 def monitoring_dashboard():
     """Main monitoring dashboard showing all assets with profiles and current status"""
     # Get all assets with their monitoring profiles
@@ -118,6 +119,7 @@ def monitoring_dashboard():
 
 @bp.route('/monitoring/profiles')
 @login_required
+@admin_required
 def monitoring_profiles():
     """View all monitoring profiles and their checks"""
     profiles = MonitoringProfile.query.order_by(MonitoringProfile.name).all()
@@ -145,6 +147,7 @@ def monitoring_profiles():
 
 @bp.route('/monitoring/profile/<int:profile_id>')
 @login_required
+@admin_required
 def monitoring_profile_detail(profile_id):
     """View details of a specific monitoring profile including all checks"""
     profile = MonitoringProfile.query.get_or_404(profile_id)
@@ -215,6 +218,7 @@ def monitoring_profile_detail(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/bulk-assign-assets', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_bulk_assign_assets(profile_id):
     """Bulk-assign all unassigned matching assets to this profile"""
     profile = MonitoringProfile.query.get_or_404(profile_id)
@@ -262,6 +266,7 @@ def monitoring_profile_bulk_assign_assets(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/add-check', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_add_check(profile_id):
     """Add a monitoring check to a profile with optional custom thresholds"""
     MonitoringProfile.query.get_or_404(profile_id)
@@ -306,6 +311,7 @@ def monitoring_profile_add_check(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/remove-check/<int:check_id>', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_remove_check(profile_id, check_id):
     """Remove a monitoring check from a profile"""
     MonitoringProfile.query.get_or_404(profile_id)
@@ -327,6 +333,7 @@ def monitoring_profile_remove_check(profile_id, check_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/assign-existing-backup-policy', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_bulk_assign_backup(profile_id):
     """Bulk-assign an existing backup policy to all enrolled agents in this profile"""
     MonitoringProfile.query.get_or_404(profile_id)
@@ -380,6 +387,7 @@ def monitoring_profile_bulk_assign_backup(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/create-backup-policy', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_create_backup_policy(profile_id):
     """Quick-create a backup policy and optionally assign to all Windows agents in this profile"""
     MonitoringProfile.query.get_or_404(profile_id)
@@ -444,6 +452,7 @@ def monitoring_profile_create_backup_policy(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/add-alert', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_add_alert(profile_id):
     """Manually create a monitoring alert for an asset in this profile"""
     profile = MonitoringProfile.query.get_or_404(profile_id)
@@ -481,6 +490,7 @@ def monitoring_profile_add_alert(profile_id):
 
 @bp.route('/monitoring/profile/<int:profile_id>/assign-backup-policy', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_profile_assign_backup(profile_id):
     """Assign a backup policy to an asset (via its RMM agent) from the profile detail page"""
     profile = MonitoringProfile.query.get_or_404(profile_id)
@@ -562,6 +572,7 @@ def agent_service_file():
 
 @bp.route('/monitoring/assign/<int:asset_id>', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_assign_profile(asset_id):
     """Assign a monitoring profile to an asset"""
     asset = Asset.query.get_or_404(asset_id)
@@ -602,6 +613,7 @@ def monitoring_assign_profile(asset_id):
 
 @bp.route('/monitoring/unassign/<int:asset_id>', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_unassign_profile(asset_id):
     """Remove monitoring profile from an asset"""
     asset = Asset.query.get_or_404(asset_id)
@@ -624,6 +636,7 @@ def monitoring_unassign_profile(asset_id):
 
 @bp.route('/monitoring/alerts')
 @login_required
+@admin_required
 def monitoring_alerts():
     """View all monitoring alerts"""
     status_filter = request.args.get('status', 'active')
@@ -663,6 +676,7 @@ def monitoring_alerts():
 
 @bp.route('/monitoring/alert/<int:alert_id>/acknowledge', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_acknowledge_alert(alert_id):
     """Acknowledge a monitoring alert"""
     alert = MonitoringAlert.query.get_or_404(alert_id)
@@ -683,6 +697,7 @@ def monitoring_acknowledge_alert(alert_id):
 
 @bp.route('/monitoring/alert/<int:alert_id>/resolve', methods=['POST'])
 @login_required
+@admin_required
 def monitoring_resolve_alert(alert_id):
     """Resolve a monitoring alert"""
     alert = MonitoringAlert.query.get_or_404(alert_id)
@@ -705,6 +720,7 @@ def monitoring_resolve_alert(alert_id):
 
 @bp.route('/monitoring/maintenance-windows')
 @login_required
+@admin_required
 def monitoring_maintenance_windows():
     """View and manage maintenance windows"""
     windows = MaintenanceWindow.query.order_by(MaintenanceWindow.day_of_week, MaintenanceWindow.start_time).all()

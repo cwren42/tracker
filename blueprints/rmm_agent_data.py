@@ -52,6 +52,7 @@ from blueprints.rmm import bp, _dt_iso, _verify_agent_token
 
 @bp.route('/api/rmm/last-scan/<agent_id>', methods=['POST'])
 @login_required
+@admin_required
 def api_rmm_last_scan(agent_id):
     """Persist the last AV scan time into security_json."""
     import json as _json
@@ -79,6 +80,7 @@ def api_rmm_last_scan(agent_id):
 
 @bp.route('/api/rmm/metrics-history/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_metrics_history(agent_id):
     """Return CPU/RAM history for the last N hours (default 24)."""
     hours = int(request.args.get('hours', 24))
@@ -99,6 +101,7 @@ def api_rmm_metrics_history(agent_id):
 
 @bp.route('/api/rmm/availability/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_availability(agent_id):
     """Return recent online/offline events for an agent."""
     limit = int(request.args.get('limit', 100))
@@ -118,6 +121,7 @@ def api_rmm_availability(agent_id):
 
 @bp.route('/api/rmm/patches/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_patches(agent_id):
     """Return installed Windows hotfixes for an agent."""
     rows = db.session.execute(
@@ -136,6 +140,7 @@ def api_rmm_patches(agent_id):
 
 @bp.route('/api/rmm/pending-updates/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_pending_updates(agent_id):
     """List available (not yet installed) Windows Updates reported by the agent."""
     rows = db.session.execute(
@@ -181,6 +186,7 @@ def api_rmm_pending_updates(agent_id):
 
 @bp.route('/api/rmm/session-events/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_session_events(agent_id):
     """Return session activity events (logon/logoff/lock/unlock/sleep/wake) for an agent."""
     days = request.args.get('days', 7, type=int)
@@ -198,6 +204,7 @@ def api_rmm_session_events(agent_id):
 
 @bp.route('/api/rmm/software/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_software(agent_id):
     """Return installed software inventory for an agent."""
     rows = db.session.execute(
@@ -213,6 +220,7 @@ def api_rmm_software(agent_id):
 
 @bp.route('/api/rmm/patch-jobs/<agent_id>', methods=['GET'])
 @login_required
+@admin_required
 def api_rmm_patch_jobs_get(agent_id):
     """List patch deployment jobs for an agent."""
     import json as _json

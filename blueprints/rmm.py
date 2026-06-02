@@ -217,6 +217,7 @@ _EAGLE_SYSTEM_EXCL = " AND LOWER(process_name) NOT IN ({}) ".format(
 
 @bp.route('/api/rmm/online-agents')
 @login_required
+@admin_required
 def api_rmm_online_agents():
     """Return online agents based on last_seen_at <= 5 min."""
     rows = db.session.execute(text("""
@@ -239,6 +240,7 @@ def api_rmm_online_agents():
 
 @bp.route('/api/rmm/scripts/tested', methods=['GET'])
 @login_required
+@admin_required
 def api_rmm_scripts_tested():
     _ensure_rmm_script_library_table()
     rows = db.session.execute(text("""
@@ -864,6 +866,7 @@ def api_rmm_admin_agent_version():
 
 @bp.route('/api/rmm/agent-status/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_agent_status(agent_id):
     """Proxy the gateway /status/<agent_id>, falling back to DB last_seen_at recency."""
     try:
@@ -934,6 +937,7 @@ def rmm_terminal(agent_id):
 
 @bp.route('/api/rmm/telemetry/<agent_id>')
 @login_required
+@admin_required
 def api_rmm_telemetry(agent_id):
     """Return latest saved telemetry for an agent."""
     import json as _json

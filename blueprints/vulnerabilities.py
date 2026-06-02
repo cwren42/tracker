@@ -49,6 +49,7 @@ bp = Blueprint('vulnerabilities', __name__)
 
 @bp.route('/vulnerabilities')
 @login_required
+@admin_required
 def vulnerability_dashboard():
     con = _alert_svc._get_db()
     try:
@@ -104,6 +105,7 @@ def api_vuln_sync():
 
 @bp.route('/api/vulnerabilities/stats')
 @login_required
+@admin_required
 def api_vuln_stats():
     con = _alert_svc._get_db()
     try:
@@ -141,6 +143,7 @@ def api_vuln_stats():
 
 @bp.route('/api/vulnerabilities')
 @login_required
+@admin_required
 def api_vulnerabilities():
     con = _alert_svc._get_db()
     try:
@@ -177,6 +180,7 @@ def api_vulnerabilities():
 
 @bp.route('/api/vulnerabilities/devices')
 @login_required
+@admin_required
 def api_vuln_devices():
     con = _alert_svc._get_db()
     try:
@@ -338,6 +342,7 @@ def api_vuln_deploy(cve_id):
 
 @bp.route('/api/vulnerabilities/cve-patch-jobs')
 @login_required
+@admin_required
 def api_cve_patch_jobs():
     cve_id   = request.args.get('cve_id')
     asset_id = request.args.get('asset_id')
@@ -393,6 +398,7 @@ def api_vuln_bulk_status():
 
 @bp.route('/api/vulnerabilities/patch-history')
 @login_required
+@admin_required
 def api_vuln_patch_history():
     asset_id = request.args.get('asset_id')
     if not asset_id:
@@ -415,6 +421,7 @@ def api_vuln_patch_history():
 
 @bp.route('/api/vulnerabilities/by-app')
 @login_required
+@admin_required
 def api_vuln_by_app():
     """Return CVEs grouped by product_name with device counts — for one-click patch-all."""
     con = _alert_svc._get_db()
@@ -538,6 +545,7 @@ def api_patch_all_by_app():
 
 @bp.route('/api/vulnerabilities/report/summary')
 @login_required
+@admin_required
 def api_vuln_report_summary():
     """Overall stats: severity counts, exposure totals, patch job pipeline."""
     con = _alert_svc._get_db()
@@ -572,6 +580,7 @@ def api_vuln_report_summary():
 
 @bp.route('/api/vulnerabilities/report/top-assets')
 @login_required
+@admin_required
 def api_vuln_report_top_assets():
     """Top 20 assets ordered by critical → high → total open CVEs."""
     con = _alert_svc._get_db()
@@ -600,6 +609,7 @@ def api_vuln_report_top_assets():
 
 @bp.route('/api/vulnerabilities/report/trend')
 @login_required
+@admin_required
 def api_vuln_report_trend():
     """Daily count of CVEs remediated over the past 30 days."""
     con = _alert_svc._get_db()

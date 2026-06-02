@@ -135,6 +135,7 @@ def download_agent_bat():
 
 @bp.route('/download/agent-msi')
 @login_required
+@admin_required
 @license_required
 def download_agent_msi():
     """Serve the MSI installer directly."""

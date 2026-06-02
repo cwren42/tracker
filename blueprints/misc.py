@@ -409,6 +409,7 @@ def api_asset_search():
 
 @bp.route('/download/agent-installer')
 @login_required
+@admin_required
 @license_required
 def download_agent_installer():
     """Serve the EXE installer (preferred), then MSI, then PS1 fallback."""
@@ -433,6 +434,7 @@ def download_agent_installer():
 
 @bp.route('/download/agent-ps1')
 @login_required
+@admin_required
 @license_required
 def download_agent_ps1():
     """Serve the raw PowerShell installer script directly."""
@@ -446,6 +448,7 @@ def download_agent_ps1():
 
 @bp.route('/download/deploy-ps1')
 @login_required
+@admin_required
 @license_required
 def download_deploy_ps1():
     """Serve the simple one-liner deploy script (off-LAN safe)."""
@@ -481,6 +484,7 @@ def download_agent_exe_public():
 
 @bp.route('/download/agent-bat')
 @login_required
+@admin_required
 @license_required
 def download_agent_bat():
     """Serve a .bat launcher that runs the PS1 bypassing execution policy.
@@ -534,6 +538,7 @@ def download_agent_bat():
 
 @bp.route('/download/agent-msi')
 @login_required
+@admin_required
 @license_required
 def download_agent_msi():
     """Serve the MSI installer directly."""
@@ -862,6 +867,7 @@ def api_notifications_mark_read():
 
 @bp.route('/api/reports/templates', methods=['GET'])
 @login_required
+@admin_required
 def api_report_templates():
     db_conn = get_db()
     rows = db_conn.execute(
@@ -873,6 +879,7 @@ def api_report_templates():
 
 @bp.route('/api/reports/runs', methods=['GET'])
 @login_required
+@admin_required
 def api_report_runs_list():
     db_conn = get_db()
     rows = db_conn.execute(
@@ -884,6 +891,7 @@ def api_report_runs_list():
 
 @bp.route('/api/reports/run', methods=['POST'])
 @login_required
+@admin_required
 def api_report_run():
     data    = request.get_json()
     rtype   = data.get('report_type')
@@ -909,6 +917,7 @@ def api_report_run():
 
 @bp.route('/api/reports/runs/<int:run_id>', methods=['GET'])
 @login_required
+@admin_required
 def api_report_run_status(run_id):
     db_conn = get_db()
     row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
@@ -920,6 +929,7 @@ def api_report_run_status(run_id):
 
 @bp.route('/api/reports/runs/<int:run_id>/data', methods=['GET'])
 @login_required
+@admin_required
 def api_report_run_data(run_id):
     db_conn = get_db()
     row = db_conn.execute("SELECT * FROM report_runs WHERE id=?", (run_id,)).fetchone()
@@ -939,6 +949,7 @@ def api_report_run_data(run_id):
 
 @bp.route('/api/reports/download/<string:filename>')
 @login_required
+@admin_required
 def api_report_download(filename):
     safe = os.path.basename(filename)
     path = os.path.join(_report_engine.REPORT_DIR, safe)

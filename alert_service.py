@@ -247,6 +247,18 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     assigned_uid  = rule['assigned_to_user_id']
     label         = rule['label'] or alert_type
 
+    # Only admins may HOLD a ticket. Drop any non-admin (or stale) rule assignee
+    # so an auto-created alert ticket is never assigned to a non-admin user.
+    if assigned_uid is not None:
+        try:
+            _arow = con.execute(
+                'SELECT role FROM "user" WHERE id = ?', (assigned_uid,)
+            ).fetchone()
+            if not _arow or _arow['role'] != 'admin':
+                assigned_uid = None
+        except Exception:
+            assigned_uid = None
+
     if not _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown):
         # Condition still active — refresh last_seen_at so state doesn't get
         # auto-resolved while we're in the cooldown window

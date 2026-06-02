@@ -239,7 +239,7 @@
     <div class="d-flex gap-1">
       <select name="bulk_assignee_id" class="form-select form-select-sm" style="width:150px">
         <option value="0">— Unassigned —</option>
-        {% for tech in techs %}
+        {% for tech in assignees %}
         <option value="{{ tech.id }}">{{ tech.display_name }}</option>
         {% endfor %}
       </select>

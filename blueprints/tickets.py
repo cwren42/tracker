@@ -124,7 +124,7 @@ def tickets():
                                urgent_count=0, unassigned_count=0, closed_today=0,
                                chart_labels=[], chart_data=[], tech_loads=[],
                                avg_hours=None, resolution_by_priority=[],
-                               techs=[], f_status='', f_priority='', f_source='',
+                               techs=[], assignees=[], f_status='', f_priority='', f_source='',
                                f_category='', f_assignee='', f_type='',
                                base_user_mode=True, now=datetime.now())
     # ── Read filter params ────────────────────────────────────────────────────
@@ -195,8 +195,14 @@ def tickets():
         show_alerts = True  # mark so banner doesn't show
 
     tickets = q.order_by(SupportTicket.created_at.desc()).all()
+    # `techs` stays broad: it powers the assignee FILTER + technician workload
+    # stats, so historical non-admin assignees still show there.
     techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])) \
                       .order_by(User.full_name).all()
+    # `assignees` is admin-only: only admins may HOLD a ticket, so the (bulk)
+    # assign dropdown lists admins exclusively.
+    assignees = User.query.filter(User.role == 'admin') \
+                          .order_by(db.func.coalesce(User.full_name, User.username)).all()
 
     # ── Chart: tickets created per day for last 30 days ───────────────────────
     today = date.today()  # server-local; buckets local-stored created_at
@@ -282,7 +288,7 @@ def tickets():
                            chart_labels=chart_labels, chart_data=chart_data, tech_loads=tech_loads,
                            avg_hours=avg_hours,
                            closed_today=closed_today, resolution_by_priority=resolution_by_priority,
-                           techs=techs,
+                           techs=techs, assignees=assignees,
                            f_status=f_status, f_priority=f_priority, f_source=f_source,
                            f_category=f_category, f_assignee=f_assignee, f_type=f_type,
                            now=datetime.now())
@@ -458,7 +464,8 @@ def view_ticket(ticket_id):
     if current_user.role == 'base_user' and ticket.created_by_user_id != current_user.id:
         flash('You can only view your own tickets.', 'danger')
         return redirect(url_for('tickets.tickets'))
-    techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(db.func.coalesce(User.full_name, User.username)).all()
+    # Assign dropdown: only admins may HOLD a ticket (assignee pool is admin-only).
+    techs = User.query.filter(User.role == 'admin').order_by(db.func.coalesce(User.full_name, User.username)).all()
     # Build timeline: merge notes + activity sorted by created_at
     # Base users and eagle_eyes cannot see internal (tech-only) notes
     _notes_q = ticket.notes.order_by(TicketNote.created_at).all()
@@ -561,9 +568,13 @@ def assign_ticket(ticket_id):
         ticket.assigned_to_user_id = None
         detail = 'Unassigned'
     else:
-        ticket.assigned_to_user_id = int(assignee_id)
-        u = User.query.get(ticket.assigned_to_user_id)
-        detail = f'Assigned to {u.display_name if u else assignee_id}'
+        u = User.query.get(int(assignee_id))
+        # Only admins may be assigned a ticket.
+        if not u or u.role != 'admin':
+            flash('Tickets can only be assigned to admin users.', 'danger')
+            return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
+        ticket.assigned_to_user_id = u.id
+        detail = f'Assigned to {u.display_name}'
         # Email technician if ticket is High or Urgent
         if ticket.priority in ('High', 'Urgent') and u and u.email:
             try:
@@ -774,6 +785,12 @@ def bulk_action():
     elif action == 'assign':
         assignee_raw = request.form.get('bulk_assignee_id', '0')
         assignee_id = int(assignee_raw) if assignee_raw.isdigit() and assignee_raw != '0' else None
+        # Only admins may be assigned a ticket (unassign / assignee_id None stays allowed).
+        if assignee_id is not None:
+            _au = User.query.get(assignee_id)
+            if not _au or _au.role != 'admin':
+                flash('Tickets can only be assigned to admin users.', 'danger')
+                return redirect(url_for('tickets.tickets'))
         for t in bulk_tickets:
             t.assigned_to_user_id = assignee_id
             label = User.query.get(assignee_id).display_name if assignee_id else 'Unassigned'

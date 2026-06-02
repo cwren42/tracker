@@ -484,12 +484,16 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     link = f'/alerts/center#{category}'
     if ticket_id:
         link = f'/tickets/{ticket_id}'
-    con.execute(
-        """INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at)
-           VALUES (?, ?, ?, ?, ?, false, NOW())""",
-        (label, message, icon_map.get(category, 'bi-bell'),
-         color_map.get(priority, 'warning'), link)
-    )
+    # Only surface in the notification bell if the rule is notify-worthy (same flag that
+    # gates email). Operational noise (RAM/CPU/disk/battery — email_notify=False) used to
+    # write a bell entry every cycle and buried the bell; mirror the email policy here.
+    if email_notify:
+        con.execute(
+            """INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at)
+               VALUES (?, ?, ?, ?, ?, false, NOW())""",
+            (label, message, icon_map.get(category, 'bi-bell'),
+             color_map.get(priority, 'warning'), link)
+        )
 
     con.commit()
 

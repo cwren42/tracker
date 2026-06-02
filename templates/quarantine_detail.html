@@ -193,14 +193,18 @@
       {% if is_admin and msg.release_status == 'Blocked' %}
       <div class="card mb-3">
         <div class="card-header fw-semibold">
-          <i class="bi bi-shield-lock me-2 text-warning"></i>How this is blocked &amp; how to unblock
+          <i class="bi bi-shield-lock me-2 text-warning"></i>How <em>this message</em> was blocked &amp; how to unblock
         </div>
         <div class="card-body">
           {% if block_mechanisms %}
           <p class="small text-muted mb-3">
-            Reviewed, manual steps — run in an Exchange Online PowerShell session
-            (<code>Connect-ExchangeOnline</code>). Nothing here runs automatically.
+            The mechanism that blocked <strong>this</strong> message
+            (reason: <code>{{ msg.quarantine_reason or 'Unknown' }}</code>). Reviewed, manual steps —
+            run in an Exchange Online PowerShell session (<code>Connect-ExchangeOnline</code>). Nothing runs automatically.
           </p>
+          {% if other_domain_mechanisms %}
+          <p class="small text-muted mb-3"><i class="bi bi-info-circle me-1"></i>{{ other_domain_mechanisms|length }} other block reason(s) exist for this sender domain (other messages) — manage those from the domain unblock view.</p>
+          {% endif %}
           {% for m in block_mechanisms %}
           {% set kind_meta = {
             'transport_rule': ('bg-info text-dark', 'Transport rule'),

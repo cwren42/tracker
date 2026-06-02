@@ -547,8 +547,16 @@ def quarantine_detail(message_id):
     # only meaningful for messages that were actually blocked. Surfaced right here on the
     # message so an admin doesn't have to file an unblock request to see the mechanism.
     block_mechanisms = []
+    other_domain_mechanisms = []
     if current_user.role == "admin" and msg.release_status == "Blocked" and msg.sender_domain:
-        block_mechanisms = _detect_block_mechanisms(msg.sender_domain)
+        _all = _detect_block_mechanisms(msg.sender_domain)
+        # Scope to THIS message's own reason so the card answers "why was THIS message
+        # blocked" — not every reason the whole sender domain has ever been blocked for.
+        _reason = (msg.quarantine_reason or "Unknown")
+        block_mechanisms = [m for m in _all if m.get("reason") == _reason] or _all
+        # Anything else the domain is blocked by (shown collapsed, for context).
+        _shown = {id(m) for m in block_mechanisms}
+        other_domain_mechanisms = [m for m in _all if id(m) not in _shown]
 
     return render_template(
         "quarantine_detail.html",
@@ -558,6 +566,7 @@ def quarantine_detail(message_id):
         domain_count=domain_count,
         related=related,
         block_mechanisms=block_mechanisms,
+        other_domain_mechanisms=other_domain_mechanisms,
         now=datetime.utcnow(),
         is_admin=(current_user.role == "admin"),
     )

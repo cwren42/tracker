@@ -534,6 +534,7 @@ def delete_ticket(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/status', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_status(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
@@ -629,6 +630,7 @@ def assign_ticket(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/category', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_category(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
@@ -642,6 +644,7 @@ def set_ticket_category(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/priority', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_priority(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)

@@ -31,6 +31,11 @@
 
   {# Status action buttons #}
   <div class="d-flex gap-2 flex-wrap">
+    {% if quarantine_msg_id %}
+    <a href="{{ url_for('quarantine.quarantine_detail', message_id=quarantine_msg_id) }}" class="btn btn-warning btn-sm" title="Open the quarantined message to review and release it">
+      <i class="bi bi-shield-lock me-1"></i>Open quarantined message
+    </a>
+    {% endif %}
     {% if ticket.status != 'Closed' %}
       {% if ticket.status == 'Open' %}
         <form method="POST" action="{{ url_for('tickets.set_ticket_status', ticket_id=ticket.id) }}">

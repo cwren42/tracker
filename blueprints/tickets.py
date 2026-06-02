@@ -511,10 +511,18 @@ def view_ticket(ticket_id):
     effective_reporter_email = ticket.reporter_email or _resolve_reporter_email(
         ticket.reporter_name, hostname=ticket.hostname, asset_id=ticket.asset_id,
     )
+    # Quarantine release-request tickets carry a [qmsg:<message_id>] marker — pull it so
+    # the view can offer a direct link to the quarantined message (review/release).
+    quarantine_msg_id = None
+    if ticket.source == 'quarantine' and ticket.description:
+        _qm = re.search(r'\[qmsg:([^\]]+)\]', ticket.description)
+        if _qm:
+            quarantine_msg_id = _qm.group(1)
     return render_template('view_ticket.html', ticket=ticket, techs=techs, timeline=timeline,
                            today=date.today(), all_tags=all_tags, watcher_ids=watcher_ids,
                            all_users=all_users, linked=linked,
-                           effective_reporter_email=effective_reporter_email)
+                           effective_reporter_email=effective_reporter_email,
+                           quarantine_msg_id=quarantine_msg_id)
 
 
 @bp.route('/tickets/<int:ticket_id>/delete', methods=['POST'])

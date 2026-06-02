@@ -887,6 +887,7 @@ def api_rmm_agent_status(agent_id):
 
 @bp.route('/api/rmm/issue-token', methods=['POST'])
 @login_required
+@admin_required
 def api_rmm_issue_token():
     """Issue a short-lived connect token so the browser terminal can auth with the gateway."""
     data = request.get_json(force=True) or {}
@@ -912,6 +913,7 @@ def api_rmm_issue_token():
 
 @bp.route('/rmm/terminal/<agent_id>')
 @login_required
+@admin_required
 def rmm_terminal(agent_id):
     """Full-page xterm.js terminal for a connected RMM agent."""
     # Look up asset name from agent record

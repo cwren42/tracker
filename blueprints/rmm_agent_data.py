@@ -247,6 +247,7 @@ def api_rmm_patch_jobs_get(agent_id):
 
 @bp.route('/api/rmm/patch-jobs/<agent_id>', methods=['POST'])
 @login_required
+@admin_required
 def api_rmm_patch_jobs_create(agent_id):
     """Approve a set of pending updates, creating a queued patch job."""
     import json as _json
@@ -276,6 +277,7 @@ def api_rmm_patch_jobs_create(agent_id):
 
 @bp.route('/api/rmm/cmd/<agent_id>', methods=['POST'])
 @login_required
+@admin_required
 def api_rmm_cmd(agent_id):
     """Proxy any JSON message to the connected agent via gateway send-msg."""
     import json as _json, urllib.request as _req, urllib.error as _err
@@ -320,6 +322,7 @@ def api_rmm_cmd(agent_id):
 
 @bp.route('/api/rmm/cmd-result/<agent_id>/<int:session_id>')
 @login_required
+@admin_required
 def api_rmm_cmd_result(agent_id, session_id):
     """Poll for latest agent response in rmm_event for a given session."""
     import json as _json
@@ -458,6 +461,7 @@ Write-Host 'Done.'
 
 @bp.route('/api/rmm/patch-jobs/<agent_id>/<int:job_id>/deploy', methods=['POST'])
 @login_required
+@admin_required
 def api_rmm_patch_jobs_deploy(agent_id, job_id):
     """Push a queued patch job to the connected agent via the gateway."""
     import json as _json, urllib.request as _req, urllib.error as _err

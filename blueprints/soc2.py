@@ -892,6 +892,7 @@ def soc2_export_all():
 
 @bp.route('/api/soc2/generate-software-inventory', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def api_generate_software_inventory():
     """Generate software inventory report from Defender"""

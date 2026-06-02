@@ -184,6 +184,7 @@ def api_ai_predict_failures():
 
 @bp.route('/api/ai/triage-ticket/<int:ticket_id>', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_triage_ticket(ticket_id):
     """Auto-triage a ticket: suggest priority and category."""
     try:
@@ -350,6 +351,7 @@ def api_workflow_runs(wf_id):
 
 @bp.route('/api/workflows/ai-generate', methods=['POST'])
 @login_required
+@admin_required
 def api_workflow_ai_generate():
     data   = request.get_json(force=True) or {}
     prompt = (data.get('prompt') or '').strip()
@@ -394,6 +396,7 @@ def api_ai_ticket_suggest(ticket_id):
 
 @bp.route('/api/ai/suggestions/<int:sug_id>/apply', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_suggestion_apply(sug_id):
     try:
         _ai_engine.apply_ticket_suggestion(sug_id)
@@ -404,6 +407,7 @@ def api_ai_suggestion_apply(sug_id):
 
 @bp.route('/api/ai/suggestions/<int:sug_id>/dismiss', methods=['POST'])
 @login_required
+@admin_required
 def api_ai_suggestion_dismiss(sug_id):
     _ai_engine.dismiss_ticket_suggestion(sug_id)
     return jsonify({'ok': True})

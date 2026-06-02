@@ -982,6 +982,7 @@ def remove_license_key(license_id):
 
 @bp.route('/api/settings/<key>', methods=['GET'])
 @login_required
+@admin_required
 def api_setting_get(key):
     allowed = {'teams_webhook_url'}
     if key not in allowed:
@@ -992,6 +993,7 @@ def api_setting_get(key):
 
 @bp.route('/api/settings', methods=['POST'])
 @login_required
+@admin_required
 def api_setting_set():
     data = request.get_json(force=True) or {}
     key  = data.get('key', '')

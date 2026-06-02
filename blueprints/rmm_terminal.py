@@ -8,6 +8,7 @@ import uuid
 
 from flask import jsonify, render_template, request
 from flask_login import current_user, login_required
+from utils import admin_required
 
 from blueprints.rmm import bp
 from models import Asset
@@ -16,6 +17,7 @@ from ssh_terminal_manager import get_ssh_manager
 
 @bp.route('/terminal/<int:asset_id>')
 @login_required
+@admin_required
 def terminal(asset_id):
     """Web-based SSH terminal for an asset"""
     asset = Asset.query.get_or_404(asset_id)
@@ -24,6 +26,7 @@ def terminal(asset_id):
 
 @bp.route('/api/terminal/connect', methods=['POST'])
 @login_required
+@admin_required
 def api_terminal_connect():
     """Connect to an asset via SSH"""
     data = request.get_json()
@@ -61,6 +64,7 @@ def api_terminal_connect():
 
 @bp.route('/api/terminal/input', methods=['POST'])
 @login_required
+@admin_required
 def api_terminal_input():
     """Send input to SSH session"""
     data = request.get_json()
@@ -82,6 +86,7 @@ def api_terminal_input():
 
 @bp.route('/api/terminal/output', methods=['POST'])
 @login_required
+@admin_required
 def api_terminal_output():
     """Get output from SSH session"""
     data = request.get_json()
@@ -106,6 +111,7 @@ def api_terminal_output():
 
 @bp.route('/api/terminal/disconnect', methods=['POST'])
 @login_required
+@admin_required
 def api_terminal_disconnect():
     """Disconnect SSH session"""
     data = request.get_json()

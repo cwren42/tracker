@@ -87,6 +87,7 @@ def vulnerability_dashboard():
 
 @bp.route('/api/vulnerabilities/sync', methods=['POST'])
 @login_required
+@admin_required
 def api_vuln_sync():
     from flask import current_app as _current_app
     _app = _current_app._get_current_object()
@@ -218,6 +219,7 @@ def api_vuln_devices():
 
 @bp.route('/api/vulnerabilities/<cve_id>/status', methods=['PUT'])
 @login_required
+@admin_required
 def api_vuln_status(cve_id):
     d        = request.get_json(force=True)
     con      = _alert_svc._get_db()
@@ -251,6 +253,7 @@ def api_vuln_status(cve_id):
 
 @bp.route('/api/vulnerabilities/<cve_id>/deploy', methods=['POST'])
 @login_required
+@admin_required
 def api_vuln_deploy(cve_id):
     data     = request.get_json(force=True) or {}
     asset_id = data.get('asset_id')
@@ -363,6 +366,7 @@ def api_cve_patch_jobs():
 
 @bp.route('/api/vulnerabilities/bulk-status', methods=['PUT'])
 @login_required
+@admin_required
 def api_vuln_bulk_status():
     d        = request.get_json(force=True) or {}
     asset_id = d.get('asset_id')

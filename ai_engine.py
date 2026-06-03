@@ -312,6 +312,112 @@ def dismiss_ticket_suggestion(suggestion_id: int) -> bool:
     return True
 
 
+def _keyword_score(text: str, keywords: str) -> tuple:
+    """Score a fix's comma-separated `fix_keywords` against the ticket text.
+    Returns (n_matches, [matched phrases]). Substring match, so multi-word
+    phrases like 'pointer not working' match too."""
+    if not keywords:
+        return 0, []
+    hits = []
+    for kw in keywords.split(","):
+        kw = kw.strip().lower()
+        if kw and kw in text:
+            hits.append(kw)
+    return len(hits), hits
+
+
+def match_ticket_to_fix(ticket_id: int) -> dict:
+    """Match a ticket to the single best automated fix in the library
+    (rmm_script_library where is_fix=true), or none.
+
+    Two-stage and cheap-first: a deterministic keyword prefilter over
+    `fix_keywords` builds a candidate set; only if there are candidates do we
+    spend an LLM call to rank them. Falls back to the keyword score when no AI
+    is configured. NEVER raises — returns fix_id=None on any failure so the
+    auto-scoop subscriber degrades safely.
+
+    Returns {"fix_id": int|None, "fix_name": str, "confidence": float,
+             "reason": str, "is_tested": bool, "source": "rules"|"ai"|"none",
+             "candidates": [{"fix_id","name","score"}]}.
+    """
+    none = {"fix_id": None, "fix_name": "", "confidence": 0.0, "reason": "",
+            "is_tested": False, "source": "none", "candidates": []}
+    try:
+        db = _db()
+        trow = db.execute(
+            "SELECT subject, description FROM support_ticket WHERE id=?", (ticket_id,)
+        ).fetchone()
+        fixes = db.execute(
+            "SELECT id, name, fix_keywords, is_tested FROM rmm_script_library "
+            "WHERE is_fix=true AND is_active=true"
+        ).fetchall()
+        db.close()
+    except Exception:
+        log.exception("match_ticket_to_fix: db read failed (ticket=%s)", ticket_id)
+        return none
+    if not trow or not fixes:
+        return none
+
+    text = f"{trow['subject']} {trow['description'] or ''}".lower()
+
+    # Stage 1 — keyword prefilter -> candidates (best score first)
+    scored = []
+    for f in fixes:
+        n, hits = _keyword_score(text, f["fix_keywords"] or "")
+        if n > 0:
+            scored.append({"fix_id": f["id"], "name": f["name"],
+                           "is_tested": bool(f["is_tested"]), "score": n, "hits": hits})
+    scored.sort(key=lambda c: c["score"], reverse=True)
+    if not scored:
+        return none
+    candidates = [{"fix_id": c["fix_id"], "name": c["name"], "score": c["score"]} for c in scored]
+
+    # Stage 2 — LLM rank over the candidate set (only when AI is configured)
+    if _get_api_key():
+        try:
+            clines = "\n".join(
+                f"- fix_id={c['fix_id']}: {c['name']} (keywords: {f['fix_keywords']})"
+                for c, f in [(c, next(x for x in fixes if x["id"] == c["fix_id"])) for c in scored]
+            )
+            raw = _openai_chat([
+                {"role": "system", "content":
+                 "You match an IT support ticket to the single best automated fix from a list, "
+                 "or to none. A fix should be chosen ONLY if it clearly resolves the ticket's "
+                 "root problem. Respond with ONLY JSON (no prose): "
+                 '{"fix_id": <id or null>, "confidence": 0.0-1.0, "reason": "one sentence"}. '
+                 "confidence is how sure you are this exact fix resolves THIS ticket."},
+                {"role": "user", "content":
+                 f"TICKET #{ticket_id}\nSubject: {trow['subject']}\n"
+                 f"Description: {trow['description'] or '(none)'}\n\n"
+                 f"Candidate fixes:\n{clines}"}
+            ], max_tokens=120)
+            parsed = _loads_lenient(raw) or {}
+            fid = parsed.get("fix_id")
+            fid = int(fid) if fid not in (None, "", "null") else None
+            valid_ids = {c["fix_id"] for c in scored}
+            if fid in valid_ids:
+                conf = float(parsed.get("confidence", 0.5) or 0.5)
+                conf = max(0.0, min(1.0, conf))
+                chosen = next(c for c in scored if c["fix_id"] == fid)
+                return {"fix_id": fid, "fix_name": chosen["name"], "confidence": conf,
+                        "reason": str(parsed.get("reason", ""))[:300],
+                        "is_tested": chosen["is_tested"], "source": "ai",
+                        "candidates": candidates}
+            # model declined (fix_id null / not a candidate) -> no confident match
+            return {**none, "candidates": candidates,
+                    "reason": str(parsed.get("reason", ""))[:300]}
+        except Exception:
+            log.exception("match_ticket_to_fix: LLM rank failed (ticket=%s), using keyword fallback", ticket_id)
+
+    # Fallback — keyword-only confidence (caps below high-confidence auto-park
+    # unless the keyword overlap is strong: 1 hit=0.55, 2=0.70, 3+=0.80).
+    top = scored[0]
+    conf = {1: 0.55, 2: 0.70}.get(top["score"], 0.80)
+    return {"fix_id": top["fix_id"], "fix_name": top["name"], "confidence": conf,
+            "reason": f"Keyword match: {', '.join(top['hits'][:4])}",
+            "is_tested": top["is_tested"], "source": "rules", "candidates": candidates}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Security monitor
 # ──────────────────────────────────────────────────────────────────────────────

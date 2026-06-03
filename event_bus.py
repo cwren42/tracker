@@ -300,6 +300,18 @@ def _dispatch_once(flask_app):
                             knowledge_agent.learn_from_ticket(int(tid))
                         except Exception:
                             log.exception("ticket.resolved: learn_from_ticket failed (ticket=%s)", tid)
+                # Built-in subscriber: the "Apply" reflex — auto-scoop. A NEW ticket is
+                # matched against the vetted fix library; a confident match on a tested
+                # fix + reachable device PARKS a 1-click apply_fix at /approvals (gated by
+                # the ticket_autoscoop_enabled setting). scoop() is fail-safe & idempotent.
+                if etype == "ticket.created":
+                    tid = payload.get("ticket_id")
+                    if tid is not None:
+                        try:
+                            import ticket_autoscoop
+                            ticket_autoscoop.scoop(int(tid))
+                        except Exception:
+                            log.exception("ticket.created: auto-scoop failed (ticket=%s)", tid)
                 # Built-in subscriber: the email-security half of "Learn". A human-approved
                 # quarantine release (the release_quarantine action) publishes email.released;
                 # distill it into an email-triage runbook. Upserts by source_id='qmsg:<id>',

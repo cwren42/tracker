@@ -28,6 +28,15 @@ EVAL_INTERVAL_S = 300   # 5 minutes
 # Only one Gunicorn worker should run the evaluator per cycle
 ALERT_EVAL_LOCK_PATH = '/tmp/tracker_alert_eval.lock'
 
+# Flap protection: an active alert must have been UNSEEN for at least this many
+# minutes before its ticket is auto-closed. One missed sample (transient telemetry
+# gap) must not flap-close a ticket — so this is comfortably > one eval interval.
+AUTO_RESOLVE_GRACE_MINUTES = 20   # ~4 missed 5-min cycles
+
+# Re-open (instead of create-new) a closed alert ticket only if it was closed
+# within this window. Older closed tickets are treated as a fresh incident.
+REOPEN_WINDOW_DAYS = 7
+
 # Alert types that represent a CONTINUOUS condition (on/off state).
 # When the condition clears, the open ticket is auto-closed with a note.
 # Event-based types (new_local_admin, cve_critical, cve_high) are intentionally
@@ -151,81 +160,245 @@ def _ensure_alert_state_table(con):
             ticket_id    INTEGER,
             fired_at     TIMESTAMP NOT NULL DEFAULT NOW(),
             last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            resolved_at  TIMESTAMP
+            resolved_at  TIMESTAMP,
+            occurrence_count INTEGER NOT NULL DEFAULT 1
         )
     """)
+    # Migration for pre-existing tables that lack occurrence_count.
+    con.execute(
+        "ALTER TABLE alert_state ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 1"
+    )
     con.commit()
 
 
-def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id):
+def _alert_key(rule, agent_id, asset_id):
+    """Stable identity for one alert condition on one target."""
+    return f"{rule['id']}:{agent_id or ''}:{asset_id or 0}"
+
+
+def _get_alert_state(con, alert_key):
+    """Return the alert_state row for this key, or None."""
+    return con.execute(
+        "SELECT * FROM alert_state WHERE alert_key = ?", (alert_key,)
+    ).fetchone()
+
+
+def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id,
+                        bump=False):
     """
     Track that this alert condition is currently active.
     Upserts: insert on first fire, update last_seen_at on subsequent fires.
     The alert_key uniquely identifies one alert condition on one target.
+
+    - When `ticket_id` is provided it OVERWRITES the stored ticket_id so a
+      re-opened or freshly-created ticket re-links the state (the previous
+      COALESCE froze a stale id forever and broke auto-resolution).
+    - `bump=True` increments occurrence_count (a real fire/re-fire, not a
+      cooldown-only last_seen refresh).
+    - Always clears resolved_at so a re-firing condition reactivates its state.
     """
     alert_type = rule['alert_type']
     if alert_type not in _AUTO_RESOLVE_TYPES:
         return
-    alert_key = f"{rule['id']}:{agent_id or ''}:{asset_id or 0}"
+    alert_key = _alert_key(rule, agent_id, asset_id)
     con.execute("""
         INSERT INTO alert_state
-            (rule_id, category, alert_type, alert_key, agent_id, asset_id, hostname, ticket_id, fired_at, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+            (rule_id, category, alert_type, alert_key, agent_id, asset_id, hostname,
+             ticket_id, fired_at, last_seen_at, occurrence_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 1)
         ON CONFLICT (alert_key) DO UPDATE
             SET last_seen_at = NOW(),
-                ticket_id    = COALESCE(alert_state.ticket_id, EXCLUDED.ticket_id),
-                resolved_at  = NULL
+                hostname     = EXCLUDED.hostname,
+                ticket_id    = COALESCE(EXCLUDED.ticket_id, alert_state.ticket_id),
+                resolved_at  = NULL,
+                occurrence_count = alert_state.occurrence_count + (CASE WHEN ? THEN 1 ELSE 0 END)
     """, (rule['id'], rule['category'], alert_type, alert_key,
-          agent_id or '', asset_id or 0, hostname, ticket_id))
+          agent_id or '', asset_id or 0, hostname, ticket_id, bool(bump)))
+
+
+def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
+                                 message, agent_id, asset_id, hostname, rule_id):
+    """
+    Return the ticket_id for this alert condition, deduplicated across close.
+
+    Resolution order (one evolving ticket per rule+host):
+      1. If the alert_state row already points at an OPEN ticket → append an
+         occurrence note + bump updated_at; reuse it (don't spam new tickets).
+      2. Else if a matching alert ticket was CLOSED within REOPEN_WINDOW_DAYS →
+         RE-OPEN the most recent one (status->Open, clear closed_at, note the
+         re-fire) instead of creating a brand-new ticket.
+      3. Else INSERT a new ticket.
+
+    Only ever touches source='alert' tickets. Returns the live ticket id (or
+    None if ticket creation failed).
+    """
+    subject   = f'[ALERT] {label}'
+    alert_key = _alert_key(rule, agent_id, asset_id)
+    state     = _get_alert_state(con, alert_key)
+
+    # occurrence_count in alert_state is the source of truth; it is incremented
+    # by the _upsert_alert_state(bump=True) call that follows this helper, so
+    # the "this fire" occurrence number is current + 1.
+    occ = ((state['occurrence_count'] if state else 0) or 0) + 1
+
+    # ── Build the target-match predicate (asset_id preferred, else hostname) ──
+    if asset_id:
+        match_sql = "asset_id = ?"
+        match_val = asset_id
+    elif hostname:
+        match_sql = "hostname = ?"
+        match_val = hostname
+    else:
+        match_sql = None
+        match_val = None
+
+    # 1. Reuse the OPEN ticket the state already tracks, if it's still open.
+    if state and state['ticket_id']:
+        open_t = con.execute(
+            """SELECT id FROM support_ticket
+               WHERE id = ? AND source = 'alert'
+                 AND status NOT IN ('Closed','Merged')""",
+            (state['ticket_id'],)
+        ).fetchone()
+        if open_t:
+            con.execute(
+                """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+                   VALUES (?, NULL, ?, NOW())""",
+                (open_t['id'],
+                 f'[Alert] Condition still active (occurrence {occ}): {message}')
+            )
+            con.execute(
+                "UPDATE support_ticket SET updated_at = NOW() WHERE id = ?",
+                (open_t['id'],)
+            )
+            con.execute(
+                """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
+                   VALUES (?, NULL, 'alert_refired', ?, NOW())""",
+                (open_t['id'], f'Occurrence {occ}: {message}')
+            )
+            logger.debug(f'Dedup: alert ticket #{open_t["id"]} still open — '
+                         f'appended occurrence {occ}.')
+            return open_t['id']
+
+    # 2. Re-open the most recent CLOSED matching alert ticket within the window.
+    if match_sql:
+        recent_closed = con.execute(
+            f"""SELECT id FROM support_ticket
+                WHERE source = 'alert'
+                  AND status IN ('Closed','Merged')
+                  AND subject = ?
+                  AND {match_sql}
+                  AND closed_at IS NOT NULL
+                  AND closed_at > NOW() - INTERVAL '{int(REOPEN_WINDOW_DAYS)} days'
+                ORDER BY closed_at DESC
+                LIMIT 1""",
+            (subject, match_val)
+        ).fetchone()
+        if recent_closed:
+            tid = recent_closed['id']
+            con.execute(
+                """UPDATE support_ticket
+                   SET status='Open', closed_at=NULL, closed_by_user_id=NULL,
+                       priority=?, updated_at=NOW()
+                   WHERE id=?""",
+                (priority, tid)
+            )
+            con.execute(
+                """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+                   VALUES (?, NULL, ?, NOW())""",
+                (tid, f'[Alert] Re-fired (occurrence {occ}): {message}\n\n'
+                      f'Condition recurred; re-opening this ticket instead of '
+                      f'creating a new one.')
+            )
+            con.execute(
+                """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
+                   VALUES (?, NULL, 'alert_reopened', ?, NOW())""",
+                (tid, f'Re-opened by alert engine (occurrence {occ}): {message}')
+            )
+            logger.info(f'Re-opened alert ticket #{tid} for "{subject}" on '
+                        f'{hostname or asset_id} (occurrence {occ}).')
+            return tid
+
+    # 3. No reusable ticket — create a fresh one.
+    csat_token = str(uuid.uuid4()).replace('-', '')
+    cur = con.execute(
+        """INSERT INTO support_ticket
+           (status, priority, category, source, subject, description,
+            hostname, asset_id, assigned_to_user_id, csat_token, created_at, updated_at)
+           VALUES ('Open', ?, ?, 'alert', ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+        (priority, cat, subject,
+         f'{message}\n\nAuto-created by alert rule #{rule_id}.',
+         hostname or '', asset_id, assigned_uid, csat_token)
+    )
+    return cur.lastrowid
 
 
 def _resolve_cleared_alerts(con, eval_started_at):
     """
-    After each evaluation cycle, find alert_state rows whose condition was NOT
-    seen this cycle (last_seen_at < eval_started_at) and auto-close their tickets.
-    This is the core of state-based alerting: ticket lifecycle follows the
-    alert condition lifecycle.
+    After each evaluation cycle, find alert_state rows whose condition has NOT
+    been seen for at least AUTO_RESOLVE_GRACE_MINUTES (flap protection — one
+    missing telemetry sample must not flap-close a ticket) and auto-close their
+    tickets. This is the core of state-based alerting: ticket lifecycle follows
+    the alert condition lifecycle.
+
+    Closes are done in raw SQL only and intentionally do NOT publish
+    ticket.resolved / hit the ticket Learn loop — auto-resolved alert noise must
+    never become runbooks. Only ever touches source='alert' tickets.
     """
+    # eval_started_at is only used as a sanity anchor; the real gate is the
+    # grace window measured against last_seen_at, so a single skipped cycle
+    # (last_seen_at just under eval_started_at) does NOT close anything.
     stale = con.execute("""
         SELECT id, rule_id, category, alert_type, alert_key,
-               agent_id, hostname, ticket_id
+               agent_id, hostname, ticket_id, occurrence_count
         FROM alert_state
         WHERE resolved_at IS NULL
-          AND last_seen_at < ?
-    """, (eval_started_at.strftime('%Y-%m-%d %H:%M:%S'),)).fetchall()
+          AND last_seen_at < NOW() - INTERVAL '%d minutes'
+    """ % int(AUTO_RESOLVE_GRACE_MINUTES)).fetchall()
 
+    closed_any = False
     for s in stale:
-        # Mark state as resolved
+        # Mark state as resolved (idempotent — guarded by resolved_at IS NULL).
         con.execute(
             "UPDATE alert_state SET resolved_at = NOW() WHERE id = ?",
             (s['id'],)
         )
-        # Auto-close the linked ticket if it's still open
-        if s['ticket_id']:
-            open_ticket = con.execute(
-                "SELECT id, status FROM support_ticket WHERE id = ? AND status NOT IN ('Closed','Merged')",
-                (s['ticket_id'],)
-            ).fetchone()
-            if open_ticket:
-                con.execute(
-                    """UPDATE support_ticket
-                       SET status='Closed', closed_at=NOW(), updated_at=NOW()
-                       WHERE id=?""",
-                    (s['ticket_id'],)
-                )
-                # Add resolution note
-                label = s['alert_type'].replace('_', ' ').title()
-                host  = s['hostname'] or s['agent_id'] or 'unknown'
-                con.execute(
-                    """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
-                       VALUES (?, NULL, ?, NOW())""",
-                    (s['ticket_id'],
-                     f'[Auto-resolved] Alert condition "{label}" cleared on {host}. '
-                     f'Ticket closed automatically by alert engine.')
-                )
-                logger.info(f'Auto-resolved ticket #{s["ticket_id"]} — '
-                            f'{s["alert_type"]} cleared on {host}')
-    if stale:
+        closed_any = True
+        if not s['ticket_id']:
+            continue
+        # Auto-close the linked ticket only if it's still open AND alert-sourced.
+        open_ticket = con.execute(
+            """SELECT id FROM support_ticket
+               WHERE id = ? AND source = 'alert'
+                 AND status NOT IN ('Closed','Merged')""",
+            (s['ticket_id'],)
+        ).fetchone()
+        if not open_ticket:
+            continue
+        con.execute(
+            """UPDATE support_ticket
+               SET status='Closed', closed_at=NOW(), updated_at=NOW()
+               WHERE id=?""",
+            (s['ticket_id'],)
+        )
+        label = s['alert_type'].replace('_', ' ').title()
+        host  = s['hostname'] or s['agent_id'] or 'unknown'
+        con.execute(
+            """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+               VALUES (?, NULL, ?, NOW())""",
+            (s['ticket_id'],
+             f'[Auto-resolved] Alert condition "{label}" back within threshold '
+             f'on {host}. Ticket closed automatically by the alert engine '
+             f'(no further occurrences for {int(AUTO_RESOLVE_GRACE_MINUTES)}+ minutes).')
+        )
+        con.execute(
+            """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
+               VALUES (?, NULL, 'auto_resolved', ?, NOW())""",
+            (s['ticket_id'], f'{label} cleared on {host}; closed by alert engine.')
+        )
+        logger.info(f'Auto-resolved ticket #{s["ticket_id"]} — '
+                    f'{s["alert_type"]} cleared on {host}')
+    if closed_any:
         con.commit()
 
 
@@ -247,70 +420,49 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     assigned_uid  = rule['assigned_to_user_id']
     label         = rule['label'] or alert_type
 
+    # Only admins may HOLD a ticket. Drop any non-admin (or stale) rule assignee
+    # so an auto-created alert ticket is never assigned to a non-admin user.
+    if assigned_uid is not None:
+        try:
+            _arow = con.execute(
+                'SELECT role FROM "user" WHERE id = ?', (assigned_uid,)
+            ).fetchone()
+            if not _arow or _arow['role'] != 'admin':
+                assigned_uid = None
+        except Exception:
+            assigned_uid = None
+
     if not _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown):
         # Condition still active — refresh last_seen_at so state doesn't get
-        # auto-resolved while we're in the cooldown window
+        # auto-resolved while we're in the cooldown window. NOT a new occurrence.
         try:
-            _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id=None)
+            _upsert_alert_state(con, rule, agent_id, asset_id, hostname,
+                                ticket_id=None, bump=False)
         except Exception:
             pass
         return  # already fired recently
 
-    # Create ticket
+    # Create / re-open ticket (deduplicated across close — one evolving ticket
+    # per (rule, host) instead of a fresh ticket every cooldown cycle).
     ticket_id = None
     if auto_ticket:
         try:
-            csat_token = str(uuid.uuid4()).replace('-', '')
             cat_map = {
                 'agent': 'Hardware', 'asset': 'Hardware',
                 'vulnerability': 'Security', 'eagle_eyes': 'General'
             }
             cat = cat_map.get(category, 'General')
-
-            # Deduplication: skip if ANY open auto-ticket for this alert+host already
-            # exists (no time limit).  The ticket stays open until someone closes it,
-            # which prevents the 24h window from regenerating tickets indefinitely.
-            existing = None
-            if asset_id:
-                existing = con.execute(
-                    """SELECT id FROM support_ticket
-                       WHERE source = 'alert' AND status != 'Closed'
-                         AND asset_id = ?
-                         AND subject = ?
-                       LIMIT 1""",
-                    (asset_id, f'[ALERT] {label}')
-                ).fetchone()
-            elif hostname:
-                existing = con.execute(
-                    """SELECT id FROM support_ticket
-                       WHERE source = 'alert' AND status != 'Closed'
-                         AND hostname = ?
-                         AND subject = ?
-                       LIMIT 1""",
-                    (hostname, f'[ALERT] {label}')
-                ).fetchone()
-
-            if existing:
-                logger.debug(f'Dedup: skipping auto-ticket for [{category}] {alert_type} — '
-                             f'open ticket #{existing["id"]} already exists.')
-                ticket_id = existing['id']  # keep reference for state tracking
-            else:
-                cur = con.execute(
-                    """INSERT INTO support_ticket
-                       (status, priority, category, source, subject, description,
-                        hostname, asset_id, assigned_to_user_id, csat_token, created_at, updated_at)
-                       VALUES ('Open', ?, ?, 'alert', ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                    (priority, cat, f'[ALERT] {label}',
-                     f'{message}\n\nAuto-created by alert rule #{rule_id}.',
-                     hostname or '', asset_id, assigned_uid, csat_token)
-                )
-                ticket_id = cur.lastrowid
+            ticket_id = _open_or_reopen_alert_ticket(
+                con, rule, label, cat, priority, assigned_uid,
+                message, agent_id, asset_id, hostname, rule_id)
         except Exception as e:
-            logger.error(f'Auto-ticket creation failed: {e}')
+            logger.error(f'Auto-ticket open/reopen failed: {e}')
 
-    # Track alert state for continuous-condition auto-resolution
+    # Track alert state for continuous-condition auto-resolution.
+    # bump=True: this is a real fire (cooldown elapsed), so count the occurrence.
     try:
-        _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id)
+        _upsert_alert_state(con, rule, agent_id, asset_id, hostname,
+                            ticket_id, bump=True)
     except Exception as e:
         logger.debug(f'alert_state upsert failed (table may not exist yet): {e}')
 
@@ -332,12 +484,16 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     link = f'/alerts/center#{category}'
     if ticket_id:
         link = f'/tickets/{ticket_id}'
-    con.execute(
-        """INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at)
-           VALUES (?, ?, ?, ?, ?, false, NOW())""",
-        (label, message, icon_map.get(category, 'bi-bell'),
-         color_map.get(priority, 'warning'), link)
-    )
+    # Only surface in the notification bell if the rule is notify-worthy (same flag that
+    # gates email). Operational noise (RAM/CPU/disk/battery — email_notify=False) used to
+    # write a bell entry every cycle and buried the bell; mirror the email policy here.
+    if email_notify:
+        con.execute(
+            """INSERT INTO notification_bell (title, body, icon, color, link, read_flag, created_at)
+               VALUES (?, ?, ?, ?, ?, false, NOW())""",
+            (label, message, icon_map.get(category, 'bi-bell'),
+             color_map.get(priority, 'warning'), link)
+        )
 
     con.commit()
 

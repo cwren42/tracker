@@ -300,6 +300,72 @@ def learn_from_ticket(ticket_id):
     return title
 
 
+# Human-readable label per email decision, for the runbook prompt + title.
+_EMAIL_DECISIONS = {
+    "released":         "RELEASED to the inbox (treated as a false positive / safe)",
+    "kept_quarantined": "KEPT in quarantine (the quarantine was correct)",
+    "blocked":          "BLOCKED (confirmed malicious / unwanted)",
+    "deleted":          "DELETED (confirmed malicious / unwanted)",
+}
+
+
+def learn_from_email_decision(message_id, decision, actor=None):
+    """The email-security half of 'Learn' — distill a *human decision* on a quarantined
+    message into a reusable email-triage runbook, so the brain's future verdicts are
+    grounded in what real operators actually did. Keyed source_id='qmsg:<id>' so a later
+    decision on the same message refreshes it. App context required (ORM + AI). Returns the
+    runbook title, or None when there's nothing generalizable to capture."""
+    from models import QuarantineMessage
+    from email_agent import build_message_summary, run_chat
+    msg = QuarantineMessage.query.filter_by(message_id=message_id).first()
+    if not msg:
+        return None
+    decision_label = _EMAIL_DECISIONS.get(decision, decision)
+    summary = build_message_summary(msg, include_headers=False)
+    body = (f"DECISION: A human {decision_label}.\n"
+            f"{'Actioned by: ' + actor if actor else ''}\n\n"
+            f"MESSAGE:\n{summary}")
+    system = (
+        "You curate an email-security triage runbook library. Turn this HUMAN DECISION on a "
+        "quarantined/blocked email into a concise, reusable triage rule for next time. DEFAULT to "
+        "writing one. Reply with exactly 'SKIP' ONLY when there's nothing generalizable (e.g. a pure "
+        "one-off with no pattern). Generalize away the individual recipient; KEEP the signal that drove "
+        "the call — sender domain, SPF/DKIM/DMARC posture, threat/quarantine reason, subject pattern, "
+        "URL/attachment shape. Reply in Markdown with: a single short title line, then '## Signal' "
+        "(what this kind of mail looks like), '## Decision' (what was done and why), and "
+        "'## When to apply'. No preamble."
+    )
+    try:
+        content, _model = run_chat(system, body, max_tokens=500)
+    except Exception:
+        log.exception("learn_from_email_decision: AI call failed for %s", message_id)
+        return None
+    content = (content or "").strip()
+    if not content or content.upper().startswith("SKIP"):
+        return None
+    title = (content.splitlines()[0].lstrip("# ").strip()
+             or f"Email triage: {msg.sender_domain or 'unknown sender'}")[:200]
+    try:
+        vec = _embed([f"{title}\n\n{content}"])[0]
+    except Exception:
+        log.exception("learn_from_email_decision: embed failed for %s", message_id)
+        return None
+    db = _db()
+    try:
+        db.execute("DELETE FROM knowledge_chunk WHERE source_type='runbook' AND source_id=?",
+                   (f"qmsg:{message_id}",))
+        db.execute(
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+            "VALUES ('runbook',?,?,?,?,?)",
+            (f"qmsg:{message_id}", title, content, json.dumps(vec), _now()),
+        )
+        db.commit()
+    finally:
+        db.close()
+    log.info("learned email runbook from %s (%s): %s", message_id, decision, title)
+    return title
+
+
 def add_manual(title, content):
     """Operator-authored knowledge entry (a how-to / SOP written directly). Embeds + stores
     as source_type='manual'. Returns the chunk id. App/raw context-agnostic."""

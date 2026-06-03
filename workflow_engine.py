@@ -235,6 +235,72 @@ def _action_webhook(config: dict, ctx: dict) -> tuple:
         return False, {"error": str(e)}
 
 
+def _action_release_quarantine(config: dict, ctx: dict) -> tuple:
+    """Release a quarantined/blocked email via Defender, then auto-close the linked
+    release-request ticket. Medium-risk: the gate PARKS this at /approvals (and in
+    Mission Control) so a human signs off before a quarantined message is delivered.
+    Runs in the workflow daemon — no app context / no current_user — so it uses env
+    M365 creds + raw SQL, exactly like the other live-change actions. The ticket close
+    deliberately does NOT publish ticket.resolved (a single release is not a runbook —
+    consistent with the manual release route)."""
+    message_id = _render(config.get("message_id", ctx.get("message_id", "")), ctx)
+    recipient  = _render(config.get("recipient",  ctx.get("recipient", "")),  ctx)
+    if not message_id:
+        return False, {"error": "No message_id"}
+    db = _db()
+    try:
+        # Backfill the recipient from the message row if the trigger didn't carry one.
+        if not recipient:
+            row = db.execute("SELECT recipient_address FROM quarantine_message WHERE message_id=?",
+                             (message_id,)).fetchone()
+            recipient = (row["recipient_address"] if row else "") or ""
+        # Defender release (context-free: env creds + HTTPS).
+        from quarantine_service import QuarantineService
+        from m365_config import get_m365_credentials
+        tid, cid, sec = get_m365_credentials()
+        if not (tid and cid and sec):
+            return False, {"error": "M365 credentials not configured"}
+        result = QuarantineService(tid, cid, sec).release_message(message_id, recipient)
+        if not result.get("success"):
+            return False, {"error": result.get("error", "release failed")}
+        # Mark released + auto-close the [qmsg:] release-request ticket (system actor).
+        db.execute("UPDATE quarantine_message SET release_status='Released', "
+                   "released_by='agentic-os', released_at=? WHERE message_id=?",
+                   (_now(), message_id))
+        marker = "[qmsg:%s]" % message_id
+        trow = db.execute(
+            "SELECT id FROM support_ticket WHERE source='quarantine' "
+            "AND status NOT IN ('Closed','Merged') AND description LIKE ? ORDER BY id DESC LIMIT 1",
+            ("%" + marker + "%",)).fetchone()
+        ticket_id = trow["id"] if trow else None
+        if ticket_id:
+            db.execute("UPDATE support_ticket SET status='Closed', closed_at=?, updated_at=? WHERE id=?",
+                       (_now(), _now(), ticket_id))
+            db.execute("INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+                       "VALUES (?,?,?,?,?,?)",
+                       (ticket_id, None,
+                        "Released from quarantine to %s — approved via the Action Center. Auto-closed." % recipient,
+                        True, False, _now()))
+        db.commit()
+        # Feed the Knowledge "Learn" loop: a human-approved release is a grounded
+        # email-triage decision. Publish onto the bus; the dispatcher's built-in
+        # subscriber distills it into an email runbook (with app context). Best-effort.
+        try:
+            import event_bus
+            event_bus.publish("email.released",
+                              {"message_id": message_id, "recipient": recipient, "actor": "agentic-os"},
+                              source="workflow")
+        except Exception:
+            log.exception("release_quarantine: email.released publish failed for %s", message_id)
+        return True, {"message_id": message_id, "recipient": recipient,
+                      "released": True, "ticket_id": ticket_id}
+    except Exception as e:
+        db.rollback()
+        return False, {"error": str(e)}
+    finally:
+        db.close()
+
+
 def _action_deploy_patch(config: dict, ctx: dict) -> tuple:
     """Trigger CVE patch deployment for a device."""
     cve_id   = _render(config.get("cve_id", ctx.get("cve_id", "")), ctx)
@@ -687,6 +753,164 @@ def deny_action(row_id, approver, reason=""):
     return True, {"denied": True, "by": approver}
 
 
+def _parse_block_rule(reason: str):
+    """'Transport rule: SECURITY - Block Known Bad IPs B' -> 'SECURITY - Block Known Bad IPs B'."""
+    r = (reason or "").strip()
+    if ":" in r and r.lower().startswith("transport rule"):
+        return r.split(":", 1)[1].strip() or None
+    return None
+
+
+def _close_qmsg_ticket(db, message_id, note):
+    """Close the open [qmsg:<id>] release-request ticket + add an internal note. Uses the
+    caller's db handle (no commit here)."""
+    marker = "[qmsg:%s]" % message_id
+    trow = db.execute(
+        "SELECT id FROM support_ticket WHERE source='quarantine' "
+        "AND status NOT IN ('Closed','Merged') AND description LIKE ? ORDER BY id DESC LIMIT 1",
+        ("%" + marker + "%",)).fetchone()
+    if not trow:
+        return None
+    tid = trow["id"]
+    db.execute("UPDATE support_ticket SET status='Closed', closed_at=?, updated_at=? WHERE id=?",
+               (_now(), _now(), tid))
+    db.execute("INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+               "VALUES (?,?,?,?,?,?)", (tid, None, note, True, False, _now()))
+    return tid
+
+
+# Email-remediation modes the Approvals queue can pick for a parked release_quarantine row.
+EMAIL_REMEDIATION_MODES = ("release", "whitelist_domain", "remove_blocklist")
+
+
+def resolve_email_remediation(row_id, approver, mode):
+    """Resolve a parked release_quarantine approval with a CHOSEN remediation (the operator
+    picked an option on the card): release the message, whitelist the sender domain (add a
+    transport-rule exception + central allow), or remove it from the blacklist rule. Claims
+    the row atomically, runs the chosen action in a background thread (EXO calls are slow),
+    finalizes the ledger + closes the ticket. Returns (claimed, info); the UI polls status."""
+    if mode not in EMAIL_REMEDIATION_MODES:
+        return False, {"error": f"unknown remediation mode: {mode}"}
+    before = _claim_pending(row_id, to_approval_status="approved", to_status="running")
+    if before is None:
+        return False, {"error": "Not a pending approval (already resolved, denied, or not found)."}
+    replay = (before or {}).get("replay") or {}
+    ctx = dict(replay.get("ctx") or {})
+    message_id = ctx.get("message_id")
+    if not message_id:
+        _ledger_result(row_id, "failed", after_state={"error": "no message_id in parked ctx"},
+                       verification_status="failed", verification_detail=f"{mode} by {approver}")
+        return True, {"error": "Parked row has no message_id."}
+
+    def _run():
+        try:
+            # If they chose plain release, reuse the release action verbatim (handles the
+            # Defender call + ticket close + email.released learn event).
+            if mode == "release":
+                cfg = {"message_id": message_id, "recipient": ctx.get("recipient", "")}
+                success, out = _action_release_quarantine(cfg, ctx)
+            else:
+                success, out = _run_unblock(message_id, mode, approver)
+        except Exception as e:
+            success, out = False, {"error": str(e)}
+        out = out if isinstance(out, dict) else {"result": str(out)}
+        _ledger_result(row_id, "succeeded" if success else "failed",
+                       after_state=out, verification_status=_verify_status(success, out),
+                       verification_detail=f"{mode} by {approver}")
+        if replay.get("step_id"):
+            _update_step(replay["step_id"], "completed" if success else "failed", out)
+        if replay.get("run_id"):
+            _finish_run(replay["run_id"], "completed" if success else "failed",
+                        f"email remediation: {mode} ({'ok' if success else 'failed'})")
+
+    threading.Thread(target=_run, daemon=True, name=f"resolve-{row_id}").start()
+    return True, {"resolving": True, "mode": mode, "by": approver}
+
+
+def _run_unblock(message_id, mode, approver):
+    """Whitelist the sender domain (transport-rule exception + central allow) or remove it
+    from the blacklist rule, then close the ticket. Returns (success, output)."""
+    import exo_service
+    db = _db()
+    try:
+        row = db.execute("SELECT sender_address, sender_domain, quarantine_reason FROM quarantine_message "
+                         "WHERE message_id=?", (message_id,)).fetchone()
+        if not row:
+            return False, {"error": "message not found"}
+        rule = _parse_block_rule(row["quarantine_reason"])
+        if not rule:
+            return False, {"error": f"could not identify a transport rule from reason: "
+                                    f"{row['quarantine_reason']!r}. Manual unblock needed."}
+        # Which domain to whitelist matters: transport rules default to SenderAddressLocation
+        # 'Header', so they match the VISIBLE From-header domain (from sender_address) — NOT
+        # the envelope domain that our sender_domain column captures for relayed mail (e.g.
+        # Constant Contact: From ieeesscs.ccsend.com but envelope in.constantcontact.com).
+        # Except BOTH so the rule matches whether it's Header- or Envelope-scoped.
+        from_addr = (row["sender_address"] or "")
+        header_domain = from_addr.split("@")[-1].strip().lower() if "@" in from_addr else ""
+        envelope_domain = (row["sender_domain"] or "").strip().lower()
+        domains = []
+        for d in (header_domain, envelope_domain):
+            if d and d not in domains:
+                try:
+                    domains.append(exo_service.safe_domain(d))
+                except Exception:
+                    pass
+        if not domains:
+            return False, {"error": "no usable sender domain on message"}
+
+        results = {}
+        if mode == "whitelist_domain":
+            # Add each candidate domain as an exception on the blocking rule (the definitive
+            # fix — overrides the match even for content/FromAddressContains rules) and to the
+            # central allow list (best-effort). The From-header domain (domains[0]) is primary.
+            results["exceptions"] = {}
+            primary = None
+            for d in domains:
+                res = exo_service.add_domain_exception(rule, d)
+                results["exceptions"][d] = res
+                if primary is None:
+                    primary = res
+                if res.get("ok"):
+                    try:
+                        exo_service.add_to_allowlist(d)
+                    except Exception as e:
+                        log.warning("allow-list add failed for %s: %s", d, e)
+            note = (f"Whitelisted {', '.join(domains)}: added as exception(s) on '{rule}' "
+                    f"+ '{exo_service.ALLOW_RULE}' via EXO app-only. Future mail will flow; "
+                    f"the sender can resend this message. (approved: {approver})")
+            verb = "whitelisted"
+            log_domain = domains[0]
+        else:  # remove_blocklist
+            primary = exo_service.remove_from_blacklist(rule, domains[0])
+            results["removed"] = primary
+            note = (f"Removed {domains[0]} from blacklist rule '{rule}' via EXO app-only. "
+                    f"The sender can resend. (approved: {approver})")
+            verb = "removed from blocklist"
+            log_domain = domains[0]
+
+        if not primary or not primary.get("ok"):
+            return False, {"error": (primary or {}).get("error", "EXO change failed"), "detail": results}
+
+        # Persist an audit row + close the ticket.
+        try:
+            db.execute(
+                "INSERT INTO domain_unblock_request (domain, message_id, requested_by, reason, "
+                "status, created_at, decided_by, decided_at, decision_note) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (log_domain, message_id, approver, rule, "applied", _now(), approver, _now(), note))
+        except Exception:
+            log.exception("domain_unblock_request insert failed (non-fatal)")
+        tid = _close_qmsg_ticket(db, message_id, note)
+        db.commit()
+        return True, {"domains": domains, "rule": rule, "action": verb, "ticket_id": tid, **results}
+    except Exception as e:
+        db.rollback()
+        return False, {"error": str(e)}
+    finally:
+        db.close()
+
+
 def _ledger_set_status(row_id, *, approval_status=None, status=None,
                        verification_status=None, verification_detail=None,
                        complete=False):
@@ -1036,6 +1260,74 @@ def _action_uninstall_software(config: dict, ctx: dict) -> tuple:
     )
 
 
+# Only a bare filename inside C:\ITTOOLS is allowed — no path separators, no traversal.
+_ITTOOLS_FILE_RE = re.compile(r"^[A-Za-z0-9 ._()\-]{1,160}\.(exe|msi|bat|cmd|ps1|msix|appx)$", re.I)
+
+
+def _action_install_local_tool(config: dict, ctx: dict) -> tuple:
+    """Install a user-staged installer from C:\\ITTOOLS on a device, as SYSTEM (no UAC).
+
+    The user drops the installer in the sanctioned C:\\ITTOOLS folder and requests it; this
+    runs ONLY from that folder (never an arbitrary path), verifies the SHA-256 matches what
+    was approved (defeats swap-after-approval), Unblock-File's it (clears Mark-of-the-Web /
+    SmartScreen), then runs it silently. Medium-risk → parks at /approvals."""
+    asset_id  = config.get("asset_id") or ctx.get("asset_id")
+    file_name = _render(config.get("file_name", ctx.get("file_name", "")), ctx).strip()
+    args      = _render(config.get("args", ctx.get("args", "")), ctx).strip()
+    sha256    = (_render(config.get("sha256", ctx.get("sha256", "")), ctx).strip() or "").upper()
+    if not file_name or not _ITTOOLS_FILE_RE.match(file_name):
+        return False, {"error": f"Invalid installer filename (must be a bare name in C:\\ITTOOLS): {file_name!r}"}
+    if not sha256 or not re.match(r"^[A-F0-9]{64}$", sha256):
+        return False, {"error": "A valid SHA-256 is required (computed at request time)."}
+
+    # Build the install script. Values are validated above; arg tokens are emitted as a
+    # quoted PS array so multi-flag silent args (e.g. "/qn /norestart") pass correctly.
+    arg_tokens = args.split()
+    ps_args = ", ".join("'" + t.replace("'", "''") + "'" for t in arg_tokens)
+    fn_lit = file_name.replace("'", "''")
+    run = ("$p = Start-Process msiexec.exe -ArgumentList '/i', ('\"'+$file+'\"'), '/qn', '/norestart' -Wait -PassThru"
+           if file_name.lower().endswith(".msi")
+           else ("$p = Start-Process -LiteralPath $file" +
+                 (f" -ArgumentList @({ps_args})" if ps_args else "") +
+                 " -Wait -PassThru -WindowStyle Hidden"))
+    script = (
+        "$ErrorActionPreference='Stop'\n"
+        "$dir='C:\\ITTOOLS'\n"
+        f"$file=Join-Path $dir '{fn_lit}'\n"
+        "if (-not $file.StartsWith($dir + '\\')) { Write-Output 'PATH_OUTSIDE_ITTOOLS'; exit 9 }\n"
+        "if (-not (Test-Path -LiteralPath $file)) { Write-Output 'FILE_NOT_FOUND'; exit 2 }\n"
+        "$h=(Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToUpper()\n"
+        f"if ($h -ne '{sha256}') {{ Write-Output \"HASH_MISMATCH actual=$h\"; exit 3 }}\n"
+        "Unblock-File -LiteralPath $file\n"
+        f"{run}\n"
+        "Write-Output ('INSTALL_EXIT=' + $p.ExitCode)\n"
+        "exit $p.ExitCode\n"
+    )
+    success, output = _device_action(
+        "install_local_tool", "rmm.run_script", asset_id, "powershell", script,
+        risk_tier="medium", reason=f"workflow: install C:\\ITTOOLS\\{file_name}",
+        timeout_s=1800, wait_result=True,
+        extra_output={"file_name": file_name, "sha256": sha256, "args": args}, ctx=ctx,
+    )
+    # On success close the originating software-request ticket with a result note.
+    ticket_id = config.get("ticket_id") or ctx.get("ticket_id")
+    if success and ticket_id:
+        try:
+            db = _db()
+            db.execute("UPDATE support_ticket SET status='Closed', closed_at=?, updated_at=? WHERE id=?",
+                       (_now(), _now(), ticket_id))
+            db.execute("INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+                       "VALUES (?,?,?,?,?,?)",
+                       (ticket_id, None,
+                        "Installed %s on the device (approved via the Action Center). %s Auto-closed."
+                        % (file_name, output.get("result") or output.get("stdout") or ""),
+                        True, False, _now()))
+            db.commit(); db.close()
+        except Exception:
+            log.exception("install_local_tool: ticket close failed for %s", ticket_id)
+    return success, output
+
+
 def _action_run_script(config: dict, ctx: dict) -> tuple:
     """Run a PowerShell or Bash script on a device via RMM agent."""
     asset_id = config.get("asset_id") or ctx.get("asset_id")
@@ -1374,11 +1666,13 @@ ACTION_MAP = {
     "add_to_group":       _action_add_to_group,
     "remove_from_group":  _action_remove_from_group,
     "azure_sync":         _action_azure_sync,
+    "release_quarantine": _action_release_quarantine,
     "webhook":            _action_webhook,
     "http_request":       _action_http_request,
     "deploy_patch":       _action_deploy_patch,
     "deploy_software":    _action_deploy_software,
     "uninstall_software": _action_uninstall_software,
+    "install_local_tool": _action_install_local_tool,
     "run_script":         _action_run_script,
     "reboot_device":      _action_reboot_device,
     "shutdown_device":    _action_shutdown_device,

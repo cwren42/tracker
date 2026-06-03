@@ -255,9 +255,30 @@ EmailEvents
         loc         = (row.get("LatestDeliveryLocation") or "").lower()
         orig_action = (row.get("DeliveryAction") or "").lower()
         orig_loc    = (row.get("DeliveryLocation") or "").lower()
-        # Blocked — never entered the mailbox
+        # A REAL security block carries an attributed reason: an org policy, a detection
+        # method, a threat type, or a mail-flow (transport) rule. Validated against
+        # Get-MessageTraceV2: a "Blocked/Dropped" EmailEvents row with NONE of these was
+        # actually DELIVERED in Exchange — these are multi-leg / auto-generated intra-org
+        # messages (e.g. OOF auto-replies) where EmailEvents records only a dropped/failed
+        # leg while the message reached the mailbox. So a reasonless block is a FALSE POSITIVE;
+        # treat it as Delivered rather than polluting the security view + release queue.
+        # Mirror the reason-derivation fields exactly (OrgLevelPolicy OR UserLevelPolicy OR a
+        # transport rule OR a detection/threat). A Tenant Allow/Block List block surfaces as a
+        # policy name, so this keeps TABL/user-policy blocks classified as Blocked.
+        has_security_reason = bool(
+            (row.get("OrgLevelPolicy") or "").strip()
+            or (row.get("UserLevelPolicy") or "").strip()
+            or (row.get("DetectionMethods") or "").strip()
+            or (row.get("ThreatTypes") or "").strip()
+            or (row.get("ExchangeTransportRule") or "").strip()
+        )
+        # Blocked — never entered the mailbox, with an attributed security reason.
         if "block" in action or "block" in orig_action:
-            return "Blocked"
+            if has_security_reason:
+                return "Blocked"
+            if not ("quarantine" in loc or "quarantine" in orig_loc):
+                return "Delivered"   # reasonless block → EmailEvents false positive (really delivered)
+            # blocked-into-quarantine → fall through to the quarantine branch below
         # Quarantined — held by Defender (authoritative; check before folder names)
         if "quarantine" in action or "quarantine" in loc or "quarantine" in orig_loc:
             return "Quarantined"

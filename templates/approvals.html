@@ -25,22 +25,62 @@
     {% for row in pending %}
     {% set rp, policy = plan(row) %}
     {% set cfg = rp.get('config') or {} %}
+    {% set ctx = rp.get('ctx') or {} %}
     <div class="col-12 col-xl-6" id="appr-{{ row.id }}">
       <div class="card h-100" style="border-left:4px solid {{ tier_color.get(row.risk_tier, 'var(--muted)') }};">
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start mb-2">
             <div>
               <span class="badge" style="background:{{ tier_bg.get(row.risk_tier,'var(--surface-2)') }};color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};text-transform:uppercase;letter-spacing:.04em;">{{ row.risk_tier }} risk</span>
-              <span class="fw-semibold ms-1">{{ rp.get('node_label') or row.action_type.replace('_',' ')|title }}</span>
+              <span class="fw-semibold ms-1">
+                {%- if row.action_type == 'release_quarantine' -%}
+                  {{ 'Release from quarantine' if ctx.get('release_status') == 'Quarantined' else 'Whitelist sender domain' }}
+                {%- else -%}
+                  {{ rp.get('node_label') or row.action_type.replace('_',' ')|title }}
+                {%- endif -%}
+              </span>
             </div>
             <span class="small text-muted">#{{ row.id }} · {{ row.created_at.strftime('%b %d, %H:%M') if row.created_at else '' }}</span>
           </div>
 
           <div class="small text-muted mb-2">
-            <span class="me-3"><i class="bi bi-lightning-charge me-1"></i>{{ row.action_type }}</span>
+            <span class="me-3"><i class="bi bi-lightning-charge me-1"></i>{% if row.action_type == 'release_quarantine' %}{{ 'release from quarantine' if ctx.get('release_status') == 'Quarantined' else 'whitelist sender domain' }}{% elif row.action_type == 'install_local_tool' %}install software (C:\ITTOOLS){% else %}{{ row.action_type }}{% endif %}</span>
             {% if row.object_type and row.object_type != 'workflow_action' %}<span class="me-3"><i class="bi bi-hdd me-1"></i>{{ row.object_type }} {{ row.object_id }}</span>{% endif %}
             {% if row.correlation_id %}<span><i class="bi bi-diagram-2 me-1"></i>{{ row.correlation_id }}</span>{% endif %}
           </div>
+          {% if row.action_type == 'release_quarantine' %}
+          <div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">
+            <div><i class="bi bi-envelope me-1"></i><strong>{{ ctx.get('subject') or '(no subject)' }}</strong></div>
+            <div class="text-muted">From <strong>{{ ctx.get('sender') or 'unknown' }}</strong> &rarr; {{ ctx.get('recipient') or 'unknown' }}</div>
+            {% if ctx.get('ai_recommended') %}
+            {% set rec = ctx.get('ai_recommended')|lower %}
+            {% set rec_ok = rec in ['release','none'] %}
+            <div class="mt-1 pt-1" style="border-top:1px dashed var(--border);">
+              <i class="bi bi-cpu me-1"></i><span class="text-muted">Brain recommends</span>
+              <strong style="color:{{ 'var(--bs-success, #198754)' if rec_ok else 'var(--bs-danger, #dc3545)' }};text-transform:uppercase;">{{ ctx.get('ai_recommended') }}</strong>
+              {% if ctx.get('ai_confidence') is not none %}<span class="text-muted">({{ (ctx.get('ai_confidence')*100)|round|int }}%)</span>{% endif %}
+              {% if ctx.get('ai_verdict') %}<span class="text-muted">· verdict: {{ ctx.get('ai_verdict') }}</span>{% endif %}
+              {% if ctx.get('ai_rationale') %}<div class="text-muted fst-italic mt-1">{{ ctx.get('ai_rationale') }}</div>{% endif %}
+            </div>
+            {% endif %}
+            {% if ctx.get('release_status') or ctx.get('justification') %}
+            <div class="mt-1 pt-1" style="border-top:1px dashed var(--border);">
+              {% if ctx.get('release_status') %}<span class="badge" style="background:var(--surface-1);border:1px solid var(--border);color:var(--text);">{{ ctx.get('release_status') }}</span>{% endif %}
+              {% if ctx.get('justification') %}<span class="ms-1"><i class="bi bi-chat-quote me-1"></i><span class="text-muted">Reason given:</span> {{ ctx.get('justification') }}</span>{% endif %}
+            </div>
+            {% endif %}
+            {% if ctx.get('message_id') %}<a class="d-inline-block mt-1" href="{{ url_for('quarantine.quarantine_detail', message_id=ctx.get('message_id')) }}" target="_blank">Review the message &rarr;</a>{% endif %}
+          </div>
+          {% endif %}
+          {% if row.action_type == 'install_local_tool' %}
+          <div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">
+            <div><i class="bi bi-box-seam me-1"></i><strong>C:\ITTOOLS\{{ ctx.get('file_name') or '(file)' }}</strong>{% if ctx.get('args') %} <span class="text-muted">args: {{ ctx.get('args') }}</span>{% endif %}</div>
+            <div class="text-muted"><i class="bi bi-pc-display me-1"></i>{{ ctx.get('hostname') or ('asset ' ~ ctx.get('asset_id')) }} · runs as SYSTEM</div>
+            {% if ctx.get('sha256') %}<div class="text-muted" style="font-family:monospace;font-size:.72rem;word-break:break-all;"><i class="bi bi-fingerprint me-1"></i>SHA-256 {{ ctx.get('sha256') }}</div>{% endif %}
+            {% if ctx.get('justification') %}<div class="mt-1 pt-1" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i><span class="text-muted">Reason given:</span> {{ ctx.get('justification') }}</div>{% endif %}
+            <div class="form-text mt-1">Verify the file + hash before approving — this runs an unsigned installer as SYSTEM. The install is hash-locked, so it fails if the file was changed after the request.</div>
+          </div>
+          {% endif %}
           {% if policy %}<div class="small mb-2" style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};"><i class="bi bi-shield-exclamation me-1"></i>{{ policy }}</div>{% endif %}
           <div class="small mb-2"><span class="text-muted">Requested by</span> {{ row.requested_by }}</div>
 
@@ -53,6 +93,21 @@
           </details>
           {% endif %}
 
+          {% if row.action_type == 'release_quarantine' %}
+          {% set is_quar = (ctx.get('release_status') == 'Quarantined') %}
+          <div class="d-flex flex-wrap gap-2 align-items-center" id="appr-actions-{{ row.id }}">
+            {% if is_quar %}
+            <button class="btn btn-sm btn-success" onclick="resolveEmail({{ row.id }}, 'release')" title="Deliver this quarantined message to the inbox">
+              <i class="bi bi-inbox me-1"></i>Release message</button>
+            {% endif %}
+            <button class="btn btn-sm btn-primary" onclick="resolveEmail({{ row.id }}, 'whitelist_domain')" title="Add the sender domain as an exception on the blocking rule + central allow list — fixes it for good">
+              <i class="bi bi-shield-check me-1"></i>Whitelist domain</button>
+            <input type="text" id="deny-reason-{{ row.id }}" class="form-control form-control-sm" style="max-width:180px;" placeholder="Reason (optional)">
+            <button class="btn btn-sm btn-outline-secondary" onclick="denyAction({{ row.id }})">
+              <i class="bi bi-x-lg me-1"></i>Deny</button>
+          </div>
+          <div class="form-text mt-1">{% if is_quar %}Release delivers this message to the inbox. {% endif %}Whitelist runs a live Exchange transport-rule exception (gated){% if not is_quar %} — the original blocked message is gone, so the sender can resend once the domain is allowed{% endif %}.</div>
+          {% else %}
           <div class="d-flex gap-2 align-items-center" id="appr-actions-{{ row.id }}">
             <button class="btn btn-sm btn-primary" onclick="approveAction({{ row.id }}, '{{ row.risk_tier }}')">
               <i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>
@@ -60,6 +115,7 @@
             <button class="btn btn-sm btn-outline-secondary" onclick="denyAction({{ row.id }})">
               <i class="bi bi-x-lg me-1"></i>Deny</button>
           </div>
+          {% endif %}
           <div id="appr-result-{{ row.id }}" class="small mt-2"></div>
         </div>
       </div>
@@ -144,6 +200,23 @@ function approveAction(id, tier){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(!d.ok){ res.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>'+(d.error||'Could not approve')+'</span>'; return; }
+      pollApproval(id, 0);
+    })
+    .catch(function(e){ res.innerHTML='<span class="text-danger">'+e+'</span>'; });
+}
+
+function resolveEmail(id, mode){
+  var labels={release:'release this message to the inbox',
+              whitelist_domain:'whitelist the sender domain (live Exchange transport-rule change)',
+              remove_blocklist:'remove the sender domain from the blacklist rule (live Exchange change)'};
+  if(!confirm('Confirm: '+(labels[mode]||mode)+'?')) return;
+  var res=_apprEl(id,'result');
+  _disableActions(id);
+  res.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>Working…';
+  fetch('/approvals/'+id+'/resolve-email', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'}, body:JSON.stringify({mode:mode})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok){ res.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>'+(d.error||'Could not resolve')+'</span>'; return; }
       pollApproval(id, 0);
     })
     .catch(function(e){ res.innerHTML='<span class="text-danger">'+e+'</span>'; });

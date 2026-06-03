@@ -48,3 +48,7 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Exchange Online app-only auth (cert + key + pfx) — never commit
+.exo_auth/
+*.pfx

@@ -74,6 +74,7 @@
 
   <!-- Tab bar -->
   <div class="d-flex flex-wrap gap-1 mb-3" role="tablist">
+    {% if is_admin %}
     {% set tabs = [
       ('all',         'All',         'grid-3x3',              tab_counts.all,         '#6c757d'),
       ('delivered',   'Delivered',   'inbox',                 tab_counts.delivered,   '#20c997'),
@@ -82,6 +83,13 @@
       ('junk',        'Junk',        'trash2',                tab_counts.junk,        '#fd7e14'),
       ('threats',     'Threats',     'bug',                   tab_counts.threats,     '#b07bff'),
     ] %}
+    {% else %}
+    {# Non-admins only see security-relevant categories #}
+    {% set tabs = [
+      ('quarantined', 'Quarantined', 'shield-fill-exclamation',tab_counts.quarantined,'#ffc107'),
+      ('blocked',     'Blocked',     'slash-circle',          tab_counts.blocked,     '#ff6b6b'),
+    ] %}
+    {% endif %}
     {% for key, label, icon, cnt, color in tabs %}
     {% set active = (view_filter == key) %}
     <a href="{{ url_for('quarantine.quarantine_list', view=key, days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}"
@@ -94,6 +102,7 @@
 
   <!-- Stat cards -->
   <div class="row g-3 mb-3">
+    {% if is_admin %}
     <div class="col-6 col-md-3">
       <a href="{{ url_for('quarantine.quarantine_list', view='delivered', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
         <div class="qstat-card" style="border-color:rgba(32,201,151,.3);cursor:pointer;">
@@ -103,6 +112,7 @@
         </div>
       </a>
     </div>
+    {% endif %}
     <div class="col-6 col-md-3">
       <a href="{{ url_for('quarantine.quarantine_list', view='quarantined', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
         <div class="qstat-card" style="border-color:rgba(255,193,7,.3);cursor:pointer;">
@@ -121,6 +131,7 @@
         </div>
       </a>
     </div>
+    {% if is_admin %}
     <div class="col-6 col-md-3">
       <a href="{{ url_for('quarantine.quarantine_list', view='threats', days=days_filter, q=search, threat=threat_filter, policy=policy_filter) }}" class="text-decoration-none">
         <div class="qstat-card" style="border-color:rgba(176,123,255,.3);cursor:pointer;">
@@ -130,6 +141,7 @@
         </div>
       </a>
     </div>
+    {% endif %}
   </div>
 
   <!-- Filter bar -->
@@ -268,9 +280,13 @@
               <i class="bi bi-trash3"></i>
             </button>
             {% endif %}
-            {% if not is_admin and m.release_status in ['Quarantined', 'Blocked'] %}
-            <button class="btn btn-outline-success" onclick="requestRelease('{{ m.message_id }}', this)" title="Ask an admin to release this to your inbox">
+            {% if not is_admin and m.release_status == 'Quarantined' %}
+            <button class="btn btn-outline-success" onclick="requestRelease('{{ m.message_id }}', this, 'release')" title="Ask an admin to release this to your inbox">
               <i class="bi bi-box-arrow-up me-1"></i>Request release
+            </button>
+            {% elif not is_admin and m.release_status == 'Blocked' %}
+            <button class="btn btn-outline-primary" onclick="requestRelease('{{ m.message_id }}', this, 'whitelist')" title="Ask an admin to whitelist this sender domain (the message was blocked, not quarantined)">
+              <i class="bi bi-shield-check me-1"></i>Request whitelist
             </button>
             {% endif %}
             {% if is_admin and m.release_requested_at %}
@@ -588,18 +604,24 @@ async function bulkAiAnalyze() {
   }
 }
 
-// ── User: request an admin release a quarantined message ──────────────────────
-async function requestRelease(messageId, btn) {
-  if (!confirm('Ask an admin to release this message to your inbox?')) return;
+// ── User: ask an admin to release (quarantined) or whitelist (blocked) a message ──
+async function requestRelease(messageId, btn, type) {
+  const what = type === 'whitelist'
+    ? 'Why should this sender domain be whitelisted? (required)'
+    : 'Why should this message be released to your inbox? (required)';
+  const justification = (prompt(what) || '').trim();
+  if (!justification) { showToast('A justification is required.', 'warning'); return; }
   const orig = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   try {
     const res = await fetch(`/quarantine/${encodeURIComponent(messageId)}/request-release`, {
-      method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'},
+      method: 'POST',
+      headers: {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json'},
+      body: JSON.stringify({justification: justification}),
     }).then(r => r.json());
     if (res.ok) {
-      showToast(res.message || 'Release request sent to the admin.', 'success');
+      showToast(res.message || 'Request sent to the admin.', 'success');
       btn.outerHTML = '<span class="badge bg-info text-dark"><i class="bi bi-check2 me-1"></i>Requested</span>';
     } else {
       btn.disabled = false; btn.innerHTML = orig;

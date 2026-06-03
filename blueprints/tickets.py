@@ -1216,6 +1216,32 @@ def api_create_support_ticket():
     except Exception as _e:
         logger.warning(f'Failed to insert API ticket bell: {_e}')
 
+    # Software install request (from the systray "Install software" picker): the payload
+    # carries a structured software_request block {file_name, sha256, args}. Tag the ticket
+    # and publish onto the bus so the "Software Install" workflow parks an install_local_tool
+    # approval at /approvals (gated; runs the staged C:\ITTOOLS installer as SYSTEM on approve).
+    swreq = payload.get('software_request') or {}
+    if swreq.get('file_name'):
+        try:
+            ticket.category = 'Software'
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            import event_bus
+            event_bus.publish("software.install_requested", {
+                "asset_id": asset_id,
+                "file_name": swreq.get('file_name'),
+                "sha256": (swreq.get('sha256') or '').upper(),
+                "args": swreq.get('args') or '',
+                "ticket_id": ticket.id,
+                "justification": description,
+                "requester": reporter_name or reporter_email or '',
+                "hostname": hostname or '',
+            }, source="tray")
+        except Exception:
+            logger.warning(f'software.install_requested publish failed for ticket {ticket.id}')
+
     return jsonify({
         'success': True,
         'ticket_id': ticket.id,

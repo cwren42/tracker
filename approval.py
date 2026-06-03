@@ -45,6 +45,7 @@ RISK_TIERS = {
     "run_script":        "high",    # arbitrary code execution on an endpoint
     "deploy_software":   "medium",
     "uninstall_software": "medium",
+    "install_local_tool": "medium",  # runs a user-staged installer from C:\ITTOOLS as SYSTEM
     "deploy_patch":      "medium",
     "apply_gpo":         "medium",
     "reboot_device":     "high",
@@ -54,6 +55,9 @@ RISK_TIERS = {
     # ── External calls with side effects ──
     "webhook":           "medium",
     "http_request":      "medium",
+
+    # ── Email security ──
+    "release_quarantine": "medium",  # delivers a quarantined/blocked message — human signs off
 }
 
 # Tiers permitted to execute automatically, with no human in the loop.

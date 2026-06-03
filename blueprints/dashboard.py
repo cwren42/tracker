@@ -887,6 +887,27 @@ def deny_action(row_id):
     return redirect(url_for('dashboard.approvals'))
 
 
+@bp.route('/approvals/<int:row_id>/resolve-email', methods=['POST'])
+@login_required
+@admin_required
+def resolve_email(row_id):
+    """Resolve a parked release_quarantine approval with a chosen remediation:
+    release | whitelist_domain | remove_blocklist. The whitelist/remove options run the
+    EXO app-only transport-rule change so the problem is fixed for good, not just this once."""
+    import workflow_engine
+    approver = current_user.username or current_user.email or f'user#{current_user.id}'
+    data = request.get_json(silent=True) or {}
+    mode = (data.get('mode') or request.form.get('mode') or '').strip()
+    claimed, info = workflow_engine.resolve_email_remediation(row_id, approver, mode)
+    ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    if ajax:
+        if not claimed:
+            return jsonify({'ok': False, 'error': info.get('error', 'Could not resolve.')}), 409
+        return jsonify({'ok': True, 'running': True, 'mode': info.get('mode')})
+    flash(info.get('error') or f"Resolving ({mode})…", 'warning' if not claimed else 'success')
+    return redirect(url_for('dashboard.approvals'))
+
+
 @bp.route('/api/approvals/<int:row_id>/status')
 @login_required
 @admin_required

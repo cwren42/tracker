@@ -364,6 +364,18 @@ def quarantine_list():
         cutoff = datetime.utcnow() - timedelta(days=int(days_filter))
         base_q = base_q.filter(QuarantineMessage.received_time >= cutoff)
 
+    # Non-admins only see the security-relevant categories: Quarantined + Blocked. Hard-filter
+    # the base query so Delivered/Junk/threats never surface regardless of query params, and
+    # constrain the selectable tabs/filters. Admins continue to see every category.
+    if not is_admin:
+        base_q = base_q.filter(QuarantineMessage.release_status.in_(
+            ["Quarantined", "Released", "Deleted", "Blocked"]))
+        if view_filter not in ("quarantined", "blocked"):
+            view_filter = "quarantined"
+        if status_filter not in ("Quarantined", "Released", "Deleted", "Blocked"):
+            status_filter = ""
+        threat_filter = ""
+
     # ── Tab counts ────────────────────────────────────────────────────────────
     tab_counts = {
         "all":         base_q.count(),
@@ -826,6 +838,15 @@ def quarantine_request_release(message_id):
     if msg.release_status not in ("Quarantined", "Blocked"):
         return jsonify({"error": "Only quarantined or blocked messages can be requested for release."}), 400
 
+    # Justification is required (carried to the approver). Request type depends on state:
+    # Quarantined mail can be released; Blocked (transport-rule) mail can only be whitelisted.
+    justification = ((request.get_json(silent=True) or {}).get("justification")
+                     or request.form.get("justification") or "").strip()
+    if not justification:
+        return jsonify({"error": "A justification is required — tell the admin why this should be allowed."}), 400
+    request_type = "release" if msg.release_status == "Quarantined" else "whitelist"
+    request_label = "release from quarantine" if request_type == "release" else "domain whitelist"
+
     now = datetime.utcnow()
     # Dedup: if a request was logged in the last hour, don't re-email the admins.
     recently = bool(msg.release_requested_at) and (now - msg.release_requested_at.replace(tzinfo=None)) < timedelta(hours=1)
@@ -836,8 +857,15 @@ def quarantine_request_release(message_id):
     # Best-effort AI verdict to give the admin quick context (never blocks ticket/email).
     verdict_line = ""   # plain-text line for the ticket description
     verdict_html = ""   # styled block for the email
+    verdict_data = {}   # structured fields carried into the approval (the brain's recommendation)
     try:
         v, _model = _analyze_email_verdict(msg)
+        verdict_data = {
+            "ai_verdict": v.get("verdict"),
+            "ai_confidence": v.get("confidence"),
+            "ai_recommended": v.get("recommended_action"),
+            "ai_rationale": v.get("rationale"),
+        }
         verdict_line = (
             f"AI verdict: {v['verdict'].upper()} ({int(v['confidence'] * 100)}% confidence) — "
             f"suggested: {v['recommended_action']}. {v['rationale']}"
@@ -873,25 +901,31 @@ def quarantine_request_release(message_id):
     received_str = msg.received_time.strftime("%Y-%m-%d %H:%M") if msg.received_time else "—"
     if ticket is None:
         subj_clean = (msg.subject or "(no subject)").strip()
-        ticket_subject = f"[Quarantine] Release request: {subj_clean}"
+        ticket_subject = f"[Quarantine] {request_label.title()} request: {subj_clean}"
         if len(ticket_subject) > 200:
             ticket_subject = ticket_subject[:197] + "..."
         description = (
-            f"{requester} ({current_user.email}) requested release of a quarantined "
-            f"message to their inbox.\n\n"
+            f"{requester} ({current_user.email}) requested {request_label} for a "
+            f"{msg.release_status.lower()} message.\n\n"
+            f"Justification: {justification}\n\n"
             f"From: {msg.sender_address or '(unknown)'}\n"
             f"To: {msg.recipient_address or '(unknown)'}\n"
             f"Subject: {msg.subject or '(none)'}\n"
             f"Threat: {msg.threat_type or 'None'} · Risk: {msg.risk_label or 'N/A'}\n"
             f"Auth: SPF {msg.spf_result or 'none'} / DKIM {msg.dkim_result or 'none'} / "
             f"DMARC {msg.dmarc_result or 'none'}\n"
+            f"Blocked by: {msg.quarantine_reason or 'N/A'}\n"
             f"Received: {received_str}\n"
         )
         if verdict_line:
             description += f"\n{verdict_line}\n"
+        action_hint = ("Review before releasing — the requester cannot release it themselves."
+                       if request_type == "release"
+                       else "Blocked by a transport rule (nothing to release) — whitelist the "
+                            "domain to let future mail through; the sender can resend.")
         description += (
             f"\nReview & action: {detail_url}\n"
-            f"\nReview before releasing — the requester cannot release it themselves.\n"
+            f"\n{action_hint}\n"
             f"\n{marker}"
         )
         ticket = SupportTicket(
@@ -911,6 +945,27 @@ def quarantine_request_release(message_id):
         db.session.commit()
         # NOTE: intentionally do NOT publish ticket.created/ticket.resolved here —
         # release-request tickets must not seed the Knowledge "Learn" loop.
+        # DO publish a release-requested event onto the bus: the "Quarantine Release"
+        # workflow picks it up and parks a medium-risk release_quarantine action at
+        # /approvals (+ Mission Control). Approving it there runs the Defender release
+        # and auto-closes this ticket — same agentic path as Account Unlock. Only on a
+        # NEW ticket, so re-requests don't double-park an approval.
+        try:
+            import event_bus
+            event_bus.publish("quarantine.release_requested", {
+                "message_id": msg.message_id,
+                "recipient": msg.recipient_address or "",
+                "ticket_id": ticket.id,
+                "subject": msg.subject or "",
+                "sender": msg.sender_address or "",
+                "release_status": msg.release_status,   # 'Blocked' | 'Quarantined' — drives card options
+                "request_type": request_type,           # 'release' | 'whitelist'
+                "justification": justification,
+                "requested_by": current_user.email or current_user.username,
+                **verdict_data,  # the brain's recommendation, shown on the approval card
+            }, source="quarantine")
+        except Exception:
+            logger.exception("Failed to publish quarantine.release_requested for %s", msg.message_id)
     else:
         # Existing open ticket for this message — append a re-request note rather
         # than creating a duplicate review.

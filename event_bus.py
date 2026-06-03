@@ -300,6 +300,18 @@ def _dispatch_once(flask_app):
                             knowledge_agent.learn_from_ticket(int(tid))
                         except Exception:
                             log.exception("ticket.resolved: learn_from_ticket failed (ticket=%s)", tid)
+                # Built-in subscriber: the email-security half of "Learn". A human-approved
+                # quarantine release (the release_quarantine action) publishes email.released;
+                # distill it into an email-triage runbook. Upserts by source_id='qmsg:<id>',
+                # returns None when not generalizable — safe under at-least-once delivery.
+                if etype == "email.released":
+                    mid = payload.get("message_id")
+                    if mid:
+                        try:
+                            import knowledge_agent
+                            knowledge_agent.learn_from_email_decision(mid, "released", payload.get("actor"))
+                        except Exception:
+                            log.exception("email.released: learn_from_email_decision failed (msg=%s)", mid)
             _mark_dispatched(eid)
             dispatched += 1
         except Exception as e:

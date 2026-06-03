@@ -271,7 +271,10 @@ def run_auto_approve_patches_job(flask_app):
     logger.info('Starting scheduled auto-approve patch deployment')
     with flask_app.app_context():
         try:
-            from blueprints.patch_mgmt import _run_auto_approve
+            from blueprints.patch_mgmt import _run_auto_approve, _cleanup_patch_jobs
+            stuck, purged = _cleanup_patch_jobs()
+            if stuck or purged:
+                logger.info(f'Patch-job cleanup: failed-stuck={stuck} purged-old={purged}')
             deployed, skipped = _run_auto_approve()
             logger.info(f'Auto-approve patches: deployed={deployed} skipped/offline={skipped}')
         except Exception as exc:

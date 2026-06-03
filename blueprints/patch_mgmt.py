@@ -7,6 +7,7 @@ from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required, current_user
 from sqlalchemy import text
 from extensions import db
+from models import now_mst
 from utils import manager_required, admin_required
 
 logger = logging.getLogger(__name__)
@@ -381,8 +382,80 @@ def api_run_auto_approve():
     return jsonify({'ok': True, 'deployed': deployed, 'skipped': skipped})
 
 
+def _patch_setting(key, default=None):
+    """Fail-safe read of a setting value."""
+    try:
+        row = db.session.execute(text("SELECT value FROM setting WHERE key=:k"), {'k': key}).fetchone()
+        return row[0] if row and row[0] is not None else default
+    except Exception:
+        return default
+
+
+def _truthy(v, default=False):
+    if v is None:
+        return default
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Agents quiet longer than this are considered offline and are NOT targeted for
+# auto-deploy (otherwise their jobs sit 'queued' forever — the old 8,941 backlog).
+PATCH_ONLINE_CUTOFF_MIN = 15
+
+
+def _within_maintenance_window():
+    """True if now (server-local) is inside the patch maintenance window. Setting
+    patch_maintenance_window = 'HH:MM-HH:MM' (server local); default 02:00-06:00.
+    Supports windows that wrap midnight."""
+    win = (_patch_setting('patch_maintenance_window', '02:00-06:00') or '02:00-06:00').strip()
+    try:
+        s, e = win.split('-')
+        sh, sm = (int(x) for x in s.split(':'))
+        eh, em = (int(x) for x in e.split(':'))
+    except Exception:
+        sh, sm, eh, em = 2, 0, 6, 0
+    now = now_mst()
+    cur = now.hour * 60 + now.minute
+    start, end = sh * 60 + sm, eh * 60 + em
+    return (start <= cur <= end) if start <= end else (cur >= start or cur <= end)
+
+
+def _cleanup_patch_jobs():
+    """Keep rmm_patch_job bounded: fail stuck 'deploying' jobs that never returned a
+    result, and purge terminal rows older than 30 days. Runs daily before auto-approve
+    so the queue can't balloon back into the old 8,941-row backlog."""
+    try:
+        stuck = db.session.execute(text("""
+            UPDATE rmm_patch_job
+               SET status='failed', notes=COALESCE(notes,'') || ' [stale deploy — no result]', updated_at=NOW()
+             WHERE status='deploying' AND completed_at IS NULL
+               AND (updated_at IS NULL OR updated_at < NOW() - interval '6 hours')""")).rowcount
+        purged = db.session.execute(text("""
+            DELETE FROM rmm_patch_job
+             WHERE status IN ('completed','failed')
+               AND COALESCE(completed_at, updated_at, created_at) < NOW() - interval '30 days'""")).rowcount
+        db.session.commit()
+        return stuck, purged
+    except Exception:
+        db.session.rollback()
+        return 0, 0
+
+
 def _run_auto_approve():
-    """Find pending updates matching auto-approve rules and deploy them."""
+    """Auto-deploy pending updates matching the rules — WITH SAFETY RAILS:
+      * master kill-switch (patch_auto_deploy_enabled, default on)
+      * only inside the maintenance window
+      * only to ONLINE agents (no permanent-queued backlog)
+      * deduped against agents that already have an open job (no nightly pileup)
+      * reboot gated by policy (allow_reboot flag, default off) — honored by the agent
+      * non-delivered jobs are marked failed, not left queued forever
+    """
+    if not _truthy(_patch_setting('patch_auto_deploy_enabled', 'true'), default=True):
+        logger.info('patch auto-approve: disabled by setting')
+        return 0, 0
+    if not _within_maintenance_window():
+        logger.info('patch auto-approve: outside maintenance window — skipping')
+        return 0, 0
+
     row = db.session.execute(
         text("SELECT value FROM setting WHERE key='patch_auto_approve_rules'")
     ).fetchone()
@@ -391,22 +464,31 @@ def _run_auto_approve():
     if not active_rules:
         return 0, 0
 
-    # Build SQL conditions for matching updates
+    allow_reboot = _truthy(_patch_setting('patch_allow_reboot', 'false'), default=False)
+
+    # Only ONLINE agents — skip offline so jobs don't pile up queued forever.
     all_pending = db.session.execute(text("""
         SELECT pu.agent_id, pu.update_id, pu.title, pu.severity, pu.category
         FROM rmm_pending_update pu
         JOIN rmm_agent ra ON ra.agent_id = pu.agent_id AND ra.enabled = true
-    """)).fetchall()
+        WHERE ra.last_seen_at IS NOT NULL
+          AND ra.last_seen_at > NOW() - (:cutoff || ' minutes')::interval
+    """), {'cutoff': str(PATCH_ONLINE_CUTOFF_MIN)}).fetchall()
 
-    # Group matches by agent
-    agent_updates = {}  # agent_id -> list of (update_id, title)
+    # Dedup: skip any agent that already has an open (queued/deploying) job.
+    open_agents = {r[0] for r in db.session.execute(
+        text("SELECT DISTINCT agent_id FROM rmm_patch_job WHERE status IN ('queued','deploying')")
+    ).fetchall()}
+
+    agent_updates = {}  # agent_id -> [(update_id, title)]
     for pu in all_pending:
         agent_id  = pu[0]
+        if agent_id in open_agents:
+            continue
         update_id = pu[1]
         title     = pu[2] or ''
         severity  = pu[3] or ''
         category  = pu[4] or ''
-
         matched = False
         for rule in active_rules:
             if 'match_title' in rule and rule['match_title'].lower() in title.lower():
@@ -415,7 +497,6 @@ def _run_auto_approve():
                 matched = True; break
             if 'match_category' in rule and rule['match_category'].lower() == category.lower():
                 matched = True; break
-
         if matched:
             agent_updates.setdefault(agent_id, []).append((update_id, title))
 
@@ -438,11 +519,12 @@ def _run_auto_approve():
         job_id = res.scalar()
 
         payload = json.dumps({
-            'type':       'install_patches',
-            'job_id':     job_id,
-            'update_ids': uids,
-            'kb_ids':     [],
-            'titles':     titles,
+            'type':         'install_patches',
+            'job_id':       job_id,
+            'update_ids':   uids,
+            'kb_ids':       [],
+            'titles':       titles,
+            'allow_reboot': allow_reboot,   # agent honors this (forced reboot only when true)
         }).encode()
         try:
             req = _ur.Request(
@@ -461,8 +543,17 @@ def _run_auto_approve():
                 db.session.commit()
                 deployed += 1
             else:
+                # Not delivered — mark failed so it doesn't linger queued forever.
+                db.session.execute(text(
+                    "UPDATE rmm_patch_job SET status='failed', notes='not delivered (agent unreachable)', updated_at=NOW() WHERE id=:jid"),
+                    {'jid': job_id})
+                db.session.commit()
                 skipped += 1
         except Exception:
+            db.session.execute(text(
+                "UPDATE rmm_patch_job SET status='failed', notes='dispatch error', updated_at=NOW() WHERE id=:jid"),
+                {'jid': job_id})
+            db.session.commit()
             skipped += 1
 
     return deployed, skipped

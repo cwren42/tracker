@@ -3420,6 +3420,14 @@ class EagleEyes {
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+    [DllImport("user32.dll")]
+    static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetTickCount();
+
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+
     static string J(string s) {
         return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", " ");
     }
@@ -3447,7 +3455,16 @@ class EagleEyes {
                 GetWindowThreadProcessId(hwnd, out pid);
                 string pname = "";
                 try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
-                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\"}";
+                // Idle is computed HERE, inside the interactive user session: GetLastInputInfo
+                // only sees the calling session's input, so the SYSTEM service in session 0
+                // cannot measure the user's idle time (it reported bogus, ever-growing idle).
+                uint idleSec = 0;
+                try {
+                    LASTINPUTINFO lii = new LASTINPUTINFO();
+                    lii.cbSize = (uint)Marshal.SizeOf(lii);
+                    if (GetLastInputInfo(ref lii)) { idleSec = (GetTickCount() - lii.dwTime) / 1000u; }
+                } catch { }
+                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\",\"i\":" + idleSec + "}";
                 File.WriteAllText(OutFile, json);
                 File.AppendAllText(DiagFile, n + " ok p=" + pname +
                     " t=" + title.Substring(0, Math.Min(60, title.Length)) + Environment.NewLine);
@@ -3692,17 +3709,19 @@ def _ee_ensure_helper() -> bool:
 
 
 def _get_active_window_info() -> tuple:
-    """Return (process_name, window_title) for the foreground window.
+    """Return (process_name, window_title, idle_seconds) for the foreground window.
 
-    Reads the JSON file maintained by the persistent helper process that runs
-    inside the interactive user session.  Returns ('', '') on failure or when
-    not on Windows.
+    Reads the JSON maintained by the helper that runs inside the interactive user
+    session. Idle is computed THERE — GetLastInputInfo only sees input from within
+    the calling session, so the SYSTEM service in session 0 cannot measure the user's
+    idle time (the old session-0 _get_idle_seconds reported bogus ever-growing idle,
+    which made every event look idle). Returns ('', '', 0) on failure / non-Windows.
     """
     if sys.platform != "win32":
-        return ("", "")
+        return ("", "", 0)
     try:
         if not _ee_ensure_helper():
-            return ("", "")
+            return ("", "", 0)
         # Give the helper up to 4 s to produce a first result after fresh start
         import time as _time
         for _ in range(4):
@@ -3713,9 +3732,13 @@ def _get_active_window_info() -> tuple:
             data = json.loads(f.read().strip())
         proc  = (data.get("p") or "").strip()
         title = (data.get("t") or "").strip()
-        return (proc, title)
+        try:
+            idle = max(0, int(data.get("i") or 0))
+        except (TypeError, ValueError):
+            idle = 0
+        return (proc, title, idle)
     except Exception:
-        return ("", "")
+        return ("", "", 0)
 
 
 def _get_idle_seconds() -> int:
@@ -4702,9 +4725,10 @@ async def main() -> None:
                         await asyncio.sleep(poll_s)
                         now = datetime.now()
 
-                        # Active window + idle state
-                        proc, title = await loop.run_in_executor(None, _get_active_window_info)
-                        idle_s      = await loop.run_in_executor(None, _get_idle_seconds)
+                        # Active window + idle state. idle_s comes from the user-session
+                        # helper (session-0 GetLastInputInfo is blind to the interactive
+                        # user, so the old _get_idle_seconds() reported bogus idle).
+                        proc, title, idle_s = await loop.run_in_executor(None, _get_active_window_info)
                         is_idle     = idle_s >= IDLE_THRESH_S
 
                         if proc != last_process or title != last_title:

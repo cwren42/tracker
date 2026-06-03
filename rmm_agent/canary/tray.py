@@ -993,6 +993,27 @@ def _acquire_single_instance_mutex():
     return handle  # keep alive for process lifetime
 
 
+def _get_agent_version() -> str:
+    """Best-effort agent version for display in the tray menu. Reads AGENT_VERSION from
+    agent_client.py next to the tray (always present), falling back to version.txt."""
+    d = os.path.dirname(os.path.abspath(sys.argv[0]))
+    try:
+        import re as _re
+        with open(os.path.join(d, 'agent_client.py'), encoding='utf-8') as f:
+            for line in f:
+                mt = _re.match(r'\s*AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', line)
+                if mt:
+                    return mt.group(1)
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(d, 'version.txt'), encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        pass
+    return 'unknown'
+
+
 def main():
     _set_dpi_aware()   # process-wide, before any window (correct place for DPI)
     _mutex = _acquire_single_instance_mutex()  # exit if another tray is running
@@ -1025,6 +1046,7 @@ def main():
 
     # Build menu
     reboot_label = '⚠ Pending Reboot!' if reboot else 'Check for Updates'
+    _agent_ver = _get_agent_version()
 
     menu = pystray.Menu(
         pystray.MenuItem('Submit IT Ticket',
@@ -1041,6 +1063,8 @@ def main():
                          lambda icon, item: _run_in_thread(_show_info_dialog, config)),
         pystray.MenuItem(reboot_label,
                          lambda icon, item: _run_in_thread(_show_updates_dialog)),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(f'Agent v{_agent_ver}', lambda icon, item: None, enabled=False),
     )
 
     icon_img = _get_icon_image()

@@ -46,7 +46,7 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 
-from blueprints.rmm import bp, _verify_agent_token
+from blueprints.rmm import bp, _verify_agent_token, _agent_payload_dir, _agent_file
 
 
 @bp.route('/download/agent-installer')
@@ -482,12 +482,19 @@ def rmm_agent_repair():
 
 @bp.route('/rmm/agent/tray')
 def rmm_agent_tray():
-    """Serve tray.py to authenticated agents."""
+    """Serve tray.py to authenticated agents.
+
+    Canary-gated to match /rmm/agent/version + /rmm/agent/file: agents listed in
+    setting['rmm_agent_canary'] get the staged canary tray (rmm_agent/canary/tray.py,
+    the 2.9.8 Install-software picker); everyone else gets the fleet default
+    (rmm_agent/tray.py, 2.9.7). Uses the same _agent_payload_dir resolver so the
+    served file matches the hash announced by /rmm/agent/tray-sha for that agent.
+    """
     agent_id = request.args.get('agent_id', '')
     token    = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
-    tray_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'tray.py')
+    tray_path = _agent_file(agent_id, 'tray.py')
     if not os.path.isfile(tray_path):
         return jsonify({'error': 'tray.py not found on server'}), 404
     return send_file(tray_path, mimetype='text/x-python', as_attachment=False)
@@ -495,13 +502,17 @@ def rmm_agent_tray():
 
 @bp.route('/rmm/agent/tray-sha')
 def rmm_agent_tray_sha():
-    """Return SHA-256 of tray.py so agents can detect updates without downloading the full file."""
+    """Return SHA-256 of tray.py so agents can detect updates without downloading the full file.
+
+    Canary-gated identically to /rmm/agent/tray (same _agent_payload_dir resolver),
+    so the hash always matches the file that endpoint would serve for this agent.
+    """
     import hashlib as _hl
     agent_id = request.args.get('agent_id', '')
     token    = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
-    tray_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'tray.py')
+    tray_path = _agent_file(agent_id, 'tray.py')
     if not os.path.isfile(tray_path):
         return jsonify({'error': 'tray.py not found'}), 404
     with open(tray_path, 'rb') as f:

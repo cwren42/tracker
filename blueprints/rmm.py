@@ -510,10 +510,69 @@ def _verify_agent_token(agent_id: str, token: str) -> bool:
     return False
 
 
+def _is_canary_agent(agent_id):
+    """True if this agent is pinned to the canary build.
+
+    Canary roster lives in setting['rmm_agent_canary'] as a comma/whitespace/
+    newline-separated list of agent_id strings (i.e. the rmm_agent.agent_id
+    column, which on this fleet equals the hostname, e.g. 'CHRIS-DESKTOP').
+    Matching is case-insensitive and whitespace-trimmed. Empty/missing setting
+    => no canaries, so everyone falls back to the fleet-default served files.
+    Fail-safe: any error => not a canary (serve the fleet default).
+    """
+    if not agent_id:
+        return False
+    try:
+        row = db.session.execute(
+            text("SELECT value FROM setting WHERE key = 'rmm_agent_canary'")
+        ).fetchone()
+        raw = (row.value if row else '') or ''
+    except Exception:
+        db.session.rollback()
+        return False
+    roster = {p.strip().lower() for p in re.split(r'[,\s]+', raw) if p.strip()}
+    return agent_id.strip().lower() in roster
+
+
+def _agent_payload_dir(agent_id):
+    """Resolve which directory's agent_client.py/version.txt to serve.
+
+    Canary-pinned agents get rmm_agent/canary/ (the 2.9.8 staged build);
+    everyone else gets the live-served rmm_agent/ (the 2.9.7 fleet default).
+    Falls back to the fleet default if the canary dir is somehow incomplete.
+    """
+    base = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent')
+    if _is_canary_agent(agent_id):
+        canary = os.path.join(base, 'canary')
+        if (os.path.exists(os.path.join(canary, 'agent_client.py'))
+                and os.path.exists(os.path.join(canary, 'version.txt'))):
+            return canary
+    return base
+
+
+def _agent_file(agent_id, filename):
+    """Resolve a single served agent payload file with PER-FILE canary fallback.
+
+    A canary-pinned agent gets rmm_agent/canary/<filename> ONLY if that file is actually
+    staged; otherwise the fleet default rmm_agent/<filename>. This keeps a partially-staged
+    canary (e.g. agent_client.py staged but tray.py not yet) from 404-ing a pinned agent —
+    it serves the fleet copy for whatever isn't staged. Returns an absolute path.
+    """
+    base = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent')
+    if _is_canary_agent(agent_id):
+        cand = os.path.join(base, 'canary', filename)
+        if os.path.isfile(cand):
+            return cand
+    return os.path.join(base, filename)
+
+
 @bp.route('/rmm/agent/version')
 def rmm_agent_version():
     """Return current agent version + SHA-256 of agent_client.py.
     Authenticated by agent_id + token query params (agent calls this on startup).
+
+    Canary-gated: agents listed in setting['rmm_agent_canary'] are served the
+    staged canary build (rmm_agent/canary/); all others get the fleet default.
     """
     agent_id = request.args.get('agent_id', '')
     token = request.args.get('token', '')
@@ -521,7 +580,7 @@ def rmm_agent_version():
         return jsonify({'error': 'Unauthorized'}), 401
 
     import hashlib
-    agent_dir = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent')
+    agent_dir = _agent_payload_dir(agent_id)
     version_path = os.path.join(agent_dir, 'version.txt')
     agent_path = os.path.join(agent_dir, 'agent_client.py')
 
@@ -538,13 +597,19 @@ def rmm_agent_version():
 
 @bp.route('/rmm/agent/file')
 def rmm_agent_file():
-    """Serve agent_client.py for self-update. Authenticated by agent token."""
+    """Serve agent_client.py for self-update. Authenticated by agent token.
+
+    Canary-gated to match /rmm/agent/version: pinned agents get the staged
+    canary agent_client.py, everyone else gets the fleet default. Both endpoints
+    use the same resolver so the served file always matches the announced
+    checksum (the agent aborts the swap on any mismatch).
+    """
     agent_id = request.args.get('agent_id', '')
     token = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'error': 'Unauthorized'}), 401
 
-    agent_path = os.path.join(os.path.dirname(__file__), '..', 'rmm_agent', 'agent_client.py')
+    agent_path = os.path.join(_agent_payload_dir(agent_id), 'agent_client.py')
     return send_file(agent_path, mimetype='text/x-python', as_attachment=False)
 
 

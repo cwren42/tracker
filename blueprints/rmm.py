@@ -1082,20 +1082,118 @@ def _eagle_date_params(default_days: int = 7) -> tuple:
     return ("captured_at >= NOW() - CAST(:since AS INTERVAL)", {'since': f'{days} days'})
 
 
-def _eagle_report_scheduler():
-    """Check report schedules every 15 minutes and send due emails."""
+_EAGLE_REPORT_BROWSERS = "('msedge','chrome','firefox','brave','opera','iexplore','safari')"
+_EAGLE_REPORT_DAYS = {'daily': 1, 'weekly': 7, 'monthly': 30}
+
+
+def _eagle_naive(dt):
+    """Normalize a datetime to naive server-local for comparison (timestamptz columns
+    come back tz-aware; now_mst() is naive)."""
+    if dt is not None and getattr(dt, 'tzinfo', None) is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
+def _fmt_hms(seconds):
+    s = int(seconds or 0)
+    h, m = s // 3600, (s % 3600) // 60
+    return f"{h}h {m}m" if h else f"{m}m"
+
+
+def _build_eagle_report(app, agent_id, freq):
+    """Build a plain-text Eagle Eyes PRODUCTIVITY summary for one agent over the
+    period implied by freq. Active vs idle time + the productive/unproductive/neutral
+    split of active time (idle excluded) + top apps — same classification as the
+    on-screen report. Returns (label, body) or (label, None) when there's no data."""
+    days = _EAGLE_REPORT_DAYS.get(freq, 7)
+    with app.app_context():
+        # Friendly label: hostname / owner if resolvable
+        label = agent_id
+        try:
+            nm = db.session.execute(text("""
+                SELECT a.name, e.name FROM rmm_agent r
+                LEFT JOIN asset a ON a.id = r.asset_id
+                LEFT JOIN employee e ON e.id = a.employee_id
+                WHERE r.agent_id = :aid"""), {'aid': agent_id}).fetchone()
+            if nm:
+                label = (nm[0] or agent_id) + (f" / {nm[1]}" if nm[1] else "")
+        except Exception:
+            pass
+        row = db.session.execute(
+            text(f"""WITH classified AS (
+                    SELECT e.duration_s AS dur, COALESCE(e.idle_s, 0) AS idle_s,
+                           COALESCE(site_cls.productivity, proc_cls.productivity, 'neutral') AS productivity
+                    FROM rmm_eagle_event e
+                    LEFT JOIN LATERAL (
+                        SELECT sc.productivity FROM rmm_eagle_app_class sc
+                        WHERE sc.window_title_pattern IS NOT NULL
+                          AND (sc.agent_id IS NULL OR sc.agent_id = :aid)
+                          AND LOWER(e.process_name) IN {_EAGLE_REPORT_BROWSERS}
+                          AND LOWER(COALESCE(e.window_title,'')) LIKE '%' || LOWER(sc.window_title_pattern) || '%'
+                        ORDER BY sc.agent_id NULLS LAST LIMIT 1) site_cls ON true
+                    LEFT JOIN LATERAL (
+                        SELECT pc.productivity FROM rmm_eagle_app_class pc
+                        WHERE pc.window_title_pattern IS NULL
+                          AND LOWER(e.process_name) LIKE LOWER(pc.process_pattern) LIMIT 1) proc_cls ON true
+                    WHERE e.agent_id = :aid AND e.captured_at >= now() - (:days || ' days')::interval)
+                SELECT COALESCE(SUM(dur),0),
+                       COALESCE(SUM(dur) FILTER (WHERE idle_s >= 300),0),
+                       COALESCE(SUM(dur) FILTER (WHERE idle_s < 300 AND productivity='productive'),0),
+                       COALESCE(SUM(dur) FILTER (WHERE idle_s < 300 AND productivity='unproductive'),0),
+                       COALESCE(SUM(dur) FILTER (WHERE idle_s < 300 AND productivity NOT IN ('productive','unproductive')),0)
+                FROM classified"""),
+            {'aid': agent_id, 'days': days}).fetchone()
+        tracked = int(row[0] or 0)
+        if tracked == 0:
+            return label, None
+        idle = int(row[1] or 0); prod = int(row[2] or 0); unprod = int(row[3] or 0); neut = int(row[4] or 0)
+        active = max(0, tracked - idle)
+        apps = db.session.execute(
+            text("""SELECT process_name, SUM(duration_s) AS t FROM rmm_eagle_event
+                    WHERE agent_id = :aid AND captured_at >= now() - (:days || ' days')::interval
+                    GROUP BY process_name ORDER BY t DESC LIMIT 5"""),
+            {'aid': agent_id, 'days': days}).fetchall()
+
+        def pct(n, d):
+            return round(100.0 * n / d, 0) if d else 0
+        lines = [
+            f"Eagle Eyes {freq.title()} Productivity Report — {label}",
+            f"Period: last {days} day(s)  ·  generated {now_mst().strftime('%Y-%m-%d %H:%M')}",
+            "",
+            f"  Active:        {_fmt_hms(active)}  ({pct(active, tracked):.0f}% of tracked)",
+            f"  Idle/away:     {_fmt_hms(idle)}  ({pct(idle, tracked):.0f}% of tracked)",
+            f"  Productive:    {_fmt_hms(prod)}  ({pct(prod, active):.0f}% of active)",
+            f"  Unproductive:  {_fmt_hms(unprod)}  ({pct(unprod, active):.0f}% of active)",
+            f"  Neutral:       {_fmt_hms(neut)}  ({pct(neut, active):.0f}% of active)",
+            "",
+            "  Top applications:",
+        ]
+        for a in apps:
+            lines.append(f"    - {a[0] or '(unknown)'}: {_fmt_hms(a[1])}")
+        return label, "\n".join(lines)
+
+
+def _eagle_report_scheduler(app):
+    """Daemon loop: every 15 minutes, send any due Eagle Eyes productivity reports.
+    Started from app.py alongside the other background workers (app is passed in —
+    blueprint modules have no module-level app)."""
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
 
     def _is_due(freq, dow, send_time, last_sent):
-        """Return True if this schedule should fire now."""
-        now = datetime.utcnow()
-        h, m = (int(x) for x in (send_time or '08:00').split(':'))
-        if now.hour != h or now.minute > m + 15:
+        """Fire when local time matches send_time (within a 15-min window) and we
+        haven't already sent today for this schedule."""
+        now = now_mst()  # server-local, matches how send_time is entered
+        try:
+            h, m = (int(x) for x in (send_time or '08:00').split(':'))
+        except Exception:
+            h, m = 8, 0
+        if now.hour != h or not (m <= now.minute <= m + 15):
             return False
-        if last_sent and (now - last_sent).total_seconds() < 3600:
-            return False  # already sent within the last hour
+        last = _eagle_naive(last_sent)
+        if last and (now - last).total_seconds() < 6 * 3600:
+            return False  # already sent recently (guards the 15-min recheck window)
         if freq == 'daily':
             return True
         if freq == 'weekly' and now.isoweekday() == int(dow or 1):
@@ -1103,24 +1201,6 @@ def _eagle_report_scheduler():
         if freq == 'monthly' and now.day == 1:
             return True
         return False
-
-    def _build_eagle_report(agent_id):
-        """Build a plain-text Eagle Eyes summary for a given agent (or all)."""
-        with app.app_context():
-            where = "WHERE agent_id = :aid" if agent_id else ""
-            params = {'aid': agent_id} if agent_id else {}
-            rows = db.session.execute(text(f"""
-                SELECT agent_id, event_type, description, captured_at
-                FROM rmm_eagle_event
-                {where}
-                ORDER BY captured_at DESC LIMIT 50
-            """), params).mappings().fetchall()
-            if not rows:
-                return None, "No Eagle Eyes events in the last period."
-            lines = [f"Eagle Eyes Report — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n"]
-            for r in rows:
-                lines.append(f"  [{r['captured_at']}] {r['agent_id']} – {r['event_type']}: {r['description']}")
-            return rows[0]['agent_id'], "\n".join(lines)
 
     while True:
         try:
@@ -1132,27 +1212,39 @@ def _eagle_report_scheduler():
                 """)).mappings().fetchall()
 
                 for sch in schedules:
-                    last = datetime.fromisoformat(sch['last_sent_at']) if sch['last_sent_at'] else None
-                    if not _is_due(sch['frequency'], sch['day_of_week'], sch['send_time'], last):
+                    if not sch['agent_id'] or not sch['email_to']:
                         continue
-                    subject_agent, body = _build_eagle_report(sch['agent_id'])
+                    if not _is_due(sch['frequency'], sch['day_of_week'], sch['send_time'], sch['last_sent_at']):
+                        continue
+                    # Atomic cross-worker claim: stamp last_sent only if it's unchanged
+                    # since we read it, so exactly one gunicorn worker sends this report.
+                    claimed = db.session.execute(text("""
+                        UPDATE rmm_eagle_report_schedule SET last_sent_at = :now
+                        WHERE id = :id AND last_sent_at IS NOT DISTINCT FROM :old
+                        RETURNING id"""),
+                        {'now': now_mst(), 'old': sch['last_sent_at'], 'id': sch['id']}).fetchone()
+                    db.session.commit()
+                    if not claimed:
+                        continue  # another worker already took this one
+                    label, body = _build_eagle_report(app, sch['agent_id'], sch['frequency'] or 'weekly')
                     if not body:
-                        continue
+                        continue  # no data this period; claim stands, retry next period
                     try:
                         msg = MIMEMultipart('alternative')
-                        msg['Subject'] = f"Eagle Eyes Report — {subject_agent or 'All Agents'}"
+                        msg['Subject'] = f"Eagle Eyes {(sch['frequency'] or 'weekly').title()} Report — {label}"
                         msg['From'] = current_app.config.get('MAIL_DEFAULT_SENDER', 'assettracker@cirque.com')
                         msg['To'] = sch['email_to']
                         msg.attach(MIMEText(body, 'plain'))
                         with smtplib.SMTP(current_app.config.get('MAIL_SERVER', '10.15.0.4'),
                                           current_app.config.get('MAIL_PORT', 25)) as smtp:
                             smtp.sendmail(msg['From'], [sch['email_to']], msg.as_string())
-                        db.session.execute(text(
-                            "UPDATE rmm_eagle_report_schedule SET last_sent_at = :ts WHERE id = :id"
-                        ), {'ts': datetime.utcnow().isoformat(), 'id': sch['id']})
-                        db.session.commit()
                         logger.info(f"Eagle Eyes report sent to {sch['email_to']} (schedule {sch['id']})")
                     except Exception as _mail_err:
+                        # Release the claim so the next 15-min pass retries the send.
+                        db.session.execute(text(
+                            "UPDATE rmm_eagle_report_schedule SET last_sent_at = :old WHERE id = :id"),
+                            {'old': sch['last_sent_at'], 'id': sch['id']})
+                        db.session.commit()
                         logger.warning(f"Eagle Eyes email failed for schedule {sch['id']}: {_mail_err}")
         except Exception as _sched_err:
             logger.warning(f'Eagle report scheduler error: {_sched_err}')

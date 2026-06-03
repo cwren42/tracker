@@ -120,6 +120,97 @@ def _save_ico(path: str) -> None:
         f.write(base64.b64decode(_ICO_B64))
 
 
+# ── shared UI theming: DPI-aware, branded header, one consistent ttk look ────
+_LOGO_WHITE_B64 = "iVBORw0KGgoAAAANSUhEUgAAACIAAAAgCAYAAAB3j6rJAAAELUlEQVR4nJWXW6hVVRSG9+WcJOrcyoJ6MNKOZL742oVO3qBTPUVPFZGJKGFE9NqD0EUxK4roNYjIJOuISBH0FF3xlF1B6MnKtBQRM4/b7dlfD/Mfrn/NvdfZ2wWLudacc4z5j39c1li1WsUFNIA6MAl8B1yj93qVjMnWgYaevwDu13Ozn2wvZU2Nb5OulwZVZrKPSPZroHnZQEzRHVLUBs4Dy93aCtm62BwBjgIXpWPjoIaUgEjhV1JyXuNMP2VmxAuSaQHzAjUWLr8cNoLWtsawbG0VGIurm4H/BMB1bB+IFaP1auAI0NE9Z8+HxFiXZWbE+wagZbLngGX93FsDhjRuk6KOKF0tJWHhptwyA3FXxuADwOfSBbB3QVaM1iXAWVP0jNZf1vs8cAwYd1Yo4upbO/Rjra3PXDRVCcYsetfY+BVYBAzp4L+MlZ0GIGQfMzZawApb22d6Z2VEowrE7doYbNyn+UUaN9pBc6RiV9c9AvxhQF+XzLDWl5OyL3Rv6GLFaP3SaP0kW2vqnrU9H5mOSNeOmBszkGHoLjPkKDBKuJciQB+2TReAlZRLdSi7x/YBrNf8s3qfB06SYi2yMMYJ4LjJRjoPRZBeRUrXoPXNXsFkYD40678X/cPAT8bWnkwmxs1myBywlCgDwHO2eBK4jiyYzD0N4BZSOodlm7VnWu9tAbozB0MK/B8M8O44YAlw2th4ujK1yuzsMFccA67V/AGK66AOzt27zmQ7wJoasN8EZ0VxIzv0SpJ/J4AxzeXpvEvzK0lxcIaUJQ9VuGi35DrAbzXgUwPyDeW6EJasAk4BJ4B/gHsr/D2p+cXAjcANwES4NgPyjrFypEaq/f+aZVsuRXJZcK8B/plU6K4gBWtXOle4M3TdbSAApmPD82bZcbmggQUscBOp9EeZfkrzefleTQrsKGR1ByKdB7vAa2GUVGByf4cFwU4UrYty0WLNz2i+Q2oru77Oputx09FCzZYfssE2lLoxyl3XYbPmLa3dSoqRvBsL3SE/CvxpBr96aZ9tyinbl1nizXBcB8zinZqbpyjxYUToeNGM/ZvUkBfM2cYpbQx/r9N8fPQeNUUXgNvMveOkehKs7NBaxMpSUtcW61v87F4R/YE2Rjc2TCpKI5Q/A29YAIYLNhnQc6QKHHr3mN4fsUKXAwkal1Eu30/2CNQTpFrRoBxDTcrpHM32lMlC8aGs7NIC/XZD/zupT/FaszVXZLJrskPXAp9RXPsXBJFF9xgpnaPpPWPPv5AK2ULN84yBOUvxTWmRMmzh5llKwt9PSFk7G6erLDI3TVJO55B9rS8bPVhpkD6CUPxgRTM8yA9WNNvxg9WdrgOAybuxtu5S11YhG0aM6/A86IcGAtEDzHtS9IrPDygb1XoWpevAbGSW1Um/BIeB6wcKslqXew8BD/Yz4n9TxO/xVCpB7wAAAABJRU5ErkJggg=="
+_PALETTE = {
+    'maroon':   '#8B1A2B',
+    'maroon_d': '#6E141F',
+    'panel':    '#f4f5f7',
+    'surface':  '#ffffff',
+    'text':     '#1f2430',
+    'muted':    '#6b7280',
+    'border':   '#d6dae0',
+    'danger':   '#c0392b',
+}
+_photo_refs = []   # keep PhotoImage refs alive (Tk garbage-collects them otherwise)
+_dpi_done = False
+
+
+def _set_dpi_aware():
+    """Per-monitor DPI awareness so Windows stops bitmap-stretching (blurring) our
+    windows on high-DPI displays. Must run before the first Tk window is created."""
+    global _dpi_done
+    if _dpi_done:
+        return
+    _dpi_done = True
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor v2
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()        # fallback: system DPI
+    except Exception:
+        pass
+
+
+def _apply_theme(root):
+    """Apply one consistent ttk theme + palette to a dialog. Also sets sane defaults
+    for the classic tk widgets the dialogs still use, so everything matches."""
+    import tkinter as tk
+    from tkinter import ttk
+    root.configure(bg=_PALETTE['panel'])
+    root.option_add('*Font', 'Segoe\\ UI 10')
+    st = ttk.Style(root)
+    try:
+        st.theme_use('clam')
+    except Exception:
+        pass
+    st.configure('.', font=('Segoe UI', 10), background=_PALETTE['panel'], foreground=_PALETTE['text'])
+    st.configure('TFrame', background=_PALETTE['panel'])
+    st.configure('TLabel', background=_PALETTE['panel'], foreground=_PALETTE['text'])
+    st.configure('Muted.TLabel', foreground=_PALETTE['muted'])
+    st.configure('Field.TLabel', font=('Segoe UI', 9, 'bold'))
+    st.configure('TEntry', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'],
+                 lightcolor=_PALETTE['border'], darkcolor=_PALETTE['border'], padding=4)
+    st.configure('TCombobox', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'], padding=3)
+    st.map('TEntry', bordercolor=[('focus', _PALETTE['maroon'])])
+    st.map('TCombobox', bordercolor=[('focus', _PALETTE['maroon'])])
+    st.configure('Primary.TButton', font=('Segoe UI', 10, 'bold'), foreground='white',
+                 background=_PALETTE['maroon'], bordercolor=_PALETTE['maroon'],
+                 focuscolor=_PALETTE['maroon'], padding=(16, 7), relief='flat')
+    st.map('Primary.TButton',
+           background=[('active', _PALETTE['maroon_d']), ('pressed', _PALETTE['maroon_d'])],
+           foreground=[('disabled', '#e9c6cc')])
+    st.configure('Ghost.TButton', font=('Segoe UI', 10), foreground=_PALETTE['maroon'],
+                 background=_PALETTE['panel'], bordercolor=_PALETTE['border'],
+                 padding=(14, 7), relief='flat')
+    st.map('Ghost.TButton', background=[('active', '#e9ebef')])
+    return st
+
+
+def _branded_header(root, title):
+    """Maroon header bar with the white Cirque logo + title (replaces the old text glyph)."""
+    import tkinter as tk
+    hdr = tk.Frame(root, bg=_PALETTE['maroon'], height=58)
+    hdr.pack(fill='x')
+    hdr.pack_propagate(False)
+    try:
+        img = tk.PhotoImage(data=_LOGO_WHITE_B64)
+        _photo_refs.append(img)
+        tk.Label(hdr, image=img, bg=_PALETTE['maroon']).pack(side='left', padx=(16, 10))
+    except Exception:
+        pass
+    tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
+             font=('Segoe UI Semibold', 14)).pack(side='left', pady=15)
+    return hdr
+
+
+def _window_icon(root):
+    """Set the window/taskbar icon from the embedded ICO."""
+    _apply_theme(root)
+    _window_icon(root)
+
+
 def _get_username() -> str:
     try:
         import ctypes
@@ -418,26 +509,19 @@ def _show_ticket_form(config: dict) -> None:
     hostname    = _get_hostname()
     username    = _get_username()
 
+    _set_dpi_aware()
     root = tk.Tk()
     root.title('Submit IT Ticket')
     root.resizable(False, False)
     root.attributes('-topmost', True)
 
-    # Window icon
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
     # ── layout ──────────────────────────────────────────────────────────────
     pad = dict(padx=12, pady=6)
 
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Submit IT Ticket', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Submit IT Ticket')
 
     f = tk.Frame(root, padx=16, pady=12)
     f.pack(fill='both', expand=True)
@@ -552,22 +636,16 @@ def _show_install_software_form(config: dict) -> None:
 
     files = _list_ittools_installers()
 
+    _set_dpi_aware()
     root = tk.Tk()
     root.title('Install Software')
     root.resizable(False, False)
     root.attributes('-topmost', True)
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
     pad = dict(padx=12, pady=6)
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Install Software', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Install Software')
 
     f = tk.Frame(root, padx=16, pady=12)
     f.pack(fill='both', expand=True)
@@ -712,22 +790,16 @@ def _show_request_fix_form(config: dict) -> None:
             _log(f'fetch fixes failed: {e}')
             fetch_error = "Couldn't reach IT to load available fixes. Try again later."
 
+    _set_dpi_aware()
     root = tk.Tk()
     root.title('Request a Fix')
     root.resizable(False, False)
     root.attributes('-topmost', True)
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
     pad = dict(padx=12, pady=6)
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Request a Fix', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Request a Fix')
 
     f = tk.Frame(root, padx=16, pady=12)
     f.pack(fill='both', expand=True)
@@ -842,22 +914,16 @@ def _show_info_dialog(config: dict) -> None:
     it_contact = cfg.get('it_contact', 'IT Support')
     reboot    = _pending_reboot()
 
+    _set_dpi_aware()
     root = tk.Tk()
     root.title('Computer Info')
     root.resizable(False, False)
     root.attributes('-topmost', True)
 
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Computer Info', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Computer Info')
 
     f = tk.Frame(root, padx=20, pady=16)
     f.pack(fill='both')
@@ -888,6 +954,7 @@ def _show_updates_dialog() -> None:
 
     reboot = _pending_reboot()
 
+    _set_dpi_aware()
     root = tk.Tk()
     root.withdraw()
 

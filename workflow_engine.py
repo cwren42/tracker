@@ -566,7 +566,10 @@ def _dispatch_to_agent(agent_id: str, online: bool, shell: str, code: str,
             if result is None:
                 return False, {"delivered": "websocket", "session_id": session_id,
                                "error": "Timed out waiting for script_result"}
-            exit_code = int(result.get("exit_code", 1) or 1)
+            # NB: do NOT use `or 1` here — a successful exit_code of 0 is falsy and
+            # would be rewritten to 1, marking every successful fix as failed.
+            _ec = result.get("exit_code", 1)
+            exit_code = int(_ec) if _ec is not None else 1
             out = {
                 "delivered": "websocket", "session_id": session_id,
                 "exit_code": exit_code,

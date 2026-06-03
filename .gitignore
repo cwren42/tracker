@@ -52,3 +52,6 @@ Thumbs.db
 # Exchange Online app-only auth (cert + key + pfx) — never commit
 .exo_auth/
 *.pfx
+
+# Agent update signing private key — never commit
+.agent_signing/

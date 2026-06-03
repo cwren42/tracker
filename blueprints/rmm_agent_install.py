@@ -538,6 +538,40 @@ def rmm_agent_fixes():
     return jsonify({'fixes': [{'id': r[0], 'name': r[1], 'description': r[2] or ''} for r in rows]})
 
 
+def _serve_agent_sig(agent_id, token, filename):
+    """Return the detached RSA signature of the canary-aware served agent payload file, so
+    the agent can verify authenticity before swapping. Matches the same _agent_file the
+    /file + /tray endpoints serve, so the signature always covers the bytes that agent gets."""
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    path = _agent_file(agent_id, filename)
+    if not os.path.isfile(path):
+        return jsonify({'error': f'{filename} not found'}), 404
+    try:
+        import agent_update_signing
+        if not agent_update_signing.signing_available():
+            return jsonify({'error': 'signing not configured'}), 503
+        return jsonify({'sig': agent_update_signing.sign_file(path),
+                        'alg': 'RSA-3072-PKCS1v15-SHA256'})
+    except Exception as e:
+        current_app.logger.warning('agent payload signing failed for %s: %s', filename, e)
+        return jsonify({'error': 'signing failed'}), 500
+
+
+@bp.route('/rmm/agent/file-sig')
+def rmm_agent_file_sig():
+    """Detached signature of the served agent_client.py (self-update authenticity check)."""
+    return _serve_agent_sig(request.args.get('agent_id', ''), request.args.get('token', ''),
+                            'agent_client.py')
+
+
+@bp.route('/rmm/agent/tray-sig')
+def rmm_agent_tray_sig():
+    """Detached signature of the served tray.py (tray-update authenticity check)."""
+    return _serve_agent_sig(request.args.get('agent_id', ''), request.args.get('token', ''),
+                            'tray.py')
+
+
 @bp.route('/rmm/agent/tray-install')
 def rmm_agent_tray_install():
     """Serve tray_install.py — authenticated by agent token or browser session."""

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.9"
+AGENT_VERSION = "2.9.10"
 
 import asyncio
 import base64
@@ -66,6 +66,51 @@ def _ssl_ctx():
         return ctx
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Self-update payload signature verification (CANARY only)
+# Server signs the served agent_client.py / tray.py with RSA-3072 PKCS1v15
+# SHA-256; we verify the detached hex signature before swapping any payload.
+# Fail-closed: no sig / bad sig / verify error => do NOT apply the update.
+# ---------------------------------------------------------------------------
+_UPDATE_PUB_E = 65537
+_UPDATE_PUB_N = int("c60971a6afa233df8868968ff69b438104eb928ae33c79089eb855d96f148a43db05216929f2534beea5ccbfcfd3f905fb4c8f259d91958dd955ea3c6be1118f3ffea3c72ebeb5a6d1b1ec6a88ab959406f78e38c801d88909874fd7497b08772b987c5c7652ded9ef928b17544a4bfc7d52e1889f20cf8293e778cf64eabac8c3c85600d0af5874270be30a049fc0fecc50e1584a7899976398bba82dcacd82211fbe210012de186be7bbd496f1eef3d7a1cd7f8f3165bf00eab9fa60f4b25af628f54b9b7790258a93cd4edf6c7274e31e8708ae4a83511d9bf69bdd22e4794f1ec11fa378c777300ab238b93bba5283d629259ead16413df74a3b7318804d11f7a93c2af48b157e73bb780059cbd4fc0d0fa55a7ea65c03ba496336e6fc86e2101221f44945980cc9cbc5a9a0c9a28da0f34d2852f219e22e461e33ffda1c922351e738d633adf82b4f9f29f2f5a2fa859e6aa4b49d64ab3c5896bbcfd0e554b191cfcd4c83ec7b730b66e9f988df75ca3ef69def7ad8307ec3d1a958a91f", 16)
+_SHA256_DER = bytes.fromhex("3031300d060960864801650304020105000420")  # PKCS#1 v1.5 SHA-256 DigestInfo
+
+
+def _verify_update_sig(data: bytes, sig_hex: str) -> bool:
+    try:
+        sig = bytes.fromhex(sig_hex)
+        k = (_UPDATE_PUB_N.bit_length() + 7) // 8
+        if len(sig) != k:
+            return False
+        m = pow(int.from_bytes(sig, "big"), _UPDATE_PUB_E, _UPDATE_PUB_N)
+        em = m.to_bytes(k, "big")
+        if em[0:2] != b"\x00\x01":
+            return False
+        try:
+            sep = em.index(b"\x00", 2)
+        except ValueError:
+            return False
+        if sep < 10 or any(b != 0xFF for b in em[2:sep]):
+            return False
+        return em[sep + 1:] == _SHA256_DER + hashlib.sha256(data).digest()
+    except Exception:
+        return False
+
+
+def _fetch_update_sig(sig_url: str, ctx, timeout: int = 15) -> str:
+    """Fetch a detached signature from a *-sig endpoint. Returns the hex sig
+    string, or '' on any error / missing sig (caller fails closed)."""
+    try:
+        req = urllib.request.Request(sig_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+            obj = json.loads(r.read())
+        return str(obj.get("sig") or "")
+    except Exception as e:
+        print(f"[update] signature fetch failed: {e}", flush=True)
+        return ""
 
 
 def _ps_json(script: str, timeout: int = 15):
@@ -278,10 +323,19 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
                 with open(_TRAY_PY_PATH, 'rb') as fh:
                     existing = fh.read()
             if new_src != existing:
-                os.makedirs(os.path.dirname(_TRAY_PY_PATH), exist_ok=True)
-                with open(_TRAY_PY_PATH, 'wb') as fh:
-                    fh.write(new_src)
-                print('[tray] tray.py updated', flush=True)
+                # Signature gate (CANARY): verify the served tray.py before writing.
+                # Fail-closed -- no sig / bad sig leaves the existing tray.py in place.
+                tray_sig_url = f"{tracker_url}/rmm/agent/tray-sig?agent_id={agent_id}&token={token}"
+                tray_sig = _fetch_update_sig(tray_sig_url, ctx)
+                if not tray_sig:
+                    print('[tray] No signature returned for tray.py -- skipping update (fail-closed)', flush=True)
+                elif not _verify_update_sig(new_src, tray_sig):
+                    print('[tray] Signature verification FAILED for tray.py -- skipping update (fail-closed)', flush=True)
+                else:
+                    os.makedirs(os.path.dirname(_TRAY_PY_PATH), exist_ok=True)
+                    with open(_TRAY_PY_PATH, 'wb') as fh:
+                        fh.write(new_src)
+                    print('[tray] Signature verified -- tray.py updated', flush=True)
         except Exception as dl_err:
             print(f'[tray] download failed: {dl_err}', flush=True)
 
@@ -779,6 +833,18 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
         if server_checksum and hashlib.sha256(new_code).hexdigest() != server_checksum:
             print("[update] Checksum mismatch -- aborting", flush=True)
             return False
+
+        # Signature gate (CANARY): verify a detached RSA signature of the EXACT
+        # bytes we are about to swap in. Fail-closed -- no sig / bad sig aborts.
+        sig_url = f"{tracker_url}/rmm/agent/file-sig?agent_id={agent_id}&token={token}"
+        sig = _fetch_update_sig(sig_url, _ssl_ctx())
+        if not sig:
+            print("[update] No signature returned for agent_client.py -- aborting (fail-closed)", flush=True)
+            return False
+        if not _verify_update_sig(new_code, sig):
+            print("[update] Signature verification FAILED for agent_client.py -- aborting (fail-closed)", flush=True)
+            return False
+        print("[update] Signature verified for agent_client.py", flush=True)
 
         tmp = current_path + ".new"
         old = current_path + ".old"

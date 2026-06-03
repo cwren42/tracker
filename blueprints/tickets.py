@@ -1298,6 +1298,30 @@ def api_create_support_ticket():
         except Exception:
             logger.warning(f'software.install_requested publish failed for ticket {ticket.id}')
 
+    # Fix request (from the systray "Request a fix" picker): payload carries fix_request:{fix_id}.
+    # Publish fix.requested so the "Apply Fix" workflow parks an apply_fix approval at /approvals
+    # (gated; runs the vetted library fix as SYSTEM on the device once an admin approves).
+    fxreq = payload.get('fix_request') or {}
+    if fxreq.get('fix_id'):
+        try:
+            from sqlalchemy import text as _t
+            fid = int(fxreq.get('fix_id'))
+            frow = db.session.execute(
+                _t("SELECT name FROM rmm_script_library WHERE id=:id AND is_fix=true AND is_active=true"),
+                {'id': fid}).fetchone()
+            if frow:
+                import event_bus
+                event_bus.publish("fix.requested", {
+                    "fix_id": fid,
+                    "fix_name": frow[0],
+                    "asset_id": asset_id,
+                    "hostname": hostname or '',
+                    "ticket_id": ticket.id,
+                    "requested_by": reporter_name or reporter_email or '',
+                }, source="tray")
+        except Exception:
+            logger.warning(f'fix.requested publish failed for ticket {ticket.id}')
+
     return jsonify({
         'success': True,
         'ticket_id': ticket.id,

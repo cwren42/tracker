@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 from blueprints.rmm import bp, _verify_agent_token, _agent_payload_dir, _agent_file
+from api_system import require_api_key
 
 
 @bp.route('/download/agent-installer')
@@ -518,6 +519,23 @@ def rmm_agent_tray_sha():
     with open(tray_path, 'rb') as f:
         sha = _hl.sha256(f.read()).hexdigest()
     return jsonify({'sha256': sha})
+
+
+@bp.route('/rmm/agent/fixes')
+@require_api_key('create_tickets')
+def rmm_agent_fixes():
+    """One-click fix library for the systray 'Request a fix' picker.
+
+    Authenticated by the same tray API key the systray already uses to submit tickets
+    (Authorization: Bearer <tray_api_key>, scope create_tickets) — NOT the per-agent
+    token, which the tray process does not hold. Returns vetted, active fixes only
+    (id/name/description); the SYSTEM scripts stay server-side — the agent only ever
+    sends back a fix_id, which the apply_fix action re-validates before running.
+    """
+    rows = db.session.execute(text(
+        "SELECT id, name, description FROM rmm_script_library "
+        "WHERE is_fix=true AND is_active=true ORDER BY name")).fetchall()
+    return jsonify({'fixes': [{'id': r[0], 'name': r[1], 'description': r[2] or ''} for r in rows]})
 
 
 @bp.route('/rmm/agent/tray-install')

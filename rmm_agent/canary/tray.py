@@ -175,6 +175,25 @@ def _sha256_file(name: str) -> str:
     return h.hexdigest().upper()
 
 
+def _fetch_fixes(tracker_url: str, api_key: str, timeout: int = 15) -> list:
+    """GET the vetted one-click fix library from the server.
+
+    Authenticated with the SAME Bearer tray_api_key the ticket POST uses (scope
+    create_tickets) and the SAME TLS posture as _post_ticket (_ssl_ctx). Returns
+    a list of {id, name, description} dicts. Raises on transport / non-2xx so the
+    caller can show an error.
+    """
+    req = urllib.request.Request(
+        f'{tracker_url}/rmm/agent/fixes',
+        headers={'Authorization': f'Bearer {api_key}'},
+        method='GET',
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
+        body = json.loads(resp.read())
+    fixes = body.get('fixes') or []
+    return [f for f in fixes if isinstance(f, dict) and f.get('id') is not None and f.get('name')]
+
+
 def _pending_reboot() -> bool:
     """Return True if Windows has a pending reboot."""
     try:
@@ -664,6 +683,152 @@ def _show_install_software_form(config: dict) -> None:
     root.mainloop()
 
 
+# ── request-a-fix picker ──────────────────────────────────────────────────────
+
+def _show_request_fix_form(config: dict) -> None:
+    """Open a tkinter dialog letting the user pick a vetted one-click fix and
+    submit a fix request. Fetches the fix library via GET /rmm/agent/fixes (same
+    Bearer tray_api_key as the ticket POST) and reuses the existing ticket
+    transport (_post_ticket) + offline spool (_spool_ticket)."""
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
+    cfg = _load_config() or config
+    tracker_url = _resolve_tracker_url(cfg)
+    api_key     = cfg.get('tray_api_key', '')
+    asset_id    = cfg.get('asset_id', '')
+    hostname    = _get_hostname()
+    username    = _get_username()
+
+    # Fetch the fix library up front so we can show names + descriptions.
+    fixes = []
+    fetch_error = None
+    if not tracker_url or not api_key:
+        fetch_error = 'Tray config is missing. Contact IT.'
+    else:
+        try:
+            fixes = _fetch_fixes(tracker_url, api_key)
+        except Exception as e:
+            _log(f'fetch fixes failed: {e}')
+            fetch_error = "Couldn't reach IT to load available fixes. Try again later."
+
+    root = tk.Tk()
+    root.title('Request a Fix')
+    root.resizable(False, False)
+    root.attributes('-topmost', True)
+    try:
+        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
+        _save_ico(ico_path)
+        root.iconbitmap(ico_path)
+    except Exception:
+        pass
+
+    pad = dict(padx=12, pady=6)
+    header = tk.Frame(root, bg='#8B1A2B', height=52)
+    header.pack(fill='x')
+    tk.Label(header, text='  ◈◈  Request a Fix', bg='#8B1A2B', fg='white',
+             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+
+    f = tk.Frame(root, padx=16, pady=12)
+    f.pack(fill='both', expand=True)
+
+    if fetch_error or not fixes:
+        msg = fetch_error or ('No fixes are available right now.\n\n'
+                              'Contact IT if you were expecting one.')
+        tk.Label(f, text=msg, font=('Segoe UI', 9), justify='left',
+                 anchor='w').grid(row=0, column=0, columnspan=2, sticky='w', **pad)
+        tk.Button(f, text='Close', font=('Segoe UI', 10), padx=12, pady=6,
+                  relief='flat', command=root.destroy).grid(row=1, column=0, columnspan=2, pady=(6, 2))
+        root.mainloop()
+        return
+
+    # Map display name -> fix id (names shown in the dropdown).
+    name_to_id = {fx['name']: fx['id'] for fx in fixes}
+    id_to_desc = {fx['id']: (fx.get('description') or '') for fx in fixes}
+    names = [fx['name'] for fx in fixes]
+
+    # Fix picker
+    tk.Label(f, text='Fix *', font=('Segoe UI', 9, 'bold'), anchor='w').grid(row=0, column=0, sticky='w', **pad)
+    fix_var = tk.StringVar(value=names[0])
+    ttk.Combobox(f, textvariable=fix_var, values=names, state='readonly', width=46).grid(row=0, column=1, sticky='ew', **pad)
+
+    # Description help text (updates with the selected fix)
+    desc_var = tk.StringVar(value=id_to_desc.get(name_to_id[names[0]], ''))
+    tk.Label(f, textvariable=desc_var, font=('Segoe UI', 8), fg='#888', anchor='w',
+             justify='left', wraplength=360).grid(row=1, column=1, sticky='w', padx=12)
+
+    def _on_pick(*_a):
+        fid = name_to_id.get(fix_var.get().strip())
+        desc_var.set(id_to_desc.get(fid, ''))
+    fix_var.trace_add('write', _on_pick)
+
+    # What's wrong? (required reason)
+    tk.Label(f, text="What's wrong? *", font=('Segoe UI', 9, 'bold'), anchor='nw').grid(row=2, column=0, sticky='nw', **pad)
+    reason_text = tk.Text(f, width=46, height=5, font=('Segoe UI', 9), wrap='word')
+    reason_text.grid(row=2, column=1, sticky='ew', **pad)
+
+    status_var = tk.StringVar()
+    tk.Label(f, textvariable=status_var, fg='#555', font=('Segoe UI', 8)).grid(row=3, column=0, columnspan=2, sticky='w', padx=12)
+
+    def _submit():
+        fix_name = fix_var.get().strip()
+        fix_id   = name_to_id.get(fix_name)
+        reason   = reason_text.get('1.0', 'end').strip()
+        if fix_id is None:
+            messagebox.showwarning('Pick a Fix', 'Please choose a fix from the list.', parent=root)
+            return
+        if not reason:
+            messagebox.showwarning('Reason Required', "Please describe what's wrong.", parent=root)
+            return
+        if not tracker_url or not api_key:
+            messagebox.showerror('Not Configured', 'Tray config is missing. Contact IT.', parent=root)
+            return
+
+        btn_submit.config(state='disabled', text='Submitting…')
+        payload = {
+            'subject':       f'Fix request: {fix_name}',
+            'description':   reason,
+            'source':        'tray',
+            'asset_id':      int(asset_id) if str(asset_id).isdigit() else None,
+            'reporter_name': username or None,
+            'hostname':      hostname,
+            'fix_request': {
+                'fix_id': int(fix_id),
+            },
+        }
+        status_var.set('Sending…')
+        root.update()
+        try:
+            ticket_id = _post_ticket(tracker_url, api_key, payload)
+            status_var.set(f'✓ Request #{ticket_id} submitted — awaiting IT approval.')
+            _toast('Fix Requested',
+                   f"IT received your request for '{fix_name}' (#{ticket_id}). "
+                   "It will run once approved.")
+            _run_in_thread(_flush_spool, tracker_url, api_key)
+            root.after(2200, root.destroy)
+        except Exception as e:
+            _log(f'fix request failed, spooling: {e}')
+            _spool_ticket(payload)
+            status_var.set("No connection to IT right now — saved, will send when you're back online.")
+            _toast('Request Saved',
+                   "No connection to IT right now — your fix request is saved and "
+                   "will send automatically once you're back online.")
+            root.after(2600, root.destroy)
+
+    btn_frame = tk.Frame(f)
+    btn_frame.grid(row=4, column=0, columnspan=2, pady=(6, 2))
+    btn_submit = tk.Button(btn_frame, text='Request Fix', bg='#8B1A2B', fg='white',
+                           font=('Segoe UI', 10, 'bold'), padx=16, pady=6,
+                           relief='flat', cursor='hand2', command=_submit)
+    btn_submit.pack(side='left', padx=6)
+    tk.Button(btn_frame, text='Cancel', font=('Segoe UI', 10), padx=12, pady=6,
+              relief='flat', command=root.destroy).pack(side='left', padx=6)
+
+    f.columnconfigure(1, weight=1)
+    reason_text.focus_set()
+    root.mainloop()
+
+
 # ── computer info dialog ─────────────────────────────────────────────────────
 
 def _show_info_dialog(config: dict) -> None:
@@ -791,6 +956,8 @@ def main():
                          default=True),
         pystray.MenuItem('Install software',
                          lambda icon, item: _run_in_thread(_show_install_software_form, config)),
+        pystray.MenuItem('Request a fix',
+                         lambda icon, item: _run_in_thread(_show_request_fix_form, config)),
         pystray.MenuItem('Open IT Portal',
                          lambda icon, item: webbrowser.open(_resolve_tracker_url(_load_config()))),
         pystray.Menu.SEPARATOR,

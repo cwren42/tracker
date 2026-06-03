@@ -11,7 +11,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify,
                    redirect, render_template, request, send_file, session,
                    url_for)
 from flask_login import current_user, login_required
-from sqlalchemy import func, or_, text
+from sqlalchemy import event, func, or_, text
 
 from extensions import db, limiter
 from models import (
@@ -33,6 +33,23 @@ from utils import (
 )
 logger = logging.getLogger(__name__)
 from api_system import require_api_key
+
+
+@event.listens_for(SupportTicket, 'before_insert')
+def _auto_assign_ticket(mapper, connection, target):
+    """Auto-assign every new ticket to the default assignee (the sole IT person) when no
+    assignee is set — so nothing lands unassigned. Configurable via the setting
+    'default_ticket_assignee_user_id'; explicit assignments are always respected."""
+    if target.assigned_to_user_id is not None:
+        return
+    try:
+        row = connection.execute(
+            text("SELECT value FROM setting WHERE key = 'default_ticket_assignee_user_id'")
+        ).fetchone()
+        if row and row[0]:
+            target.assigned_to_user_id = int(row[0])
+    except Exception:
+        logger.warning('auto-assign default-assignee lookup failed', exc_info=True)
 
 
 bp = Blueprint('tickets', __name__)

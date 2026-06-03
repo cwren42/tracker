@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.17"
+AGENT_VERSION = "2.9.18"
 
 import asyncio
 import base64
@@ -2278,39 +2278,62 @@ def _run_dialog_in_user_session(ps_code: str, timeout_ms: int = 36 * 60 * 1000) 
         kernel32.CloseHandle(h_token)
 
 
-def _install_patches_wua(update_ids: list) -> dict:
-    """Install specific Windows Updates by Update ID (GUID) using the WUA COM API."""
-    if not update_ids:
-        return {"installed": 0, "reboot_required": False, "error": "No update IDs specified"}
-    ids_ps = ", ".join(f'"{v}"' for v in update_ids)
+def _install_patches_wua(update_ids: list, kb_ids=None, titles=None) -> dict:
+    """Install specific Windows Updates via the WUA COM API, matching the LIVE pending
+    set by UpdateID OR KB article. Defender/signature UpdateIDs rotate (often hourly),
+    so a stale snapshot UpdateID frequently no longer matches — but the KB number is
+    stable. KBs come from kb_ids and are also parsed out of the titles the server sends.
+    After installing, re-scans to report how many targeted updates are still pending
+    (post-install verification)."""
+    import re as _re
+    kbs = set()
+    for k in (kb_ids or []):
+        m = _re.search(r'(\d{6,7})', str(k))
+        if m:
+            kbs.add(m.group(1))
+    for t in (titles or []):
+        for m in _re.findall(r'KB(\d{6,7})', str(t), _re.I):
+            kbs.add(m)
+    if not update_ids and not kbs:
+        return {"installed": 0, "reboot_required": False, "error": "No update IDs or KBs specified"}
+    ids_ps = ", ".join(f'"{v}"' for v in (update_ids or []))
+    kbs_ps = ", ".join(f'"{v}"' for v in sorted(kbs))
     script = f"""
 $ids = @({ids_ps})
+$kbs = @({kbs_ps})
+function Match-U($u) {{
+    if ($ids -contains $u.Identity.UpdateID) {{ return $true }}
+    if ($kbs.Count -gt 0) {{ foreach ($kb in $u.KBArticleIDs) {{ if ($kbs -contains [string]$kb) {{ return $true }} }} }}
+    return $false
+}}
 try {{
     $Sess   = New-Object -ComObject Microsoft.Update.Session
     $Search = $Sess.CreateUpdateSearcher()
     $Found  = $Search.Search("IsInstalled=0 and IsHidden=0")
     $coll   = New-Object -ComObject Microsoft.Update.UpdateColl
-    foreach ($u in $Found.Updates) {{
-        if ($ids -contains $u.Identity.UpdateID) {{ [void]$coll.Add($u) }}
-    }}
+    foreach ($u in $Found.Updates) {{ if (Match-U $u) {{ [void]$coll.Add($u) }} }}
     if ($coll.Count -eq 0) {{
-        @{{installed=0;reboot_required=$false;error="No matching pending updates"}} | ConvertTo-Json -Compress
+        @{{installed=0;reboot_required=$false;still_pending=0;error="No matching pending updates"}} | ConvertTo-Json -Compress
         exit
     }}
-    $dl = $Sess.CreateUpdateDownloader()
-    $dl.Updates = $coll
-    [void]$dl.Download()
-    $inst = $Sess.CreateUpdateInstaller()
-    $inst.Updates = $coll
+    $dl = $Sess.CreateUpdateDownloader(); $dl.Updates = $coll; [void]$dl.Download()
+    $inst = $Sess.CreateUpdateInstaller(); $inst.Updates = $coll
     $res  = $inst.Install()
+    # post-install verification: re-scan and count targeted updates still pending
+    $still = 0
+    try {{
+        $F2 = $Search.Search("IsInstalled=0 and IsHidden=0")
+        foreach ($u in $F2.Updates) {{ if (Match-U $u) {{ $still++ }} }}
+    }} catch {{}}
     @{{
         installed       = $coll.Count
         reboot_required = $res.RebootRequired
         result_code     = $res.ResultCode
+        still_pending   = $still
         error           = ""
     }} | ConvertTo-Json -Compress
 }} catch {{
-    @{{installed=0;reboot_required=$false;error=$_.Exception.Message}} | ConvertTo-Json -Compress
+    @{{installed=0;reboot_required=$false;still_pending=0;error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
     result = _ps_json(script, timeout=30 * 60)  # up to 30 min for large patches
@@ -2320,6 +2343,7 @@ try {{
         "installed":       int(result.get("installed") or 0),
         "reboot_required": bool(result.get("reboot_required")),
         "result_code":     result.get("result_code"),
+        "still_pending":   int(result.get("still_pending") or 0),
         "error":           result.get("error") or "",
     }
 
@@ -4967,17 +4991,23 @@ async def main() -> None:
 
                         # --- Install approved patches ---
                         if msg_type == "install_patches":
-                            job_id     = payload.get("job_id")
-                            update_ids = payload.get("update_ids") or []
-                            print(f"[agent] install_patches job={job_id} count={len(update_ids)}", flush=True)
+                            job_id       = payload.get("job_id")
+                            update_ids   = payload.get("update_ids") or []
+                            kb_ids       = payload.get("kb_ids") or []
+                            titles       = payload.get("titles") or []
+                            allow_reboot = bool(payload.get("allow_reboot", False))
+                            print(f"[agent] install_patches job={job_id} count={len(update_ids)} allow_reboot={allow_reboot}", flush=True)
                             loop2 = asyncio.get_event_loop()
-                            result = await loop2.run_in_executor(None, _install_patches_wua, update_ids)
+                            result = await loop2.run_in_executor(None, _install_patches_wua, update_ids, kb_ids, titles)
                             await ws.send(json.dumps({
                                 "type":   "patch_install_result",
                                 "job_id": job_id,
                                 "result": result,
                             }))
-                            if result.get("reboot_required") and not result.get("error"):
+                            # Only reboot when the server explicitly allows it. Otherwise the
+                            # reboot stays pending (reboot_required is reported) and the user
+                            # reboots on their own schedule via the tray.
+                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
                             continue
 
@@ -4986,7 +5016,8 @@ async def main() -> None:
                             job_id       = payload.get("job_id")
                             cve_ids      = payload.get("cve_ids") or []
                             product_name = payload.get("product_name") or ''
-                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids} product={product_name}", flush=True)
+                            allow_reboot = bool(payload.get("allow_reboot", False))
+                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids} product={product_name} allow_reboot={allow_reboot}", flush=True)
                             loop2 = asyncio.get_event_loop()
                             result = await loop2.run_in_executor(
                                 None, _find_and_install_cve_patches, cve_ids, product_name
@@ -4996,7 +5027,7 @@ async def main() -> None:
                                 "job_id": job_id,
                                 "result": result,
                             }))
-                            if result.get("reboot_required") and not result.get("error"):
+                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
                             continue
 

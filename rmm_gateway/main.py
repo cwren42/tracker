@@ -598,7 +598,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                             j_cve   = job_row["cve_id"]
                             if new_status == 'installed':
                                 close_status = 'Remediated'
-                                close_note   = 'Auto-closed: patch confirmed by RMM'
+                                close_note   = 'RMM installed updates — pending Defender re-scan confirmation (specific KB not individually verified)'
                             else:
                                 close_status = 'Exception'
                                 close_note   = 'No automated patch found (no Windows Update KB or package manager update matched this CVE). Device remains exposed — manual update required.'

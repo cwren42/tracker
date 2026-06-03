@@ -391,6 +391,116 @@ def add_manual(title, content):
     return cid
 
 
+# Operational/learned knowledge — the runbook library. 'runbook' = distilled from a
+# resolved ticket/email or hand-authored; 'manual' = an operator-written note. These
+# are the editable, human-browsable knowledge; ISMS policy + system docs live in their
+# own subsystems (ISMS Manual / Settings → Systems) and are not part of this library.
+LIBRARY_TYPES = ("runbook", "manual")
+
+
+def list_knowledge(types=LIBRARY_TYPES):
+    """Library listing of the learned/operational knowledge, newest first. No embeddings
+    (kept out of the payload — they're large). Returns dict rows with a short excerpt."""
+    db = _db()
+    try:
+        ph = ",".join("?" for _ in types)
+        rows = db.execute(
+            "SELECT id, source_type, source_id, title, "
+            "LEFT(content, 280) AS excerpt, LENGTH(content) AS len, updated_at "
+            f"FROM knowledge_chunk WHERE source_type IN ({ph}) ORDER BY updated_at DESC",
+            tuple(types),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
+
+
+def get_chunk(chunk_id):
+    """Full single entry (with content) for the reader/editor. None if missing."""
+    db = _db()
+    try:
+        r = db.execute(
+            "SELECT id, source_type, source_id, title, content, updated_at "
+            "FROM knowledge_chunk WHERE id=?", (chunk_id,)
+        ).fetchone()
+        return dict(r) if r else None
+    finally:
+        db.close()
+
+
+def update_chunk(chunk_id, title, content):
+    """Edit a runbook/manual entry in place and re-embed. Raises ValueError if the entry
+    is missing or is a managed-elsewhere type (policy/ISMS/system doc)."""
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("Content is required.")
+    if not title:
+        title = content[:80]
+    db = _db()
+    try:
+        r = db.execute("SELECT source_type FROM knowledge_chunk WHERE id=?", (chunk_id,)).fetchone()
+        if not r:
+            raise ValueError("Entry not found.")
+        if r["source_type"] not in LIBRARY_TYPES:
+            raise ValueError(f"{r['source_type']} entries are managed in their own subsystem and can't be edited here.")
+        vec = _embed([f"{title}\n\n{content}"])[0]   # network call; ok to hold the conn
+        db.execute(
+            "UPDATE knowledge_chunk SET title=?, content=?, embedding=?, updated_at=? WHERE id=?",
+            (title, content, json.dumps(vec), _now(), chunk_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+    log.info("knowledge entry %s updated: %s", chunk_id, title)
+    return True
+
+
+def delete_chunk(chunk_id):
+    """Delete a runbook/manual entry. Raises ValueError for managed-elsewhere types.
+    Returns False if the entry didn't exist."""
+    db = _db()
+    try:
+        r = db.execute("SELECT source_type FROM knowledge_chunk WHERE id=?", (chunk_id,)).fetchone()
+        if not r:
+            return False
+        if r["source_type"] not in LIBRARY_TYPES:
+            raise ValueError(f"{r['source_type']} entries are managed in their own subsystem and can't be deleted here.")
+        db.execute("DELETE FROM knowledge_chunk WHERE id=?", (chunk_id,))
+        db.commit()
+    finally:
+        db.close()
+    log.info("knowledge entry %s deleted", chunk_id)
+    return True
+
+
+def add_runbook(title, content, source_id=None):
+    """Author a runbook (source_type='runbook') directly into the library. Upserts by
+    source_id when one is given (e.g. 'manual:my-slug'); otherwise inserts a new row."""
+    title = (title or "").strip()
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("Content is required.")
+    if not title:
+        title = content.splitlines()[0][:120] if content else "Untitled runbook"
+    vec = _embed([f"{title}\n\n{content}"])[0]
+    db = _db()
+    try:
+        if source_id:
+            db.execute("DELETE FROM knowledge_chunk WHERE source_type='runbook' AND source_id=?", (source_id,))
+        cur = db.execute(
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
+            "VALUES ('runbook', ?, ?, ?, ?, ?)",
+            (source_id, title, content, json.dumps(vec), _now()),
+        )
+        cid = cur.lastrowid
+        db.commit()
+    finally:
+        db.close()
+    log.info("runbook authored: %s (#%s)", title, cid)
+    return cid
+
+
 def add_system_doc(system_id, title, content, doc_key=None):
     """Attach a Markdown doc to an IT system — embedded into the knowledge base as
     source_type='system_doc', source_id='system:<id>[:doc_key]'. Upserts on (system,doc_key)

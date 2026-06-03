@@ -1,27 +1,32 @@
 {% extends "base.html" %}
-{% block title %}Knowledge Agent{% endblock %}
+{% block title %}Knowledge & Runbooks{% endblock %}
 {% block content %}
-{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)','runbook':'var(--warning)','manual':'var(--accent)'} %}
+{% set src_color = {'policy_section':'var(--accent)','system_description':'var(--info)','isms_document':'var(--success)','runbook':'var(--warning)','manual':'var(--info)'} %}
+{% set type_label = {'runbook':'Runbook','manual':'Note'} %}
 
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
   <div>
-    <h1 class="h4 mb-0"><i class="bi bi-journal-richtext me-2" style="color:var(--accent)"></i>Knowledge Agent
-      <span class="text-muted fw-normal fs-6">— ask the ISMS &amp; system docs</span></h1>
-    <div class="small text-muted">Semantic search + grounded answers with citations · {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}{% if runbook_count %} · <span style="color:var(--success)">{{ runbook_count }} learned runbook{{ 's' if runbook_count != 1 }}</span>{% endif %}</div>
+    <h1 class="h4 mb-0"><i class="bi bi-journal-richtext me-2" style="color:var(--accent)"></i>Knowledge &amp; Runbooks
+      <span class="text-muted fw-normal fs-6">— our learned IT knowledge</span></h1>
+    <div class="small text-muted">
+      {{ library|length }} runbook{{ 's' if library|length != 1 }} in the library ·
+      semantic search grounds answers across {{ chunk_count }} indexed chunk{{ 's' if chunk_count != 1 }}
+    </div>
   </div>
   <div class="d-flex gap-2">
-    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#addKnowledge">
-      <i class="bi bi-plus-lg me-1"></i>Add note
+    <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#addKnowledge">
+      <i class="bi bi-journal-plus me-1"></i>New runbook
     </button>
     <form method="post" action="{{ url_for('dashboard.knowledge_reindex') }}"
           onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Indexing…';">
-      <button class="btn btn-sm btn-outline-secondary" title="Re-embed the corpus from the ISMS + system docs">
+      <button class="btn btn-sm btn-outline-secondary" title="Re-embed the search corpus (ISMS + system docs)">
         <i class="bi bi-arrow-repeat me-1"></i>Reindex
       </button>
     </form>
   </div>
 </div>
 
+<!-- New runbook authoring -->
 <div class="collapse mb-3" id="addKnowledge">
   <div class="card"><div class="card-body">
     <form method="post" action="{{ url_for('dashboard.knowledge_add') }}">
@@ -29,40 +34,35 @@
         <input type="text" name="title" class="form-control form-control-sm" placeholder="Title — e.g. How to reset a user's MFA">
       </div>
       <div class="mb-2">
-        <textarea name="content" rows="5" class="form-control form-control-sm" required
-                  placeholder="Write the how-to / SOP here. It gets embedded into the knowledge base and surfaces in answers + ticket suggestions."></textarea>
+        <textarea name="content" rows="8" class="form-control form-control-sm" required style="font-family:var(--bs-font-monospace,monospace);"
+                  placeholder="Write the runbook in Markdown. Use ## Problem, ## Resolution (numbered steps), ## Notes. Code fences (```) render too. It gets embedded so it surfaces in answers + ticket suggestions."></textarea>
       </div>
-      <button class="btn btn-sm btn-primary"><i class="bi bi-journal-plus me-1"></i>Add to knowledge base</button>
+      <div class="d-flex justify-content-between align-items-center">
+        <span class="small text-muted"><i class="bi bi-markdown me-1"></i>Markdown supported</span>
+        <button class="btn btn-sm btn-primary"><i class="bi bi-journal-plus me-1"></i>Add runbook</button>
+      </div>
     </form>
   </div></div>
 </div>
 
+<!-- Ask -->
 <form method="post" action="{{ url_for('dashboard.knowledge') }}" class="mb-3">
   <div class="input-group input-group-lg">
     <span class="input-group-text" style="background:var(--surface);border-color:var(--border);"><i class="bi bi-search"></i></span>
-    <input type="text" name="q" class="form-control" placeholder="e.g. What's our password policy? How do we handle an offboarding?"
-           value="{{ query }}" autofocus>
+    <input type="text" name="q" class="form-control" placeholder="Ask the knowledge base — e.g. how do we fix an Entra sync SourceAnchor error?"
+           value="{{ query }}">
     <button class="btn btn-primary"><i class="bi bi-stars me-1"></i>Ask</button>
   </div>
 </form>
 
-{% if chunk_count == 0 %}
-<div class="alert d-flex align-items-center gap-2" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
-  <i class="bi bi-info-circle"></i>
-  <div>The knowledge base is empty. Click <strong>Reindex</strong> to embed the ISMS policies and system documentation.</div>
-</div>
-{% endif %}
-
 {% if result %}
-<div class="row g-3">
-  <!-- Answer -->
+<div class="row g-3 mb-4">
   <div class="col-12 col-lg-7">
     <div class="card h-100"><div class="card-body">
       <h2 class="h6 mb-3"><i class="bi bi-stars me-2" style="color:var(--accent)"></i>Answer</h2>
       <div class="knowledge-answer">{{ answer_html | safe }}</div>
     </div></div>
   </div>
-  <!-- Sources -->
   <div class="col-12 col-lg-5">
     <div class="card h-100"><div class="card-body">
       <h2 class="h6 mb-3"><i class="bi bi-link-45deg me-2 text-muted"></i>Sources</h2>
@@ -83,10 +83,158 @@
 </div>
 {% endif %}
 
+<!-- Runbook library -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="bi bi-collection me-2" style="color:var(--warning)"></i>Runbook Library</span>
+    <input type="text" id="libFilter" class="form-control form-control-sm" style="max-width:240px;" placeholder="Filter by title…">
+  </div>
+  <div class="list-group list-group-flush" id="libList">
+    {% for e in library %}
+    {% set sid = e.source_id or '' %}
+    {% set origin = ('Learned from ticket #' ~ sid.split(':')[1]) if sid.startswith('ticket:')
+                    else ('Learned from email') if sid.startswith('qmsg:')
+                    else 'Authored' %}
+    <button type="button" class="list-group-item list-group-item-action knowledge-row"
+            data-id="{{ e.id }}" data-title="{{ e.title|e }}">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div class="me-2" style="min-width:0;">
+          <div class="fw-semibold text-truncate">{{ e.title }}</div>
+          <div class="small text-muted text-truncate">{{ e.excerpt }}{% if e.len > 280 %}…{% endif %}</div>
+        </div>
+        <div class="text-end flex-shrink-0">
+          <span class="badge" style="background:var(--surface-2);color:{{ src_color.get(e.source_type,'var(--muted)') }};">{{ type_label.get(e.source_type, e.source_type) }}</span>
+          <div class="small text-muted mt-1">{{ origin }}</div>
+          <div class="small text-muted">{{ (e.updated_at|string)[:10] }}</div>
+        </div>
+      </div>
+    </button>
+    {% else %}
+    <div class="list-group-item text-muted small">No runbooks yet. Click <strong>New runbook</strong> to author one, or they'll appear here as the brain learns from resolved tickets.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Reader / editor modal -->
+<div class="modal fade" id="kbModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="kbModalTitle">Runbook</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <!-- View pane -->
+        <div id="kbView">
+          <div class="small text-muted mb-2" id="kbMeta"></div>
+          <div class="knowledge-answer" id="kbContent"></div>
+        </div>
+        <!-- Edit pane -->
+        <form id="kbEditForm" method="post" class="d-none">
+          <div class="mb-2">
+            <label class="form-label small text-muted">Title</label>
+            <input type="text" name="title" id="kbEditTitle" class="form-control form-control-sm">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small text-muted">Content (Markdown)</label>
+            <textarea name="content" id="kbEditContent" rows="16" class="form-control form-control-sm" style="font-family:var(--bs-font-monospace,monospace);"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <form id="kbDeleteForm" method="post" onsubmit="return confirm('Delete this runbook? This cannot be undone.');">
+          <button type="submit" class="btn btn-sm btn-outline-danger" id="kbDeleteBtn"><i class="bi bi-trash me-1"></i>Delete</button>
+        </form>
+        <div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="kbEditBtn"><i class="bi bi-pencil me-1"></i>Edit</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="kbCancelBtn">Cancel</button>
+          <button type="submit" form="kbEditForm" class="btn btn-sm btn-primary d-none" id="kbSaveBtn"><i class="bi bi-save me-1"></i>Save &amp; re-index</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <style>
 .knowledge-answer h1,.knowledge-answer h2,.knowledge-answer h3{font-size:1rem;font-weight:600;margin-top:1rem;}
 .knowledge-answer p{margin-bottom:.6rem;}
 .knowledge-answer ul,.knowledge-answer ol{padding-left:1.2rem;}
 .knowledge-answer code{background:var(--surface-2);padding:.1em .3em;border-radius:4px;}
+.knowledge-answer pre{background:var(--surface-2);padding:.75rem;border-radius:6px;overflow:auto;}
+.knowledge-answer pre code{background:none;padding:0;}
+.knowledge-answer table{width:100%;font-size:.9em;border-collapse:collapse;}
+.knowledge-answer th,.knowledge-answer td{border:1px solid var(--border);padding:.3em .5em;}
+.knowledge-row{cursor:pointer;}
 </style>
+
+<script>
+(function(){
+  var modalEl = document.getElementById('kbModal');
+  if (!modalEl || typeof bootstrap === 'undefined') return;
+  var modal = new bootstrap.Modal(modalEl);
+  var titleEl = document.getElementById('kbModalTitle');
+  var metaEl = document.getElementById('kbMeta');
+  var contentEl = document.getElementById('kbContent');
+  var viewPane = document.getElementById('kbView');
+  var editForm = document.getElementById('kbEditForm');
+  var editTitle = document.getElementById('kbEditTitle');
+  var editContent = document.getElementById('kbEditContent');
+  var editBtn = document.getElementById('kbEditBtn');
+  var cancelBtn = document.getElementById('kbCancelBtn');
+  var saveBtn = document.getElementById('kbSaveBtn');
+  var deleteForm = document.getElementById('kbDeleteForm');
+  var deleteBtn = document.getElementById('kbDeleteBtn');
+  var current = null;
+
+  function showView(){
+    viewPane.classList.remove('d-none'); editForm.classList.add('d-none');
+    saveBtn.classList.add('d-none'); cancelBtn.classList.add('d-none');
+    editBtn.classList.remove('d-none');
+  }
+  function showEdit(){
+    viewPane.classList.add('d-none'); editForm.classList.remove('d-none');
+    saveBtn.classList.remove('d-none'); cancelBtn.classList.remove('d-none');
+    editBtn.classList.add('d-none');
+  }
+
+  document.querySelectorAll('.knowledge-row').forEach(function(row){
+    row.addEventListener('click', function(){
+      var id = this.getAttribute('data-id');
+      titleEl.textContent = this.getAttribute('data-title') || 'Runbook';
+      metaEl.textContent = 'Loading…'; contentEl.innerHTML = '';
+      showView(); modal.show();
+      fetch('/knowledge/entry/' + id).then(function(r){return r.json();}).then(function(d){
+        if (!d.ok){ contentEl.innerHTML = '<div class="text-danger">Could not load entry.</div>'; return; }
+        current = d.entry;
+        titleEl.textContent = current.title || 'Runbook';
+        metaEl.textContent = (current.source_type === 'runbook' ? 'Runbook' : 'Note') +
+                             ' · updated ' + (current.updated_at || '').slice(0,16);
+        contentEl.innerHTML = current.content_html || '';
+        editTitle.value = current.title || '';
+        editContent.value = current.content || '';
+        editForm.setAttribute('action', '/knowledge/entry/' + id + '/edit');
+        deleteForm.setAttribute('action', '/knowledge/entry/' + id + '/delete');
+        var ed = !!current.editable;
+        editBtn.classList.toggle('d-none', !ed);
+        deleteBtn.classList.toggle('d-none', !ed);
+        showView();
+      }).catch(function(){ contentEl.innerHTML = '<div class="text-danger">Load failed.</div>'; });
+    });
+  });
+
+  editBtn.addEventListener('click', showEdit);
+  cancelBtn.addEventListener('click', showView);
+
+  var filter = document.getElementById('libFilter');
+  if (filter){
+    filter.addEventListener('input', function(){
+      var q = this.value.toLowerCase();
+      document.querySelectorAll('#libList .knowledge-row').forEach(function(row){
+        var t = (row.getAttribute('data-title') || '').toLowerCase();
+        row.style.display = t.indexOf(q) >= 0 ? '' : 'none';
+      });
+    });
+  }
+})();
+</script>
 {% endblock %}

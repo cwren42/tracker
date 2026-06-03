@@ -1391,9 +1391,62 @@ def knowledge():
             flash(str(e), 'warning')  # e.g. no OpenAI key configured
         except Exception as e:
             flash(f'Knowledge search failed: {e}', 'danger')
+    # The browsable library = our learned/operational knowledge (runbooks + authored notes).
+    # ISMS policy + system docs are indexed for search but managed in their own subsystems.
+    library = knowledge_agent.list_knowledge()
     return render_template('knowledge.html', query=query, result=result,
                            answer_html=answer_html, chunk_count=chunk_count,
-                           runbook_count=runbook_count)
+                           runbook_count=runbook_count, library=library)
+
+
+@bp.route('/knowledge/entry/<int:chunk_id>')
+@login_required
+@admin_required
+def knowledge_entry(chunk_id):
+    """JSON for the library reader/editor modal — full content + rendered markdown."""
+    import knowledge_agent
+    e = knowledge_agent.get_chunk(chunk_id)
+    if not e:
+        return jsonify({'ok': False, 'error': 'Not found'}), 404
+    import markdown as _md
+    e['content_html'] = _md.markdown(e.get('content') or '', extensions=['extra', 'fenced_code', 'tables'])
+    e['editable'] = e['source_type'] in knowledge_agent.LIBRARY_TYPES
+    e['updated_at'] = str(e.get('updated_at') or '')
+    return jsonify({'ok': True, 'entry': e})
+
+
+@bp.route('/knowledge/entry/<int:chunk_id>/edit', methods=['POST'])
+@login_required
+@admin_required
+def knowledge_entry_edit(chunk_id):
+    import knowledge_agent
+    title = (request.form.get('title') or '').strip()
+    content = (request.form.get('content') or '').strip()
+    try:
+        knowledge_agent.update_chunk(chunk_id, title, content)
+        flash('Runbook updated and re-indexed.', 'success')
+    except ValueError as e:
+        flash(str(e), 'warning')
+    except Exception as e:
+        flash(f'Could not update entry: {e}', 'danger')
+    return redirect(url_for('dashboard.knowledge'))
+
+
+@bp.route('/knowledge/entry/<int:chunk_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def knowledge_entry_delete(chunk_id):
+    import knowledge_agent
+    try:
+        if knowledge_agent.delete_chunk(chunk_id):
+            flash('Runbook deleted.', 'success')
+        else:
+            flash('Entry not found.', 'warning')
+    except ValueError as e:
+        flash(str(e), 'warning')
+    except Exception as e:
+        flash(f'Could not delete entry: {e}', 'danger')
+    return redirect(url_for('dashboard.knowledge'))
 
 
 @bp.route('/knowledge/add', methods=['POST'])
@@ -1408,8 +1461,8 @@ def knowledge_add():
         flash('Content is required.', 'warning')
         return redirect(url_for('dashboard.knowledge'))
     try:
-        knowledge_agent.add_manual(title, content)
-        flash('Knowledge entry added and indexed.', 'success')
+        knowledge_agent.add_runbook(title, content)
+        flash('Runbook added to the library and indexed.', 'success')
     except ValueError as e:
         flash(str(e), 'warning')
     except Exception as e:

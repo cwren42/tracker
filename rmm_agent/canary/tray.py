@@ -154,42 +154,47 @@ def _set_dpi_aware():
 
 
 def _apply_theme(root):
-    """Apply one consistent ttk theme + palette to a dialog. Also sets sane defaults
-    for the classic tk widgets the dialogs still use, so everything matches."""
-    import tkinter as tk
+    """Apply one consistent ttk theme + palette to a dialog. Never raises — a theming
+    failure must never stop the dialog from opening."""
     from tkinter import ttk
-    root.configure(bg=_PALETTE['panel'])
-    root.option_add('*Font', 'Segoe\\ UI 10')
-    st = ttk.Style(root)
     try:
-        st.theme_use('clam')
+        root.configure(bg=_PALETTE['panel'])
     except Exception:
         pass
-    st.configure('.', font=('Segoe UI', 10), background=_PALETTE['panel'], foreground=_PALETTE['text'])
-    st.configure('TFrame', background=_PALETTE['panel'])
-    st.configure('TLabel', background=_PALETTE['panel'], foreground=_PALETTE['text'])
-    st.configure('Muted.TLabel', foreground=_PALETTE['muted'])
-    st.configure('Field.TLabel', font=('Segoe UI', 9, 'bold'))
-    st.configure('TEntry', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'],
-                 lightcolor=_PALETTE['border'], darkcolor=_PALETTE['border'], padding=4)
-    st.configure('TCombobox', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'], padding=3)
-    st.map('TEntry', bordercolor=[('focus', _PALETTE['maroon'])])
-    st.map('TCombobox', bordercolor=[('focus', _PALETTE['maroon'])])
-    st.configure('Primary.TButton', font=('Segoe UI', 10, 'bold'), foreground='white',
-                 background=_PALETTE['maroon'], bordercolor=_PALETTE['maroon'],
-                 focuscolor=_PALETTE['maroon'], padding=(16, 7), relief='flat')
-    st.map('Primary.TButton',
-           background=[('active', _PALETTE['maroon_d']), ('pressed', _PALETTE['maroon_d'])],
-           foreground=[('disabled', '#e9c6cc')])
-    st.configure('Ghost.TButton', font=('Segoe UI', 10), foreground=_PALETTE['maroon'],
-                 background=_PALETTE['panel'], bordercolor=_PALETTE['border'],
-                 padding=(14, 7), relief='flat')
-    st.map('Ghost.TButton', background=[('active', '#e9ebef')])
-    return st
+    try:
+        st = ttk.Style(root)
+        try:
+            st.theme_use('clam')
+        except Exception:
+            pass
+        st.configure('.', font=('Segoe UI', 10), background=_PALETTE['panel'], foreground=_PALETTE['text'])
+        st.configure('TFrame', background=_PALETTE['panel'])
+        st.configure('TLabel', background=_PALETTE['panel'], foreground=_PALETTE['text'])
+        st.configure('Muted.TLabel', foreground=_PALETTE['muted'])
+        st.configure('Field.TLabel', font=('Segoe UI', 9, 'bold'))
+        st.configure('TEntry', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'],
+                     lightcolor=_PALETTE['border'], darkcolor=_PALETTE['border'], padding=4)
+        st.configure('TCombobox', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'], padding=3)
+        st.map('TEntry', bordercolor=[('focus', _PALETTE['maroon'])])
+        st.map('TCombobox', bordercolor=[('focus', _PALETTE['maroon'])])
+        st.configure('Primary.TButton', font=('Segoe UI', 10, 'bold'), foreground='white',
+                     background=_PALETTE['maroon'], bordercolor=_PALETTE['maroon'],
+                     focuscolor=_PALETTE['maroon'], padding=(16, 7), relief='flat')
+        st.map('Primary.TButton',
+               background=[('active', _PALETTE['maroon_d']), ('pressed', _PALETTE['maroon_d'])],
+               foreground=[('disabled', '#e9c6cc')])
+        st.configure('Ghost.TButton', font=('Segoe UI', 10), foreground=_PALETTE['maroon'],
+                     background=_PALETTE['panel'], bordercolor=_PALETTE['border'],
+                     padding=(14, 7), relief='flat')
+        st.map('Ghost.TButton', background=[('active', '#e9ebef')])
+        return st
+    except Exception:
+        return None
 
 
 def _branded_header(root, title):
-    """Maroon header bar with the white Cirque logo + title (replaces the old text glyph)."""
+    """Maroon header bar with the white Cirque logo + title. Never raises — falls back
+    to a plain maroon title bar if the logo can't load."""
     import tkinter as tk
     hdr = tk.Frame(root, bg=_PALETTE['maroon'], height=58)
     hdr.pack(fill='x')
@@ -200,8 +205,12 @@ def _branded_header(root, title):
         tk.Label(hdr, image=img, bg=_PALETTE['maroon']).pack(side='left', padx=(16, 10))
     except Exception:
         pass
-    tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
-             font=('Segoe UI Semibold', 14)).pack(side='left', pady=15)
+    try:
+        tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
+                 font=('Segoe UI Semibold', 14)).pack(side='left', pady=15)
+    except Exception:
+        tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
+                 font=('Segoe UI', 14, 'bold')).pack(side='left', pady=15)
     return hdr
 
 

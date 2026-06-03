@@ -424,6 +424,79 @@ def api_rmm_eagle_app_summary(agent_id):
     return jsonify({'ok': True, 'summary': summary})
 
 
+# Foreground events with idle_s at/above this are counted as "away/idle" rather than
+# active work time (standard 5-minute inactivity cutoff).
+_EAGLE_IDLE_CUTOFF_S = 300
+
+
+@bp.route('/api/rmm/eagle-eyes/<agent_id>/productivity-summary')
+@login_required
+def api_rmm_eagle_productivity_summary(agent_id):
+    """Headline productivity rollup for the date range: tracked / active / idle time, the
+    productive-vs-unproductive-vs-neutral split of ACTIVE time, and percentages. Built on the
+    same per-event classification as app-summary (process + browser window-title-site +
+    per-agent overrides). This is the 'are they being productive?' answer at a glance."""
+    if not _ee_role_ok():
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    if _ee_denied(agent_id):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    date_clause, date_params = _eagle_date_params(default_days=7)
+    wh_clause = "AND EXTRACT(HOUR FROM captured_at AT TIME ZONE 'America/Denver') BETWEEN 8 AND 18" if request.args.get('work_hours') == '1' else ''
+    BROWSERS = "('msedge','chrome','firefox','brave','opera','iexplore','safari')"
+    row = db.session.execute(
+        text(f"""WITH classified AS (
+                SELECT e.duration_s AS dur, COALESCE(e.idle_s, 0) AS idle_s,
+                       COALESCE(site_cls.productivity, proc_cls.productivity, 'neutral') AS productivity
+                FROM rmm_eagle_event e
+                LEFT JOIN LATERAL (
+                    SELECT sc.productivity
+                    FROM rmm_eagle_app_class sc
+                    WHERE sc.window_title_pattern IS NOT NULL
+                      AND (sc.agent_id IS NULL OR sc.agent_id = :aid)
+                      AND LOWER(e.process_name) IN {BROWSERS}
+                      AND LOWER(COALESCE(e.window_title,'')) LIKE '%' || LOWER(sc.window_title_pattern) || '%'
+                    ORDER BY sc.agent_id NULLS LAST
+                    LIMIT 1
+                ) site_cls ON true
+                LEFT JOIN LATERAL (
+                    SELECT pc.productivity
+                    FROM rmm_eagle_app_class pc
+                    WHERE pc.window_title_pattern IS NULL
+                      AND LOWER(e.process_name) LIKE LOWER(pc.process_pattern)
+                    LIMIT 1
+                ) proc_cls ON true
+                WHERE e.agent_id = :aid AND {date_clause}
+                {_EAGLE_SYSTEM_EXCL}
+                {wh_clause}
+            )
+            SELECT
+                COALESCE(SUM(dur), 0)                                                                AS tracked_s,
+                COALESCE(SUM(dur) FILTER (WHERE idle_s >= :idle), 0)                                  AS idle_s,
+                COALESCE(SUM(dur) FILTER (WHERE idle_s < :idle AND productivity = 'productive'), 0)   AS productive_s,
+                COALESCE(SUM(dur) FILTER (WHERE idle_s < :idle AND productivity = 'unproductive'), 0) AS unproductive_s,
+                COALESCE(SUM(dur) FILTER (WHERE idle_s < :idle
+                         AND productivity NOT IN ('productive','unproductive')), 0)                   AS neutral_s
+            FROM classified"""),
+        {'aid': agent_id, 'idle': _EAGLE_IDLE_CUTOFF_S, **date_params}
+    ).fetchone()
+    tracked = int(row[0] or 0); idle = int(row[1] or 0)
+    prod = int(row[2] or 0); unprod = int(row[3] or 0); neut = int(row[4] or 0)
+    active = max(0, tracked - idle)
+
+    def _pct(n, d):
+        return round(100.0 * n / d, 1) if d else 0.0
+
+    return jsonify({'ok': True, 'summary': {
+        'tracked_s': tracked, 'active_s': active, 'idle_s': idle,
+        'productive_s': prod, 'unproductive_s': unprod, 'neutral_s': neut,
+        'idle_pct': _pct(idle, tracked),
+        'active_pct': _pct(active, tracked),
+        'productive_pct': _pct(prod, active),
+        'unproductive_pct': _pct(unprod, active),
+        'neutral_pct': _pct(neut, active),
+    }})
+
+
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/hourly')
 @login_required
 def api_rmm_eagle_hourly(agent_id):

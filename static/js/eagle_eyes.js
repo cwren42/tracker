@@ -218,9 +218,23 @@ function spinSet(prefix, state) {
   vis(prefix+'-empty', state === 'empty');
 }
 /* ── Productivity score ──────────────────────────────────────────── */
-function renderProductivity(summary) {
+function renderProductivity(summary, ps) {
   const el = document.getElementById('stat-prod-score');
   const sub = document.getElementById('stat-prod-sub');
+  // Preferred: the server "productivity-summary" rollup, which separates idle time
+  // (idle events are NOT counted as productive) and scores productive % of ACTIVE time.
+  // Falls back to the app-summary calc if the endpoint is unavailable.
+  if (ps && ps.tracked_s) {
+    if (ps.productive_s + ps.unproductive_s === 0) {
+      el.textContent='—'; el.style.color='#adb5bd'; sub.textContent='No apps classified yet'; return;
+    }
+    const score = Math.round(ps.productive_pct);  // productive % of active time
+    el.textContent = score+'%';
+    el.style.color = score>=75?'#51cf66':score>=50?'#fcc419':'#ff6b6b';
+    sub.textContent = `active ${fmtDuration(ps.active_s)} · idle ${Math.round(ps.idle_pct)}% · `
+      + `${fmtDuration(ps.productive_s)} prod / ${fmtDuration(ps.unproductive_s)} unprod / ${fmtDuration(ps.neutral_s)} neutral`;
+    return;
+  }
   if (!summary.length) { el.textContent='—'; sub.textContent='No data'; return; }
   let productiveS=0, unproductiveS=0, neutralS=0;
   for (const r of summary) {
@@ -465,16 +479,18 @@ window.eeLoad = async function() {
   const wh = document.getElementById('ee-work-hours').checked;
   const whParam = wh ? '&work_hours=1' : '';
   setAllLoading();
-  const [sumRes,dailyRes,hourlyRes,evtRes,sitesRes] = await Promise.all([
+  const [sumRes,dailyRes,hourlyRes,evtRes,sitesRes,psRes] = await Promise.all([
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/app-summary?${dp}${whParam}`),
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/daily?${dp}${whParam}`),
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/hourly?${dp}${whParam}`),
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/events?${dp}&limit=500`),
     fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/top-sites?${dp}${whParam}`),
+    fetch(`/api/rmm/eagle-eyes/${encodeURIComponent(agentId)}/productivity-summary?${dp}${whParam}`),
   ]);
-  const [sumData,dailyData,hourlyData,evtData,sitesData] = await Promise.all(
-    [sumRes.json(),dailyRes.json(),hourlyRes.json(),evtRes.json(),sitesRes.json()]
+  const [sumData,dailyData,hourlyData,evtData,sitesData,psData] = await Promise.all(
+    [sumRes.json(),dailyRes.json(),hourlyRes.json(),evtRes.json(),sitesRes.json(),psRes.json()]
   );
+  const ps = psData.ok ? psData.summary : null;
   lastSummary = sumData.ok  ? sumData.summary  : [];
   lastEvents  = evtData.ok  ? evtData.events   : [];
   lastSites   = sitesData.ok? sitesData.sites   : [];
@@ -486,7 +502,7 @@ window.eeLoad = async function() {
   const filteredEvt = workHoursFilter(lastEvents);
 
   renderStats(lastSummary, daily, hourly);
-  renderProductivity(lastSummary);
+  renderProductivity(lastSummary, ps);
   renderUsage(lastSummary);
   renderCategories(lastSummary);
   renderTopSites(lastSites);

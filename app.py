@@ -184,7 +184,7 @@ def _photo_url(photo_rel):
 from blueprints import auth, assets, dashboard, employees, internal_audit, licenses, management_review, phishing, policy_acknowledgements, security_training, system_description, vendor_management
 from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
-from blueprints import backup, quarantine, patch_mgmt
+from blueprints import backup, quarantine, patch_mgmt, systems
 
 app.register_blueprint(auth.bp)
 app.register_blueprint(assets.bp)
@@ -211,6 +211,7 @@ app.register_blueprint(ai.bp)
 app.register_blueprint(misc.bp)
 app.register_blueprint(backup.bp)
 app.register_blueprint(quarantine.bp)
+app.register_blueprint(systems.bp)
 app.register_blueprint(patch_mgmt.bp)
 
 # ── CSRF exemptions for non-browser endpoints ──────────────────────────────
@@ -259,3 +260,8 @@ _eagle_report_thread = threading.Thread(
     target=_rmm_module._eagle_report_scheduler, args=(app,), daemon=True
 )
 _eagle_report_thread.start()
+
+# Event bus — the connective tissue. One dispatcher thread per worker; only the
+# cross-process flock winner actually fans events out to workflow triggers.
+import event_bus
+event_bus.start_event_dispatcher(app)

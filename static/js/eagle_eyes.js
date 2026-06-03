@@ -135,6 +135,20 @@ async function toggleMonitoring(turnOn) {
     if (data && data.ok) {
       _eeMonState = data;
       _setMonitorUi(data.enabled);
+      // Notice/ack gate (warn mode): monitoring was enabled, but the employee has
+      // no monitoring/acceptable-use acknowledgement on record. Allowed, but warn.
+      if (data.ack_warning) {
+        const w = data.ack_warning;
+        const who = w.employee_name ? ('"' + w.employee_name + '"') : 'the assigned employee';
+        alert('Monitoring enabled — but ' + who + ' has NO acknowledged "' + w.policy_name +
+              '" monitoring policy on record. Record an acknowledgement under '
+              + 'SOC2 → Policy Acknowledgements to keep this monitoring defensible. '
+              + '(This warning is logged to the surveillance audit trail.)');
+      }
+    } else if (data && data.error === 'ack_required') {
+      // Block mode: enablement refused until acknowledgement exists.
+      alert(data.message || 'Cannot enable monitoring: no acknowledged monitoring policy on record.');
+      _setMonitorUi(_eeMonState ? _eeMonState.enabled : !turnOn);  // revert UI
     } else {
       alert('Could not change monitoring: ' + ((data && data.error) || 'unknown error'));
       _setMonitorUi(_eeMonState ? _eeMonState.enabled : !turnOn);  // revert UI

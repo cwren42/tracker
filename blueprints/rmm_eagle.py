@@ -99,6 +99,145 @@ def _ee_role_ok():
     return current_user.role in ('admin', 'eagle_eyes')
 
 
+# ─── Viewer-access audit ("who watches the watchers") ────────────────────────
+# Today only config CHANGES are audited. The helpers below record when an
+# eagle_eyes/admin user VIEWS a monitored target's surveillance data (detail
+# page, live poller, screenshot gallery). Reuses models._log_audit / audit_trail
+# so the rows land alongside the Tier-3 config/screenshot audit and are reviewable
+# in the same surveillance audit UI.
+#
+# entity_type is always 'rmm_eagle_view'; action is 'eagle_eyes.view_<surface>'.
+# Debounce keeps polled endpoints (live "current") from flooding: at most one
+# row per viewer+target+surface per _VIEW_DEBOUNCE_MIN minutes.
+_VIEW_DEBOUNCE_MIN = 10
+
+
+def _resolve_target(agent_id):
+    """Best-effort (asset_id, owner_name) for an agent_id, for the audit row.
+
+    Never raises — auditing must not break the surveilled view.
+    """
+    try:
+        row = db.session.execute(
+            text("""SELECT ra.asset_id, e.name
+                    FROM rmm_agent ra
+                    LEFT JOIN asset a ON a.id = ra.asset_id
+                    LEFT JOIN employee e ON e.id = a.employee_id
+                    WHERE ra.agent_id ILIKE :aid
+                    LIMIT 1"""),
+            {'aid': agent_id}
+        ).fetchone()
+        if row:
+            return (row[0], row[1])
+    except Exception:
+        pass
+    return (None, None)
+
+
+def _log_view(agent_id, surface, debounce=False):
+    """Record a surveillance-VIEW audit row (best-effort, commits itself).
+
+    surface: short tag, e.g. 'detail', 'live', 'screenshots'.
+    debounce: when True, skip if this viewer already logged the same
+    viewer+target+surface within _VIEW_DEBOUNCE_MIN minutes (for pollers).
+    """
+    try:
+        action = f'eagle_eyes.view_{surface}'
+        if debounce:
+            recent = db.session.execute(
+                text("""SELECT 1 FROM audit_trail
+                        WHERE user_id = :uid AND action = :act
+                          AND entity_type = 'rmm_eagle_view'
+                          AND changes LIKE :needle
+                          AND created_at > NOW() - (:mins || ' minutes')::interval
+                        LIMIT 1"""),
+                {'uid': (current_user.id if current_user.is_authenticated else 1),
+                 'act': action, 'needle': f'%"agent_id": "{agent_id}"%',
+                 'mins': _VIEW_DEBOUNCE_MIN}
+            ).fetchone()
+            if recent:
+                return
+        asset_id, owner = _resolve_target(agent_id)
+        _log_audit('rmm_eagle_view', int(asset_id or 0), action, {
+            'agent_id': agent_id,
+            'asset_id': asset_id,
+            'owner': owner,
+            'surface': surface,
+        })
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+# ─── Notice / acknowledgment gate ────────────────────────────────────────────
+# Targeted monitoring is far more defensible when the monitored employee has
+# acknowledged a monitoring / acceptable-use policy. We reuse the existing ISMS
+# machinery — the soc2_policy_acknowledgement table (models.SOC2PolicyAcknowledgement),
+# managed at Settings → SOC2 Policy Acknowledgements — rather than inventing a new store.
+#
+# Strictness is a Setting 'eagle_require_ack' (warn | block), default 'warn' so we
+# don't break current operation. The named policy to check against is a Setting
+# 'eagle_monitoring_policy_name' (default 'Acceptable Use', which is one of the
+# existing acknowledgement TYPE_OPTIONS) — wired and ready even if no monitoring
+# policy document exists yet (no policy is fabricated).
+def _eagle_setting(key, default):
+    try:
+        row = db.session.execute(
+            text("SELECT value FROM setting WHERE key = :k"), {'k': key}
+        ).fetchone()
+        if row and row[0] is not None and str(row[0]).strip():
+            return str(row[0]).strip()
+    except Exception:
+        pass
+    return default
+
+
+def _ack_status_for_agent(agent_id):
+    """Resolve the monitored employee for agent_id and report monitoring-policy ack.
+
+    Returns dict: {'employee_id', 'employee_name', 'acknowledged' (bool),
+    'policy_name', 'acknowledged_on', 'reason'}.  Never raises.
+    """
+    policy_name = _eagle_setting('eagle_monitoring_policy_name', 'Acceptable Use')
+    out = {'employee_id': None, 'employee_name': None, 'acknowledged': False,
+           'policy_name': policy_name, 'acknowledged_on': None, 'reason': None}
+    try:
+        row = db.session.execute(
+            text("""SELECT a.employee_id, e.name
+                    FROM rmm_agent ra
+                    LEFT JOIN asset a ON a.id = ra.asset_id
+                    LEFT JOIN employee e ON e.id = a.employee_id
+                    WHERE ra.agent_id ILIKE :aid LIMIT 1"""),
+            {'aid': agent_id}
+        ).fetchone()
+        if not row or not row[0]:
+            out['reason'] = 'no_employee'  # device not linked to an employee
+            return out
+        out['employee_id'] = row[0]
+        out['employee_name'] = row[1]
+        # Match either the named monitoring policy OR the acknowledgement TYPE
+        # (so an 'Acceptable Use'-type ack counts even if policy_name differs).
+        ack = db.session.execute(
+            text("""SELECT acknowledged_on FROM soc2_policy_acknowledgement
+                    WHERE employee_id = :eid
+                      AND status = 'Acknowledged'
+                      AND (policy_name ILIKE :pn OR acknowledgement_type ILIKE :pn)
+                    ORDER BY acknowledged_on DESC LIMIT 1"""),
+            {'eid': row[0], 'pn': policy_name}
+        ).fetchone()
+        if ack:
+            out['acknowledged'] = True
+            out['acknowledged_on'] = str(ack[0]) if ack[0] else None
+        else:
+            out['reason'] = 'no_ack'
+    except Exception:
+        out['reason'] = 'check_error'
+    return out
+
+
 @bp.route('/api/rmm/eagle-eyes/<agent_id>', methods=['GET', 'POST'])
 @login_required
 def api_rmm_eagle_eyes(agent_id):
@@ -134,6 +273,32 @@ def api_rmm_eagle_eyes(agent_id):
         text("SELECT enabled, screenshot_interval_min, screenshots_enabled FROM rmm_eagle_config WHERE agent_id = :aid"),
         {'aid': agent_id}
     ).fetchone()
+
+    # ── Notice / acknowledgment gate ──
+    # Only evaluated on a transition INTO enabled (turning capture ON). The gate's
+    # strictness is Setting 'eagle_require_ack' (warn | block), default 'warn'.
+    ack_info = None
+    was_enabled = bool(_old[0]) if _old else False
+    enabling = enabled and not was_enabled
+    if enabling:
+        ack_info = _ack_status_for_agent(agent_id)
+        mode = _eagle_setting('eagle_require_ack', 'warn').lower()
+        if not ack_info['acknowledged'] and mode == 'block':
+            # Record the blocked attempt for the audit trail, then refuse.
+            _log_audit('rmm_eagle_config', 0, 'eagle_eyes.enable_blocked', {
+                'agent_id': agent_id, 'reason': 'no_monitoring_ack',
+                'ack': ack_info,
+            })
+            db.session.commit()
+            return jsonify({
+                'ok': False, 'error': 'ack_required',
+                'message': ('Cannot enable monitoring: the assigned employee has not '
+                            'acknowledged the monitoring/acceptable-use policy '
+                            f"({ack_info['policy_name']}). Record an acknowledgement "
+                            'first, or set eagle_require_ack to "warn".'),
+                'ack': ack_info,
+            }), 409
+
     db.session.execute(
         text("""INSERT INTO rmm_eagle_config (agent_id, enabled, screenshot_interval_min, screenshots_enabled, updated_at)
                 VALUES (:aid, :en, :iv, :se, NOW() - INTERVAL '7 hours')
@@ -151,6 +316,8 @@ def api_rmm_eagle_eyes(agent_id):
                  'screenshots_enabled': bool(_old[2])} if _old else None),
         'new': {'enabled': enabled, 'screenshot_interval_min': interval,
                 'screenshots_enabled': screenshots_enabled},
+        # Record whether a monitoring-policy ack was on record at enable time.
+        'ack_at_enable': (ack_info if enabling else None),
     })
     db.session.commit()
     # Push config to connected agent via gateway
@@ -169,7 +336,12 @@ def api_rmm_eagle_eyes(agent_id):
             _json.loads(r.read())
     except Exception:
         pass  # agent may not be connected; config is persisted so it applies on next connect
-    return jsonify({'ok': True, 'enabled': enabled, 'screenshot_interval_min': interval, 'screenshots_enabled': screenshots_enabled})
+    resp = {'ok': True, 'enabled': enabled, 'screenshot_interval_min': interval,
+            'screenshots_enabled': screenshots_enabled}
+    # warn-mode: surface a non-blocking notice so the UI can prompt to record an ack.
+    if enabling and ack_info and not ack_info['acknowledged']:
+        resp['ack_warning'] = ack_info
+    return jsonify(resp)
 
 
 @bp.route('/api/rmm/eagle-eyes/<agent_id>/events')
@@ -417,6 +589,10 @@ def api_rmm_eagle_screenshots(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
     if _ee_denied(agent_id):
         return jsonify({'ok': False, 'error': 'forbidden'}), 403
+    # Viewer-access audit: one row per opening of a target's screenshot gallery.
+    # The gallery may re-poll on date change, so debounce. Per-image VIEW/DOWNLOAD
+    # are audited separately (un-debounced) on the screenshot/<id> endpoints.
+    _log_view(agent_id, 'screenshots', debounce=True)
     date_clause, date_params = _eagle_date_params(default_days=7)
     limit = int(request.args.get('limit', 200))
     rows = db.session.execute(
@@ -530,6 +706,8 @@ def rmm_eagle_eyes_dashboard(agent_id):
     ).fetchone()
     if recent_ev and recent_ev[0] and recent_ev[0].utcoffset() is not None:
         tz_offset_h = recent_ev[0].utcoffset().total_seconds() / 3600
+    # Viewer-access audit: one row per opening of a target's surveillance detail page.
+    _log_view(agent_id, 'detail')
     return render_template('eagle_eyes.html', agent_id=agent_id, hostname=hostname,
                            asset_id_num=asset_id_num,
                            tz_offset_h=tz_offset_h)
@@ -542,6 +720,9 @@ def api_eagle_current(agent_id):
         return jsonify(ok=False, error='forbidden'), 403
     if _ee_denied(agent_id):
         return jsonify(ok=False, error='forbidden'), 403
+    # Viewer-access audit: the live view is polled, so debounce to one row per
+    # viewer+target per _VIEW_DEBOUNCE_MIN minutes (not one per refresh tick).
+    _log_view(agent_id, 'live', debounce=True)
     try:
         row = db.session.execute(
             text("SELECT process_name, window_title, idle_s, is_idle, captured_at FROM rmm_eagle_current WHERE agent_id = :aid"),
@@ -995,6 +1176,68 @@ def rmm_eagle_compare():
         hidden = _ee_hidden_ids()
         agents = [a for a in agents if a['agent_id'] not in hidden]
     return render_template('compare_agents.html', agents=agents)
+
+
+@bp.route('/rmm/eagle-eyes/audit')
+@login_required
+@eagle_eyes_required
+def rmm_eagle_audit():
+    """Surveillance audit trail: who viewed/changed/blocked whom, when.
+
+    Surfaces the eagle_eyes.* rows written via models._log_audit (Tier-3 config +
+    screenshot view/download, exclusions, bulk toggles, and the Feature-A viewer
+    VIEW rows). Gated to admin + eagle_eyes — same surface as the rest of Eagle Eyes.
+    """
+    try:
+        limit = min(int(request.args.get('limit', 500)), 2000)
+    except (TypeError, ValueError):
+        limit = 500
+    surface = (request.args.get('surface') or '').strip()  # all | views | changes
+    # Eagle-related audit actions live under entity types we control.
+    where = ["(at.entity_type IN ('rmm_eagle_view','rmm_eagle_config','rmm_screenshot','eagle_eyes_exclusions') "
+             "OR at.action LIKE 'eagle_eyes.%')"]
+    if surface == 'views':
+        where.append("at.action LIKE 'eagle_eyes.view_%'")
+    elif surface == 'changes':
+        where.append("at.action NOT LIKE 'eagle_eyes.view_%'")
+    rows = db.session.execute(
+        text(f"""
+            SELECT at.created_at, at.action, at.entity_type, at.changes,
+                   at.ip_address, u.username, u.role
+            FROM audit_trail at
+            LEFT JOIN "user" u ON u.id = at.user_id
+            WHERE {' AND '.join(where)}
+            ORDER BY at.created_at DESC
+            LIMIT :lim
+        """),
+        {'lim': limit}
+    ).mappings().fetchall()
+    entries = []
+    for r in rows:
+        c = {}
+        try:
+            c = json.loads(r['changes']) if r['changes'] else {}
+        except Exception:
+            c = {}
+        # Pull a friendly target out of the changes blob regardless of action shape.
+        target_agent = c.get('agent_id')
+        owner = c.get('owner')
+        if not owner and isinstance(c.get('ack_at_enable'), dict):
+            owner = c['ack_at_enable'].get('employee_name')
+        entries.append({
+            'created_at': _dt_iso(r['created_at']),
+            'action': r['action'],
+            'entity_type': r['entity_type'],
+            'viewer': r['username'] or '—',
+            'viewer_role': r['role'] or '',
+            'ip': r['ip_address'] or '',
+            'target_agent': target_agent or '',
+            'owner': owner or '',
+            'surface': c.get('surface') or '',
+            'detail': c,
+        })
+    return render_template('eagle_eyes_audit.html', entries=entries,
+                           surface=surface or 'all', limit=limit)
 
 
 @bp.route('/api/rmm/eagle-eyes/compare-data')

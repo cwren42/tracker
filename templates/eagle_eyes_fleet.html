@@ -25,6 +25,9 @@
       <a href="/rmm/eagle-eyes/compare" class="btn btn-sm btn-outline-info">
         <i class="bi bi-layout-split me-1"></i>Compare
       </a>
+      <a href="/rmm/eagle-eyes/audit" class="btn btn-sm btn-outline-secondary" title="Surveillance audit trail — who viewed whom">
+        <i class="bi bi-shield-lock me-1"></i>Audit
+      </a>
       {% endif %}
     </div>
   </div>
@@ -165,5 +168,5 @@
   </div>
 </div>
 
-<script src="/static/js/eagle_eyes_fleet.js"></script>
+<script src="/static/js/eagle_eyes_fleet.js?v={{ asset_version }}"></script>
 {% endblock %}

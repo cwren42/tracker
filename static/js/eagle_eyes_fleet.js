@@ -421,6 +421,18 @@
             agent.eagle_enabled = enable;
             if (!enable) agent.screenshots_enabled = false;
           }
+          // Notice/ack gate (warn mode): enabled, but no acknowledged monitoring policy.
+          if (data.ack_warning) {
+            const w = data.ack_warning;
+            const who = w.employee_name ? ('"' + w.employee_name + '"') : 'the assigned employee';
+            alert('Monitoring enabled — but ' + who + ' has NO acknowledged "' + w.policy_name +
+                  '" monitoring policy on record. Record an acknowledgement under '
+                  + 'SOC2 → Policy Acknowledgements to keep this monitoring defensible. '
+                  + '(Logged to the surveillance audit trail.)');
+          }
+        } else if (data && data.error === 'ack_required') {
+          // Block mode: enablement refused until acknowledgement exists.
+          alert(data.message || 'Cannot enable monitoring: no acknowledged monitoring policy on record.');
         } else {
           console.error('enable/disable failed:', data && data.error);
         }

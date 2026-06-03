@@ -372,7 +372,12 @@ def bulk_export_selected():
 @manager_required
 @license_required
 def bulk_update_agent():
-    """Queue a force_update command for the RMM agents linked to selected assets."""
+    """Trigger a self-update on the RMM agents linked to selected assets.
+
+    Sends a live WS 'update_now' via the gateway — the agent has no working heartbeat/
+    rmm_commands consumer, so the old queue-a-force_update approach never fired (it just
+    piled up zombie rows). Online agents update immediately; offline ones pick it up on
+    their next periodic update check (~4h) or restart."""
     data = request.get_json(force=True) or {}
     asset_ids = data.get('asset_ids', [])
     if not asset_ids:
@@ -385,28 +390,25 @@ def bulk_update_agent():
     if not rows:
         return jsonify({'success': False, 'message': 'None of the selected assets have an RMM agent enrolled'}), 400
 
-    queued = 0
+    import urllib.request as _ur, json as _json
+    delivered = offline = 0
     for row in rows:
         agent_id = row[0]
-        # Skip if a pending force_update already exists
-        existing = db.session.execute(
-            text("SELECT 1 FROM rmm_commands WHERE agent_id = :aid AND command_type = 'control' AND status = 'pending' LIMIT 1"),
-            {'aid': agent_id}
-        ).fetchone()
-        if existing:
-            continue
-        db.session.execute(
-            text("INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at) VALUES (:aid, 'force_update', 'control', 'pending', NOW())"),
-            {'aid': agent_id}
-        )
-        queued += 1
-    db.session.commit()
+        try:
+            req = _ur.Request(f"{RMM_GATEWAY_INTERNAL}/send-msg/{agent_id}",
+                              data=_json.dumps({'type': 'update_now', 'session_id': 0}).encode(),
+                              headers={'Content-Type': 'application/json'}, method='POST')
+            with _ur.urlopen(req, timeout=3) as r:
+                ok = _json.loads(r.read()).get('ok', False)
+            delivered += 1 if ok else 0
+            offline += 0 if ok else 1
+        except Exception:
+            offline += 1
 
-    skipped = len(rows) - queued
-    msg = f'Queued update for {queued} agent(s).'
-    if skipped:
-        msg += f' {skipped} already had a pending command.'
-    return jsonify({'success': True, 'count': queued, 'message': msg})
+    msg = f'Sent update to {delivered} online agent(s).'
+    if offline:
+        msg += f' {offline} offline — they will update on their next check (~4h) or restart.'
+    return jsonify({'success': True, 'count': delivered, 'message': msg})
 
 
 @bp.route('/assets/bulk/scan-patches', methods=['POST'])

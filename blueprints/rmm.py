@@ -811,8 +811,14 @@ def api_rmm_send_command():
             # Use power_action for restart; queue the rest (launcher handles on heartbeat).
             if command == 'restart':
                 gw_payload = {'type': 'power_action', 'action': 'restart', 'session_id': 0}
+            elif command == 'force_update':
+                # The agent only acts on a live WS 'update_now' (it has no working heartbeat/
+                # rmm_commands consumer), so the old gw_payload=None path queued force_updates
+                # that never ran (275 zombie rows). Send update_now over the gateway instead —
+                # the same proven trigger the "Update Agent" button uses.
+                gw_payload = {'type': 'update_now', 'session_id': 0}
             else:
-                gw_payload = None  # force_update / reinstall still go via queue
+                gw_payload = None  # reinstall still has no WS handler; leave to queue
 
         if gw_payload:
             body = _json.dumps(gw_payload).encode()

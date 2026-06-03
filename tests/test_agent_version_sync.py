@@ -18,15 +18,16 @@ import os
 import re
 
 _AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rmm_agent")
+_CANARY_DIR = os.path.join(_AGENT_DIR, "canary")
 
 
-def _version_txt() -> str:
-    with open(os.path.join(_AGENT_DIR, "version.txt"), encoding="utf-8") as f:
+def _version_txt(base: str = _AGENT_DIR) -> str:
+    with open(os.path.join(base, "version.txt"), encoding="utf-8") as f:
         return f.read().strip()
 
 
-def _agent_client_version() -> str:
-    path = os.path.join(_AGENT_DIR, "agent_client.py")
+def _agent_client_version(base: str = _AGENT_DIR) -> str:
+    path = os.path.join(base, "agent_client.py")
     with open(path, encoding="utf-8") as f:
         for line in f:
             m = re.match(r'\s*AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', line)
@@ -47,3 +48,18 @@ def test_agent_version_sources_match():
 def test_version_is_semver_like():
     txt = _version_txt()
     assert re.fullmatch(r"\d+\.\d+\.\d+", txt), f"version.txt {txt!r} is not X.Y.Z"
+
+
+def test_canary_version_sources_match():
+    """If a canary build is staged (rmm_agent/canary/), its two version sources must also
+    agree — the canary serves to pinned agents and previously wasn't guarded, so it could
+    drift unchecked."""
+    if not (os.path.isfile(os.path.join(_CANARY_DIR, "version.txt"))
+            and os.path.isfile(os.path.join(_CANARY_DIR, "agent_client.py"))):
+        return  # no canary staged — nothing to check
+    txt = _version_txt(_CANARY_DIR)
+    code = _agent_client_version(_CANARY_DIR)
+    assert txt == code, (
+        f"Canary agent version drift: canary/version.txt={txt!r} but "
+        f"canary/agent_client.py AGENT_VERSION={code!r}. Bump both together."
+    )

@@ -717,7 +717,7 @@ def approve_action(row_id, approver):
         step_id = replay.get("step_id")
         run_id = replay.get("run_id")
         try:
-            success, output = ACTION_MAP[action_type](config, ctx)
+            success, output = ACTION_MAP[action_type](_render_config(config, ctx), ctx)
         except Exception as e:
             success, output = False, {"error": str(e)}
         out = output if isinstance(output, dict) else {"result": str(output)}
@@ -1287,7 +1287,7 @@ def _action_install_local_tool(config: dict, ctx: dict) -> tuple:
     fn_lit = file_name.replace("'", "''")
     run = ("$p = Start-Process msiexec.exe -ArgumentList '/i', ('\"'+$file+'\"'), '/qn', '/norestart' -Wait -PassThru"
            if file_name.lower().endswith(".msi")
-           else ("$p = Start-Process -LiteralPath $file" +
+           else ("$p = Start-Process -FilePath $file" +
                  (f" -ArgumentList @({ps_args})" if ps_args else "") +
                  " -Wait -PassThru -WindowStyle Hidden"))
     script = (
@@ -1692,6 +1692,20 @@ def _render(template: str, ctx: dict) -> str:
     return re.sub(r"\{\{(.+?)\}\}", replacer, str(template))
 
 
+def _render_config(config: dict, ctx: dict) -> dict:
+    """Resolve {{...}} templates in a node/replay config against ctx BEFORE dispatch.
+
+    Handlers historically rendered each field themselves, but a few non-string-ish fields
+    (asset_id, ticket_id) were never wrapped in _render — so on the parked→approved replay
+    path the literal '{{asset_id}}' reached SQL and blew up the bigint cast (the Ken-Lenovo
+    install failure). Rendering centrally fixes the whole class for every action. Only string
+    values are templated; numbers/bools/nested structures pass through untouched, and the
+    handlers' own _render calls stay correct (idempotent on already-resolved values)."""
+    if not isinstance(config, dict):
+        return config
+    return {k: (_render(v, ctx) if isinstance(v, str) else v) for k, v in config.items()}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Action dispatcher
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1920,7 +1934,7 @@ def _drive(run_id, node_map, adj, edge_conditions, ctx, visited, queue):
                 handler = ACTION_MAP.get(action_type)
                 if handler:
                     try:
-                        success, output = handler(config, ctx)
+                        success, output = handler(_render_config(config, ctx), ctx)
                     except Exception as e:
                         success, output = False, {"error": str(e)}
                 else:

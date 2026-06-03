@@ -317,6 +317,13 @@ class M365Service:
         """Get all managed devices with detailed hardware information"""
         logger.info("Fetching all devices with hardware details")
         # Extended fields — some may not be available depending on Intune license tier.
+        # NOTE: 'tpmVersion' is NOT a top-level property of the beta managedDevice
+        # resource (it lives only under hardwareInformation, which is a non-default
+        # complex type that requires a per-device GET). Including it in the list-call
+        # $select returns 400 Bad Request, which previously forced a fallback to the
+        # minimal field set and dropped ALL the rich hardware fields (storage/MAC/etc).
+        # tpmVersion is still read opportunistically from hardwareInformation in the
+        # consumer (assets_intune.py) when present.
         extended_fields = [
             'id', 'deviceName', 'serialNumber', 'userPrincipalName',
             'operatingSystem', 'osVersion', 'manufacturer', 'model',
@@ -324,7 +331,7 @@ class M365Service:
             'lastSyncDateTime', 'azureADDeviceId',
             'processorArchitecture', 'totalStorageSpaceInBytes',
             'freeStorageSpaceInBytes', 'wiFiMacAddress',
-            'ethernetMacAddress', 'tpmVersion',
+            'ethernetMacAddress',
         ]
         # Minimal fallback fields — always available.
         minimal_fields = [

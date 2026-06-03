@@ -121,6 +121,7 @@ def perform_intune_asset_sync():
         all_assets = Asset.query.all()
         assets_by_serial = {}
         assets_by_azure_id = {}
+        assets_by_intune_id = {}
         assets_by_name_lower = {}
         existing_asset_tags = set()
         _ZERO_GUID = '00000000-0000-0000-0000-000000000000'
@@ -132,8 +133,18 @@ def perform_intune_asset_sync():
             _aad = (existing_asset.azure_ad_device_id or '').strip().lower()
             if _aad and _aad != _ZERO_GUID:
                 assets_by_azure_id.setdefault(_aad, existing_asset)
+            _iid = (existing_asset.intune_device_id or '').strip()
+            if _iid:
+                assets_by_intune_id.setdefault(_iid, existing_asset)
             if existing_asset.name:
                 assets_by_name_lower.setdefault(existing_asset.name.strip().lower(), existing_asset)
+
+        # Per-run record of which device last wrote each asset's authoritative
+        # fields (name/user), keyed by asset id -> that device's lastSyncDateTime.
+        # After an HDD/mainboard swap two Intune managed devices can report the
+        # same serial (a live one + a defunct one). Both match the same asset; the
+        # stale one must NOT clobber the live one's name (last-writer-wins bug).
+        last_writer_sync = {}
 
         employees_by_email_lower = {
             (emp.email or '').strip().lower(): emp
@@ -188,6 +199,8 @@ def perform_intune_asset_sync():
                 serial_number = normalize_serial(device.get('serialNumber'))
                 azure_id = normalize_azure_id(device.get('azureADDeviceId'))
 
+                intune_id = (device.get('id') or '').strip() or None
+
                 asset = None
                 if serial_number and serial_number in assets_by_serial:
                     asset = assets_by_serial[serial_number]
@@ -198,6 +211,12 @@ def perform_intune_asset_sync():
                 # created duplicate assets (e.g. gao.yang_Windows_N piling up daily).
                 if not asset and azure_id and azure_id in assets_by_azure_id:
                     asset = assets_by_azure_id[azure_id]
+                # Match on the Intune managed-device id too, before falling back to
+                # name/create. Guards against spawning a duplicate asset that carries
+                # an intune_device_id (or azure id) an existing asset already owns
+                # (the #966 vs #125 split). Always update the existing owner instead.
+                if not asset and intune_id and intune_id in assets_by_intune_id:
+                    asset = assets_by_intune_id[intune_id]
                 if not asset:
                     asset = assets_by_name_lower.get(device_name_norm.lower())
 
@@ -238,44 +257,78 @@ def perform_intune_asset_sync():
                 eth_mac = device.get('ethernetMacAddress')
 
                 if asset:
-                    asset.name = device_name_norm or asset.name
-                    asset.manufacturer = device.get('manufacturer') or asset.manufacturer
-                    asset.model = device.get('model') or asset.model
-                    if os_name:
-                        asset.os_version = f"{os_name} {os_ver}".strip()
-                    asset.intune_os_version = os_ver
+                    # If another device in THIS run already wrote authoritative
+                    # fields onto this asset with a NEWER lastSyncDateTime, the
+                    # current device is stale (e.g. the defunct SHAMPTON-THINK
+                    # record vs the live Ken-Lenovo, both reporting serial
+                    # PF3PEVYX after an HDD swap). Let only the freshest device own
+                    # the device-identity fields (name, model, UPN/employee,
+                    # intune_device_id, telemetry). Older device records may still
+                    # exist in Intune until cleaned up, so we must not let them win.
+                    prior_sync = last_writer_sync.get(asset.id)
+                    is_stale = (
+                        prior_sync is not None
+                        and last_sync_dt is not None
+                        and last_sync_dt < prior_sync
+                    )
 
-                    asset.intune_device_id = device.get('id')
-                    asset.intune_compliance_state = device.get('complianceState', 'unknown')
-                    asset.intune_management_state = device.get('managementState', 'unknown')
-                    if enrollment_dt:
-                        asset.intune_enrolled_date = enrollment_dt
-                    if last_sync_dt:
-                        asset.intune_last_sync = last_sync_dt
-                        asset.last_seen = last_sync_dt
+                    if not is_stale:
+                        asset.name = device_name_norm or asset.name
+                        asset.manufacturer = device.get('manufacturer') or asset.manufacturer
+                        asset.model = device.get('model') or asset.model
+                        if os_name:
+                            asset.os_version = f"{os_name} {os_ver}".strip()
+                        asset.intune_os_version = os_ver
 
-                    asset.online_state = device.get('complianceState', 'unknown')
-                    asset.hardware_cpu = cpu_arch
-                    if ram_gb is not None:
-                        asset.hardware_ram_gb = ram_gb
-                    if total_storage_gb is not None:
-                        asset.hardware_storage_total_gb = total_storage_gb
-                    if free_storage_gb is not None:
-                        asset.hardware_storage_free_gb = free_storage_gb
-                    asset.hardware_bios_version = bios_ver
-                    asset.hardware_tpm_version = tpm_ver
-                    asset.hardware_mac_wifi = wifi_mac
-                    asset.hardware_mac_ethernet = eth_mac
-                    asset.azure_ad_device_id = device.get('azureADDeviceId')
-                    if azure_id:
-                        assets_by_azure_id.setdefault(azure_id, asset)
+                        asset.intune_device_id = device.get('id')
+                        asset.intune_compliance_state = device.get('complianceState', 'unknown')
+                        asset.intune_management_state = device.get('managementState', 'unknown')
+                        if enrollment_dt:
+                            asset.intune_enrolled_date = enrollment_dt
+                        if last_sync_dt:
+                            asset.intune_last_sync = last_sync_dt
+                            asset.last_seen = last_sync_dt
 
-                    if employee:
-                        if not asset.employee_id:
-                            asset.employee_id = employee.id
-                            asset.status = 'In Use'
-                        elif asset.employee_id != employee.id:
-                            asset.employee_id = employee.id
+                        asset.online_state = device.get('complianceState', 'unknown')
+                        asset.hardware_cpu = cpu_arch
+                        if ram_gb is not None:
+                            asset.hardware_ram_gb = ram_gb
+                        if total_storage_gb is not None:
+                            asset.hardware_storage_total_gb = total_storage_gb
+                        if free_storage_gb is not None:
+                            asset.hardware_storage_free_gb = free_storage_gb
+                        asset.hardware_bios_version = bios_ver
+                        asset.hardware_tpm_version = tpm_ver
+                        asset.hardware_mac_wifi = wifi_mac
+                        asset.hardware_mac_ethernet = eth_mac
+                        asset.azure_ad_device_id = device.get('azureADDeviceId')
+
+                        if employee:
+                            if not asset.employee_id:
+                                asset.employee_id = employee.id
+                                asset.status = 'In Use'
+                            elif asset.employee_id != employee.id:
+                                asset.employee_id = employee.id
+
+                        # Record this device as the freshest writer of this asset.
+                        # A device with no lastSyncDateTime cannot beat one that has
+                        # a real timestamp, so only advance the marker when we have
+                        # a real value (or none recorded yet).
+                        if last_sync_dt is not None:
+                            last_writer_sync[asset.id] = last_sync_dt
+                        else:
+                            last_writer_sync.setdefault(asset.id, prior_sync)
+
+                        # Register identifiers so subsequent devices/runs match this
+                        # asset instead of duplicating. Only the FRESHEST writer registers
+                        # ids — a stale/defunct device must NOT seed the run maps, or it
+                        # could mis-route a later device onto this asset within the run.
+                        if azure_id:
+                            assets_by_azure_id.setdefault(azure_id, asset)
+                        if intune_id:
+                            assets_by_intune_id.setdefault(intune_id, asset)
+                        if serial_number:
+                            assets_by_serial.setdefault(serial_number, asset)
 
                     updated_count += 1
                 else:
@@ -319,14 +372,28 @@ def perform_intune_asset_sync():
                         notes=f"Synced from Microsoft Intune on {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
                     )
                     db.session.add(new_asset)
+                    # Flush so the new asset gets a real primary key — needed to key
+                    # last_writer_sync (avoids a None-key collision across multiple
+                    # newly-created assets in the same run).
+                    db.session.flush()
                     if serial_number:
                         assets_by_serial[serial_number] = new_asset
                     if azure_id:
                         assets_by_azure_id.setdefault(azure_id, new_asset)
+                    if intune_id:
+                        assets_by_intune_id.setdefault(intune_id, new_asset)
                     assets_by_name_lower.setdefault(device_name_norm.lower(), new_asset)
+                    if new_asset.id is not None and last_sync_dt is not None:
+                        last_writer_sync[new_asset.id] = last_sync_dt
                     synced_count += 1
 
+                # Commit per device so one bad row (e.g. a flush IntegrityError on a new
+                # asset) can't leave the session in a needs-rollback state and cascade-fail
+                # the rest of the fleet sync. Successful devices persist; a failing one is
+                # rolled back below and skipped.
+                db.session.commit()
             except Exception as e:
+                db.session.rollback()
                 errors.append(f"Error syncing {device.get('deviceName', 'Unknown')}: {str(e)}")
                 continue
 

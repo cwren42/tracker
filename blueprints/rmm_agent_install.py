@@ -369,7 +369,7 @@ def rmm_enroll():
         token_hash = _hl.sha256(raw_token.encode()).hexdigest()
 
         existing = db.session.execute(
-            text("SELECT id FROM rmm_agent WHERE agent_id = :aid"),
+            text("SELECT id, asset_id FROM rmm_agent WHERE agent_id = :aid"),
             {'aid': agent_id}
         ).fetchone()
         if existing:
@@ -387,6 +387,43 @@ def rmm_enroll():
                         VALUES (:aid, :asid, :hash, TRUE, :now, :now)"""),
                 {'aid': agent_id, 'asid': asset.id, 'hash': token_hash, 'now': now}
             )
+
+        # Rename reconciliation: a renamed device re-enrolls under a NEW agent_id
+        # (agent_id defaults to hostname). Other agent rows may still point at the
+        # asset this device USED to be (e.g. KEN-DELL's agent left pointing at the
+        # old asset #125 after the box became Ken-Lenovo / asset #966). When this
+        # enrollment resolved a hostname match to `asset.id`, re-point any OTHER
+        # agent rows that (a) reference this same asset OR (b) carry the device's
+        # old name, but are NOT this agent_id, and disable them so the live agent
+        # is the single source of truth. Guard against regressing first-enrollment:
+        # only touch rows that are genuinely stale duplicates, never this agent.
+        # SAFETY: only ever disable a STALE agent (not seen in 7+ days, or never).
+        # This fleet has pre-existing tangles where two genuinely-distinct live devices
+        # share one asset_id — without this guard the asset_id arm would disable a live
+        # agent. A live agent (recent last_seen_at) is never touched; only the dead
+        # old-name row left behind by a rename gets retired.
+        stale_cutoff = now - timedelta(days=7)
+        stale_rows = db.session.execute(
+            text("""SELECT id, agent_id, asset_id FROM rmm_agent
+                    WHERE agent_id != :aid
+                      AND enabled = TRUE
+                      AND (last_seen_at IS NULL OR last_seen_at < :stale_cutoff)
+                      AND (asset_id = :asid OR LOWER(agent_id) = LOWER(:host))"""),
+            {'aid': agent_id, 'asid': asset.id, 'host': hostname, 'stale_cutoff': stale_cutoff}
+        ).fetchall()
+        for row in stale_rows:
+            db.session.execute(
+                text("""UPDATE rmm_agent
+                        SET enabled = FALSE, asset_id = :asid
+                        WHERE id = :rid"""),
+                {'asid': asset.id, 'rid': row.id}
+            )
+            logger.info(
+                "RMM rename reconcile: disabled stale agent_id=%s (was asset_id=%s) "
+                "in favor of agent_id=%s -> asset_id=%s",
+                row.agent_id, row.asset_id, agent_id, asset.id
+            )
+
         db.session.commit()
 
         logger.info(f"RMM self-enrollment: agent_id={agent_id} hostname={hostname} asset_id={asset.id}")

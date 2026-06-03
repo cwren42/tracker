@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 from api_system import require_api_key
 
 
+bp = Blueprint('tickets', __name__)
+
+
 @event.listens_for(SupportTicket, 'before_insert')
 def _auto_assign_ticket(mapper, connection, target):
     """Auto-assign every new ticket to the default assignee (the sole IT person) when no
@@ -52,10 +55,92 @@ def _auto_assign_ticket(mapper, connection, target):
         logger.warning('auto-assign default-assignee lookup failed', exc_info=True)
 
 
-bp = Blueprint('tickets', __name__)
+def _on_ticket_resolved(ticket):
+    """Single hook fired when a ticket transitions INTO a resolved (Closed) state.
+
+    Publishes a `ticket.resolved` bus event. The event dispatcher
+    (event_bus._dispatch_once) has a built-in subscriber that runs the Knowledge
+    Agent's "Learn" step — distilling the ticket into a reusable runbook — within an
+    app context. Routing Learn through the event keeps ONE source of truth across
+    every close path (UI status change, close button, bulk close) AND the brain's
+    auto-resolve in workflow_engine, which also publishes ticket.resolved. Learn is
+    idempotent (upserts by source_id='ticket:<id>'), so at-least-once delivery is safe.
+
+    Call this only on the actual transition into Closed (not on every status write).
+    Best-effort: never raises into the request.
+    """
+    try:
+        import event_bus
+        event_bus.publish('ticket.resolved', {
+            'ticket_id': ticket.id, 'subject': ticket.subject,
+            'category': ticket.category,
+            'closed_by': getattr(current_user, 'username', None),
+        }, source='tickets')
+    except Exception as _e:
+        logger.warning(f'Failed to publish ticket.resolved for ticket {ticket.id}: {_e}')
 
 
 # ==================== SUPPORT TICKETS ====================
+
+
+def _resolve_reporter_email(name, hostname=None, asset_id=None):
+    """Resolve a reporter's email from the Employee directory.
+
+    The tray client submits reporter_name but no reporter_email, so we look the
+    person up in the Employee directory. Returns a confident single match or None.
+
+    Match order (read-only, indexed-ish, no full scans):
+      1. Case-insensitive exact full-name match on Employee.name. If exactly one
+         Employee matches AND has an email, use it. If 2+ names match, we do NOT
+         guess (return None) to avoid leaking the wrong person's email.
+      2. Asset-owner fallback: if asset_id (or hostname) resolves to an Asset that
+         has an assigned Employee with an email, use that. This is a strong signal
+         because the ticket was filed from that machine.
+
+    Never returns an empty string; returns None when no confident match.
+    """
+    name = (name or '').strip()
+
+    # 1) Exact (case-insensitive) full-name match in the Employee directory.
+    if name:
+        try:
+            matches = Employee.query.filter(
+                func.lower(Employee.name) == name.lower()
+            ).limit(2).all()
+            if len(matches) == 1:
+                email = (matches[0].email or '').strip()
+                if email:
+                    return email
+            # len == 0 -> fall through to asset owner; len >= 2 -> ambiguous,
+            # do not guess by name, but the asset owner below is still a safe signal.
+        except Exception as _e:
+            logger.warning(f'_resolve_reporter_email name lookup failed: {_e}')
+
+    # 2) Asset-owner fallback — the machine the ticket was filed from.
+    asset = None
+    try:
+        if asset_id:
+            asset = Asset.query.get(int(asset_id))
+        if asset is None and hostname:
+            asset = Asset.query.filter(
+                func.lower(Asset.name) == hostname.strip().lower()
+            ).first()
+    except Exception as _e:
+        logger.warning(f'_resolve_reporter_email asset lookup failed: {_e}')
+        asset = None
+
+    if asset is not None and asset.employee_id:
+        try:
+            owner = Employee.query.get(asset.employee_id)
+            if owner:
+                email = (owner.email or '').strip()
+                if email:
+                    return email
+        except Exception as _e:
+            logger.warning(f'_resolve_reporter_email asset-owner lookup failed: {_e}')
+
+    return None
+
 
 # ─── Ticket SLA Escalation Background Thread ─────────────────────────────────
 
@@ -81,9 +166,9 @@ def tickets():
                                urgent_count=0, unassigned_count=0, closed_today=0,
                                chart_labels=[], chart_data=[], tech_loads=[],
                                avg_hours=None, resolution_by_priority=[],
-                               techs=[], f_status='', f_priority='', f_source='',
+                               techs=[], assignees=[], f_status='', f_priority='', f_source='',
                                f_category='', f_assignee='', f_type='',
-                               base_user_mode=True, now=datetime.utcnow())
+                               base_user_mode=True, now=datetime.now())
     # ── Read filter params ────────────────────────────────────────────────────
     f_status   = request.args.get('status',   '').strip()
     f_priority = request.args.get('priority', '').strip()
@@ -115,7 +200,7 @@ def tickets():
         SupportTicket.status.notin_(['Closed', 'Merged'])
     ).count()
     total_closed = SupportTicket.query.filter_by(status='Closed').count()
-    today_date = datetime.utcnow().date()
+    today_date = date.today()  # server-local; compared against local-stored updated_at
 
     # ── Build filtered query ──────────────────────────────────────────────────
     q = SupportTicket.query
@@ -152,11 +237,17 @@ def tickets():
         show_alerts = True  # mark so banner doesn't show
 
     tickets = q.order_by(SupportTicket.created_at.desc()).all()
+    # `techs` stays broad: it powers the assignee FILTER + technician workload
+    # stats, so historical non-admin assignees still show there.
     techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])) \
                       .order_by(User.full_name).all()
+    # `assignees` is admin-only: only admins may HOLD a ticket, so the (bulk)
+    # assign dropdown lists admins exclusively.
+    assignees = User.query.filter(User.role == 'admin') \
+                          .order_by(db.func.coalesce(User.full_name, User.username)).all()
 
     # ── Chart: tickets created per day for last 30 days ───────────────────────
-    today = datetime.utcnow().date()
+    today = date.today()  # server-local; buckets local-stored created_at
     chart_labels = [
         (today - timedelta(days=29 - i)).strftime('%Y-%m-%d') for i in range(30)
     ]
@@ -239,10 +330,10 @@ def tickets():
                            chart_labels=chart_labels, chart_data=chart_data, tech_loads=tech_loads,
                            avg_hours=avg_hours,
                            closed_today=closed_today, resolution_by_priority=resolution_by_priority,
-                           techs=techs,
+                           techs=techs, assignees=assignees,
                            f_status=f_status, f_priority=f_priority, f_source=f_source,
                            f_category=f_category, f_assignee=f_assignee, f_type=f_type,
-                           now=datetime.utcnow())
+                           now=datetime.now())
 
 
 @bp.route('/tickets/new', methods=['GET', 'POST'])
@@ -267,6 +358,15 @@ def new_ticket():
         asset_id = request.form.get('asset_id')
         asset = Asset.query.get(int(asset_id)) if asset_id else None
 
+        # Auto-resolve reporter email from the Employee directory when not given,
+        # so the value is persisted for future replies. None if no confident match.
+        if not reporter_email:
+            reporter_email = _resolve_reporter_email(
+                reporter_name,
+                hostname=(asset.name if asset else None),
+                asset_id=(asset.id if asset else None),
+            )
+
         ticket = SupportTicket(
             status='Open',
             priority=priority,
@@ -279,8 +379,8 @@ def new_ticket():
             asset_tag=asset.asset_tag if asset else None,
             hostname=asset.name if asset else None,
             created_by_user_id=current_user.id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(),  # server-local (TZ=America/Denver); utcnow() displayed +6h. See now_mst().
+            updated_at=datetime.now(),
         )
         db.session.add(ticket)
         db.session.commit()
@@ -364,6 +464,31 @@ def new_ticket():
         except Exception as _e:
             logger.warning(f'Failed to insert ticket notification bell: {_e}')
 
+        # Emit onto the event bus — the brain's nervous system. Subscribers (workflows
+        # whose trigger_type matches 'ticket.created') react; risky actions still park
+        # for approval. Best-effort, post-commit; never blocks ticket creation.
+        try:
+            import event_bus
+            # Enrich with the submitter's AD identity so account-lockout workflows can
+            # resolve who to unlock (User.email -> Employee.sam_account_name).
+            _sam = None
+            try:
+                if current_user.email:
+                    _emp = Employee.query.filter_by(email=current_user.email).first()
+                    _sam = _emp.sam_account_name if _emp else None
+            except Exception:
+                _sam = None
+            event_bus.publish('ticket.created', {
+                'ticket_id': ticket.id, 'subject': ticket.subject,
+                'priority': priority, 'category': getattr(ticket, 'category', None),
+                'asset_id': asset.id if asset else None,
+                'submitted_by': current_user.username,
+                'submitter_email': current_user.email,
+                'submitter_sam': _sam,
+            }, source='tickets')
+        except Exception as _e:
+            logger.warning(f'Failed to publish ticket.created event: {_e}')
+
         flash(f'Ticket #{ticket.id} created.', 'success')
         return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
 
@@ -381,7 +506,8 @@ def view_ticket(ticket_id):
     if current_user.role == 'base_user' and ticket.created_by_user_id != current_user.id:
         flash('You can only view your own tickets.', 'danger')
         return redirect(url_for('tickets.tickets'))
-    techs = User.query.filter(User.role.in_(['admin', 'manager', 'viewer'])).order_by(db.func.coalesce(User.full_name, User.username)).all()
+    # Assign dropdown: only admins may HOLD a ticket (assignee pool is admin-only).
+    techs = User.query.filter(User.role == 'admin').order_by(db.func.coalesce(User.full_name, User.username)).all()
     # Build timeline: merge notes + activity sorted by created_at
     # Base users and eagle_eyes cannot see internal (tech-only) notes
     _notes_q = ticket.notes.order_by(TicketNote.created_at).all()
@@ -389,15 +515,38 @@ def view_ticket(ticket_id):
         _notes_q = [n for n in _notes_q if not n.is_internal]
     notes = [{'type': 'note', 'obj': n, 'ts': n.created_at} for n in _notes_q]
     acts = [{'type': 'activity', 'obj': a, 'ts': a.created_at} for a in ticket.activity.order_by(TicketActivity.created_at).all()]
-    timeline = sorted(notes + acts, key=lambda x: x['ts'] or datetime.utcnow())
+    timeline = sorted(notes + acts, key=lambda x: x['ts'] or datetime.now())
     all_tags = TicketTag.query.order_by(TicketTag.name).all()
     watcher_ids = {w.user_id for w in ticket.watchers.all()}
     all_users = User.query.filter(User.role.in_(['admin', 'manager', 'viewer', 'eagle_eyes'])) \
                           .order_by(db.func.coalesce(User.full_name, User.username)).all()
     linked = ticket.links.all()
+    # Prefill the reply "To" field even for older tickets whose reporter_email is
+    # NULL (e.g. tray tickets created before auto-resolution). Read-only: we do
+    # NOT write this back to the column on a page view — the reply handler stores
+    # reply_to when a reply is actually sent.
+    effective_reporter_email = ticket.reporter_email or _resolve_reporter_email(
+        ticket.reporter_name, hostname=ticket.hostname, asset_id=ticket.asset_id,
+    )
+    # Quarantine release-request tickets carry a [qmsg:<message_id>] marker — pull it so
+    # the view can offer a direct link to the quarantined message (review/release).
+    quarantine_msg_id = None
+    if ticket.source == 'quarantine' and ticket.description:
+        _qm = re.search(r'\[qmsg:([^\]]+)\]', ticket.description)
+        if _qm:
+            quarantine_msg_id = _qm.group(1)
+    # One-click remediation fixes (admin only) for the "Apply fix" picker.
+    fixes = []
+    if current_user.role == 'admin':
+        from sqlalchemy import text as _t
+        fixes = [dict(r._mapping) for r in db.session.execute(_t(
+            "SELECT id, name, description FROM rmm_script_library "
+            "WHERE is_fix=true AND is_active=true ORDER BY name"))]
     return render_template('view_ticket.html', ticket=ticket, techs=techs, timeline=timeline,
                            today=date.today(), all_tags=all_tags, watcher_ids=watcher_ids,
-                           all_users=all_users, linked=linked)
+                           all_users=all_users, linked=linked,
+                           effective_reporter_email=effective_reporter_email,
+                           quarantine_msg_id=quarantine_msg_id, fixes=fixes)
 
 
 @bp.route('/tickets/<int:ticket_id>/delete', methods=['POST'])
@@ -417,6 +566,7 @@ def delete_ticket(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/status', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_status(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
@@ -425,12 +575,66 @@ def set_ticket_status(ticket_id):
         old = ticket.status
         ticket.status = new_status
         if new_status == 'Closed':
-            ticket.closed_at = datetime.utcnow()
+            ticket.closed_at = datetime.now()  # server-local; see now_mst()
             ticket.closed_by_user_id = current_user.id
         db.session.add(TicketActivity(ticket_id=ticket.id, user_id=current_user.id,
                                       action='status_changed', detail=f'{old} → {new_status}'))
         db.session.commit()
+
+        # On resolution: distill the ticket into a reusable runbook (Knowledge Agent
+        # "Learn" step), routed through the centralized ticket.resolved hook.
+        if new_status == 'Closed' and old != 'Closed':
+            _on_ticket_resolved(ticket)
     return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
+
+
+@bp.route('/tickets/<int:ticket_id>/apply-fix', methods=['POST'])
+@login_required
+@admin_required
+@license_required
+def apply_ticket_fix(ticket_id):
+    """Admin one-click remediation: dispatch a vetted 'fix' from the library to the ticket's
+    device. Resolves the device, then publishes fix.requested -> the Apply Fix workflow parks
+    an apply_fix approval at /approvals (which runs the fix as SYSTEM once approved)."""
+    from sqlalchemy import text as _t
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    data = request.get_json(silent=True) or {}
+    try:
+        fix_id = int(data.get('fix_id') or request.form.get('fix_id'))
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'fix_id is required'}), 400
+    frow = db.session.execute(
+        _t("SELECT name FROM rmm_script_library WHERE id=:id AND is_fix=true AND is_active=true"),
+        {'id': fix_id}).fetchone()
+    if not frow:
+        return jsonify({'ok': False, 'error': 'Unknown or inactive fix.'}), 400
+
+    # Resolve the device for this ticket: explicit asset > hostname > reporter's employee asset.
+    asset_id, hostname = ticket.asset_id, ticket.hostname
+    if not asset_id:
+        a = Asset.query.filter(Asset.name == hostname).first() if hostname else None
+        if a is None and ticket.created_by_user_id:
+            u = User.query.get(ticket.created_by_user_id)
+            emp_id = getattr(u, 'employee_id', None) if u else None
+            if emp_id:
+                a = Asset.query.filter(Asset.employee_id == emp_id).first()
+        if a:
+            asset_id, hostname = a.id, (hostname or a.name)
+    if not asset_id:
+        return jsonify({'ok': False, 'error': 'No device resolved for this ticket — set the asset on the ticket first.'}), 400
+
+    try:
+        import event_bus
+        event_bus.publish('fix.requested', {
+            'fix_id': fix_id, 'fix_name': frow[0], 'asset_id': asset_id,
+            'hostname': hostname or '', 'ticket_id': ticket.id,
+            'requested_by': current_user.username or current_user.email or '',
+        }, source='ticket')
+    except Exception:
+        logger.exception('fix.requested publish failed for ticket %s', ticket.id)
+        return jsonify({'ok': False, 'error': 'Failed to queue the fix.'}), 500
+    return jsonify({'ok': True,
+                    'message': f"'{frow[0]}' queued — approve it at /approvals to run on {hostname or 'the device'}."})
 
 
 @bp.route('/tickets/<int:ticket_id>/edit', methods=['POST'])
@@ -459,9 +663,13 @@ def assign_ticket(ticket_id):
         ticket.assigned_to_user_id = None
         detail = 'Unassigned'
     else:
-        ticket.assigned_to_user_id = int(assignee_id)
-        u = User.query.get(ticket.assigned_to_user_id)
-        detail = f'Assigned to {u.display_name if u else assignee_id}'
+        u = User.query.get(int(assignee_id))
+        # Only admins may be assigned a ticket.
+        if not u or u.role != 'admin':
+            flash('Tickets can only be assigned to admin users.', 'danger')
+            return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
+        ticket.assigned_to_user_id = u.id
+        detail = f'Assigned to {u.display_name}'
         # Email technician if ticket is High or Urgent
         if ticket.priority in ('High', 'Urgent') and u and u.email:
             try:
@@ -503,6 +711,7 @@ def assign_ticket(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/category', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_category(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
@@ -516,6 +725,7 @@ def set_ticket_category(ticket_id):
 
 @bp.route('/tickets/<int:ticket_id>/priority', methods=['POST'])
 @login_required
+@admin_required
 @license_required
 def set_ticket_priority(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
@@ -661,17 +871,26 @@ def bulk_action():
         abort(400)
     bulk_tickets = SupportTicket.query.filter(SupportTicket.id.in_(ids)).all()
     count = len(bulk_tickets)
+    # Tickets that transition INTO Closed here — fire the Learn hook once each, post-commit.
+    _resolved = []
     if action == 'close':
         for t in bulk_tickets:
             if t.status not in ('Closed', 'Merged'):
                 t.status = 'Closed'
-                t.closed_at = datetime.utcnow()
+                t.closed_at = datetime.now()  # server-local; see now_mst()
                 t.closed_by_user_id = current_user.id
                 db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                               action='closed', detail='Bulk closed'))
+                _resolved.append(t)
     elif action == 'assign':
         assignee_raw = request.form.get('bulk_assignee_id', '0')
         assignee_id = int(assignee_raw) if assignee_raw.isdigit() and assignee_raw != '0' else None
+        # Only admins may be assigned a ticket (unassign / assignee_id None stays allowed).
+        if assignee_id is not None:
+            _au = User.query.get(assignee_id)
+            if not _au or _au.role != 'admin':
+                flash('Tickets can only be assigned to admin users.', 'danger')
+                return redirect(url_for('tickets.tickets'))
         for t in bulk_tickets:
             t.assigned_to_user_id = assignee_id
             label = User.query.get(assignee_id).display_name if assignee_id else 'Unassigned'
@@ -694,10 +913,13 @@ def bulk_action():
         for t in bulk_tickets:
             if t.status in ('Merged',):
                 continue
+            _was_closed = t.status == 'Closed'
             t.status = status
             if status == 'Closed' and t.closed_at is None:
-                t.closed_at = datetime.utcnow()
+                t.closed_at = datetime.now()  # server-local; see now_mst()
                 t.closed_by_user_id = current_user.id
+            if status == 'Closed' and not _was_closed:
+                _resolved.append(t)
             db.session.add(TicketActivity(ticket_id=t.id, user_id=current_user.id,
                                           action='status_changed',
                                           detail=f'Bulk: status → {status}'))
@@ -716,6 +938,9 @@ def bulk_action():
     else:
         abort(400)
     db.session.commit()
+    # Post-commit: Learn from each ticket that just transitioned into Closed.
+    for t in _resolved:
+        _on_ticket_resolved(t)
     flash(f'{count} ticket(s) updated.', 'success')
     return redirect(request.referrer or url_for('tickets.tickets'))
 
@@ -752,9 +977,10 @@ def merge_ticket(ticket_id):
 @license_required
 def close_ticket(ticket_id):
     ticket = SupportTicket.query.get_or_404(ticket_id)
-    if ticket.status != 'Closed':
+    _transitioned = ticket.status != 'Closed'
+    if _transitioned:
         ticket.status = 'Closed'
-        ticket.closed_at = datetime.utcnow()
+        ticket.closed_at = datetime.now()  # server-local; see now_mst()
         ticket.closed_by_user_id = current_user.id
         # Generate CSAT token and send survey email if reporter email is known
         if ticket.reporter_email and not ticket.csat_token:
@@ -780,6 +1006,8 @@ def close_ticket(ticket_id):
                 logger.warning(f'CSAT email failed for ticket {ticket.id}: {_csat_err}')
         else:
             db.session.commit()
+    if _transitioned:
+        _on_ticket_resolved(ticket)
     _notify_watchers(ticket, f'Ticket #{ticket.id} Closed',
                      f'<p>Ticket <strong>#{ticket.id}: {ticket.subject}</strong> has been closed.</p>')
     flash(f'Ticket #{ticket.id} closed.', 'success')
@@ -1010,6 +1238,14 @@ def api_create_support_ticket():
         if not hostname:
             hostname = asset.name
 
+    # The tray client submits reporter_name but no reporter_email. Auto-resolve
+    # it from the Employee directory (or the filing asset's owner) and persist it
+    # so future replies prefill. None when there's no confident single match.
+    if not reporter_email:
+        reporter_email = _resolve_reporter_email(
+            reporter_name, hostname=hostname, asset_id=asset_id,
+        )
+
     # Attribute the ticket to the REPORTER's own account so it appears in their
     # "my tickets" list — not the API-key owner. Resolve by email first, then by
     # username/full name; fall back to the API user for external/unknown reporters.
@@ -1039,8 +1275,8 @@ def api_create_support_ticket():
         asset_id=asset_id,
         asset_tag=asset_tag,
         created_by_user_id=created_by_user_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(),  # server-local (TZ=America/Denver); utcnow() displayed +6h. See now_mst().
+        updated_at=datetime.now(),
     )
     db.session.add(ticket)
     db.session.commit()
@@ -1068,6 +1304,56 @@ def api_create_support_ticket():
         _con.close()
     except Exception as _e:
         logger.warning(f'Failed to insert API ticket bell: {_e}')
+
+    # Software install request (from the systray "Install software" picker): the payload
+    # carries a structured software_request block {file_name, sha256, args}. Tag the ticket
+    # and publish onto the bus so the "Software Install" workflow parks an install_local_tool
+    # approval at /approvals (gated; runs the staged C:\ITTOOLS installer as SYSTEM on approve).
+    swreq = payload.get('software_request') or {}
+    if swreq.get('file_name'):
+        try:
+            ticket.category = 'Software'
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            import event_bus
+            event_bus.publish("software.install_requested", {
+                "asset_id": asset_id,
+                "file_name": swreq.get('file_name'),
+                "sha256": (swreq.get('sha256') or '').upper(),
+                "args": swreq.get('args') or '',
+                "ticket_id": ticket.id,
+                "justification": description,
+                "requester": reporter_name or reporter_email or '',
+                "hostname": hostname or '',
+            }, source="tray")
+        except Exception:
+            logger.warning(f'software.install_requested publish failed for ticket {ticket.id}')
+
+    # Fix request (from the systray "Request a fix" picker): payload carries fix_request:{fix_id}.
+    # Publish fix.requested so the "Apply Fix" workflow parks an apply_fix approval at /approvals
+    # (gated; runs the vetted library fix as SYSTEM on the device once an admin approves).
+    fxreq = payload.get('fix_request') or {}
+    if fxreq.get('fix_id'):
+        try:
+            from sqlalchemy import text as _t
+            fid = int(fxreq.get('fix_id'))
+            frow = db.session.execute(
+                _t("SELECT name FROM rmm_script_library WHERE id=:id AND is_fix=true AND is_active=true"),
+                {'id': fid}).fetchone()
+            if frow:
+                import event_bus
+                event_bus.publish("fix.requested", {
+                    "fix_id": fid,
+                    "fix_name": frow[0],
+                    "asset_id": asset_id,
+                    "hostname": hostname or '',
+                    "ticket_id": ticket.id,
+                    "requested_by": reporter_name or reporter_email or '',
+                }, source="tray")
+        except Exception:
+            logger.warning(f'fix.requested publish failed for ticket {ticket.id}')
 
     return jsonify({
         'success': True,
@@ -1110,7 +1396,7 @@ def _do_sla_pass(flask_app):
             db.or_(SupportTicket.source.is_(None),
                    ~SupportTicket.source.in_(['system', 'alert']))
         ).all()
-        now = datetime.utcnow()
+        now = datetime.now()  # match how created_at is stored (server-local naive); see now_mst()
         escalated = []
         for t in open_tickets:
             hours = SLA_HOURS.get(t.priority, 72)

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.10"
+AGENT_VERSION = "2.9.11"
 
 import asyncio
 import base64
@@ -68,6 +68,48 @@ def _ssl_ctx():
         return None
 
 
+def _verifying_ssl_ctx():
+    """Best-effort *chain-validating* SSL context for update fetches (R1).
+
+    Validates the server certificate chain but tolerates a hostname mismatch
+    (the internal cert may not match the URL we dial). This is defense-in-depth
+    only: the RSA signature verification on the payload is the real integrity
+    guard, so callers MUST fall back to the unverified _ssl_ctx() on any cert
+    error rather than breaking updates for agents whose internal CA isn't
+    chain-trusted. Returns None on failure (caller falls back)."""
+    try:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        return ctx
+    except Exception:
+        return None
+
+
+def _open_update_url(req, timeout):
+    """Open an update-related request, preferring a chain-verifying TLS context
+    and falling back to the unverified context on any SSL/cert error (R1).
+
+    Confidentiality is best-effort here; payload integrity is enforced
+    separately by RSA signature verification. We therefore never let a cert
+    failure block a LAN update."""
+    import ssl as _ssl
+    vctx = _verifying_ssl_ctx()
+    if vctx is not None:
+        try:
+            return urllib.request.urlopen(req, context=vctx, timeout=timeout)
+        except _ssl.SSLError as e:
+            print(f"[update] verifying TLS fetch failed ({e}); falling back to unverified (sig still enforced)", flush=True)
+        except urllib.error.URLError as e:
+            # URLError wraps SSLCertVerificationError on most stacks
+            if isinstance(getattr(e, "reason", None), _ssl.SSLError):
+                print(f"[update] verifying TLS fetch failed ({e.reason}); falling back to unverified (sig still enforced)", flush=True)
+            else:
+                raise
+    return urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout)
+
+
 # ---------------------------------------------------------------------------
 # Self-update payload signature verification (CANARY only)
 # Server signs the served agent_client.py / tray.py with RSA-3072 PKCS1v15
@@ -100,12 +142,15 @@ def _verify_update_sig(data: bytes, sig_hex: str) -> bool:
         return False
 
 
-def _fetch_update_sig(sig_url: str, ctx, timeout: int = 15) -> str:
+def _fetch_update_sig(sig_url: str, ctx=None, timeout: int = 15) -> str:
     """Fetch a detached signature from a *-sig endpoint. Returns the hex sig
-    string, or '' on any error / missing sig (caller fails closed)."""
+    string, or '' on any error / missing sig (caller fails closed).
+
+    Uses the verifying-with-fallback TLS opener (R1); the legacy `ctx` arg is
+    ignored and kept only for call-site compatibility."""
     try:
         req = urllib.request.Request(sig_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+        with _open_update_url(req, timeout) as r:
             obj = json.loads(r.read())
         return str(obj.get("sig") or "")
     except Exception as e:
@@ -315,7 +360,7 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
         ctx.verify_mode = _ssl.CERT_NONE
         try:
             req = _ur.Request(tray_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-            with _ur.urlopen(req, timeout=20, context=ctx) as resp:
+            with _open_update_url(req, 20) as resp:
                 new_src = resp.read()
             # Only write if changed
             existing = b''
@@ -809,11 +854,36 @@ def ensure_ittools_dir() -> None:
         print(f"[ittools] provisioning failed: {e}", flush=True)
 
 
+def _parse_semver(v) -> tuple:
+    """Parse a dotted version string into a tuple of ints for ordered compare.
+
+    Defensive against malformed/missing values: non-numeric or empty
+    components become 0, and a missing/None version parses to (0,) so it sorts
+    BELOW any real release (and would therefore be refused as a downgrade).
+    Used by the refuse-downgrade gate (R9) -- integer-tuple compare, NOT a
+    string compare, so 2.9.10 correctly sorts ABOVE 2.9.9."""
+    parts = []
+    for chunk in str(v or "").split("."):
+        chunk = chunk.strip()
+        try:
+            parts.append(int(chunk))
+        except (TypeError, ValueError):
+            # tolerate things like "2.9.11-rc1" -> take leading digits, else 0
+            digits = ""
+            for ch in chunk:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            parts.append(int(digits) if digits else 0)
+    return tuple(parts) if parts else (0,)
+
+
 def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
     try:
         url = f"{tracker_url}/rmm/agent/version?agent_id={agent_id}&token={token}"
         req = urllib.request.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=10) as r:
+        with _open_update_url(req, 10) as r:
             data = json.loads(r.read())
 
         server_checksum = data.get("checksum", "")
@@ -824,10 +894,29 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
             print(f"[update] Up to date ({AGENT_VERSION})", flush=True)
             return False
 
+        # Refuse downgrades (CANARY R9): a stale or malicious OLDER served file
+        # must never silently downgrade the agent. Compare served vs local as
+        # INTEGER semver tuples (NOT string compare -- "2.9.10" < "2.9.9" as
+        # strings would be a bug). Only swap when served is STRICTLY greater.
+        # Intentional rollback is performed by releasing a HIGHER version number
+        # that contains the desired (older-behaving) code -- never by serving a
+        # lower number. This gate is IN ADDITION to the checksum-diff gate and
+        # the RSA signature verification below.
+        served_ver = _parse_semver(data.get("version"))
+        local_ver = _parse_semver(AGENT_VERSION)
+        if served_ver < local_ver:
+            print(f"[update] refusing downgrade: served {data.get('version')} < running {AGENT_VERSION}", flush=True)
+            return False
+        if served_ver == local_ver:
+            # Same version but checksum differs (e.g. rebuild) -- no version
+            # advance, so treat as a no-op to stay consistent with R9 intent.
+            print(f"[update] served version equals running ({AGENT_VERSION}) -- no version advance, skipping", flush=True)
+            return False
+
         print(f"[update] New version {data.get('version')} available -- downloading...", flush=True)
         file_url = f"{tracker_url}/rmm/agent/file?agent_id={agent_id}&token={token}"
         req2 = urllib.request.Request(file_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-        with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
+        with _open_update_url(req2, 30) as r:
             new_code = r.read()
 
         if server_checksum and hashlib.sha256(new_code).hexdigest() != server_checksum:

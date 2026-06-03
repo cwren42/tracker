@@ -518,11 +518,18 @@ def view_ticket(ticket_id):
         _qm = re.search(r'\[qmsg:([^\]]+)\]', ticket.description)
         if _qm:
             quarantine_msg_id = _qm.group(1)
+    # One-click remediation fixes (admin only) for the "Apply fix" picker.
+    fixes = []
+    if current_user.role == 'admin':
+        from sqlalchemy import text as _t
+        fixes = [dict(r._mapping) for r in db.session.execute(_t(
+            "SELECT id, name, description FROM rmm_script_library "
+            "WHERE is_fix=true AND is_active=true ORDER BY name"))]
     return render_template('view_ticket.html', ticket=ticket, techs=techs, timeline=timeline,
                            today=date.today(), all_tags=all_tags, watcher_ids=watcher_ids,
                            all_users=all_users, linked=linked,
                            effective_reporter_email=effective_reporter_email,
-                           quarantine_msg_id=quarantine_msg_id)
+                           quarantine_msg_id=quarantine_msg_id, fixes=fixes)
 
 
 @bp.route('/tickets/<int:ticket_id>/delete', methods=['POST'])
@@ -562,6 +569,55 @@ def set_ticket_status(ticket_id):
         if new_status == 'Closed' and old != 'Closed':
             _on_ticket_resolved(ticket)
     return redirect(url_for('tickets.view_ticket', ticket_id=ticket.id))
+
+
+@bp.route('/tickets/<int:ticket_id>/apply-fix', methods=['POST'])
+@login_required
+@admin_required
+@license_required
+def apply_ticket_fix(ticket_id):
+    """Admin one-click remediation: dispatch a vetted 'fix' from the library to the ticket's
+    device. Resolves the device, then publishes fix.requested -> the Apply Fix workflow parks
+    an apply_fix approval at /approvals (which runs the fix as SYSTEM once approved)."""
+    from sqlalchemy import text as _t
+    ticket = SupportTicket.query.get_or_404(ticket_id)
+    data = request.get_json(silent=True) or {}
+    try:
+        fix_id = int(data.get('fix_id') or request.form.get('fix_id'))
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'fix_id is required'}), 400
+    frow = db.session.execute(
+        _t("SELECT name FROM rmm_script_library WHERE id=:id AND is_fix=true AND is_active=true"),
+        {'id': fix_id}).fetchone()
+    if not frow:
+        return jsonify({'ok': False, 'error': 'Unknown or inactive fix.'}), 400
+
+    # Resolve the device for this ticket: explicit asset > hostname > reporter's employee asset.
+    asset_id, hostname = ticket.asset_id, ticket.hostname
+    if not asset_id:
+        a = Asset.query.filter(Asset.name == hostname).first() if hostname else None
+        if a is None and ticket.created_by_user_id:
+            u = User.query.get(ticket.created_by_user_id)
+            emp_id = getattr(u, 'employee_id', None) if u else None
+            if emp_id:
+                a = Asset.query.filter(Asset.employee_id == emp_id).first()
+        if a:
+            asset_id, hostname = a.id, (hostname or a.name)
+    if not asset_id:
+        return jsonify({'ok': False, 'error': 'No device resolved for this ticket — set the asset on the ticket first.'}), 400
+
+    try:
+        import event_bus
+        event_bus.publish('fix.requested', {
+            'fix_id': fix_id, 'fix_name': frow[0], 'asset_id': asset_id,
+            'hostname': hostname or '', 'ticket_id': ticket.id,
+            'requested_by': current_user.username or current_user.email or '',
+        }, source='ticket')
+    except Exception:
+        logger.exception('fix.requested publish failed for ticket %s', ticket.id)
+        return jsonify({'ok': False, 'error': 'Failed to queue the fix.'}), 500
+    return jsonify({'ok': True,
+                    'message': f"'{frow[0]}' queued — approve it at /approvals to run on {hostname or 'the device'}."})
 
 
 @bp.route('/tickets/<int:ticket_id>/edit', methods=['POST'])

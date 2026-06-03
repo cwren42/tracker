@@ -62,6 +62,22 @@
       <i class="bi bi-robot me-1"></i>AI Triage
     </button>
     {% endif %}
+    {% if current_user.role == 'admin' and fixes %}
+    <div class="dropdown">
+      <button class="btn btn-outline-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown"
+              title="Apply a vetted one-click fix to this ticket's device (runs as SYSTEM after you approve at /approvals)">
+        <i class="bi bi-tools me-1"></i>Apply fix
+      </button>
+      <ul class="dropdown-menu">
+        {% for f in fixes %}
+        <li><a class="dropdown-item" href="#" title="{{ f.description|e }}"
+               onclick="applyFix({{ ticket.id }}, {{ f.id }}, '{{ f.name|e }}'); return false;">{{ f.name }}</a></li>
+        {% endfor %}
+        <li><hr class="dropdown-divider"></li>
+        <li><span class="dropdown-item-text small text-muted" style="max-width:260px;white-space:normal;">Parks a gated approval — runs as SYSTEM on this ticket's device once approved.</span></li>
+      </ul>
+    </div>
+    {% endif %}
     {% if current_user.role == 'admin' %}
     <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteTicketModal">
       <i class="bi bi-trash me-1"></i>Delete
@@ -576,6 +592,20 @@
 window.VIEWTICKET_CFG = {
   ticket_id: {{ ticket.id }}
 };
+function applyFix(ticketId, fixId, fixName) {
+  if (!confirm("Apply fix '" + fixName + "' to this ticket's device?\n\nIt parks for approval at /approvals and runs as SYSTEM once approved.")) return;
+  var box = document.getElementById('aiTriageResult');
+  if (box) { box.className = 'alert alert-info mt-2'; box.textContent = "Queuing '" + fixName + "'…"; }
+  fetch('/tickets/' + ticketId + '/apply-fix', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({fix_id: fixId})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!box) return;
+    box.className = 'alert mt-2 ' + (d.ok ? 'alert-success' : 'alert-warning');
+    box.textContent = d.ok ? d.message : (d.error || 'Could not queue the fix.');
+  }).catch(function(e){ if (box) { box.className = 'alert alert-danger mt-2'; box.textContent = 'Request failed: ' + e; } });
+}
 </script>
 <script src="/static/js/view_ticket.js?v={{ asset_version }}"></script>
 {% endblock %}

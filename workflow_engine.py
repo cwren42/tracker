@@ -1328,6 +1328,52 @@ def _action_install_local_tool(config: dict, ctx: dict) -> tuple:
     return success, output
 
 
+def _action_apply_fix(config: dict, ctx: dict) -> tuple:
+    """Run a vetted one-click fix from the script library (rmm_script_library, is_fix=true)
+    on a device, as SYSTEM. Used for admin-approved remediation of needs-admin issues (e.g.
+    re-enable touchpad) raised in a ticket. Runs the library script BY ID — not arbitrary
+    code — so the approval is auditable to a known, curated fix. Medium-risk → parks."""
+    asset_id = config.get("asset_id") or ctx.get("asset_id")
+    fix_id   = config.get("fix_id") or ctx.get("fix_id")
+    try:
+        fix_id = int(fix_id)
+    except (TypeError, ValueError):
+        return False, {"error": "fix_id is required"}
+    db = _db()
+    try:
+        row = db.execute("SELECT name, shell, script_content FROM rmm_script_library "
+                         "WHERE id=? AND is_fix=? AND is_active=?", (fix_id, True, True)).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return False, {"error": f"fix #{fix_id} not found or not an active fix"}
+    script = row["script_content"] or ""
+    if not script.strip():
+        return False, {"error": f"fix #{fix_id} has no script"}
+    success, output = _device_action(
+        "apply_fix", "rmm.run_script", asset_id, (row["shell"] or "powershell"), script,
+        risk_tier="medium", reason=f"workflow: apply fix '{row['name']}' (#{fix_id})",
+        timeout_s=600, wait_result=True,
+        extra_output={"fix_id": fix_id, "fix_name": row["name"]}, ctx=ctx,
+    )
+    ticket_id = config.get("ticket_id") or ctx.get("ticket_id")
+    if success and ticket_id:
+        try:
+            db = _db()
+            db.execute("UPDATE support_ticket SET status='Closed', closed_at=?, updated_at=? WHERE id=?",
+                       (_now(), _now(), ticket_id))
+            db.execute("INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+                       "VALUES (?,?,?,?,?,?)",
+                       (ticket_id, None,
+                        "Applied fix '%s' on the device (approved via the Action Center). %s Auto-closed."
+                        % (row["name"], output.get("result") or output.get("stdout") or ""),
+                        True, False, _now()))
+            db.commit(); db.close()
+        except Exception:
+            log.exception("apply_fix: ticket close failed for %s", ticket_id)
+    return success, output
+
+
 def _action_run_script(config: dict, ctx: dict) -> tuple:
     """Run a PowerShell or Bash script on a device via RMM agent."""
     asset_id = config.get("asset_id") or ctx.get("asset_id")
@@ -1673,6 +1719,7 @@ ACTION_MAP = {
     "deploy_software":    _action_deploy_software,
     "uninstall_software": _action_uninstall_software,
     "install_local_tool": _action_install_local_tool,
+    "apply_fix":          _action_apply_fix,
     "run_script":         _action_run_script,
     "reboot_device":      _action_reboot_device,
     "shutdown_device":    _action_shutdown_device,

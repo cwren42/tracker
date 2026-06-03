@@ -44,7 +44,7 @@
           </div>
 
           <div class="small text-muted mb-2">
-            <span class="me-3"><i class="bi bi-lightning-charge me-1"></i>{% if row.action_type == 'release_quarantine' %}{{ 'release from quarantine' if ctx.get('release_status') == 'Quarantined' else 'whitelist sender domain' }}{% elif row.action_type == 'install_local_tool' %}install software (C:\ITTOOLS){% else %}{{ row.action_type }}{% endif %}</span>
+            <span class="me-3"><i class="bi bi-lightning-charge me-1"></i>{% if row.action_type == 'release_quarantine' %}{{ 'release from quarantine' if ctx.get('release_status') == 'Quarantined' else 'whitelist sender domain' }}{% elif row.action_type == 'install_local_tool' %}install software (C:\ITTOOLS){% elif row.action_type == 'apply_fix' %}apply fix{% else %}{{ row.action_type }}{% endif %}</span>
             {% if row.object_type and row.object_type != 'workflow_action' %}<span class="me-3"><i class="bi bi-hdd me-1"></i>{{ row.object_type }} {{ row.object_id }}</span>{% endif %}
             {% if row.correlation_id %}<span><i class="bi bi-diagram-2 me-1"></i>{{ row.correlation_id }}</span>{% endif %}
           </div>
@@ -79,6 +79,13 @@
             {% if ctx.get('sha256') %}<div class="text-muted" style="font-family:monospace;font-size:.72rem;word-break:break-all;"><i class="bi bi-fingerprint me-1"></i>SHA-256 {{ ctx.get('sha256') }}</div>{% endif %}
             {% if ctx.get('justification') %}<div class="mt-1 pt-1" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i><span class="text-muted">Reason given:</span> {{ ctx.get('justification') }}</div>{% endif %}
             <div class="form-text mt-1">Verify the file + hash before approving — this runs an unsigned installer as SYSTEM. The install is hash-locked, so it fails if the file was changed after the request.</div>
+          </div>
+          {% endif %}
+          {% if row.action_type == 'apply_fix' %}
+          <div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">
+            <div><i class="bi bi-tools me-1"></i><strong>{{ ctx.get('fix_name') or ('fix #' ~ ctx.get('fix_id')) }}</strong></div>
+            <div class="text-muted"><i class="bi bi-pc-display me-1"></i>{{ ctx.get('hostname') or ('asset ' ~ ctx.get('asset_id')) }} · runs as SYSTEM{% if ctx.get('ticket_id') %} · ticket #{{ ctx.get('ticket_id') }}{% endif %}</div>
+            <div class="form-text mt-1">Runs a vetted library fix script as SYSTEM on the device. Approving closes the linked ticket on success.</div>
           </div>
           {% endif %}
           {% if policy %}<div class="small mb-2" style="color:{{ tier_color.get(row.risk_tier,'var(--muted)') }};"><i class="bi bi-shield-exclamation me-1"></i>{{ policy }}</div>{% endif %}

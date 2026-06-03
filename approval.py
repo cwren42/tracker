@@ -46,6 +46,7 @@ RISK_TIERS = {
     "deploy_software":   "medium",
     "uninstall_software": "medium",
     "install_local_tool": "medium",  # runs a user-staged installer from C:\ITTOOLS as SYSTEM
+    "apply_fix":          "medium",  # runs a vetted one-click fix script (by id) as SYSTEM
     "deploy_patch":      "medium",
     "apply_gpo":         "medium",
     "reboot_device":     "high",

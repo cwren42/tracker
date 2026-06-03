@@ -823,28 +823,207 @@ def it_graph_data():
 
 
 # ── Approvals — the human-in-the-loop gate for risk-scored agent actions ─────────
+# Default window for the resolved/history view so it never becomes an endless scroll.
+APPROVALS_HISTORY_DAYS = 30
+_TIER_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+_SENS_KEYS = ('pass', 'pwd', 'secret', 'token', 'key', 'credential')
+
+
+def _asset_name_map(rows):
+    """Batch-resolve the asset IDs referenced by these ledger rows to friendly asset names,
+    so the 'Target' column shows e.g. 'Ken-Lenovo' instead of the bare id '966'."""
+    from models import Asset
+    ids = set()
+    for r in rows:
+        bs = r.before_state if isinstance(r.before_state, dict) else {}
+        ctx = ((bs or {}).get('replay') or {}).get('ctx') or {}
+        aid = ctx.get('asset_id')
+        if not aid and str(r.object_id or '').isdigit():
+            aid = r.object_id
+        if aid is not None:
+            try:
+                ids.add(int(aid))
+            except (TypeError, ValueError):
+                pass
+    if not ids:
+        return {}
+    return {a.id: (a.name or a.asset_tag or ('asset ' + str(a.id)))
+            for a in Asset.query.filter(Asset.id.in_(ids)).all()}
+
+
+def _ledger_display(row, asset_names=None):
+    """Serialize a CommandLedger row to a JSON-friendly dict for the approvals inbox.
+    Sensitive config values are redacted here, server-side. `asset_names` (from
+    _asset_name_map) turns a bare asset id into a friendly device name."""
+    bs = row.before_state if isinstance(row.before_state, dict) else {}
+    bs = bs or {}
+    rp = bs.get('replay') or {}
+    cfg = rp.get('config') or {}
+    ctx = rp.get('ctx') or {}
+    at = row.action_type or ''
+    params = {k: ('[redacted]' if any(s in k.lower() for s in _SENS_KEYS) else v)
+              for k, v in cfg.items() if not k.startswith('_')}
+    device = ctx.get('hostname') or ''
+    if not device:
+        aid = ctx.get('asset_id')
+        if not aid and str(row.object_id or '').isdigit():
+            aid = row.object_id
+        try:
+            aid_i = int(aid) if aid is not None else None
+        except (TypeError, ValueError):
+            aid_i = None
+        if aid_i is not None and asset_names and aid_i in asset_names:
+            device = asset_names[aid_i]
+        elif aid is not None:
+            device = 'asset ' + str(aid)
+        else:
+            device = row.object_id or ''
+    is_quar = (ctx.get('release_status') == 'Quarantined')
+    if at == 'release_quarantine':
+        label = 'Release from quarantine' if is_quar else 'Whitelist sender domain'
+        summary = ctx.get('subject') or '(no subject)'
+    elif at == 'install_local_tool':
+        label, summary = 'Install software', (ctx.get('file_name') or '(installer)')
+    elif at == 'apply_fix':
+        label = 'Apply fix'
+        summary = ctx.get('fix_name') or ('fix #' + str(ctx.get('fix_id') or ''))
+    elif at == 'unlock_account':
+        label = 'Unlock account'
+        summary = ctx.get('username') or ctx.get('upn') or ''
+    else:
+        label = rp.get('node_label') or at.replace('_', ' ').title()
+        summary = rp.get('node_label') or ''
+    return {
+        'id': row.id, 'action_type': at, 'label': label, 'summary': summary,
+        'device': device, 'risk_tier': row.risk_tier or 'low',
+        'requested_by': row.requested_by or '', 'correlation_id': row.correlation_id or '',
+        'approval_status': row.approval_status, 'status': row.status,
+        'verification_status': row.verification_status, 'verification_detail': row.verification_detail or '',
+        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'completed_at': row.completed_at.isoformat() if row.completed_at else None,
+        'is_email': at == 'release_quarantine', 'is_quarantined': is_quar,
+        'message_id': ctx.get('message_id'), 'sender': ctx.get('sender'),
+        'recipient': ctx.get('recipient'), 'release_status': ctx.get('release_status'),
+        'justification': ctx.get('justification'), 'sha256': ctx.get('sha256'), 'args': ctx.get('args'),
+        'ai': ({'recommended': ctx.get('ai_recommended'), 'confidence': ctx.get('ai_confidence'),
+                'verdict': ctx.get('ai_verdict'), 'rationale': ctx.get('ai_rationale')}
+               if ctx.get('ai_recommended') else None),
+        'policy': bs.get('policy', ''), 'params': params,
+        'ledger_url': url_for('dashboard.ledger_detail', row_id=row.id),
+    }
+
+
+def _query_pending():
+    """All parked approvals, sorted high-risk first then oldest-first so aging items surface."""
+    from models import CommandLedger
+    rows = (CommandLedger.query
+            .filter_by(status='awaiting_approval', approval_status='pending').all())
+    names = _asset_name_map(rows)
+    items = [_ledger_display(r, names) for r in rows]
+    items.sort(key=lambda i: (_TIER_ORDER.get(i['risk_tier'], 4), i['created_at'] or ''))
+    return items
+
+
+def _query_resolved(type_=None, risk=None, device=None, q=None,
+                    days=APPROVALS_HISTORY_DAYS, offset=0, limit=50):
+    """Resolved history with filters + a default time window (auto-archive). device/q are
+    matched against the JSON-derived display fields after serialization; type/risk/window
+    are pushed into SQL. Over-fetches when text filters are active so paging stays sane."""
+    from models import CommandLedger
+    qry = CommandLedger.query.filter(CommandLedger.status.in_(['succeeded', 'failed', 'denied']))
+    if type_:
+        qry = qry.filter(CommandLedger.action_type == type_)
+    if risk:
+        qry = qry.filter(CommandLedger.risk_tier == risk)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = APPROVALS_HISTORY_DAYS
+    if days > 0:
+        qry = qry.filter(CommandLedger.created_at >= (now_mst() - timedelta(days=days)))
+    qry = qry.order_by(CommandLedger.id.desc())
+    text_filter = bool(device or q)
+    fetch = (limit + 1) if not text_filter else (limit * 6 + 1)
+    rows = qry.offset(offset).limit(fetch).all()
+    names = _asset_name_map(rows)
+    items = [_ledger_display(r, names) for r in rows]
+    if device:
+        dl = device.lower()
+        items = [i for i in items if dl in (i['device'] or '').lower()]
+    if q:
+        ql = q.lower()
+        items = [i for i in items if ql in (i['summary'] or '').lower()
+                 or ql in (i['device'] or '').lower() or ql in (i['label'] or '').lower()
+                 or ql in (i['requested_by'] or '').lower() or ql == str(i['id'])]
+    has_more = len(items) > limit
+    return items[:limit], has_more
+
+
 @bp.route('/approvals')
 @login_required
 @admin_required
 def approvals():
-    """Pending approvals queue + recently resolved actions (the command ledger's
-    human-decision surface). Medium/high-risk device actions land here instead of
-    firing automatically — see approval.py / docs/AGENTIC_IT_OS_GAMEPLAN.md."""
-    from models import CommandLedger
-    pending = (CommandLedger.query
-               .filter_by(status='awaiting_approval', approval_status='pending')
-               .order_by(CommandLedger.created_at.desc()).all())
-    recent = (CommandLedger.query
-              .filter(CommandLedger.status.in_(['succeeded', 'failed', 'denied']))
-              .order_by(CommandLedger.id.desc()).limit(25).all())
+    """Agentic action-gate inbox: parked approvals (decide) + resolved history (audit).
+    Medium/high-risk device actions land here instead of firing automatically —
+    see approval.py / docs/AGENTIC_IT_OS_GAMEPLAN.md."""
+    pending = _query_pending()
+    resolved, has_more = _query_resolved()
+    types = sorted({i['action_type'] for i in pending + resolved if i['action_type']})
+    devices = sorted({i['device'] for i in pending + resolved if i['device']})
+    return render_template('approvals.html', pending=pending, resolved=resolved,
+                           has_more=has_more, types=types, devices=devices,
+                           history_days=APPROVALS_HISTORY_DAYS)
 
-    def _plan(row):
-        """(replay_dict, policy_note) parsed from the parked row's before_state."""
-        bs = row.before_state if isinstance(row.before_state, dict) else {}
-        bs = bs or {}
-        return (bs.get('replay') or {}), bs.get('policy', '')
 
-    return render_template('approvals.html', pending=pending, recent=recent, plan=_plan)
+@bp.route('/api/approvals/list')
+@login_required
+@admin_required
+def approvals_list():
+    """Filtered/paginated feed for the approvals inbox (resolved history + pending refresh)."""
+    scope = request.args.get('scope', 'resolved')
+    if scope == 'pending':
+        return jsonify({'items': _query_pending(), 'has_more': False})
+    items, has_more = _query_resolved(
+        type_=request.args.get('type') or None, risk=request.args.get('risk') or None,
+        device=request.args.get('device') or None, q=request.args.get('q') or None,
+        days=request.args.get('days', APPROVALS_HISTORY_DAYS),
+        offset=int(request.args.get('offset', 0) or 0),
+        limit=int(request.args.get('limit', 50) or 50))
+    return jsonify({'items': items, 'has_more': has_more})
+
+
+@bp.route('/approvals/bulk', methods=['POST'])
+@login_required
+@admin_required
+def approvals_bulk():
+    """Approve or deny several parked actions at once. Email (release_quarantine) items are
+    NOT bulk-approvable — they need the release-vs-whitelist decision — so the UI excludes
+    them from bulk-approve; bulk-deny applies to anything."""
+    import workflow_engine
+    approver = current_user.username or current_user.email or f'user#{current_user.id}'
+    data = request.get_json(silent=True) or {}
+    action = (data.get('action') or '').strip()
+    reason = (data.get('reason') or '').strip()
+    results = []
+    for raw in (data.get('ids') or []):
+        try:
+            rid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        try:
+            if action == 'approve':
+                claimed, info = workflow_engine.approve_action(rid, approver)
+                ok = bool(claimed) and not info.get('error')
+                results.append({'id': rid, 'ok': ok, 'error': None if ok else info.get('error', 'could not approve')})
+            elif action == 'deny':
+                success, output = workflow_engine.deny_action(rid, approver, reason)
+                results.append({'id': rid, 'ok': bool(success),
+                                'error': None if success else output.get('error', 'could not deny')})
+            else:
+                results.append({'id': rid, 'ok': False, 'error': 'unknown bulk action'})
+        except Exception as e:
+            results.append({'id': rid, 'ok': False, 'error': str(e)})
+    return jsonify({'results': results})
 
 
 @bp.route('/approvals/<int:row_id>/approve', methods=['POST'])

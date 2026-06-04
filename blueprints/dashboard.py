@@ -1375,44 +1375,48 @@ def mission_control():
 @login_required
 @admin_required
 def knowledge():
-    """Ask the IT knowledge base. Semantic retrieval over the ISMS policies + system docs,
-    answered with citations (knowledge_agent). Read-only against the corpus."""
+    """The IT knowledge library — GitHub-style browse of our learned runbooks/docs by
+    category, plus semantic 'Ask' over the full corpus. States via query params:
+    root (folders) → ?cat=<category> (files) → ?doc=<id> (rendered doc, +&edit=1)."""
     import knowledge_agent
+    import markdown as _md
     query = (request.form.get('q') or request.args.get('q') or '').strip()
+    cat = (request.args.get('cat') or '').strip() or None
+    doc_id = request.args.get('doc', type=int)
+    edit = request.args.get('edit') == '1'
     result, answer_html = None, None
     chunk_count = knowledge_agent.count()
-    runbook_count = knowledge_agent.count('runbook')
     if query:
         try:
             result = knowledge_agent.answer(query)
-            import markdown as _md
             answer_html = _md.markdown(result.get('answer') or '', extensions=['extra'])
         except ValueError as e:
             flash(str(e), 'warning')  # e.g. no OpenAI key configured
         except Exception as e:
             flash(f'Knowledge search failed: {e}', 'danger')
-    # The browsable library = our learned/operational knowledge (runbooks + authored notes).
-    # ISMS policy + system docs are indexed for search but managed in their own subsystems.
-    library = knowledge_agent.list_knowledge()
-    return render_template('knowledge.html', query=query, result=result,
-                           answer_html=answer_html, chunk_count=chunk_count,
-                           runbook_count=runbook_count, library=library)
 
+    # Browse state. The library = learned/operational knowledge (runbook + manual);
+    # ISMS policy + system docs are searchable but managed in their own subsystems.
+    view, docs, entry, entry_html = 'root', None, None, None
+    categories = knowledge_agent.category_counts()
+    if doc_id:
+        entry = knowledge_agent.get_chunk(doc_id)
+        if entry:
+            entry_html = _md.markdown(entry.get('content') or '', extensions=['extra', 'fenced_code', 'tables'])
+            entry['editable'] = entry['source_type'] in knowledge_agent.LIBRARY_TYPES
+            entry['category'] = entry.get('category') or 'Runbooks'
+            view = 'doc'
+        else:
+            flash('Entry not found.', 'warning')
+    elif cat:
+        docs = knowledge_agent.list_knowledge(category=cat)
+        view = 'category'
 
-@bp.route('/knowledge/entry/<int:chunk_id>')
-@login_required
-@admin_required
-def knowledge_entry(chunk_id):
-    """JSON for the library reader/editor modal — full content + rendered markdown."""
-    import knowledge_agent
-    e = knowledge_agent.get_chunk(chunk_id)
-    if not e:
-        return jsonify({'ok': False, 'error': 'Not found'}), 404
-    import markdown as _md
-    e['content_html'] = _md.markdown(e.get('content') or '', extensions=['extra', 'fenced_code', 'tables'])
-    e['editable'] = e['source_type'] in knowledge_agent.LIBRARY_TYPES
-    e['updated_at'] = str(e.get('updated_at') or '')
-    return jsonify({'ok': True, 'entry': e})
+    return render_template('knowledge.html', query=query, result=result, answer_html=answer_html,
+                           chunk_count=chunk_count, runbook_count=knowledge_agent.count('runbook'),
+                           categories=categories, view=view, cat=cat, docs=docs,
+                           entry=entry, entry_html=entry_html, edit=edit,
+                           all_categories=knowledge_agent.CATEGORIES)
 
 
 @bp.route('/knowledge/entry/<int:chunk_id>/edit', methods=['POST'])
@@ -1422,14 +1426,15 @@ def knowledge_entry_edit(chunk_id):
     import knowledge_agent
     title = (request.form.get('title') or '').strip()
     content = (request.form.get('content') or '').strip()
+    category = (request.form.get('category') or '').strip()
     try:
-        knowledge_agent.update_chunk(chunk_id, title, content)
+        knowledge_agent.update_chunk(chunk_id, title, content, category=category)
         flash('Runbook updated and re-indexed.', 'success')
     except ValueError as e:
         flash(str(e), 'warning')
     except Exception as e:
         flash(f'Could not update entry: {e}', 'danger')
-    return redirect(url_for('dashboard.knowledge'))
+    return redirect(url_for('dashboard.knowledge', doc=chunk_id))
 
 
 @bp.route('/knowledge/entry/<int:chunk_id>/delete', methods=['POST'])
@@ -1437,6 +1442,7 @@ def knowledge_entry_edit(chunk_id):
 @admin_required
 def knowledge_entry_delete(chunk_id):
     import knowledge_agent
+    cat = (request.form.get('category') or '').strip() or None
     try:
         if knowledge_agent.delete_chunk(chunk_id):
             flash('Runbook deleted.', 'success')
@@ -1446,28 +1452,29 @@ def knowledge_entry_delete(chunk_id):
         flash(str(e), 'warning')
     except Exception as e:
         flash(f'Could not delete entry: {e}', 'danger')
-    return redirect(url_for('dashboard.knowledge'))
+    return redirect(url_for('dashboard.knowledge', cat=cat) if cat else url_for('dashboard.knowledge'))
 
 
 @bp.route('/knowledge/add', methods=['POST'])
 @login_required
 @admin_required
 def knowledge_add():
-    """Operator-authored how-to / SOP added directly to the knowledge base."""
+    """Operator-authored runbook/doc added directly to the library (and search index)."""
     import knowledge_agent
     title = (request.form.get('title') or '').strip()
     content = (request.form.get('content') or '').strip()
+    category = (request.form.get('category') or '').strip() or 'Runbooks'
     if not content:
         flash('Content is required.', 'warning')
         return redirect(url_for('dashboard.knowledge'))
     try:
-        knowledge_agent.add_runbook(title, content)
-        flash('Runbook added to the library and indexed.', 'success')
+        knowledge_agent.add_runbook(title, content, category=category)
+        flash(f'Doc added to “{category}” and indexed.', 'success')
     except ValueError as e:
         flash(str(e), 'warning')
     except Exception as e:
         flash(f'Could not add knowledge: {e}', 'danger')
-    return redirect(url_for('dashboard.knowledge'))
+    return redirect(url_for('dashboard.knowledge', cat=category))
 
 
 @bp.route('/knowledge/reindex', methods=['POST'])

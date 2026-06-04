@@ -49,6 +49,11 @@ def ensure_schema():
             " updated_at TIMESTAMP)"
         )
         db.execute("CREATE INDEX IF NOT EXISTS ix_knowledge_src ON knowledge_chunk(source_type, source_id)")
+        # Library categorization (GitHub-style folders). Only meaningful for the editable
+        # library types; policy/ISMS/system chunks keep NULL. Idempotent migration + backfill.
+        db.execute("ALTER TABLE knowledge_chunk ADD COLUMN IF NOT EXISTS category VARCHAR(60)")
+        db.execute("UPDATE knowledge_chunk SET category='Runbooks' "
+                   "WHERE category IS NULL AND source_type IN ('runbook','manual')")
         db.commit()
     finally:
         db.close()
@@ -397,20 +402,48 @@ def add_manual(title, content):
 # own subsystems (ISMS Manual / Settings → Systems) and are not part of this library.
 LIBRARY_TYPES = ("runbook", "manual")
 
+# Starter folders for the library. Free-form — operators can type a new one when
+# authoring; this list just seeds the picker and the empty-folder display.
+CATEGORIES = ["Runbooks", "Domain/AD", "Backups", "Network", "Email",
+              "Security", "Hardware", "Software", "Microsoft 365", "General"]
 
-def list_knowledge(types=LIBRARY_TYPES):
+
+def list_knowledge(types=LIBRARY_TYPES, category=None):
     """Library listing of the learned/operational knowledge, newest first. No embeddings
-    (kept out of the payload — they're large). Returns dict rows with a short excerpt."""
+    (kept out of the payload — they're large). Optionally filter to one category."""
+    db = _db()
+    try:
+        ph = ",".join("?" for _ in types)
+        sql = ("SELECT id, source_type, source_id, title, category, "
+               "LEFT(content, 280) AS excerpt, LENGTH(content) AS len, updated_at "
+               f"FROM knowledge_chunk WHERE source_type IN ({ph})")
+        params = list(types)
+        if category is not None:
+            sql += " AND COALESCE(category,'Runbooks')=?"
+            params.append(category)
+        sql += " ORDER BY updated_at DESC"
+        rows = db.execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
+
+
+def category_counts(types=LIBRARY_TYPES):
+    """[(category, count)] over the library — the GitHub-style 'folders'. NULL maps to
+    'Runbooks'. Sorted by the CATEGORIES order first, then any extras alphabetically."""
     db = _db()
     try:
         ph = ",".join("?" for _ in types)
         rows = db.execute(
-            "SELECT id, source_type, source_id, title, "
-            "LEFT(content, 280) AS excerpt, LENGTH(content) AS len, updated_at "
-            f"FROM knowledge_chunk WHERE source_type IN ({ph}) ORDER BY updated_at DESC",
+            f"SELECT COALESCE(category,'Runbooks') AS category, COUNT(*) AS n "
+            f"FROM knowledge_chunk WHERE source_type IN ({ph}) "
+            f"GROUP BY COALESCE(category,'Runbooks')",
             tuple(types),
         ).fetchall()
-        return [dict(r) for r in rows]
+        counts = {r["category"]: r["n"] for r in rows}
+        order = {c: i for i, c in enumerate(CATEGORIES)}
+        cats = sorted(counts.keys(), key=lambda c: (order.get(c, 999), c.lower()))
+        return [(c, counts[c]) for c in cats]
     finally:
         db.close()
 
@@ -420,7 +453,7 @@ def get_chunk(chunk_id):
     db = _db()
     try:
         r = db.execute(
-            "SELECT id, source_type, source_id, title, content, updated_at "
+            "SELECT id, source_type, source_id, title, content, category, updated_at "
             "FROM knowledge_chunk WHERE id=?", (chunk_id,)
         ).fetchone()
         return dict(r) if r else None
@@ -428,11 +461,12 @@ def get_chunk(chunk_id):
         db.close()
 
 
-def update_chunk(chunk_id, title, content):
+def update_chunk(chunk_id, title, content, category=None):
     """Edit a runbook/manual entry in place and re-embed. Raises ValueError if the entry
     is missing or is a managed-elsewhere type (policy/ISMS/system doc)."""
     title = (title or "").strip()
     content = (content or "").strip()
+    category = (category or "").strip() or "Runbooks"
     if not content:
         raise ValueError("Content is required.")
     if not title:
@@ -446,13 +480,13 @@ def update_chunk(chunk_id, title, content):
             raise ValueError(f"{r['source_type']} entries are managed in their own subsystem and can't be edited here.")
         vec = _embed([f"{title}\n\n{content}"])[0]   # network call; ok to hold the conn
         db.execute(
-            "UPDATE knowledge_chunk SET title=?, content=?, embedding=?, updated_at=? WHERE id=?",
-            (title, content, json.dumps(vec), _now(), chunk_id),
+            "UPDATE knowledge_chunk SET title=?, content=?, category=?, embedding=?, updated_at=? WHERE id=?",
+            (title, content, category, json.dumps(vec), _now(), chunk_id),
         )
         db.commit()
     finally:
         db.close()
-    log.info("knowledge entry %s updated: %s", chunk_id, title)
+    log.info("knowledge entry %s updated: %s [%s]", chunk_id, title, category)
     return True
 
 
@@ -474,11 +508,12 @@ def delete_chunk(chunk_id):
     return True
 
 
-def add_runbook(title, content, source_id=None):
+def add_runbook(title, content, category=None, source_id=None):
     """Author a runbook (source_type='runbook') directly into the library. Upserts by
     source_id when one is given (e.g. 'manual:my-slug'); otherwise inserts a new row."""
     title = (title or "").strip()
     content = (content or "").strip()
+    category = (category or "").strip() or "Runbooks"
     if not content:
         raise ValueError("Content is required.")
     if not title:
@@ -489,15 +524,15 @@ def add_runbook(title, content, source_id=None):
         if source_id:
             db.execute("DELETE FROM knowledge_chunk WHERE source_type='runbook' AND source_id=?", (source_id,))
         cur = db.execute(
-            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, embedding, updated_at) "
-            "VALUES ('runbook', ?, ?, ?, ?, ?)",
-            (source_id, title, content, json.dumps(vec), _now()),
+            "INSERT INTO knowledge_chunk (source_type, source_id, title, content, category, embedding, updated_at) "
+            "VALUES ('runbook', ?, ?, ?, ?, ?, ?)",
+            (source_id, title, content, category, json.dumps(vec), _now()),
         )
         cid = cur.lastrowid
         db.commit()
     finally:
         db.close()
-    log.info("runbook authored: %s (#%s)", title, cid)
+    log.info("runbook authored: %s [%s] (#%s)", title, category, cid)
     return cid
 
 

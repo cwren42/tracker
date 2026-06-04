@@ -261,6 +261,26 @@ _eagle_report_thread = threading.Thread(
 )
 _eagle_report_thread.start()
 
+# Daily asset EOL/warranty auto-ticket check. Leader-elected so only ONE worker runs it
+# (its ticket dedup isn't atomic across workers waking together): the first worker to grab
+# an exclusive flock keeps the fd open for its lifetime and runs the thread; others skip.
+def _try_become_eol_leader():
+    import fcntl
+    try:
+        fd = os.open('/tmp/tracker_eol_leader.lock', os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd  # held for process lifetime -> lock stays acquired
+    except OSError:
+        return None
+_eol_leader_fd = _try_become_eol_leader()   # module-global so the fd isn't GC'd/closed
+if _eol_leader_fd is not None:
+    from blueprints import assets as _assets_module
+    _eol_thread = threading.Thread(
+        target=_assets_module._asset_eol_check, args=(app,), daemon=True
+    )
+    _eol_thread.start()
+    logger.info('Asset EOL check: this worker is the leader; daily thread started')
+
 # Event bus — the connective tissue. One dispatcher thread per worker; only the
 # cross-process flock winner actually fans events out to workflow triggers.
 import event_bus

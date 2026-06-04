@@ -111,6 +111,7 @@
     <a href="{{ url_for('assets.assets', filter='windows_servers') }}" class="btn btn-sm {% if _qf == 'windows_servers' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-windows"></i> Windows Servers</a>
     <a href="{{ url_for('assets.assets', filter='linux_servers') }}" class="btn btn-sm {% if _qf == 'linux_servers' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-hdd-rack"></i> Linux Servers</a>
     <a href="{{ url_for('assets.assets', filter='mobile') }}" class="btn btn-sm {% if _qf == 'mobile' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-phone"></i> Mobile Phones</a>
+    <a href="{{ url_for('assets.assets', filter='windows_10') }}" class="btn btn-sm {% if _qf == 'windows_10' %}btn-warning{% else %}btn-outline-warning{% endif %}" title="Windows 10 stations (past end-of-support)"><i class="bi bi-exclamation-triangle"></i> Win 10 (EOL)</a>
     <span class="vr mx-1"></span>
     <span class="small text-muted me-1">Source:</span>
     <a href="{{ url_for('assets.assets', source='intune') }}" class="btn btn-sm {% if _src == 'intune' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-microsoft"></i> Intune</a>

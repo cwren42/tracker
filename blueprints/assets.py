@@ -233,6 +233,10 @@ def assets():
         query = query.filter(
             (Asset.device_type == 'Mobile Device') |
             Asset.os_version.ilike('%android%') | Asset.os_version.ilike('%ios%'))
+    elif quick_filter == 'windows_10':
+        # Windows 10 builds report as 'Windows 10.0.1xxxx' (e.g. 19045); Windows 11 is
+        # 'Windows 10.0.2xxxx' (22000+). Surfaces past-EOL Win10 stations for upgrade.
+        query = query.filter(Asset.os_version.ilike('Windows 10.0.1%'))
 
     # Source filter — derived from the sync-id columns (intune / unifi / manual).
     source_filter = request.args.get('source', '')
@@ -1243,7 +1247,7 @@ $sb = [ScriptBlock]::Create($InstallScript)
                      mimetype='application/octet-stream')
 
 
-def _asset_eol_check():
+def _asset_eol_check(app):
     """Daily: open a ticket for assets nearing warranty expiry or age EOL."""
     EOL_AGE_YEARS = 5        # auto-ticket assets older than this
     WARN_DAYS = 30           # warn this many days before warranty expiry
@@ -1251,7 +1255,7 @@ def _asset_eol_check():
     while True:
         try:
             _time.sleep(86400)  # run once per day
-            with current_app._get_current_object().app_context():
+            with app.app_context():
                 today = datetime.utcnow().date()
                 warn_date = today + timedelta(days=WARN_DAYS)
                 eol_age_days = EOL_AGE_YEARS * 365

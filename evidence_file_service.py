@@ -16,6 +16,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from app import db
+from models import now_mst
 from soc2_models import (
     EvidenceSnapshot, StrikeGraphEvidence, SOC2Control,
     M365User, IntuneDevice, DeviceSoftware, AdminRoleSnapshot,
@@ -1769,7 +1770,9 @@ class EvidenceFileService(EvidenceAzureMixin):
         ws.column_dimensions['B'].width = 60
 
         self._summary_sheet(wb, [
-            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            # MST to match the 'Approval Date' above (ledger completed_at is written in
+            # the app's local America/Denver convention via workflow_engine._now()).
+            ('Report Generated', now_mst().strftime('%Y-%m-%d %H:%M MST')),
             ('Control', 'Provisioning (control 97)'),
             ('Sampled New Hire', emp_name),
             ('Segregation of Duties', 'HR requested; IT approved + provisioned'),

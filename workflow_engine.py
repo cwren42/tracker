@@ -1085,7 +1085,9 @@ def park_onboard(employee_id, requested_by="hr", payload=None):
         status="awaiting_approval",
         before_state={"replay": {"run_id": None, "node_id": None, "step_id": None,
                                  "action_type": "onboard_employee",
-                                 "config": {"employee_id": employee_id, "requested_by": requested_by},
+                                 "config": {"employee_id": employee_id, "requested_by": requested_by,
+                                            "first_name": payload.get("first_name") or "",
+                                            "last_name": payload.get("last_name") or ""},
                                  "ctx": {"employee_id": employee_id, "employee_name": name},
                                  "visited": [], "queue": []},
                       "onboard": payload,
@@ -1147,9 +1149,19 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
             sam = (emp.sam_account_name or "").strip()
             if not sam:
                 return False, {"error": "employee has no sam_account_name to provision"}
-            first = (emp.name or "").split(" ")[0] if emp.name else ""
-            last = (emp.name or "").split(" ")[-1] if emp.name and " " in emp.name else ""
-            upn = emp.email or f"{sam}@{config_ad.base_dn}"
+            # Prefer the HR-entered first/last (preserves middle names in givenName) that
+            # park_onboard stored in the payload; fall back to splitting the display name.
+            first = (config.get("first_name") or "").strip()
+            last = (config.get("last_name") or "").strip()
+            if not first:
+                first = (emp.name or "").split(" ")[0] if emp.name else ""
+            if not last:
+                last = (emp.name or "").split(" ")[-1] if emp.name and " " in emp.name else ""
+            # UPN fallback must be a real routable suffix, not the base DN. _onboard_derive
+            # always sets email={sam}@cirque.com, so this is a correctness guard.
+            suffix_row = Setting.query.filter_by(key="ad_upn_suffix").first()
+            upn_suffix = ((suffix_row.value if suffix_row else None) or "cirque.com").strip()
+            upn = emp.email or f"{sam}@{upn_suffix}"
 
             svc = LDAPService(config_ad)
             create = svc.create_user(
@@ -1167,6 +1179,10 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
                 return False, {"error": f"AD create_user failed: {create.get('error')}", "stage": "create_user"}
 
             new_dn = create.get("dn")
+            # create_user only enables the account when the password was set over LDAPS;
+            # it can return success=True with enabled=False (created but disabled). Mirror
+            # reality onto the Employee row rather than assuming enabled.
+            account_enabled = bool(create.get("enabled"))
 
             # Group grants — collect per-group outcomes; a group failure does NOT
             # roll back the created user (the user exists), but is surfaced.
@@ -1190,20 +1206,38 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
             except Exception as e:
                 entra = f"sync error: {e}"
 
-            # Persist the provisioned identity onto the Employee row.
+            # Persist the provisioned identity onto the Employee row. The user IS created
+            # (real, must be recorded) even on a partial result — always save sam/ad_dn.
             emp.ad_dn = new_dn
-            emp.ad_enabled = True
-            emp.onboard_status = "provisioned"
+            emp.ad_enabled = account_enabled
+            if group_errors:
+                emp.onboard_status = "provisioned_partial"
+            elif not account_enabled:
+                emp.onboard_status = "provisioned_disabled"
+            else:
+                emp.onboard_status = "provisioned"
             from models import db as _db_orm
             _db_orm.session.commit()
 
             result = {
                 "employee": emp.name, "employee_id": emp_id, "sam": sam,
-                "ou_dn": ou_dn, "groups": granted, "created": True,
-                "entra_sync": entra,
+                "ad_dn": new_dn, "ou_dn": ou_dn, "groups": granted, "created": True,
+                "enabled": account_enabled, "entra_sync": entra,
             }
             if group_errors:
                 result["group_errors"] = group_errors
+
+            # Headline outcome must reflect reality so _ledger_result does not record a
+            # clean success when it wasn't one.
+            # (2) Partial group grant → not a clean success; lead with the group failures.
+            if group_errors:
+                result["error"] = ("user created but group grant(s) failed: "
+                                   + "; ".join(group_errors))
+                return False, result
+            # (1) Created but not enabled (password not set over LDAPS) → partial; warn.
+            if not account_enabled:
+                result["warning"] = "account created but not enabled (password not set)"
+                return False, result
             return True, result
     except Exception as e:
         log.exception("onboard_employee action failed for %s", emp_id)
@@ -1228,14 +1262,35 @@ def resolve_onboard(row_id, approver, ou_dn, group_dns):
     if not group_dns:
         return False, {"error": "Select at least one group before approving."}
 
+    # Validate action_type BEFORE claiming: a stray/forged/replayed id pointed at this
+    # route against a non-onboard pending row (e.g. a parked offboard) must NOT claim and
+    # destroy that unrelated approval. Read-only peek; leave the row untouched on mismatch.
+    try:
+        db = _db()
+        try:
+            peek = db.execute(
+                "SELECT before_state FROM command_ledger WHERE id=?", (row_id,)
+            ).fetchone()
+        finally:
+            db.close()
+    except Exception:
+        log.exception("onboard pre-claim peek failed")
+        return False, {"error": "Could not read approval row."}
+    if not peek:
+        return False, {"error": "Not a pending approval (already resolved, denied, or not found)."}
+    peek_bs = peek["before_state"]
+    if isinstance(peek_bs, (str, bytes, bytearray)):
+        try:
+            peek_bs = json.loads(peek_bs or "{}")
+        except Exception:
+            peek_bs = {}
+    if ((peek_bs or {}).get("replay") or {}).get("action_type") != "onboard_employee":
+        return False, {"error": "Parked row is not an onboarding request."}
+
     before = _claim_pending(row_id, to_approval_status="approved", to_status="running")
     if before is None:
         return False, {"error": "Not a pending approval (already resolved, denied, or not found)."}
     replay = (before or {}).get("replay") or {}
-    if replay.get("action_type") != "onboard_employee":
-        _ledger_result(row_id, "failed", after_state={"error": "not an onboard approval"},
-                       verification_status="failed", verification_detail=f"approved by {approver}")
-        return True, {"error": "Parked row is not an onboarding request."}
 
     def _run():
         config = dict(replay.get("config") or {})
@@ -1252,6 +1307,9 @@ def resolve_onboard(row_id, approver, ou_dn, group_dns):
         detail = f"approved by {approver}; OU={ou_cn}; groups={groups_txt}"
         if not success and out.get("error"):
             detail += f"; FAILED: {out['error']}"
+        elif not success and out.get("warning"):
+            # Partial: account created but not enabled (no group failures).
+            detail += f"; PARTIAL: {out['warning']}"
         _ledger_result(row_id, "succeeded" if success else "failed",
                        after_state=out, verification_status=_verify_status(success, out),
                        verification_detail=detail)

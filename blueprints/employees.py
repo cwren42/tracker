@@ -605,11 +605,21 @@ def add_employee():
 def _onboard_derive(first_name, last_name):
     """Derive email + sAMAccountName from a new-hire's name, matching the existing
     convention (corwin.hudson@cirque.com / corwin.hudson). Lowercase, '.'-joined,
-    non-alnum stripped. Returns (email, sam)."""
+    non-alnum stripped. Disambiguates against existing employees' sam_account_name so
+    a collision (e.g. a second john.smith) becomes john.smith2 rather than creating an
+    Employee row + parked ledger that only fails later at AD. Returns (email, sam)."""
     f = re.sub(r'[^a-z0-9]', '', (first_name or '').strip().lower())
     l = re.sub(r'[^a-z0-9]', '', (last_name or '').strip().lower())
-    sam = f"{f}.{l}".strip('.')
-    email = f"{sam}@cirque.com" if sam else ''
+    base = f"{f}.{l}".strip('.')
+    if not base:
+        return '', ''
+    # Append a numeric disambiguator until the sam is unique among existing employees.
+    sam = base
+    n = 1
+    while Employee.query.filter_by(sam_account_name=sam).first() is not None:
+        n += 1
+        sam = f"{base}{n}"
+    email = f"{sam}@cirque.com"
     return email, sam
 
 
@@ -692,6 +702,7 @@ def onboard_request():
         # Park the high-risk onboard approval for IT (creates a pending command_ledger row).
         payload = {
             'name': full_name, 'email': email or '', 'sam': sam or '',
+            'first_name': first_name, 'last_name': last_name,
             'dept': department or '', 'title': job_title or '', 'manager': manager or '',
             'start': start_raw or '', 'work_type': work_type or '', 'phone': phone or '',
             'notes': notes,

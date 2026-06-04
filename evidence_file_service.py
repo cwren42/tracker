@@ -515,36 +515,6 @@ class EvidenceFileService(EvidenceAzureMixin):
             print(f"Error generating Employee Handbook PDF: {e}")
             return None
     
-    def generate_m365_password_policy_file(self, evidence_name):
-        """Generate M365 Password Policy configuration file"""
-        # This would query M365 password policy settings via Graph API
-        # For now, create a summary from current user data
-        
-        wb, ws = self.create_styled_workbook('Password Policy')
-        headers = ['Setting', 'Value', 'Compliant']
-        self.style_header_row(ws, headers)
-        
-        # Static password policy settings (would be from Graph API in production)
-        settings = [
-            ('Minimum Password Length', '8 characters', 'Yes'),
-            ('Password Complexity', 'Required', 'Yes'),
-            ('Password History', '24 passwords', 'Yes'),
-            ('Maximum Password Age', '90 days', 'Yes'),
-            ('Minimum Password Age', '1 day', 'Yes'),
-            ('Account Lockout Threshold', '5 attempts', 'Yes'),
-            ('Account Lockout Duration', '30 minutes', 'Yes'),
-            ('Multi-Factor Authentication', 'Enforced', 'Yes'),
-        ]
-        
-        for row_idx, (setting, value, compliant) in enumerate(settings, 2):
-            ws.cell(row_idx, 1, setting)
-            ws.cell(row_idx, 2, value)
-            ws.cell(row_idx, 3, compliant)
-        
-        file_path = self.get_file_path(evidence_name, 'M365/Intune')
-        wb.save(file_path)
-        return file_path
-    
     def generate_teamviewer_patch_scan_file(self, evidence_name):
         """Generate TeamViewer patch scan/device status file"""
         try:
@@ -1791,6 +1761,344 @@ class EvidenceFileService(EvidenceAzureMixin):
         return file_path
 
     # ------------------------------------------------------------------
+    # Settings-evidence live-config generators (the "screenshot" equivalent:
+    # a dated export of the actual current configuration values from the
+    # Tracker's own data / live integrations). No fabricated values.
+    # ------------------------------------------------------------------
+
+    def generate_m365_password_settings_file(self, evidence_name):
+        """Network/Cloud password settings, LIVE from Microsoft Entra (M365).
+
+        Pulls the real password-expiration policy per verified domain
+        (Graph /domains: passwordValidityPeriodInDays /
+        passwordNotificationWindowInDays), the authentication-methods policy
+        state, and the enforced Conditional Access policies (MFA). This is the
+        authoritative, auditable network/cloud password configuration; no
+        values are hard-coded. Returns None if the tenant is unreachable so the
+        item stays "not collected" rather than reporting fabricated settings.
+        """
+        try:
+            import requests
+            from m365_config import get_m365_credentials
+            from m365_service import M365Service
+
+            tenant_id, client_id, client_secret = get_m365_credentials()
+            if not all([tenant_id, client_id, client_secret]):
+                print('[M365 password] credentials not configured')
+                return None
+            svc = M365Service(tenant_id, client_id, client_secret)
+            token = svc.get_access_token()
+            if not token:
+                print('[M365 password] could not obtain access token')
+                return None
+            headers = {'Authorization': f'Bearer {token}'}
+
+            domains_resp = requests.get(
+                'https://graph.microsoft.com/v1.0/domains', headers=headers, timeout=25)
+            if not domains_resp.ok:
+                print(f'[M365 password] /domains -> {domains_resp.status_code}')
+                return None
+            domains = [d for d in domains_resp.json().get('value', []) if d.get('isVerified')]
+
+            try:
+                ca_policies = svc.get_conditional_access_policies()
+            except Exception:
+                ca_policies = []
+
+            wb, ws = self.create_styled_workbook('Domain Password Policy')
+            headers_row = ['Domain', 'Default', 'Password Validity (days)',
+                           'Notification Window (days)', 'Never Expires', 'Authentication Type']
+            self.style_header_row(ws, headers_row)
+            never_expire_sentinel = 2147483647
+            for row_idx, d in enumerate(domains, 2):
+                validity = d.get('passwordValidityPeriodInDays')
+                never = validity == never_expire_sentinel
+                ws.cell(row_idx, 1, d.get('id', ''))
+                ws.cell(row_idx, 2, 'Yes' if d.get('isDefault') else 'No')
+                ws.cell(row_idx, 3, 'Never' if never else (validity if validity is not None else 'Inherited'))
+                ws.cell(row_idx, 4, d.get('passwordNotificationWindowInDays') if d.get('passwordNotificationWindowInDays') is not None else 'Inherited')
+                ws.cell(row_idx, 5, 'Yes' if never else 'No')
+                ws.cell(row_idx, 6, d.get('authenticationType', ''))
+
+            # Conditional Access (MFA enforcement) detail sheet
+            ws_ca = wb.create_sheet('Conditional Access')
+            ca_headers = ['Policy Name', 'State', 'Grant Controls']
+            self.style_header_row(ws_ca, ca_headers)
+            for row_idx, p in enumerate(ca_policies, 2):
+                controls = (p.get('grantControls') or {}).get('builtInControls') or []
+                ws_ca.cell(row_idx, 1, self._sanitize_for_excel(p.get('displayName', '')[:120]))
+                ws_ca.cell(row_idx, 2, p.get('state', ''))
+                ws_ca.cell(row_idx, 3, ', '.join(controls) if controls else 'None')
+
+            enabled_ca = sum(1 for p in ca_policies if p.get('state') == 'enabled')
+            mfa_ca = sum(1 for p in ca_policies
+                         if 'mfa' in ((p.get('grantControls') or {}).get('builtInControls') or []))
+            self._summary_sheet(wb, [
+                ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+                ('Data Source', 'Microsoft Entra / Graph API (live)'),
+                ('Verified Domains', len(domains)),
+                ('Conditional Access Policies', len(ca_policies)),
+                ('Conditional Access Enabled', enabled_ca),
+                ('Policies Requiring MFA', mfa_ca),
+                ('Layer', 'Network/Cloud (Microsoft Entra ID)'),
+            ])
+            file_path = self.get_file_path(evidence_name, 'M365/Intune')
+            wb.save(file_path)
+            return file_path
+        except Exception as exc:
+            print(f'[M365 password] error: {exc}')
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def generate_monitoring_tools_file(self, evidence_name):
+        """Enabled monitoring tools/checks, LIVE from the Tracker's own
+        monitoring subsystem (monitoring_profile + monitoring_check) plus any
+        synced Azure Monitor alert rules. Reports the actual enabled monitors.
+        """
+        profiles = db.session.execute(text(
+            """SELECT name, device_type, os_family, severity_level,
+                      check_interval_minutes, enabled
+               FROM monitoring_profile ORDER BY name"""
+        )).fetchall()
+        checks = db.session.execute(text(
+            """SELECT name, check_type, script_type, timeout_seconds, enabled
+               FROM monitoring_check ORDER BY name"""
+        )).fetchall()
+        azure_alerts = AzureMonitorAlert.query.filter_by(is_current=True).all()
+
+        wb, ws = self.create_styled_workbook('Monitoring Profiles')
+        self.style_header_row(ws, ['Profile', 'Device Type', 'OS Family',
+                                   'Severity', 'Interval (min)', 'Enabled'])
+        for row_idx, p in enumerate(profiles, 2):
+            ws.cell(row_idx, 1, p[0] or '')
+            ws.cell(row_idx, 2, p[1] or '')
+            ws.cell(row_idx, 3, p[2] or '')
+            ws.cell(row_idx, 4, p[3] or '')
+            ws.cell(row_idx, 5, p[4] if p[4] is not None else '')
+            ws.cell(row_idx, 6, 'Yes' if p[5] else 'No')
+
+        ws_checks = wb.create_sheet('Monitoring Checks')
+        self.style_header_row(ws_checks, ['Check', 'Type', 'Script Type',
+                                          'Timeout (s)', 'Enabled'])
+        for row_idx, c in enumerate(checks, 2):
+            ws_checks.cell(row_idx, 1, c[0] or '')
+            ws_checks.cell(row_idx, 2, c[1] or '')
+            ws_checks.cell(row_idx, 3, c[2] or '')
+            ws_checks.cell(row_idx, 4, c[3] if c[3] is not None else '')
+            ws_checks.cell(row_idx, 5, 'Yes' if c[4] else 'No')
+
+        if azure_alerts:
+            ws_az = wb.create_sheet('Azure Monitor Alerts')
+            self.style_header_row(ws_az, ['Alert Name', 'Resource Group', 'Severity', 'Enabled'])
+            for row_idx, a in enumerate(azure_alerts, 2):
+                ws_az.cell(row_idx, 1, a.alert_name or '')
+                ws_az.cell(row_idx, 2, a.resource_group or '')
+                ws_az.cell(row_idx, 3, a.severity or '')
+                ws_az.cell(row_idx, 4, 'Yes' if a.enabled else 'No')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Data Source', 'Tracker monitoring subsystem + Azure Monitor (synced)'),
+            ('Monitoring Profiles', len(profiles)),
+            ('Enabled Profiles', sum(1 for p in profiles if p[5])),
+            ('Monitoring Checks', len(checks)),
+            ('Enabled Checks', sum(1 for c in checks if c[4])),
+            ('Azure Monitor Alert Rules', len(azure_alerts)),
+        ])
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_monitoring_alert_config_file(self, evidence_name):
+        """Performance/monitoring alert configuration, LIVE from the Tracker's
+        monitoring_alert records (severity/status/check) joined to the check
+        definitions, plus synced Azure Monitor alert rules. Reports the actual
+        configured alerting, not a documented standard.
+        """
+        alerts = db.session.execute(text(
+            """SELECT ma.severity, ma.status, mc.name, mc.check_type,
+                      ma.message, ma.triggered_at
+               FROM monitoring_alert ma
+               LEFT JOIN monitoring_check mc ON mc.id = ma.check_id
+               ORDER BY ma.triggered_at DESC NULLS LAST"""
+        )).fetchall()
+        azure_alerts = AzureMonitorAlert.query.filter_by(is_current=True).all()
+
+        wb, ws = self.create_styled_workbook('Alert Configuration')
+        self.style_header_row(ws, ['Severity', 'Status', 'Check', 'Check Type',
+                                   'Message', 'Triggered At'])
+        sev_counts = {}
+        for row_idx, a in enumerate(alerts, 2):
+            sev_counts[a[0] or 'Unknown'] = sev_counts.get(a[0] or 'Unknown', 0) + 1
+            ws.cell(row_idx, 1, a[0] or '')
+            ws.cell(row_idx, 2, a[1] or '')
+            ws.cell(row_idx, 3, a[2] or '')
+            ws.cell(row_idx, 4, a[3] or '')
+            ws.cell(row_idx, 5, self._sanitize_for_excel((a[4] or '')[:200]))
+            ws.cell(row_idx, 6, a[5].strftime('%Y-%m-%d %H:%M') if a[5] else '')
+
+        if azure_alerts:
+            ws_az = wb.create_sheet('Azure Monitor Alert Rules')
+            self.style_header_row(ws_az, ['Alert Name', 'Resource Group',
+                                          'Target Resource', 'Severity', 'Enabled'])
+            for row_idx, a in enumerate(azure_alerts, 2):
+                ws_az.cell(row_idx, 1, a.alert_name or '')
+                ws_az.cell(row_idx, 2, a.resource_group or '')
+                ws_az.cell(row_idx, 3, a.target_resource or '')
+                ws_az.cell(row_idx, 4, a.severity or '')
+                ws_az.cell(row_idx, 5, 'Yes' if a.enabled else 'No')
+
+        summary = [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Data Source', 'Tracker monitoring_alert + Azure Monitor (synced)'),
+            ('Configured Alerts (records)', len(alerts)),
+            ('Azure Monitor Alert Rules', len(azure_alerts)),
+        ]
+        for sev, cnt in sorted(sev_counts.items()):
+            summary.append((f'Alerts - {sev}', cnt))
+        self._summary_sheet(wb, summary)
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_server_encryption_file(self, evidence_name):
+        """Server encryption configuration, LIVE from azure_vm.disk_encryption
+        (synced Azure VMs) and Intune server-class devices (is_encrypted). The
+        actual current encryption state of server infrastructure.
+        """
+        vms = AzureVirtualMachine.query.filter_by(is_current=True).order_by(
+            AzureVirtualMachine.name).all()
+        # Intune server-class devices (Windows/Linux Server in the OS string)
+        intune_servers = [
+            d for d in IntuneDevice.query.filter_by(is_current=True).all()
+            if 'server' in ((d.os_version or '') + ' ' + (d.model or '')).lower()
+        ]
+
+        wb, ws = self.create_styled_workbook('Azure VM Encryption')
+        self.style_header_row(ws, ['VM Name', 'Resource Group', 'Location',
+                                   'OS Type', 'VM Size', 'Disk Encryption'])
+        enc_vms = 0
+        for row_idx, vm in enumerate(vms, 2):
+            if vm.disk_encryption:
+                enc_vms += 1
+            ws.cell(row_idx, 1, vm.name or '')
+            ws.cell(row_idx, 2, vm.resource_group or '')
+            ws.cell(row_idx, 3, vm.location or '')
+            ws.cell(row_idx, 4, vm.os_type or '')
+            ws.cell(row_idx, 5, vm.vm_size or '')
+            ws.cell(row_idx, 6, 'Yes' if vm.disk_encryption else 'No')
+
+        if intune_servers:
+            ws_i = wb.create_sheet('Intune Servers')
+            self.style_header_row(ws_i, ['Device Name', 'OS Version', 'Model',
+                                         'Encrypted', 'Compliance State'])
+            for row_idx, d in enumerate(intune_servers, 2):
+                ws_i.cell(row_idx, 1, d.device_name or '')
+                ws_i.cell(row_idx, 2, d.os_version or '')
+                ws_i.cell(row_idx, 3, d.model or '')
+                ws_i.cell(row_idx, 4, 'Yes' if d.is_encrypted else 'No')
+                ws_i.cell(row_idx, 5, d.compliance_state or '')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Data Source', 'azure_vm.disk_encryption + Intune (is_encrypted)'),
+            ('Azure VMs', len(vms)),
+            ('Azure VMs Encrypted', enc_vms),
+            ('Intune Server Devices', len(intune_servers)),
+            ('Intune Servers Encrypted', sum(1 for d in intune_servers if d.is_encrypted)),
+        ])
+        file_path = self.get_file_path(evidence_name, 'Azure')
+        wb.save(file_path)
+        return file_path
+
+    def generate_separation_of_environments_file(self, evidence_name):
+        """Separation of prod/dev/test environments, LIVE from synced Azure VMs
+        grouped by resource group with an environment classification derived
+        from the resource-group / VM naming. Reports the actual deployed
+        environments; classification heuristics are stated, not fabricated.
+        """
+        vms = AzureVirtualMachine.query.filter_by(is_current=True).order_by(
+            AzureVirtualMachine.resource_group, AzureVirtualMachine.name).all()
+
+        def classify(vm):
+            blob = f"{vm.resource_group or ''} {vm.name or ''}".lower()
+            if any(t in blob for t in ('prod', 'prd')):
+                return 'Production'
+            if any(t in blob for t in ('test', 'tst', 'qa', 'stage', 'stg', 'uat')):
+                return 'Test/Staging'
+            if any(t in blob for t in ('dev', 'leadgen', 'arm')):
+                return 'Development'
+            return 'Unclassified'
+
+        wb, ws = self.create_styled_workbook('Environment Separation')
+        self.style_header_row(ws, ['VM Name', 'Resource Group', 'Location',
+                                   'OS Type', 'Derived Environment'])
+        env_counts = {}
+        rg_set = set()
+        for row_idx, vm in enumerate(vms, 2):
+            env = classify(vm)
+            env_counts[env] = env_counts.get(env, 0) + 1
+            rg_set.add(vm.resource_group or '')
+            ws.cell(row_idx, 1, vm.name or '')
+            ws.cell(row_idx, 2, vm.resource_group or '')
+            ws.cell(row_idx, 3, vm.location or '')
+            ws.cell(row_idx, 4, vm.os_type or '')
+            ws.cell(row_idx, 5, env)
+
+        summary = [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Data Source', 'azure_vm (synced), grouped by resource group'),
+            ('Classification', 'Derived from resource-group / VM name tokens'),
+            ('Total VMs', len(vms)),
+            ('Distinct Resource Groups', len(rg_set)),
+        ]
+        for env, cnt in sorted(env_counts.items()):
+            summary.append((f'Environment - {env}', cnt))
+        self._summary_sheet(wb, summary)
+        file_path = self.get_file_path(evidence_name, 'Azure')
+        wb.save(file_path)
+        return file_path
+
+    def generate_ids_config_file(self, evidence_name):
+        """Intrusion-detection posture, LIVE from synced Azure Defender for
+        Cloud security alerts + assessments. Reports the actual detection
+        signal currently held; if no synced detections exist the report still
+        documents that state (it does not fabricate findings)."""
+        alerts = AzureSecurityAlert.query.filter_by(is_current=True).all()
+        assessments = AzureSecurityAssessment.query.filter_by(is_current=True).all()
+
+        wb, ws = self.create_styled_workbook('Detection Alerts')
+        self.style_header_row(ws, ['Alert Name', 'Severity', 'Status',
+                                   'Affected Resource', 'Detection Time'])
+        for row_idx, a in enumerate(alerts, 2):
+            ws.cell(row_idx, 1, a.alert_name or '')
+            ws.cell(row_idx, 2, a.severity or '')
+            ws.cell(row_idx, 3, a.status or '')
+            ws.cell(row_idx, 4, a.affected_resource or '')
+            ws.cell(row_idx, 5, a.detection_time.strftime('%Y-%m-%d %H:%M') if a.detection_time else '')
+
+        if assessments:
+            ws_a = wb.create_sheet('Security Assessments')
+            self.style_header_row(ws_a, ['Assessment', 'Status', 'Severity', 'Resource'])
+            for row_idx, s in enumerate(assessments, 2):
+                ws_a.cell(row_idx, 1, s.name or '')
+                ws_a.cell(row_idx, 2, s.status or '')
+                ws_a.cell(row_idx, 3, s.severity or '')
+                ws_a.cell(row_idx, 4, s.resource_id or '')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Data Source', 'Azure Defender for Cloud (synced alerts + assessments)'),
+            ('Security Alerts', len(alerts)),
+            ('Security Assessments', len(assessments)),
+            ('Note', 'Documented IDS standard is the Logging & Monitoring Procedure (ISMS).'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'Azure')
+        wb.save(file_path)
+        return file_path
+
+    # ------------------------------------------------------------------
     # ISMS-manual policy evidence generator
     # ------------------------------------------------------------------
 
@@ -2254,25 +2562,41 @@ class EvidenceFileService(EvidenceAzureMixin):
             # Azure Evidence - Network Security
             'Firewall Rules': self.generate_azure_nsg_file,
             'Current Network Diagram': self.generate_azure_network_topology_file,
-            'Security Configuration Standards': self.generate_azure_nsg_file,
-            
-            # Azure Evidence - Security Monitoring
-            'Intrusion Detection Configuration': self.generate_azure_security_alerts_file,
             'Intrusion Detection System Configuration': self.generate_azure_security_alerts_file,
-            'Monitoring Tools Enabled': self.generate_azure_monitor_alerts_file,
-            'Performance Monitoring Alert Configuration': self.generate_azure_monitor_alerts_file,
-            
+            'Monitoring Tools Enabled (legacy)': self.generate_azure_monitor_alerts_file,
+
             # Azure Evidence - Database Security
             'Database Encryption': self.generate_azure_databases_file,
             'SQL Server Database Encryption Configuration': self.generate_azure_databases_file,
-            
+
             # Azure Evidence - Storage Security
-            'Encryption in Transit': self.generate_azure_storage_file,
             'Azure Storage Encryption Configuration': self.generate_azure_storage_file,
-            
+
             # Azure Evidence - Server Security
             'Server Disk Encryption Configuration': self.generate_azure_vms_file,
-            'Server Encryption': self.generate_azure_vms_file,
+
+            # --- Settings evidence (auto-collected) ---------------------
+            # Live-config "screenshot" reports (actual current values) where a
+            # real data source exists; ISMS documented-standard PDFs where the
+            # control's authoritative_docs resolve to a manual section.
+            #
+            # LIVE config reports:
+            'Server Encryption': self.generate_server_encryption_file,                       # azure_vm + Intune servers
+            'Separation of Environments': self.generate_separation_of_environments_file,     # azure_vm by resource group
+            'Monitoring Tools Enabled': self.generate_monitoring_tools_file,                 # Tracker monitoring subsystem
+            'Performance Monitoring Alert Configuration': self.generate_monitoring_alert_config_file,
+            'Password Settings - Network/Cloud': self.generate_m365_password_settings_file,  # live Entra/Graph
+            #
+            # ISMS documented-standard reports (resolved via the control's
+            # authoritative_docs IS-IDs -> generate_isms_section_pdf):
+            'Encryption in Transit': self.generate_isms_section_pdf,                         # Cryptography Policy
+            'Intrusion Detection Configuration': self.generate_isms_section_pdf,             # Logging & Monitoring
+            'Security Configuration Standards': self.generate_isms_section_pdf,              # Operations Security
+            'Password Settings - Application': self.generate_isms_section_pdf,               # Access Control Policy
+            'Password Settings - Database': self.generate_isms_section_pdf,                  # Access Control Policy
+            'Password Settings - Operating System': self.generate_isms_section_pdf,          # Access Control Policy
+            # 'Merge SOD Configuration Check' has no documented standard and no
+            # live source (no GitLab integration) -> intentionally MANUAL.
             
             # --- Vulnerability & Patching (RMM-backed) ------------------
             # Live local data: vulnerability_cache + cve_patch_job + rmm_agent.
@@ -2368,15 +2692,13 @@ class EvidenceFileService(EvidenceAzureMixin):
             '5-22. If You Must Leave Us': self.generate_employee_handbook_pdf,
             
             # M365 User Lists (new additions)
-            'Network/Cloud User List': self.generate_m365_users_file,
-            'Operating System User List': self.generate_m365_users_file,
             'Organization Chart': self.generate_m365_users_file,
-            
-            # Password Settings (M365 password policy reports)
-            'Password Settings - Application': self.generate_m365_password_policy_file,
-            'Password Settings - Database': self.generate_m365_password_policy_file,
-            'Password Settings - Network/Cloud': self.generate_m365_password_policy_file,
-            'Password Settings - Operating System': self.generate_m365_password_policy_file,
+            # NOTE: the four 'Password Settings - *' items are wired in the
+            # "Settings evidence" block above (live Entra for Network/Cloud;
+            # ISMS Access Control Policy for Application/Database/Operating
+            # System). The previous static generate_m365_password_policy_file
+            # routing was removed because it emitted hard-coded placeholder
+            # values rather than real configuration.
         }
         
         generator_func = evidence_map.get(evidence_name)

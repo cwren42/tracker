@@ -46,22 +46,30 @@ from evidence_azure import EvidenceAzureMixin
 # Every entry below was verified against ISMS Manual v4 (document_id=1) before
 # being committed: each IS-ID exists as a real heading section in markdown_body.
 POLICY_EVIDENCE_SECTION_MAP = {
-    # control link exists but authoritative_docs is empty -> verified by name
-    'Acceptable Use Policy': ['IS-AHR01-CIRQ02-A00'],
     # "Access Removal" lives in the Access Control Procedure (§4.2.1 Employee
     # Termination: keycards/accounts revoked on termination).
     'Access Removal Procedures/Checklist': ['IS-AIR01-CIRQ04-A00'],
-    'Business Continuity Plan': ['IS-LIR-CIRQ01-A00', 'IS-LIG-CIRQ01-A00'],
     # no control link at all -> resolved by name against manual headings
     'Backup Policy': ['IS-AIR01-CIRQ08-A00'],
     'Backup Restoration Procedures': ['IS-AIR01-CIRQ08-A00'],
     'Information Security Policy': ['IS-APM01-CIRQ01-A00'],
-    # Supplier Relationships Policy + Supplier Security Review Procedure are the
-    # ISMS-manual home of vendor management (cf. control "Vendor Review").
-    'Vendor Management Policy and Procedures': ['IS-ASR01-CIRQ01-A00', 'IS-ASR01-CIRQ02-A00'],
     # Technical Vulnerability Management is §4.8 of the Operations Security
     # Policy (cf. control "Vulnerability Scan" authoritative_docs).
     'Vulnerability Management Policy': ['IS-AIR01-CIRQ03-A00'],
+}
+
+# Policy items deliberately reverted from ISMS auto-generation back to manual /
+# HR-sourced evidence (the real StrikeGraph evidence is a signed HR document or a
+# dedicated source document, NOT the ISMS manual's policy text). The resolver
+# short-circuits these to ([], None) BEFORE any resolution path -- including the
+# linked control's authoritative_docs -- so a stray "Generate now" can never
+# re-pull the wrong-source section. The control's authoritative_docs pointer is
+# intentionally LEFT intact as a documentation reference; only the auto-gen
+# evidence path is neutralized.
+POLICY_EVIDENCE_REVERTED_TO_MANUAL = {
+    'Acceptable Use Policy',                     # signed AUP from HR
+    'Business Continuity Plan',                  # dedicated BCP source
+    'Vendor Management Policy and Procedures',   # different source than Supplier Relationships
 }
 
 # Policy items the ISMS manual genuinely does NOT contain (so they must stay
@@ -1873,6 +1881,12 @@ class EvidenceFileService(EvidenceAzureMixin):
         """
         name = evidence_item.evidence_name
 
+        # Items explicitly reverted to manual/HR-sourced evidence are never
+        # auto-resolved from the ISMS manual, even if the linked control still
+        # carries authoritative_docs IS-* pointers (those remain as a doc ref).
+        if name in POLICY_EVIDENCE_REVERTED_TO_MANUAL:
+            return [], None
+
         def _existing(ids):
             out = []
             for sid in ids:
@@ -2320,11 +2334,14 @@ class EvidenceFileService(EvidenceAzureMixin):
             # are the Policy-type StrikeGraphEvidence items that resolve to a real
             # manual section. "Code of Conduct" is intentionally absent: it lives
             # in the Employee Handbook, not the ISMS manual.
-            'Acceptable Use Policy': self.generate_isms_section_pdf,
+            # 'Acceptable Use Policy', 'Business Continuity Plan', and 'Vendor
+            # Management Policy and Procedures' are intentionally absent: they
+            # were reverted to manual/HR-sourced evidence (see
+            # POLICY_EVIDENCE_REVERTED_TO_MANUAL). Even via the Policy fallback
+            # below, the resolver short-circuits them to "not collected".
             'Access Removal Procedures/Checklist': self.generate_isms_section_pdf,
             'Backup Policy': self.generate_isms_section_pdf,
             'Backup Restoration Procedures': self.generate_isms_section_pdf,
-            'Business Continuity Plan': self.generate_isms_section_pdf,
             'Change Management Policy': self.generate_isms_section_pdf,
             'Data Classification Policy': self.generate_isms_section_pdf,
             'Data Management Policy': self.generate_isms_section_pdf,
@@ -2336,7 +2353,6 @@ class EvidenceFileService(EvidenceAzureMixin):
             'Record Retention Schedule': self.generate_isms_section_pdf,
             'Risk Management Policy and Procedures': self.generate_isms_section_pdf,
             'System Description Document': self.generate_isms_section_pdf,
-            'Vendor Management Policy and Procedures': self.generate_isms_section_pdf,
             'Vulnerability Management Policy': self.generate_isms_section_pdf,
 
             # Employee Handbook Evidence (PDF generation)

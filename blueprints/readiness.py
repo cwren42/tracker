@@ -62,14 +62,14 @@ AUTOMATED_EVIDENCE_EXPORTS = [
     {'evidence_name': 'Server Scan and Patch', 'zip_path': 'automated_evidence/server_scan_and_patch.xlsx', 'category': 'RMM'},
     # ISMS-manual policy evidence (Policy-type catalog rows auto-generated as
     # PDFs by extracting the relevant IS-section(s) from the published ISMS
-    # Manual; see EvidenceFileService.generate_isms_section_pdf). All 18 resolve
-    # to a real manual section. "Code of Conduct" is intentionally excluded:
-    # it lives in the Employee Handbook, not the ISMS manual.
-    {'evidence_name': 'Acceptable Use Policy', 'zip_path': 'automated_evidence/acceptable_use_policy.pdf', 'category': 'ISMS'},
+    # Manual; see EvidenceFileService.generate_isms_section_pdf). "Code of
+    # Conduct" is excluded (it lives in the Employee Handbook). Acceptable Use
+    # Policy, Business Continuity Plan, and Vendor Management Policy and
+    # Procedures were reverted to manual/HR-sourced evidence and are excluded
+    # here (see POLICY_EVIDENCE_REVERTED_TO_MANUAL in evidence_file_service.py).
     {'evidence_name': 'Access Removal Procedures/Checklist', 'zip_path': 'automated_evidence/access_removal_procedures.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Backup Policy', 'zip_path': 'automated_evidence/backup_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Backup Restoration Procedures', 'zip_path': 'automated_evidence/backup_restoration_procedures.pdf', 'category': 'ISMS'},
-    {'evidence_name': 'Business Continuity Plan', 'zip_path': 'automated_evidence/business_continuity_plan.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Change Management Policy', 'zip_path': 'automated_evidence/change_management_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Data Classification Policy', 'zip_path': 'automated_evidence/data_classification_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Data Management Policy', 'zip_path': 'automated_evidence/data_management_policy.pdf', 'category': 'ISMS'},
@@ -81,7 +81,6 @@ AUTOMATED_EVIDENCE_EXPORTS = [
     {'evidence_name': 'Record Retention Schedule', 'zip_path': 'automated_evidence/record_retention_schedule.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Risk Management Policy and Procedures', 'zip_path': 'automated_evidence/risk_management_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'System Description Document', 'zip_path': 'automated_evidence/system_description_document.pdf', 'category': 'ISMS'},
-    {'evidence_name': 'Vendor Management Policy and Procedures', 'zip_path': 'automated_evidence/vendor_management_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Vulnerability Management Policy', 'zip_path': 'automated_evidence/vulnerability_management_policy.pdf', 'category': 'ISMS'},
 ]
 

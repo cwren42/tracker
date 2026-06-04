@@ -53,6 +53,9 @@ AUTOMATED_EVIDENCE_EXPORTS = [
     {'evidence_name': 'Operating System User List', 'zip_path': 'automated_evidence/os_user_list.xlsx', 'category': 'M365'},
     {'evidence_name': 'Asset Inventory', 'zip_path': 'automated_evidence/asset_inventory.xlsx', 'category': 'M365'},
     {'evidence_name': 'Device Disk Encryption', 'zip_path': 'automated_evidence/device_disk_encryption.xlsx', 'category': 'M365'},
+    # Provisioning (control 97): new-hire access request, sampled from the latest
+    # approved onboard_employee ledger entry (HR requested → IT approved + provisioned).
+    {'evidence_name': 'Access Request - New Hire', 'zip_path': 'automated_evidence/access_request_new_hire.xlsx', 'category': 'M365'},
     # RMM-backed (endpoint protection, vulnerability, patch)
     {'evidence_name': 'Antivirus Configuration - Workstation', 'zip_path': 'automated_evidence/antivirus_workstation.xlsx', 'category': 'RMM'},
     {'evidence_name': 'Antivirus Configuration - Server', 'zip_path': 'automated_evidence/antivirus_server.xlsx', 'category': 'RMM'},

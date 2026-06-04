@@ -328,6 +328,118 @@ class LDAPService:
             self.disconnect()
 
     # ------------------------------------------------------------------
+    # OU / Group enumeration — used by the new-hire onboarding approval card
+    # so IT can pick the target OU + security groups at approve time.
+    # Both are READ-ONLY and fail-soft (return [] + log) when AD is disabled
+    # or unreachable, so the approval UI degrades gracefully.
+    # ------------------------------------------------------------------
+
+    def _users_ou_base(self) -> str:
+        """Resolve the CirqueUsers subtree base for OU enumeration.
+
+        Preference order: explicit Setting (ad_users_ou_dn, threaded into
+        config.user_ou_dn by the caller) -> derive 'OU=CirqueUsers,<base_dn>'
+        -> bare base_dn. The derived form matches the real tree
+        (CirqueCompany > CirqueUsers > <leaf OUs>)."""
+        # config.user_ou_dn already carries ad_user_ou_dn when set; if it points
+        # at the CirqueUsers subtree (or any explicit OU) use it directly.
+        ou = (self.config.user_ou_dn or '').strip()
+        if ou and ou.lower() != (self.config.base_dn or '').strip().lower():
+            return ou
+        base = (self.config.base_dn or '').strip()
+        if base:
+            return f"OU=CirqueUsers,{base}"
+        return base
+
+    def _groups_ou_base(self, base_dn: Optional[str]) -> str:
+        """Resolve the CirqueGroups subtree base for group enumeration.
+
+        Preference order: explicit base_dn arg -> derive 'OU=CirqueGroups,<base_dn>'
+        -> bare base_dn."""
+        if base_dn and base_dn.strip():
+            return base_dn.strip()
+        base = (self.config.base_dn or '').strip()
+        if base:
+            return f"OU=CirqueGroups,{base}"
+        return base
+
+    def list_ous(self, base_dn: Optional[str] = None) -> list:
+        """Return [{'name','dn'}] of organizationalUnit objects under the
+        CirqueUsers subtree (or an explicit base_dn). Read-only subtree search.
+        Fail-soft: returns [] on any error / when AD is disabled."""
+        try:
+            self._ensure()
+        except Exception as e:
+            logger.warning('list_ous: AD unavailable (%s)', e)
+            return []
+        search_base = (base_dn or '').strip() or self._users_ou_base()
+        if not search_base:
+            logger.warning('list_ous: no search base resolved')
+            return []
+        try:
+            self.connection.search(
+                search_base=search_base,
+                search_filter='(objectClass=organizationalUnit)',
+                search_scope=SUBTREE,
+                attributes=['ou', 'name', 'distinguishedName'],
+            )
+            out = []
+            for e in (self.connection.entries or []):
+                dn = str(e.entry_dn)
+                name = ''
+                if hasattr(e, 'ou') and e.ou.value:
+                    name = str(e.ou.value)
+                elif hasattr(e, 'name') and e.name.value:
+                    name = str(e.name.value)
+                if dn:
+                    out.append({'name': name or dn, 'dn': dn})
+            out.sort(key=lambda o: o['name'].lower())
+            return out
+        except Exception as e:
+            logger.exception('list_ous failed: %s', e)
+            return []
+        finally:
+            self.disconnect()
+
+    def list_groups(self, base_dn: Optional[str] = None) -> list:
+        """Return [{'name','dn'}] of group objects under the CirqueGroups subtree
+        (or an explicit base_dn). Read-only subtree search. Fail-soft: returns []
+        on any error / when AD is disabled."""
+        try:
+            self._ensure()
+        except Exception as e:
+            logger.warning('list_groups: AD unavailable (%s)', e)
+            return []
+        search_base = (base_dn or '').strip() or self._groups_ou_base(None)
+        if not search_base:
+            logger.warning('list_groups: no search base resolved')
+            return []
+        try:
+            self.connection.search(
+                search_base=search_base,
+                search_filter='(objectClass=group)',
+                search_scope=SUBTREE,
+                attributes=['cn', 'name', 'distinguishedName'],
+            )
+            out = []
+            for e in (self.connection.entries or []):
+                dn = str(e.entry_dn)
+                name = ''
+                if hasattr(e, 'cn') and e.cn.value:
+                    name = str(e.cn.value)
+                elif hasattr(e, 'name') and e.name.value:
+                    name = str(e.name.value)
+                if dn:
+                    out.append({'name': name or dn, 'dn': dn})
+            out.sort(key=lambda g: g['name'].lower())
+            return out
+        except Exception as e:
+            logger.exception('list_groups failed: %s', e)
+            return []
+        finally:
+            self.disconnect()
+
+    # ------------------------------------------------------------------
     # Bulk user enumeration — used for employee sync (AD is master)
     # ------------------------------------------------------------------
 

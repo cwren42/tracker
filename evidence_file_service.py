@@ -16,6 +16,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from app import db
+from models import now_mst
 from soc2_models import (
     EvidenceSnapshot, StrikeGraphEvidence, SOC2Control,
     M365User, IntuneDevice, DeviceSoftware, AdminRoleSnapshot,
@@ -1686,6 +1687,101 @@ class EvidenceFileService(EvidenceAzureMixin):
         wb.save(file_path)
         return file_path
 
+    def generate_access_request_newhire_file(self, evidence_name):
+        """SOC2 'Access Request - New Hire' evidence (control 97, Provisioning).
+
+        Samples the most-recent APPROVED 'onboard_employee' command_ledger entry
+        (the segregation-of-duties new-hire flow: HR requested, IT approved at
+        /approvals and supplied the OU + groups, which triggered AD provisioning).
+        Renders one artifact showing: employee identity, OU + groups granted,
+        requested_by (HR), approved_by (IT) + approval date, and the tracking ticket.
+
+        Raises ValueError('no approved onboarding to sample yet') when none exists
+        — the row simply stays uncollected rather than fabricating evidence."""
+        row = db.session.execute(text(
+            """SELECT id, object_id, requested_by, before_state, after_state,
+                      verification_detail, completed_at, created_at, status
+               FROM command_ledger
+               WHERE action_type='onboard_employee'
+                 AND approval_status='approved'
+                 AND status='succeeded'
+               ORDER BY COALESCE(completed_at, created_at) DESC
+               LIMIT 1"""
+        )).fetchone()
+        if not row:
+            raise ValueError('no approved onboarding to sample yet')
+
+        # before_state / after_state are JSON columns -> dicts (psycopg2 parses).
+        bs = row[3] if isinstance(row[3], dict) else (json.loads(row[3]) if row[3] else {})
+        after = row[4] if isinstance(row[4], dict) else (json.loads(row[4]) if row[4] else {})
+        onboard = (bs or {}).get('onboard') or {}
+        ver_detail = row[5] or ''
+        approved_at = row[6] or row[7]
+        requested_by = row[2] or ''
+
+        # Approver — parse from verification_detail ("approved by <x>; OU=...; groups=...").
+        approver = ''
+        if 'approved by ' in ver_detail:
+            approver = ver_detail.split('approved by ', 1)[1].split(';', 1)[0].strip()
+
+        # OU + groups granted — prefer the recorded after_state (what actually ran).
+        ou_dn = after.get('ou_dn') or ''
+        ou_cn = ou_dn.split(',')[0].split('=')[-1] if '=' in ou_dn.split(',')[0] else ou_dn
+        groups = after.get('groups') or []
+        sam = after.get('sam') or onboard.get('sam') or ''
+
+        # Tracking ticket reference ([ONBOARD] ticket for this hire).
+        emp_name = onboard.get('name') or after.get('employee') or ''
+        ticket_ref = ''
+        if emp_name:
+            t = db.session.execute(text(
+                "SELECT id FROM support_ticket WHERE category='HR / Onboarding' "
+                "AND subject LIKE :s ORDER BY id DESC LIMIT 1"
+            ), {'s': f'%{emp_name}%'}).fetchone()
+            if t:
+                ticket_ref = f'#{t[0]}'
+
+        wb, ws = self.create_styled_workbook('Access Request - New Hire')
+        headers = ['Field', 'Value']
+        self.style_header_row(ws, headers)
+        rows = [
+            ('Employee', emp_name),
+            ('Email', onboard.get('email') or ''),
+            ('sAMAccountName', sam),
+            ('Department', onboard.get('dept') or ''),
+            ('Job Title', onboard.get('title') or ''),
+            ('Manager', onboard.get('manager') or ''),
+            ('Start Date', onboard.get('start') or ''),
+            ('Work Type', onboard.get('work_type') or ''),
+            ('AD OU Granted', ou_cn or ou_dn),
+            ('AD OU (DN)', ou_dn),
+            ('Security Groups Granted', ', '.join(groups) if groups else ''),
+            ('Requested By (HR)', requested_by),
+            ('Approved By (IT)', approver),
+            ('Approval Date', approved_at.strftime('%Y-%m-%d %H:%M') if approved_at else ''),
+            ('Tracking Ticket', ticket_ref),
+            ('Ledger Entry', f'command_ledger #{row[0]}'),
+            ('Verification Detail', ver_detail),
+        ]
+        for row_idx, (label, value) in enumerate(rows, 2):
+            ws.cell(row_idx, 1, label).font = Font(bold=True)
+            ws.cell(row_idx, 2, self._sanitize_for_excel(value))
+        ws.column_dimensions['A'].width = 28
+        ws.column_dimensions['B'].width = 60
+
+        self._summary_sheet(wb, [
+            # MST to match the 'Approval Date' above (ledger completed_at is written in
+            # the app's local America/Denver convention via workflow_engine._now()).
+            ('Report Generated', now_mst().strftime('%Y-%m-%d %H:%M MST')),
+            ('Control', 'Provisioning (control 97)'),
+            ('Sampled New Hire', emp_name),
+            ('Segregation of Duties', 'HR requested; IT approved + provisioned'),
+            ('Data Source', 'command_ledger (approved onboard_employee) + employee onboarding request'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'M365')
+        wb.save(file_path)
+        return file_path
+
     def generate_asset_inventory_file(self, evidence_name):
         """Asset inventory from the local asset register, enriched with Intune
         enrollment/compliance where the device is managed.
@@ -2550,6 +2646,11 @@ class EvidenceFileService(EvidenceAzureMixin):
             # --- Assets & Devices ---------------------------------------
             # Asset register enriched with Intune compliance/encryption.
             'Asset Inventory': self.generate_asset_inventory_file,
+
+            # --- Provisioning (control 97) ------------------------------
+            # New-hire access request: samples the latest approved onboard
+            # (HR requested → IT approved + provisioned at /approvals).
+            'Access Request - New Hire': self.generate_access_request_newhire_file,
 
             # --- Antivirus (catalog: per-layer) -------------------------
             # Live endpoint protection state from RMM telemetry.

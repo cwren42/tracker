@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}New-Hire Onboarding Request - Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-md-8 offset-md-2">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h1 class="h3 mb-0"><i class="bi bi-person-plus me-2"></i>New-Hire Onboarding Request</h1>
+      <a href="{{ url_for('employees.employees') }}" class="btn btn-secondary">
+        <i class="bi bi-arrow-left"></i> Back
+      </a>
+    </div>
+
+    <div class="alert alert-info small">
+      <i class="bi bi-shield-check me-1"></i>
+      HR submits the new-hire details here. IT then approves the request at
+      <strong>Approvals</strong> and supplies the AD OU + security groups, which
+      triggers provisioning. No directory changes happen from this form.
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <form method="POST">
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label for="first_name" class="form-label">First name *</label>
+              <input type="text" class="form-control" id="first_name" name="first_name"
+                     value="{{ form.first_name or '' }}" required>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label for="last_name" class="form-label">Last name *</label>
+              <input type="text" class="form-control" id="last_name" name="last_name"
+                     value="{{ form.last_name or '' }}" required>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Email (derived)</label>
+              <input type="text" class="form-control" id="derived_email" readonly
+                     style="background:var(--surface-2);">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">sAMAccountName (derived)</label>
+              <input type="text" class="form-control" id="derived_sam" readonly
+                     style="background:var(--surface-2);">
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label for="job_title" class="form-label">Job title</label>
+              <input type="text" class="form-control" id="job_title" name="job_title"
+                     value="{{ form.job_title or '' }}">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label for="department" class="form-label">Department</label>
+              <input list="dept-list" class="form-control" id="department" name="department"
+                     value="{{ form.department or '' }}" placeholder="Select or type…">
+              <datalist id="dept-list">
+                {% for d in departments %}<option value="{{ d }}">{% endfor %}
+              </datalist>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label for="manager" class="form-label">Manager</label>
+              <input list="mgr-list" class="form-control" id="manager" name="manager"
+                     value="{{ form.manager or '' }}" placeholder="Select or type…">
+              <datalist id="mgr-list">
+                {% for m in managers %}<option value="{{ m }}">{% endfor %}
+              </datalist>
+            </div>
+            <div class="col-md-3 mb-3">
+              <label for="start_date" class="form-label">Start date</label>
+              <input type="date" class="form-control" id="start_date" name="start_date"
+                     value="{{ form.start_date or '' }}">
+            </div>
+            <div class="col-md-3 mb-3">
+              <label for="work_type" class="form-label">Work type</label>
+              <select class="form-select" id="work_type" name="work_type">
+                <option value="">—</option>
+                <option value="remote" {{ 'selected' if form.work_type == 'remote' }}>Remote</option>
+                <option value="local" {{ 'selected' if form.work_type == 'local' }}>Local</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label for="phone" class="form-label">Phone</label>
+              <input type="tel" class="form-control" id="phone" name="phone"
+                     value="{{ form.phone or '' }}">
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label for="notes" class="form-label">Notes (optional)</label>
+            <textarea class="form-control" id="notes" name="notes" rows="2">{{ form.notes or '' }}</textarea>
+          </div>
+
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-send-check"></i> Submit for approval
+          </button>
+          <a href="{{ url_for('employees.employees') }}" class="btn btn-secondary">Cancel</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+  function refresh(){
+    var f = norm(document.getElementById('first_name').value);
+    var l = norm(document.getElementById('last_name').value);
+    var sam = (f && l) ? (f + '.' + l) : (f || l);
+    document.getElementById('derived_sam').value = sam;
+    document.getElementById('derived_email').value = sam ? (sam + '@cirque.com') : '';
+  }
+  ['first_name','last_name'].forEach(function(id){
+    document.getElementById(id).addEventListener('input', refresh);
+  });
+  refresh();
+})();
+</script>
+{% endblock %}

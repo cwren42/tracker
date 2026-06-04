@@ -746,6 +746,52 @@ def delete_employee(employee_id):
     return redirect(url_for('employees.employees'))
 
 
+def verify_and_park_offboards():
+    """Park offboards ONLY for employees AD positively reports as disabled — never on a
+    mere 'absent from the last sync' (a scope gap / partial pull could otherwise flag an
+    active person). For each visible employee currently flagged disabled:
+      * AD says DISABLED -> park a 1-click offboard (confident).
+      * AD says ENABLED  -> false flag; self-heal ad_enabled=True (don't park).
+      * AD says ABSENT/ERROR -> leave for MANUAL review (never auto-offboard).
+    Returns {parked, healed, absent, errors}. Requires an app context."""
+    from ldap_service import LDAPService, load_ad_config
+    import workflow_engine
+    res = {'parked': 0, 'healed': 0, 'absent': 0, 'errors': 0}
+    cfg = load_ad_config(Setting)
+    if not cfg.enabled:
+        return res
+    candidates = Employee.query.filter(
+        Employee.is_visible == True,
+        db.or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False),
+    ).all()
+    if not candidates:
+        return res
+    svc = LDAPService(cfg)
+    try:
+        svc.connect()
+        for e in candidates:
+            ident = e.sam_account_name or e.email
+            state = svc.get_account_state(ident) if ident else 'absent'
+            if state == 'disabled':
+                if workflow_engine.park_offboard(e.id, e.name, reason='AD account disabled (live-verified)'):
+                    res['parked'] += 1
+            elif state == 'enabled':
+                e.ad_enabled = True   # sync false-flagged an active user — self-heal
+                res['healed'] += 1
+            else:  # 'absent' or 'error' — too weak to auto-offboard
+                res['absent' if state == 'absent' else 'errors'] += 1
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception('verify_and_park_offboards failed')
+    finally:
+        try:
+            svc.disconnect()
+        except Exception:
+            pass
+    return res
+
+
 def _offboard_employee(employee, actor='system', actor_email=None):
     """Core offboarding, reusable by the manual button AND the 1-click approval handler:
     unassign assets (-> 'Pending Return' so they surface for collection), return active

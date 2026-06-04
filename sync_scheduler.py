@@ -540,17 +540,9 @@ def run_ad_employee_sync_job(flask_app_instance):
                 res = run_ad_employee_sync()
                 logger.info('Scheduled AD employee sync: %s', res)
                 if not res.get('error'):
-                    from models import Employee
-                    from sqlalchemy import or_
-                    import workflow_engine
-                    disabled = Employee.query.filter(
-                        Employee.is_visible == True,
-                        or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False),
-                    ).all()
-                    parked = sum(1 for e in disabled
-                                 if workflow_engine.park_offboard(e.id, e.name, reason='Directory account disabled'))
-                    logger.info('AD sync offboard parking: %d disabled-but-visible, %d newly parked',
-                                len(disabled), parked)
+                    from blueprints.employees import verify_and_park_offboards
+                    pres = verify_and_park_offboards()  # AD-verified: only positively-disabled park
+                    logger.info('AD sync offboard parking (verified): %s', pres)
             except Exception:
                 logger.exception('AD employee sync job crashed')
             finally:
@@ -571,19 +563,9 @@ def run_employee_offboard_sweep_job(flask_app_instance):
         with flask_app_instance.app_context():
             try:
                 from extensions import db
-                from models import Employee
-                from sqlalchemy import or_
-                import workflow_engine
-                disabled = Employee.query.filter(
-                    Employee.is_visible == True,
-                    or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False),
-                ).all()
-                parked = 0
-                for e in disabled:
-                    if workflow_engine.park_offboard(e.id, e.name, reason='Directory account disabled'):
-                        parked += 1
-                logger.info('Employee offboard sweep: %d disabled-but-visible, %d newly parked',
-                            len(disabled), parked)
+                from blueprints.employees import verify_and_park_offboards
+                pres = verify_and_park_offboards()  # AD-verified: park only positively-disabled
+                logger.info('Employee offboard sweep (verified): %s', pres)
             except Exception:
                 logger.exception('Employee offboard sweep crashed')
             finally:

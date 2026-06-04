@@ -132,6 +132,22 @@ class LDAPService:
             return self.connection.entries[0]
         return None
 
+    def get_account_state(self, username_or_upn: str) -> str:
+        """Live AD account state for offboard verification:
+        'enabled' | 'disabled' | 'absent' | 'error'. 'absent' = not in AD at all
+        (deleted OR outside our search scope) — a WEAK signal we must NOT auto-offboard on."""
+        try:
+            u = self.find_user(username_or_upn)
+            if u is None:
+                return 'absent'
+            uac = u.userAccountControl.value if hasattr(u, 'userAccountControl') else None
+            if uac is None:
+                return 'enabled'
+            return 'disabled' if (int(uac) & 2) else 'enabled'
+        except Exception:
+            logger.exception('get_account_state failed for %s', username_or_upn)
+            return 'error'
+
     def disable_user(self, username_or_upn: str) -> dict:
         try:
             user = self.find_user(username_or_upn)

@@ -40,6 +40,11 @@ OFFBOARD_SWEEP_LOCK_PATH = os.environ.get('TRACKER_OFFBOARD_SWEEP_LOCK_PATH', '/
 OFFBOARD_SWEEP_INTERVAL_HOURS = int(os.environ.get('OFFBOARD_SWEEP_INTERVAL_HOURS', '24'))
 DISABLE_OFFBOARD_SWEEP = os.environ.get('DISABLE_OFFBOARD_SWEEP', '').strip() in ('1', 'true', 'yes', 'on')
 
+# AD/M365 employee sync (refresh ad_enabled etc.) — daily, so disables are detected. Then parks.
+AD_EMPLOYEE_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_EMPLOYEE_SYNC_LOCK_PATH', '/tmp/tracker_ad_employee_sync.lock')
+AD_EMPLOYEE_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_EMPLOYEE_SYNC_INTERVAL_HOURS', '24'))
+DISABLE_AD_EMPLOYEE_SYNC = os.environ.get('DISABLE_AD_EMPLOYEE_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
 DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tmp/tracker_defender_vuln_sync.lock')
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -154,6 +159,19 @@ def start_sync_scheduler(flask_app):
             hours=max(AD_ASSET_SYNC_INTERVAL_HOURS, 1),
             id='ad_asset_sync',
             name='Daily on-prem AD computer sync (AD = source of truth)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+
+    if not DISABLE_AD_EMPLOYEE_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_ad_employee_sync_job(flask_app),
+            trigger='interval',
+            hours=max(AD_EMPLOYEE_SYNC_INTERVAL_HOURS, 1),
+            id='ad_employee_sync',
+            name='Daily AD/M365 employee sync (+park newly-disabled offboards)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -501,6 +519,40 @@ def run_m365_employee_photo_refresh_job(flask_app):
                     pass
 
                 logger.exception('Scheduled M365 employee photo refresh crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_ad_employee_sync_job(flask_app_instance):
+    """Daily: refresh employees from AD/M365 (so disables are detected), then park an
+    offboard (1-click review) for anyone now disabled-but-visible."""
+    with _file_lock(AD_EMPLOYEE_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('AD employee sync already running in another worker — skipping')
+            return
+        with flask_app_instance.app_context():
+            try:
+                from extensions import db
+                from blueprints.employees import run_ad_employee_sync
+                res = run_ad_employee_sync()
+                logger.info('Scheduled AD employee sync: %s', res)
+                if not res.get('error'):
+                    from models import Employee
+                    from sqlalchemy import or_
+                    import workflow_engine
+                    disabled = Employee.query.filter(
+                        Employee.is_visible == True,
+                        or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False),
+                    ).all()
+                    parked = sum(1 for e in disabled
+                                 if workflow_engine.park_offboard(e.id, e.name, reason='Directory account disabled'))
+                    logger.info('AD sync offboard parking: %d disabled-but-visible, %d newly parked',
+                                len(disabled), parked)
+            except Exception:
+                logger.exception('AD employee sync job crashed')
             finally:
                 try:
                     db.session.remove()

@@ -385,40 +385,28 @@ def sync_employees_from_m365():
     return redirect(url_for('employees.employees'))
 
 
-@bp.route('/employees/sync/ad', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def sync_employees_from_ad():
-    """Sync employees from local Active Directory.
-
-    AD is the master:
-      - Every user objectClass=user/objectCategory=person in the configured
-        base-DN is upserted into the Employee table, keyed by objectGUID.
-      - AD always wins on: name, email, department, position, phone,
-        sam_account_name, ad_guid, ad_dn, ad_enabled.
-      - Existing employees without an ad_guid are matched by email as a
-        one-time association, then pinned by objectGUID going forward.
-
-    M365 validation (if configured):
-      - After the AD pass, each employee's UPN is looked up in the Graph
-        API to populate m365_id, m365_account_enabled, m365_validated_at.
-      - Photos are pulled from M365 (or AD thumbnailPhoto as fallback).
-    """
+def run_ad_employee_sync():
+    """Core AD -> employee sync. Callable by the manual route AND the daily scheduler.
+    AD is master (name/email/dept/position/phone/ad_guid/ad_dn/ad_enabled); M365 validates
+    accountEnabled + licenses; stale (removed-from-AD) employees get ad_enabled=False.
+    Returns a result dict {created, updated, skipped, photo_saved, deactivated,
+    m365_validated, error}. Never raises. Requires an app context."""
+    result = {'created': 0, 'updated': 0, 'skipped': 0, 'photo_saved': 0,
+              'deactivated': 0, 'm365_validated': 0, 'error': None}
     try:
         from ldap_service import LDAPService, load_ad_config
         config = load_ad_config(Setting)
         if not config.enabled:
-            flash('Active Directory integration is not enabled. Go to Settings → Directory to configure it.', 'warning')
-            return redirect(url_for('employees.employees'))
+            result['error'] = 'Active Directory integration is not enabled (Settings → Directory).'
+            return result
 
         svc = LDAPService(config)
         ad_users = svc.get_all_users()
         svc.disconnect()
 
         if not ad_users:
-            flash('No users returned from Active Directory — check your base DN and bind credentials.', 'warning')
-            return redirect(url_for('employees.employees'))
+            result['error'] = 'No users returned from AD — check base DN / bind credentials.'
+            return result
 
         # ---- Load M365 users for validation (optional) ----
         m365 = None
@@ -551,19 +539,31 @@ def sync_employees_from_ad():
 
         db.session.commit()
 
-        m365_note = (f', {len(m365_by_upn)} validated against M365'
-                     if m365_by_upn else ' (M365 validation skipped — not configured)')
-        deact_note = f', {deactivated} marked inactive (removed from AD)' if deactivated else ''
-        flash(
-            f'AD sync complete: {created} added, {updated} updated, '
-            f'{skipped} skipped, {photo_saved} photos saved{deact_note}{m365_note}.',
-            'success',
-        )
+        result.update({'created': created, 'updated': updated, 'skipped': skipped,
+                       'photo_saved': photo_saved, 'deactivated': deactivated,
+                       'm365_validated': len(m365_by_upn)})
 
     except Exception as e:
         db.session.rollback()
-        flash(f'AD sync error: {e}', 'danger')
+        result['error'] = str(e)
+    return result
 
+
+@bp.route('/employees/sync/ad', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def sync_employees_from_ad():
+    """Manual AD employee sync (also runs daily via the scheduler)."""
+    r = run_ad_employee_sync()
+    if r.get('error'):
+        flash(f"AD sync: {r['error']}", 'warning')
+    else:
+        m365_note = (f", {r['m365_validated']} validated against M365"
+                     if r['m365_validated'] else ' (M365 validation skipped)')
+        deact_note = f", {r['deactivated']} marked inactive (removed from AD)" if r['deactivated'] else ''
+        flash(f"AD sync complete: {r['created']} added, {r['updated']} updated, "
+              f"{r['skipped']} skipped, {r['photo_saved']} photos saved{deact_note}{m365_note}.", 'success')
     return redirect(url_for('employees.employees'))
 
 

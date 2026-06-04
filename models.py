@@ -86,6 +86,13 @@ class Employee(db.Model):
     # Display / org fields
     is_visible = db.Column(db.Boolean, default=True, nullable=False, server_default='true')
     location = db.Column(db.String(100))            # Cirque US / Cirque Taiwan / Cirque China
+    # New-hire onboarding / access-request fields (HR-supplied at request time;
+    # onboard_status: 'requested' (HR submitted) -> 'provisioned' (IT approved + AD created)).
+    job_title = db.Column(db.String(150))
+    manager = db.Column(db.String(150))
+    start_date = db.Column(db.Date)
+    work_type = db.Column(db.String(20))            # 'remote' / 'local'
+    onboard_status = db.Column(db.String(20))       # 'requested' / 'provisioned'
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
 
 class Asset(db.Model):

@@ -934,6 +934,9 @@ def _ledger_display(row, asset_names=None):
     elif at == 'offboard_employee':
         label = 'Offboard employee'
         summary = ctx.get('employee_name') or rp.get('node_label') or ''
+    elif at == 'onboard_employee':
+        label = 'Onboard new hire'
+        summary = ctx.get('employee_name') or rp.get('node_label') or ''
     else:
         label = rp.get('node_label') or at.replace('_', ' ').title()
         summary = rp.get('node_label') or ''
@@ -954,6 +957,8 @@ def _ledger_display(row, asset_names=None):
                 'verdict': ctx.get('ai_verdict'), 'rationale': ctx.get('ai_rationale')}
                if ctx.get('ai_recommended') else None),
         'policy': bs.get('policy', ''), 'params': params,
+        'is_onboard': at == 'onboard_employee',
+        'onboard': (bs.get('onboard') if at == 'onboard_employee' else None),
         'ledger_url': url_for('dashboard.ledger_detail', row_id=row.id),
     }
 
@@ -1015,9 +1020,36 @@ def approvals():
     resolved, has_more = _query_resolved()
     types = sorted({i['action_type'] for i in pending + resolved if i['action_type']})
     devices = sorted({i['device'] for i in pending + resolved if i['device']})
+    # Only hit AD for OU/group pickers when there's actually an onboard awaiting
+    # approval (fail-soft: empty lists degrade the card to a notice, never 500s).
+    ad_ous, ad_groups = [], []
+    if any(i.get('is_onboard') for i in pending):
+        ad_ous, ad_groups = _onboard_directory_options()
     return render_template('approvals.html', pending=pending, resolved=resolved,
                            has_more=has_more, types=types, devices=devices,
-                           history_days=APPROVALS_HISTORY_DAYS)
+                           history_days=APPROVALS_HISTORY_DAYS,
+                           ad_ous=ad_ous, ad_groups=ad_groups)
+
+
+def _onboard_directory_options():
+    """Read-only OU + group lists for the onboarding approval card. list_ous resolves
+    its base from config.user_ou_dn (Setting ad_user_ou_dn) or derives
+    OU=CirqueUsers,<base_dn>; list_groups uses Setting ad_groups_ou_dn when set, else
+    derives OU=CirqueGroups,<base_dn>. Both fail-soft to []."""
+    try:
+        from models import Setting
+        from ldap_service import LDAPService, load_ad_config
+        cfg = load_ad_config(Setting)
+        if not cfg.enabled:
+            return [], []
+        svc = LDAPService(cfg)
+        ous = svc.list_ous()
+        groups_base = Setting.query.filter_by(key='ad_groups_ou_dn').first()
+        groups = svc.list_groups(groups_base.value if groups_base and groups_base.value else None)
+        return ous, groups
+    except Exception:
+        current_app.logger.exception('onboard directory options failed')
+        return [], []
 
 
 @bp.route('/api/approvals/list')
@@ -1129,6 +1161,32 @@ def resolve_email(row_id):
             return jsonify({'ok': False, 'error': info.get('error', 'Could not resolve.')}), 409
         return jsonify({'ok': True, 'running': True, 'mode': info.get('mode')})
     flash(info.get('error') or f"Resolving ({mode})…", 'warning' if not claimed else 'success')
+    return redirect(url_for('dashboard.approvals'))
+
+
+@bp.route('/approvals/<int:row_id>/approve-onboard', methods=['POST'])
+@login_required
+@admin_required
+def approve_onboard(row_id):
+    """Approve a parked onboard_employee request with the IT-supplied OU + groups.
+    Threads ou_dn + group_dns[] into workflow_engine.resolve_onboard, which merges
+    them into the parked replay config and runs the provisioning in the background."""
+    import workflow_engine
+    approver = current_user.username or current_user.email or f'user#{current_user.id}'
+    data = request.get_json(silent=True) or {}
+    ou_dn = (data.get('ou_dn') or '').strip()
+    group_dns = data.get('group_dns') or []
+    if isinstance(group_dns, str):
+        group_dns = [group_dns]
+    claimed, info = workflow_engine.resolve_onboard(row_id, approver, ou_dn, group_dns)
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        if not claimed:
+            return jsonify({'ok': False, 'error': info.get('error', 'Could not approve.')}), 409
+        if info.get('error'):
+            return jsonify({'ok': False, 'error': info['error']}), 400
+        return jsonify({'ok': True, 'running': True})
+    flash(info.get('error') or 'Provisioning the new hire…',
+          'warning' if (not claimed or info.get('error')) else 'success')
     return redirect(url_for('dashboard.approvals'))
 
 

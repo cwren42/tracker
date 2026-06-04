@@ -82,6 +82,7 @@ const ICON={release_quarantine:'bi-envelope-exclamation',install_local_tool:'bi-
 const S={
   pending: {{ pending|tojson }}, resolved: {{ resolved|tojson }}, hasMore: {{ has_more|tojson }},
   types: {{ types|tojson }}, devices: {{ devices|tojson }}, historyDays: {{ history_days|tojson }},
+  adOus: {{ ad_ous|tojson }}, adGroups: {{ ad_groups|tojson }},
   selected:new Set(), filters:{type:'',risk:'',device:'',q:''}, hq:'', offset: {{ resolved|length }},
   view: (localStorage.getItem('apprView')||'list')
 };
@@ -126,6 +127,34 @@ function detailBlock(it){
       +'<div class="text-muted"><i class="bi bi-pc-display me-1"></i>'+esc(it.device)+' · runs as SYSTEM</div>'
       +'<div class="form-text mt-1">Runs a vetted library fix as SYSTEM. Approving closes the linked ticket on success.</div></div>';
   }
+  if(it.is_onboard){
+    var o=it.onboard||{};
+    var rows=[['Email',o.email],['sAMAccountName',o.sam],['Department',o.dept],['Job title',o.title],
+              ['Manager',o.manager],['Start date',o.start],['Work type',o.work_type],['Phone',o.phone]];
+    var hr='<div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">'
+      +'<div class="mb-1"><i class="bi bi-person-badge me-1"></i><strong>'+esc(o.name||it.summary)+'</strong> <span class="text-muted">(HR-submitted)</span></div>';
+    rows.forEach(function(r){ if(r[1]) hr+='<div class="text-muted">'+esc(r[0])+': <span style="color:var(--text)">'+esc(r[1])+'</span></div>'; });
+    if(o.notes) hr+='<div class="mt-1 pt-1 text-muted" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i>'+esc(o.notes)+'</div>';
+    hr+='</div>';
+    // IT-supplied provisioning inputs
+    var ouOpts='<option value="">— select target OU —</option>';
+    (S.adOus||[]).forEach(function(ou){ ouOpts+='<option value="'+esc(ou.dn)+'">'+esc(ou.name)+'</option>'; });
+    var grpOpts='';
+    (S.adGroups||[]).forEach(function(g){ grpOpts+='<option value="'+esc(g.dn)+'">'+esc(g.name)+'</option>'; });
+    var noAd=(!(S.adOus||[]).length || !(S.adGroups||[]).length);
+    var prov='<div class="small mb-2 p-2" style="background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);">'
+      +'<div class="fw-semibold mb-1"><i class="bi bi-diagram-3 me-1"></i>IT: choose AD placement</div>';
+    if(noAd){
+      prov+='<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Directory unreachable or empty — OU/group lists could not load. Check AD settings, then reload.</div>';
+    } else {
+      prov+='<div class="mb-2"><label class="form-label mb-1">Target OU</label>'
+        +'<select class="form-select form-select-sm" id="onboard-ou-'+it.id+'">'+ouOpts+'</select></div>'
+        +'<div class="mb-1"><label class="form-label mb-1">Security groups (Ctrl/Cmd-click for multiple)</label>'
+        +'<select multiple size="6" class="form-select form-select-sm" id="onboard-groups-'+it.id+'">'+grpOpts+'</select></div>';
+    }
+    prov+='<div class="form-text mt-1"><i class="bi bi-list-check me-1"></i>IT: assign + provision asset (manual)</div></div>';
+    return hr+prov;
+  }
   return '';
 }
 function paramsBlock(it){
@@ -139,6 +168,9 @@ function actionsBlock(it){
     if(it.is_quarantined) h+='<button class="btn btn-sm btn-success" onclick="resolveEmailOne('+it.id+",'release')\"><i class=\"bi bi-inbox me-1\"></i>Release message</button>";
     h+='<button class="btn btn-sm btn-primary" onclick="resolveEmailOne('+it.id+",'whitelist_domain')\"><i class=\"bi bi-shield-check me-1\"></i>Whitelist domain</button>";
     h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm" style="max-width:170px;" placeholder="Reason (optional)">';
+  } else if(it.is_onboard){
+    h+='<button class="btn btn-sm btn-primary" onclick="approveOnboard('+it.id+')"><i class="bi bi-person-check me-1"></i>Approve &amp; provision</button>';
+    h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm flex-grow-1" placeholder="Reason (optional)">';
   } else {
     h+='<button class="btn btn-sm btn-primary" onclick="approveOne('+it.id+',\''+esc(it.risk_tier)+'\')"><i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>';
     h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm flex-grow-1" placeholder="Reason (optional)">';
@@ -176,6 +208,7 @@ function listRowHtml(it){
     +'<span class="small text-muted">#'+it.id+' · '+ageBadge(it.created_at)+'</span></div>'
     +(it.effect?'<div class="appr-effect-li small text-muted"><strong style="color:var(--text)">If approved:</strong> '+esc(it.effect)+'</div>':'')
     +(it.policy?'<div class="small" style="color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+'"><i class="bi bi-shield-exclamation me-1"></i>'+esc(it.policy)+'</div>':'')
+    +(it.is_onboard?detailBlock(it):'')
     +'</div></div>'
     +actionsBlock(it)
     +'</div></div>';
@@ -199,7 +232,7 @@ function renderPending(){
 function renderBulkbar(){
   var n=S.selected.size, el=document.getElementById('bulkbar');
   if(!n){ el.innerHTML=''; return; }
-  var sel=[...S.selected].map(findItem).filter(Boolean), anyEmail=sel.some(i=>i.is_email);
+  var sel=[...S.selected].map(findItem).filter(Boolean), anyEmail=sel.some(i=>i.is_email||i.is_onboard);
   el.innerHTML='<div class="appr-bulkbar"><span><strong>'+n+'</strong> selected</span>'
     +'<button class="btn btn-sm btn-primary"'+(anyEmail?' disabled title="Email items need release/whitelist — handle each"':'')+' onclick="bulkAction(\'approve\')"><i class="bi bi-check-lg me-1"></i>Approve</button>'
     +'<button class="btn btn-sm btn-outline-secondary" onclick="bulkAction(\'deny\')"><i class="bi bi-x-lg me-1"></i>Deny</button>'
@@ -277,6 +310,15 @@ function _fail(id,m){var r=_res(id);if(r)r.innerHTML='<span class="text-warning"
 
 function approveOne(id,tier){ if(!confirm('Approve and run this '+tier+'-risk action on the endpoint?'))return; _busy(id,'Running…');
   fetch('/approvals/'+id+'/approve',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not approve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
+function approveOnboard(id){
+  var ou=(document.getElementById('onboard-ou-'+id)||{}).value||'';
+  var gsel=document.getElementById('onboard-groups-'+id);
+  var groups=gsel?[...gsel.selectedOptions].map(o=>o.value):[];
+  if(!ou){_fail(id,'Select a target OU first.');return;}
+  if(!groups.length){_fail(id,'Select at least one security group first.');return;}
+  if(!confirm('Approve & provision this new hire in AD? This creates the account and grants '+groups.length+' group(s).'))return;
+  _busy(id,'Provisioning…');
+  fetch('/approvals/'+id+'/approve-onboard',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:JSON.stringify({ou_dn:ou,group_dns:groups})}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not approve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
 function resolveEmailOne(id,mode){ var lbl={release:'release this message to the inbox',whitelist_domain:'whitelist the sender domain (live Exchange change)'}; if(!confirm('Confirm: '+(lbl[mode]||mode)+'?'))return; _busy(id,'Working…');
   fetch('/approvals/'+id+'/resolve-email',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:JSON.stringify({mode:mode})}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not resolve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
 function denyOne(id){ var reason=(document.getElementById('deny-reason-'+id)||{}).value||''; _busy(id,'Denying…');
@@ -289,7 +331,7 @@ function pollOne(id,tries){ fetch('/api/approvals/'+id+'/status').then(r=>r.json
     else setTimeout(()=>pollOne(id,tries+1),1500);
   }).catch(()=>setTimeout(()=>pollOne(id,tries+1),2000)); }
 function bulkAction(action){ var ids=[...S.selected].map(findItem).filter(Boolean);
-  if(action==='approve')ids=ids.filter(i=>!i.is_email); ids=ids.map(i=>i.id);
+  if(action==='approve')ids=ids.filter(i=>!i.is_email&&!i.is_onboard); ids=ids.map(i=>i.id);
   if(!ids.length){alert('Nothing applicable selected.');return;}
   var reason=''; if(action==='deny'){reason=prompt('Deny '+ids.length+' item(s) — reason (optional):','')||'';} else if(!confirm('Approve & run '+ids.length+' action(s)?'))return;
   fetch('/approvals/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,action:action,reason:reason})}).then(r=>r.json()).then(function(d){

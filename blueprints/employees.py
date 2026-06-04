@@ -602,6 +602,154 @@ def add_employee():
     return render_template('add_employee.html')
 
 
+def _onboard_derive(first_name, last_name):
+    """Derive email + sAMAccountName from a new-hire's name, matching the existing
+    convention (corwin.hudson@cirque.com / corwin.hudson). Lowercase, '.'-joined,
+    non-alnum stripped. Returns (email, sam)."""
+    f = re.sub(r'[^a-z0-9]', '', (first_name or '').strip().lower())
+    l = re.sub(r'[^a-z0-9]', '', (last_name or '').strip().lower())
+    sam = f"{f}.{l}".strip('.')
+    email = f"{sam}@cirque.com" if sam else ''
+    return email, sam
+
+
+# Department options — the real OU leaves under CirqueUS (free-text 'Other' allowed).
+ONBOARD_DEPARTMENTS = ['Admin', 'Engineering', 'Executive', 'Finance', 'HR', 'IT',
+                       'Management', 'Production']
+
+
+@bp.route('/employees/onboard-request', methods=['GET', 'POST'])
+@login_required
+@manager_required
+@license_required
+def onboard_request():
+    """New-hire onboarding / access-request intake (segregation of duties: HR submits
+    the people data here; IT approves at /approvals and supplies the AD OU + groups,
+    which triggers real provisioning).
+
+    NOTE: there is no dedicated HR role in this app, so this is gated to
+    @manager_required (the same decorator other employee write-routes use). If an HR
+    role is added later, swap the decorator.
+
+    On submit this creates the Employee row (onboard_status='requested'), parks a
+    high-risk onboard_employee approval, and opens an [ONBOARD] tracking ticket.
+    It does NOT touch AD — provisioning only happens when IT approves at /approvals."""
+    if request.method == 'POST':
+        first_name = (request.form.get('first_name') or '').strip()
+        last_name  = (request.form.get('last_name') or '').strip()
+        job_title  = (request.form.get('job_title') or '').strip() or None
+        manager    = (request.form.get('manager') or '').strip() or None
+        department = (request.form.get('department') or '').strip() or None
+        work_type  = (request.form.get('work_type') or '').strip().lower() or None
+        phone      = (request.form.get('phone') or '').strip() or None
+        notes      = (request.form.get('notes') or '').strip()
+        start_raw  = (request.form.get('start_date') or '').strip()
+
+        if not first_name or not last_name:
+            flash('First and last name are required.', 'danger')
+            return render_template('onboard_request.html', departments=ONBOARD_DEPARTMENTS,
+                                   managers=_active_managers(), form=request.form)
+
+        start_date = None
+        if start_raw:
+            try:
+                start_date = datetime.strptime(start_raw, '%Y-%m-%d').date()
+            except ValueError:
+                flash('Invalid start date.', 'danger')
+                return render_template('onboard_request.html', departments=ONBOARD_DEPARTMENTS,
+                                       managers=_active_managers(), form=request.form)
+
+        if work_type not in (None, 'remote', 'local'):
+            work_type = None
+
+        email, sam = _onboard_derive(first_name, last_name)
+        full_name = f"{first_name} {last_name}".strip()
+
+        # Empty unique field -> NULL (avoid a unique-constraint clash on '').
+        email = email or None
+        existing = Employee.query.filter_by(email=email).first() if email else None
+        if existing:
+            flash(f'An employee with email {email} already exists ({existing.name}).', 'danger')
+            return render_template('onboard_request.html', departments=ONBOARD_DEPARTMENTS,
+                                   managers=_active_managers(), form=request.form)
+
+        requested_by = current_user.username or current_user.email or f'user#{current_user.id}'
+        try:
+            employee = Employee(
+                name=full_name, email=email, department=department, phone=phone,
+                job_title=job_title, manager=manager, start_date=start_date,
+                work_type=work_type, sam_account_name=(sam or None),
+                onboard_status='requested', is_visible=True,
+            )
+            db.session.add(employee)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error creating onboarding request: {e}', 'danger')
+            return render_template('onboard_request.html', departments=ONBOARD_DEPARTMENTS,
+                                   managers=_active_managers(), form=request.form)
+
+        # Park the high-risk onboard approval for IT (creates a pending command_ledger row).
+        payload = {
+            'name': full_name, 'email': email or '', 'sam': sam or '',
+            'dept': department or '', 'title': job_title or '', 'manager': manager or '',
+            'start': start_raw or '', 'work_type': work_type or '', 'phone': phone or '',
+            'notes': notes,
+        }
+        led_id = None
+        try:
+            import workflow_engine
+            led_id = workflow_engine.park_onboard(employee.id, requested_by=requested_by, payload=payload)
+        except Exception:
+            current_app.logger.exception('park_onboard failed for employee %s', employee.id)
+
+        # [ONBOARD] tracking ticket (category HR / Onboarding; source system).
+        try:
+            checklist = (
+                f"## New-Hire Onboarding / Access Request\n\n"
+                f"**Name:** {full_name}\n"
+                f"**Email (derived):** {email or 'n/a'}\n"
+                f"**sAMAccountName (derived):** {sam or 'n/a'}\n"
+                f"**Department:** {department or 'N/A'}\n"
+                f"**Job title:** {job_title or 'N/A'}\n"
+                f"**Manager:** {manager or 'N/A'}\n"
+                f"**Start date:** {start_raw or 'N/A'}\n"
+                f"**Work type:** {work_type or 'N/A'}\n"
+                f"**Requested by:** {requested_by}\n\n"
+                + (f"**Notes:** {notes}\n\n" if notes else "")
+                + "### Next step\n"
+                "- [ ] IT: approve at /approvals — supply the AD OU + security groups (triggers provisioning)\n"
+                "- [ ] IT: assign + provision asset (manual)\n"
+            )
+            ticket = SupportTicket(
+                status='Open', priority='Normal', source='system',
+                category='HR / Onboarding',
+                subject=f'[ONBOARD] {full_name} — New-Hire Access Request',
+                description=checklist,
+                reporter_name=requested_by, reporter_email=current_user.email,
+                created_at=now_mst(), updated_at=now_mst())
+            db.session.add(ticket)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('onboard tracking ticket failed for employee %s', employee.id)
+
+        if led_id:
+            flash('Onboarding request submitted for approval.', 'success')
+        else:
+            flash('Onboarding request saved, but an approval may already be parked for this hire.', 'warning')
+        return redirect(url_for('employees.employees'))
+
+    return render_template('onboard_request.html', departments=ONBOARD_DEPARTMENTS,
+                           managers=_active_managers(), form={})
+
+
+def _active_managers():
+    """Active, visible employees for the manager dropdown (free text also allowed)."""
+    return [e.name for e in Employee.query.filter(Employee.is_visible == True)
+            .order_by(Employee.name).all() if e.name]
+
+
 @bp.route('/employees/<int:employee_id>')
 @login_required
 @license_required

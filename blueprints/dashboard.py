@@ -838,7 +838,9 @@ def _asset_name_map(rows):
         bs = r.before_state if isinstance(r.before_state, dict) else {}
         ctx = ((bs or {}).get('replay') or {}).get('ctx') or {}
         aid = ctx.get('asset_id')
-        if not aid and str(r.object_id or '').isdigit():
+        # Only treat a bare object_id as an asset id for asset-scoped actions — an
+        # offboard's object_id is an EMPLOYEE id and must NOT resolve to an asset name.
+        if not aid and str(r.object_id or '').isdigit() and (r.object_type or 'asset') == 'asset':
             aid = r.object_id
         if aid is not None:
             try:
@@ -864,9 +866,12 @@ def _ledger_display(row, asset_names=None):
     params = {k: ('[redacted]' if any(s in k.lower() for s in _SENS_KEYS) else v)
               for k, v in cfg.items() if not k.startswith('_')}
     device = ctx.get('hostname') or ''
+    if not device and (row.object_type == 'employee' or at == 'offboard_employee'):
+        # Employee-scoped action → target is the person, never an asset.
+        device = ctx.get('employee_name') or ('employee #' + str(row.object_id or ''))
     if not device:
         aid = ctx.get('asset_id')
-        if not aid and str(row.object_id or '').isdigit():
+        if not aid and str(row.object_id or '').isdigit() and (row.object_type or 'asset') == 'asset':
             aid = row.object_id
         try:
             aid_i = int(aid) if aid is not None else None
@@ -890,6 +895,9 @@ def _ledger_display(row, asset_names=None):
     elif at == 'unlock_account':
         label = 'Unlock account'
         summary = ctx.get('username') or ctx.get('upn') or ''
+    elif at == 'offboard_employee':
+        label = 'Offboard employee'
+        summary = ctx.get('employee_name') or rp.get('node_label') or ''
     else:
         label = rp.get('node_label') or at.replace('_', ' ').title()
         summary = rp.get('node_label') or ''

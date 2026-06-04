@@ -441,7 +441,12 @@ def perform_intune_asset_sync():
                         asset.hardware_mac_ethernet = eth_mac
                         asset.azure_ad_device_id = device.get('azureADDeviceId')
 
-                        if employee:
+                        # Only (re)assign to an ACTIVE employee. A device whose Intune
+                        # primary user has departed (hidden / AD-disabled) must NOT be
+                        # auto-assigned back to them — that previously reverted a manual
+                        # reassignment and then swept the device into the prior owner's
+                        # offboard (e.g. bao-msi reverting from Bao back to a departed Jax).
+                        if employee and getattr(employee, 'is_visible', True) and employee.ad_enabled is not False:
                             if not asset.employee_id:
                                 asset.employee_id = employee.id
                                 asset.status = 'In Use'

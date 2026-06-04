@@ -160,6 +160,15 @@
                             {% else %}
                             <span class="text-muted">No artifact linked yet</span>
                             {% endif %}
+                            {% if item.can_generate %}
+                            <form method="post" action="{{ url_for('readiness.generate_automated_evidence_item') }}" class="mt-2">
+                                <input type="hidden" name="evidence_name" value="{{ item.evidence.evidence_name }}">
+                                <input type="hidden" name="control_id" value="{{ control.id }}">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-arrow-repeat"></i> Generate now
+                                </button>
+                            </form>
+                            {% endif %}
                         </td>
                         <td>
                             {% if item.has_artifact %}

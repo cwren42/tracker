@@ -22,6 +22,7 @@ EVIDENCE_CACHE_DIRS = {
     'M365/Defender': '/var/www/tracker/static/evidence/M365/Defender',
     'ISMS': '/var/www/tracker/static/evidence/isms',
     'TeamViewer': '/var/www/tracker/static/evidence/teamviewer',
+    'RMM': '/var/www/tracker/static/evidence/rmm',
 }
 
 

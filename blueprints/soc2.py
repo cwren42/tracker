@@ -54,6 +54,7 @@ EVIDENCE_CACHE_DIRS = {
     'M365/Defender': '/var/www/tracker/static/evidence/M365/Defender',
     'ISMS': '/var/www/tracker/static/evidence/isms',
     'TeamViewer': '/var/www/tracker/static/evidence/teamviewer',
+    'RMM': '/var/www/tracker/static/evidence/rmm',
 }
 
 
@@ -392,6 +393,9 @@ def soc2_evidence(control_id):
     """View evidence history for a specific control"""
     control = SOC2Control.query.get_or_404(control_id)
 
+    from blueprints.readiness import AUTOMATED_EVIDENCE_EXPORTS
+    generatable_names = {item['evidence_name'] for item in AUTOMATED_EVIDENCE_EXPORTS}
+
     linked_evidence = []
     for evidence_item in StrikeGraphEvidence.query.filter_by(control_id=control_id).order_by(StrikeGraphEvidence.evidence_name.asc()).all():
         resolved_path = _resolve_evidence_file_path(evidence_item.file_path)
@@ -402,6 +406,7 @@ def soc2_evidence(control_id):
             'artifact_path': artifact_path,
             'artifact_url': _evidence_file_to_static_url(artifact_path),
             'has_artifact': bool(artifact_path),
+            'can_generate': evidence_item.evidence_name in generatable_names,
         })
 
     # Get all snapshots for this control, newest first

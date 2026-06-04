@@ -36,37 +36,42 @@ from utils import admin_required
 bp = Blueprint('readiness', __name__)
 
 
+# Auto-collectable evidence, reconciled to the current 93-item StrikeGraphEvidence
+# catalog (rebuild commits 5a4c9e7/34aac23/1eda2ba). Each entry's evidence_name
+# is a real catalog row; the generator is wired in
+# EvidenceFileService.generate_evidence_file_by_name. The 'category' selects the
+# on-disk cache directory used to detect previously generated artifacts.
 AUTOMATED_EVIDENCE_EXPORTS = [
-    {'evidence_name': 'User Access List', 'zip_path': 'automated_evidence/m365_user_access_list.xlsx', 'category': 'M365'},
-    {'evidence_name': 'Administrator Access to Network/Cloud', 'zip_path': 'automated_evidence/m365_admin_access.xlsx', 'category': 'M365'},
-    {'evidence_name': 'MFA Status Report', 'zip_path': 'automated_evidence/m365_mfa_status.xlsx', 'category': 'M365'},
-    {'evidence_name': 'Conditional Access Policy Report', 'zip_path': 'automated_evidence/m365_conditional_access.xlsx', 'category': 'M365'},
-    {'evidence_name': 'Password Settings - Network/Cloud', 'zip_path': 'automated_evidence/m365_password_policy.xlsx', 'category': 'M365'},
-    {'evidence_name': 'Asset Inventory', 'zip_path': 'automated_evidence/intune_asset_inventory.xlsx', 'category': 'Intune'},
-    {'evidence_name': 'Device Disk Encryption', 'zip_path': 'automated_evidence/intune_disk_encryption.xlsx', 'category': 'Intune'},
-    {'evidence_name': 'Antivirus Configuration - Workstation', 'zip_path': 'automated_evidence/defender_antivirus_configuration.xlsx', 'category': 'Defender'},
-    {'evidence_name': 'Vulnerability Scan Results', 'zip_path': 'automated_evidence/defender_vulnerability_scan.xlsx', 'category': 'Defender'},
-    {'evidence_name': 'Patch Scan', 'zip_path': 'automated_evidence/defender_patch_scan.xlsx', 'category': 'Defender'},
-    {'evidence_name': 'Security Incident Report', 'zip_path': 'automated_evidence/defender_security_incidents.xlsx', 'category': 'Defender'},
-    {'evidence_name': 'Security Alert Report', 'zip_path': 'automated_evidence/defender_security_alerts.xlsx', 'category': 'Defender'},
-    {'evidence_name': 'Software Inventory by Asset', 'zip_path': 'automated_evidence/defender_software_inventory.xlsx', 'category': 'Defender'},
+    # M365 / Intune (identity, devices)
+    {'evidence_name': 'Administrator Access to Application', 'zip_path': 'automated_evidence/admin_access_application.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Administrator Access to Database', 'zip_path': 'automated_evidence/admin_access_database.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Administrator Access to Network/Cloud', 'zip_path': 'automated_evidence/admin_access_network_cloud.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Administrator Access to Operating System', 'zip_path': 'automated_evidence/admin_access_os.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Application User List', 'zip_path': 'automated_evidence/application_user_list.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Database User List', 'zip_path': 'automated_evidence/database_user_list.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Network/Cloud User List', 'zip_path': 'automated_evidence/network_cloud_user_list.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Operating System User List', 'zip_path': 'automated_evidence/os_user_list.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Asset Inventory', 'zip_path': 'automated_evidence/asset_inventory.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Device Disk Encryption', 'zip_path': 'automated_evidence/device_disk_encryption.xlsx', 'category': 'M365'},
+    # RMM-backed (endpoint protection, vulnerability, patch)
+    {'evidence_name': 'Antivirus Configuration - Workstation', 'zip_path': 'automated_evidence/antivirus_workstation.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Antivirus Configuration - Server', 'zip_path': 'automated_evidence/antivirus_server.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Vulnerability Scan Results', 'zip_path': 'automated_evidence/vulnerability_scan_results.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Vulnerability Remediation', 'zip_path': 'automated_evidence/vulnerability_remediation.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Patch Scan', 'zip_path': 'automated_evidence/patch_scan.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Server Scan and Patch', 'zip_path': 'automated_evidence/server_scan_and_patch.xlsx', 'category': 'RMM'},
 ]
 
 
-EMPTY_AUTOMATED_EVIDENCE_DETAILS = {
-    'Security Incident Report': ('attention', 'Live API access is unavailable for Defender incidents. Review cached evidence or permissions.'),
-    'Security Alert Report': ('attention', 'Live API access is unavailable for Defender alerts. Review cached evidence or permissions.'),
-}
+EMPTY_AUTOMATED_EVIDENCE_DETAILS = {}
 
-LIVE_REFRESH_EXCLUDED = {
-    'MFA Status Report': 'Using cached status because Microsoft Graph MFA collection is too slow for interactive refresh.',
-    'Software Inventory by Asset': 'Using cached status because software inventory refresh is too slow for interactive refresh.',
-}
+LIVE_REFRESH_EXCLUDED = {}
 
 AUTOMATED_EVIDENCE_CACHE_DIRS = {
     'M365': '/var/www/tracker/static/evidence/m365',
     'Intune': '/var/www/tracker/static/evidence/m365',
     'Defender': '/var/www/tracker/static/evidence/M365/Defender',
+    'RMM': '/var/www/tracker/static/evidence/rmm',
 }
 
 
@@ -180,6 +185,31 @@ def _find_cached_evidence_file(item):
     return max(candidates, key=os.path.getmtime)
 
 
+def _evidence_static_url(file_path):
+    static_prefix = '/var/www/tracker/static/'
+    if file_path and file_path.startswith(static_prefix):
+        return '/static/' + file_path[len(static_prefix):]
+    return None
+
+
+def _attach_artifact_links(results):
+    """Annotate automation-status result rows with a download URL/name for the
+    most recent cached artifact, so the UI can offer a download control."""
+    export_by_name = {item['evidence_name']: item for item in AUTOMATED_EVIDENCE_EXPORTS}
+    for row in results:
+        export_item = export_by_name.get(row['evidence_name'])
+        artifact_url = None
+        artifact_name = None
+        if export_item:
+            cached = _find_cached_evidence_file(export_item)
+            if cached and os.path.exists(cached):
+                artifact_url = _evidence_static_url(cached)
+                artifact_name = os.path.basename(cached)
+        row['artifact_url'] = artifact_url
+        row['artifact_name'] = artifact_name
+    return results
+
+
 def _summarize_automated_evidence_results(results):
     return {
         'total': len(results),
@@ -199,7 +229,8 @@ def _collect_automated_evidence_exports(archive=None):
 
     for item in AUTOMATED_EVIDENCE_EXPORTS:
         try:
-            file_path = evidence_service.generate_evidence_file_by_name(item['evidence_name'])
+            result = evidence_service.generate_and_record(item['evidence_name'])
+            file_path = result.get('file_path')
             if file_path and os.path.exists(file_path):
                 if archive is not None:
                     archive.write(file_path, item['zip_path'])
@@ -309,7 +340,8 @@ def _collect_interactive_live_automation_results():
             continue
 
         try:
-            file_path = evidence_service.generate_evidence_file_by_name(item['evidence_name'])
+            result = evidence_service.generate_and_record(item['evidence_name'])
+            file_path = result.get('file_path')
             if file_path and os.path.exists(file_path):
                 status, detail = _inspect_evidence_file(file_path, item['evidence_name'])
                 generated_at = datetime.utcfromtimestamp(os.path.getmtime(file_path))
@@ -419,6 +451,7 @@ def automation_status_dashboard():
         automated_evidence_results, cached_generated_at = _collect_cached_automated_evidence_results()
         generated_at = cached_generated_at.strftime('%Y-%m-%d %H:%M:%S UTC') if cached_generated_at else 'No cached run yet'
         source_label = 'cached files'
+    _attach_artifact_links(automated_evidence_results)
     automated_evidence_results.sort(key=lambda item: (item['status'] == 'exported', item['category'], item['evidence_name']))
     return render_template(
         'soc2_readiness_automation_status.html',
@@ -428,6 +461,45 @@ def automation_status_dashboard():
         source_label=source_label,
         refresh_live=refresh_live,
     )
+
+
+@bp.route('/soc2/readiness/automation-status/generate', methods=['POST'])
+@login_required
+@admin_required
+def generate_automated_evidence_item():
+    """Generate a single auto-collectable evidence artifact on demand and stamp
+    it back to the catalog (StrikeGraphEvidence + EvidenceSnapshot audit row)."""
+    from evidence_file_service import EvidenceFileService
+
+    evidence_name = (request.form.get('evidence_name') or '').strip()
+    return_control_id = (request.form.get('control_id') or '').strip()
+
+    def _back():
+        if return_control_id.isdigit():
+            return redirect(url_for('soc2.soc2_evidence', control_id=int(return_control_id)))
+        return redirect(url_for('readiness.automation_status_dashboard'))
+
+    valid_names = {item['evidence_name'] for item in AUTOMATED_EVIDENCE_EXPORTS}
+    if evidence_name not in valid_names:
+        flash('Unknown or non-automatable evidence item.', 'danger')
+        return _back()
+
+    collected_by = getattr(current_user, 'email', None) or getattr(current_user, 'username', 'admin')
+    try:
+        result = EvidenceFileService().generate_and_record(evidence_name, collected_by=collected_by)
+    except Exception as exc:  # pragma: no cover - surfaced to the operator
+        db.session.rollback()
+        flash(f'Failed to generate "{evidence_name}": {exc}', 'danger')
+        return _back()
+
+    if result.get('file_path'):
+        count = result.get('record_count')
+        count_text = f' ({count} rows)' if count is not None else ''
+        stamped = 'and recorded to the catalog' if result.get('stamped') else 'but the catalog row was not found'
+        flash(f'Generated "{evidence_name}"{count_text} {stamped}.', 'success')
+    else:
+        flash(f'Generator for "{evidence_name}" returned no file (no source data or missing integration).', 'warning')
+    return _back()
 
 
 @bp.route('/soc2/readiness')

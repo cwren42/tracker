@@ -85,6 +85,7 @@
                     <th>Category</th>
                     <th>Status</th>
                     <th>Detail</th>
+                    <th class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -109,10 +110,23 @@
                         {% endif %}
                     </td>
                     <td class="text-muted small">{{ item.detail or 'Generated successfully.' }}</td>
+                    <td class="text-end text-nowrap">
+                        <form method="post" action="{{ url_for('readiness.generate_automated_evidence_item') }}" class="d-inline">
+                            <input type="hidden" name="evidence_name" value="{{ item.evidence_name }}">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-arrow-repeat"></i> Generate now
+                            </button>
+                        </form>
+                        {% if item.artifact_url %}
+                        <a href="{{ item.artifact_url }}" target="_blank" class="btn btn-sm btn-outline-secondary" title="{{ item.artifact_name }}">
+                            <i class="bi bi-download"></i> Download
+                        </a>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="text-center text-muted py-5">No automated evidence checks were available.</td>
+                    <td colspan="5" class="text-center text-muted py-5">No automated evidence checks were available.</td>
                 </tr>
                 {% endfor %}
             </tbody>

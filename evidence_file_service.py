@@ -5,7 +5,8 @@ Generates downloadable evidence files for SOC2 compliance
 
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy import text
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from reportlab.lib.pagesizes import letter
@@ -53,6 +54,7 @@ class EvidenceFileService(EvidenceAzureMixin):
             f'{self.evidence_dir}/isms',
             f'{self.evidence_dir}/manual',
             f'{self.evidence_dir}/teamviewer',
+            f'{self.evidence_dir}/rmm',
         ]
         for dir_path in dirs:
             os.makedirs(dir_path, exist_ok=True)
@@ -79,6 +81,8 @@ class EvidenceFileService(EvidenceAzureMixin):
             return f'{self.evidence_dir}/isms/{filename}'
         elif automation_source == 'TeamViewer':
             return f'{self.evidence_dir}/teamviewer/{filename}'
+        elif automation_source == 'RMM':
+            return f'{self.evidence_dir}/rmm/{filename}'
         else:
             return f'{self.evidence_dir}/manual/{filename}'
     
@@ -1364,38 +1368,527 @@ class EvidenceFileService(EvidenceAzureMixin):
             traceback.print_exc()
             return None
     
+    # ------------------------------------------------------------------
+    # RMM-backed generators (local data: vulnerability_cache, cve_patch_job,
+    # rmm_agent, rmm_telemetry, asset). These do not depend on any external
+    # API so they always produce in-period data while the snapshots are fresh.
+    # ------------------------------------------------------------------
+
+    def _summary_sheet(self, wb, rows):
+        ws_summary = wb.create_sheet('Summary', 0)
+        for row_idx, (label, value) in enumerate(rows, 1):
+            ws_summary.cell(row_idx, 1, label).font = Font(bold=True)
+            ws_summary.cell(row_idx, 2, value)
+        ws_summary.column_dimensions['A'].width = 32
+        ws_summary.column_dimensions['B'].width = 40
+        return ws_summary
+
+    def generate_rmm_vulnerability_scan_file(self, evidence_name):
+        """Vulnerability scan results from the live RMM vulnerability_cache.
+
+        Source: vulnerability_cache (CVE catalog synced from the RMM scanner),
+        ordered by severity then CVSS. Includes a dated summary sheet.
+        """
+        sev_rank = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3, 'Unknown': 4}
+        rows = db.session.execute(text(
+            """SELECT cve_id, name, severity, cvss, exposed_machines, description,
+                      published_on, synced_at
+               FROM vulnerability_cache"""
+        )).fetchall()
+        rows = sorted(rows, key=lambda r: (sev_rank.get(r[2], 5), -(r[3] or 0)))
+
+        wb, ws = self.create_styled_workbook('Vulnerability Scan')
+        headers = ['CVE ID', 'Name', 'Severity', 'CVSS', 'Exposed Machines',
+                   'Description', 'Published', 'Last Synced']
+        self.style_header_row(ws, headers)
+        for row_idx, r in enumerate(rows, 2):
+            ws.cell(row_idx, 1, r[0] or '')
+            ws.cell(row_idx, 2, self._sanitize_for_excel((r[1] or '')[:120]))
+            ws.cell(row_idx, 3, r[2] or 'Unknown')
+            ws.cell(row_idx, 4, r[3] if r[3] is not None else '')
+            ws.cell(row_idx, 5, r[4] if r[4] is not None else 0)
+            ws.cell(row_idx, 6, self._sanitize_for_excel((r[5] or '')[:300]))
+            ws.cell(row_idx, 7, str(r[6])[:10] if r[6] else '')
+            ws.cell(row_idx, 8, r[7].strftime('%Y-%m-%d %H:%M') if r[7] else '')
+
+        by_sev = {}
+        latest_sync = None
+        for r in rows:
+            by_sev[r[2] or 'Unknown'] = by_sev.get(r[2] or 'Unknown', 0) + 1
+            if r[7] and (latest_sync is None or r[7] > latest_sync):
+                latest_sync = r[7]
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Last Scanner Sync', latest_sync.strftime('%Y-%m-%d %H:%M') if latest_sync else 'Unknown'),
+            ('Total Vulnerabilities', len(rows)),
+            ('Critical', by_sev.get('Critical', 0)),
+            ('High', by_sev.get('High', 0)),
+            ('Medium', by_sev.get('Medium', 0)),
+            ('Low', by_sev.get('Low', 0)),
+            ('Data Source', 'RMM vulnerability scanner (vulnerability_cache)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_rmm_vulnerability_remediation_file(self, evidence_name):
+        """Vulnerability remediation evidence from cve_patch_job joined to the
+        CVE catalog and asset register. Shows what was remediated, on which
+        device, and the current state (installed/superseded/no_patch).
+        """
+        rows = db.session.execute(text(
+            """SELECT j.agent_id, COALESCE(a.name, j.agent_id) AS device,
+                      j.cve_id, v.severity, v.cvss, j.status,
+                      j.updates_found, j.reboot_required,
+                      COALESCE(j.completed_at, j.updated_at, j.created_at) AS action_at,
+                      j.deployed_by
+               FROM cve_patch_job j
+               LEFT JOIN asset a ON a.id = j.asset_id
+               LEFT JOIN vulnerability_cache v ON v.cve_id = j.cve_id
+               WHERE j.status IN ('installed', 'superseded')
+               ORDER BY action_at DESC NULLS LAST"""
+        )).fetchall()
+
+        wb, ws = self.create_styled_workbook('Vuln Remediation')
+        headers = ['Device', 'Agent ID', 'CVE ID', 'Severity', 'CVSS', 'Remediation Status',
+                   'Updates Found', 'Reboot Required', 'Remediated At', 'Deployed By']
+        self.style_header_row(ws, headers)
+        for row_idx, r in enumerate(rows, 2):
+            ws.cell(row_idx, 1, r[1] or '')
+            ws.cell(row_idx, 2, r[0] or '')
+            ws.cell(row_idx, 3, r[2] or '')
+            ws.cell(row_idx, 4, r[3] or 'Unknown')
+            ws.cell(row_idx, 5, r[4] if r[4] is not None else '')
+            ws.cell(row_idx, 6, r[5] or '')
+            ws.cell(row_idx, 7, r[6] if r[6] is not None else 0)
+            ws.cell(row_idx, 8, 'Yes' if r[7] else 'No')
+            ws.cell(row_idx, 9, r[8].strftime('%Y-%m-%d %H:%M') if r[8] else '')
+            ws.cell(row_idx, 10, r[9] or 'automated')
+
+        installed = sum(1 for r in rows if r[5] == 'installed')
+        superseded = sum(1 for r in rows if r[5] == 'superseded')
+        devices = len({r[0] for r in rows if r[0]})
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Total Remediation Records', len(rows)),
+            ('Patches Installed', installed),
+            ('Superseded', superseded),
+            ('Devices Covered', devices),
+            ('Data Source', 'RMM patch engine (cve_patch_job + vulnerability_cache)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_rmm_patch_scan_file(self, evidence_name):
+        """Patch scan / server scan-and-patch evidence: per-device patch posture
+        from cve_patch_job rolled up by device, joined to rmm_agent last_seen.
+        """
+        rows = db.session.execute(text(
+            """SELECT j.agent_id,
+                      COALESCE(a.name, j.agent_id) AS device,
+                      a.category,
+                      COUNT(*) AS total_jobs,
+                      COUNT(*) FILTER (WHERE j.status = 'installed') AS installed,
+                      COUNT(*) FILTER (WHERE j.status = 'superseded') AS superseded,
+                      COUNT(*) FILTER (WHERE j.status = 'no_patch') AS no_patch,
+                      MAX(COALESCE(j.completed_at, j.updated_at, j.created_at)) AS last_action,
+                      MAX(ag.last_seen_at) AS last_seen
+               FROM cve_patch_job j
+               LEFT JOIN asset a ON a.id = j.asset_id
+               LEFT JOIN rmm_agent ag ON ag.agent_id = j.agent_id
+               GROUP BY j.agent_id, a.name, a.category
+               ORDER BY device"""
+        )).fetchall()
+
+        wb, ws = self.create_styled_workbook('Patch Scan')
+        headers = ['Device', 'Agent ID', 'Category', 'Patch Jobs', 'Installed',
+                   'Superseded', 'No Patch Needed', 'Last Patch Action', 'Agent Last Seen']
+        self.style_header_row(ws, headers)
+        for row_idx, r in enumerate(rows, 2):
+            ws.cell(row_idx, 1, r[1] or '')
+            ws.cell(row_idx, 2, r[0] or '')
+            ws.cell(row_idx, 3, r[2] or 'Workstation')
+            ws.cell(row_idx, 4, r[3])
+            ws.cell(row_idx, 5, r[4])
+            ws.cell(row_idx, 6, r[5])
+            ws.cell(row_idx, 7, r[6])
+            ws.cell(row_idx, 8, r[7].strftime('%Y-%m-%d %H:%M') if r[7] else '')
+            ws.cell(row_idx, 9, r[8].strftime('%Y-%m-%d %H:%M') if r[8] else 'Never')
+
+        total_installed = sum(r[4] for r in rows)
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Devices Scanned', len(rows)),
+            ('Total Patch Jobs', sum(r[3] for r in rows)),
+            ('Patches Installed', total_installed),
+            ('Data Source', 'RMM patch engine (cve_patch_job + rmm_agent)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_rmm_antivirus_file(self, evidence_name):
+        """Antivirus/endpoint protection configuration from live RMM telemetry
+        (rmm_telemetry.security_json: AV, firewall, antispyware, last scan).
+        """
+        rows = db.session.execute(text(
+            """SELECT t.agent_id, COALESCE(a.name, t.hostname, t.agent_id) AS device,
+                      t.os_name, t.security_json, t.last_seen
+               FROM rmm_telemetry t
+               LEFT JOIN asset a ON a.id = t.asset_id
+               WHERE t.security_json IS NOT NULL AND t.security_json <> ''
+               ORDER BY device"""
+        )).fetchall()
+
+        wb, ws = self.create_styled_workbook('Antivirus Config')
+        headers = ['Device', 'OS', 'AV Product', 'AV Active', 'AV Updated',
+                   'Firewall', 'Firewall Active', 'Last Scan', 'Telemetry As Of']
+        self.style_header_row(ws, headers)
+        protected = 0
+        for row_idx, r in enumerate(rows, 2):
+            try:
+                sec = json.loads(r[3]) or {}
+            except Exception:
+                sec = {}
+            av = (sec.get('av') or [{}])[0]
+            fw = (sec.get('fw') or [{}])[0]
+            last_scan = (sec.get('last_scan') or {}).get('time', '')
+            av_active = bool(av.get('active'))
+            if av_active:
+                protected += 1
+            ws.cell(row_idx, 1, self._sanitize_for_excel(r[1] or ''))
+            ws.cell(row_idx, 2, self._sanitize_for_excel((r[2] or '')[:60]))
+            ws.cell(row_idx, 3, self._sanitize_for_excel((av.get('name') or 'Unknown')[:60]))
+            ws.cell(row_idx, 4, 'Yes' if av_active else 'No')
+            ws.cell(row_idx, 5, 'Yes' if av.get('updated') else 'No')
+            ws.cell(row_idx, 6, self._sanitize_for_excel((fw.get('name') or 'Unknown')[:80]))
+            ws.cell(row_idx, 7, 'Yes' if fw.get('active') else 'No')
+            ws.cell(row_idx, 8, str(last_scan)[:19])
+            ws.cell(row_idx, 9, r[4].strftime('%Y-%m-%d %H:%M') if r[4] else '')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Devices Reporting', len(rows)),
+            ('AV Active', protected),
+            ('AV Not Active', len(rows) - protected),
+            ('Data Source', 'RMM endpoint telemetry (rmm_telemetry.security_json)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'RMM')
+        wb.save(file_path)
+        return file_path
+
+    def generate_admin_access_file(self, evidence_name):
+        """Administrator access list per layer.
+
+        Combines the Microsoft Entra directory-role snapshot
+        (admin_role_snapshot, active assignments at the latest snapshot date)
+        with M365 users flagged is_admin, so each privileged identity and its
+        roles are captured for the access-review evidence.
+        """
+        # admin_role_snapshot stamps each role row with a per-row timestamp that
+        # differs by microseconds within a single sync, so matching on the exact
+        # MAX(snapshot_date) would return only one row. Use the most recent sync
+        # *day* to capture the whole latest batch of active assignments.
+        latest = db.session.execute(text(
+            "SELECT MAX(snapshot_date) FROM admin_role_snapshot"
+        )).scalar()
+        role_rows = []
+        if latest:
+            role_rows = db.session.execute(text(
+                """SELECT s.user_principal_name, s.role_name, s.assigned_date,
+                          u.display_name, u.job_title, u.department, u.account_enabled
+                   FROM admin_role_snapshot s
+                   LEFT JOIN m365_user u
+                     ON u.user_principal_name = s.user_principal_name AND u.is_current
+                   WHERE s.status = 'active'
+                     AND s.snapshot_date::date = (
+                         SELECT MAX(snapshot_date)::date FROM admin_role_snapshot
+                     )
+                   ORDER BY s.user_principal_name, s.role_name"""
+            )).fetchall()
+
+        # group roles by user
+        by_user = {}
+        for r in role_rows:
+            upn = r[0]
+            entry = by_user.setdefault(upn, {
+                'display_name': r[3] or '', 'job_title': r[4] or '',
+                'department': r[5] or '', 'enabled': r[6], 'roles': [],
+                'assigned': r[2],
+            })
+            entry['roles'].append(r[1])
+
+        # include is_admin users that may not appear in the directory-role snapshot
+        admin_users = M365User.query.filter_by(is_admin=True, is_current=True).all()
+        for u in admin_users:
+            if u.user_principal_name not in by_user:
+                by_user[u.user_principal_name] = {
+                    'display_name': u.display_name or '', 'job_title': u.job_title or '',
+                    'department': u.department or '', 'enabled': u.account_enabled,
+                    'roles': [x.strip() for x in (u.admin_roles or '').split(',') if x.strip()] or ['Administrator'],
+                    'assigned': None,
+                }
+
+        wb, ws = self.create_styled_workbook('Admin Access')
+        headers = ['User Principal Name', 'Display Name', 'Job Title', 'Department',
+                   'Admin Roles', 'Account Enabled', 'Earliest Assignment']
+        self.style_header_row(ws, headers)
+        for row_idx, (upn, e) in enumerate(sorted(by_user.items()), 2):
+            ws.cell(row_idx, 1, upn or '')
+            ws.cell(row_idx, 2, e['display_name'])
+            ws.cell(row_idx, 3, e['job_title'])
+            ws.cell(row_idx, 4, e['department'])
+            ws.cell(row_idx, 5, ', '.join(sorted(set(e['roles']))))
+            ws.cell(row_idx, 6, 'Yes' if e['enabled'] else 'No')
+            ws.cell(row_idx, 7, e['assigned'].strftime('%Y-%m-%d') if e['assigned'] else '')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Directory Snapshot Date', latest.strftime('%Y-%m-%d %H:%M') if latest else 'None'),
+            ('Privileged Identities', len(by_user)),
+            ('Distinct Roles', len({r[1] for r in role_rows})),
+            ('Data Source', 'Entra directory roles (admin_role_snapshot) + m365_user.is_admin'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'M365')
+        wb.save(file_path)
+        return file_path
+
+    def generate_asset_inventory_file(self, evidence_name):
+        """Asset inventory from the local asset register, enriched with Intune
+        enrollment/compliance where the device is managed.
+        """
+        assets = db.session.execute(text(
+            """SELECT a.asset_tag, a.name, a.category, a.manufacturer, a.model,
+                      a.serial_number, a.status, a.location, a.os_version,
+                      a.last_seen, d.compliance_state, d.is_encrypted
+               FROM asset a
+               LEFT JOIN intune_device d ON d.asset_id = a.id AND d.is_current
+               ORDER BY a.name"""
+        )).fetchall()
+
+        wb, ws = self.create_styled_workbook('Asset Inventory')
+        headers = ['Asset Tag', 'Name', 'Category', 'Manufacturer', 'Model',
+                   'Serial', 'Status', 'Location', 'OS Version', 'Last Seen',
+                   'Intune Compliance', 'Encrypted']
+        self.style_header_row(ws, headers)
+        for row_idx, a in enumerate(assets, 2):
+            ws.cell(row_idx, 1, a[0] or '')
+            ws.cell(row_idx, 2, self._sanitize_for_excel(a[1] or ''))
+            ws.cell(row_idx, 3, a[2] or '')
+            ws.cell(row_idx, 4, a[3] or '')
+            ws.cell(row_idx, 5, self._sanitize_for_excel(a[4] or ''))
+            ws.cell(row_idx, 6, a[5] or '')
+            ws.cell(row_idx, 7, a[6] or '')
+            ws.cell(row_idx, 8, a[7] or '')
+            ws.cell(row_idx, 9, (a[8] or '')[:40])
+            ws.cell(row_idx, 10, a[9].strftime('%Y-%m-%d %H:%M') if a[9] else '')
+            ws.cell(row_idx, 11, a[10] or 'Not Managed')
+            ws.cell(row_idx, 12, ('Yes' if a[11] else 'No') if a[11] is not None else 'Unknown')
+
+        managed = sum(1 for a in assets if a[10])
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Total Assets', len(assets)),
+            ('Intune-Managed', managed),
+            ('Data Source', 'Asset register (asset) + Intune (intune_device)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'M365/Intune')
+        wb.save(file_path)
+        return file_path
+
+    def generate_disk_encryption_file(self, evidence_name):
+        """Device disk encryption status from Intune (intune_device.is_encrypted)."""
+        devices = IntuneDevice.query.filter_by(is_current=True).order_by(IntuneDevice.device_name).all()
+        wb, ws = self.create_styled_workbook('Disk Encryption')
+        headers = ['Device Name', 'User', 'Manufacturer', 'Model', 'OS Version',
+                   'Encrypted', 'Compliance State', 'Last Sync']
+        self.style_header_row(ws, headers)
+        encrypted = 0
+        for row_idx, d in enumerate(devices, 2):
+            if d.is_encrypted:
+                encrypted += 1
+            ws.cell(row_idx, 1, d.device_name or '')
+            ws.cell(row_idx, 2, d.user_display_name or d.user_principal_name or '')
+            ws.cell(row_idx, 3, d.manufacturer or '')
+            ws.cell(row_idx, 4, d.model or '')
+            ws.cell(row_idx, 5, d.os_version or '')
+            ws.cell(row_idx, 6, 'Yes' if d.is_encrypted else 'No')
+            ws.cell(row_idx, 7, d.compliance_state or '')
+            ws.cell(row_idx, 8, d.last_sync_datetime.strftime('%Y-%m-%d %H:%M') if d.last_sync_datetime else '')
+
+        self._summary_sheet(wb, [
+            ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('Total Devices', len(devices)),
+            ('Encrypted', encrypted),
+            ('Not Encrypted', len(devices) - encrypted),
+            ('Data Source', 'Intune (intune_device.is_encrypted)'),
+        ])
+        file_path = self.get_file_path(evidence_name, 'M365/Intune')
+        wb.save(file_path)
+        return file_path
+
+    # ------------------------------------------------------------------
+    # Catalog wiring: stamp StrikeGraphEvidence + write EvidenceSnapshot
+    # ------------------------------------------------------------------
+
+    AUTOMATION_SOURCE_BY_DIR = {
+        'm365': 'M365/Intune',
+        'M365/Defender': 'M365/Defender',
+        'azure': 'Azure',
+        'isms': 'ISMS',
+        'teamviewer': 'TeamViewer',
+        'rmm': 'RMM',
+    }
+
+    def _infer_automation_source(self, file_path):
+        parent = os.path.basename(os.path.dirname(file_path))
+        # the defender dir nests under M365; check the two-level tail
+        tail2 = '/'.join(file_path.split('/')[-3:-1])
+        if tail2.endswith('M365/Defender'):
+            return 'M365/Defender'
+        return self.AUTOMATION_SOURCE_BY_DIR.get(parent, 'M365/Intune')
+
+    def _count_data_rows(self, file_path):
+        """Best-effort count of data rows in the primary sheet of an .xlsx."""
+        if not file_path.endswith('.xlsx'):
+            return None
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            # primary data sheet is the non-Summary sheet (or first sheet)
+            data_sheet = None
+            for name in wb.sheetnames:
+                if name != 'Summary':
+                    data_sheet = wb[name]
+                    break
+            data_sheet = data_sheet or wb[wb.sheetnames[0]]
+            count = max(data_sheet.max_row - 1, 0)
+            wb.close()
+            return count
+        except Exception:
+            return None
+
+    def _resolve_snapshot_control_id(self, evidence_item):
+        """Resolve a control to attach the audit snapshot to. Prefer the
+        evidence row's own control_id; otherwise match a control by name for a
+        small set of known-unlinked rows. Returns None if none resolves (the
+        snapshot is then skipped rather than fabricated)."""
+        if evidence_item.control_id:
+            return evidence_item.control_id
+        name_to_control = {
+            'Vulnerability Scan Results': 'Vulnerability Scan',
+            'Vulnerability Remediation': 'Vulnerability Scan',
+        }
+        control_name = name_to_control.get(evidence_item.evidence_name)
+        if control_name:
+            control = SOC2Control.query.filter_by(control_name=control_name).first()
+            if control:
+                return control.id
+        return None
+
+    def stamp_evidence_collection(self, evidence_name, file_path, collected_by='automated'):
+        """Record a generated artifact back to the catalog.
+
+        - sets StrikeGraphEvidence.file_path / last_submitted_date / submission_status
+        - sets automation_source when missing (idempotent backfill on first run)
+        - updates the linked control's last_evidence_date
+        - writes an EvidenceSnapshot audit row (when a control resolves)
+        Returns the StrikeGraphEvidence row (or None if the name is unknown).
+        """
+        evidence_item = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).first()
+        if not evidence_item or not file_path or not os.path.exists(file_path):
+            return None
+
+        now = datetime.utcnow()
+        record_count = self._count_data_rows(file_path)
+
+        evidence_item.file_path = file_path
+        evidence_item.last_submitted_date = now
+        evidence_item.submission_status = 'Submitted'
+        evidence_item.updated_at = now
+        if not evidence_item.automation_source:
+            evidence_item.automation_source = self._infer_automation_source(file_path)
+
+        control_id = self._resolve_snapshot_control_id(evidence_item)
+        if control_id:
+            control = SOC2Control.query.get(control_id)
+            if control:
+                control.last_evidence_date = now
+                control.updated_at = now
+            db.session.add(EvidenceSnapshot(
+                control_id=control_id,
+                snapshot_date=now,
+                evidence_type=evidence_item.automation_source or 'Automated',
+                evidence_data=json.dumps({
+                    'evidence_name': evidence_name,
+                    'file': os.path.basename(file_path),
+                    'record_count': record_count,
+                }),
+                record_count=record_count,
+                status='collected',
+                collected_by=collected_by or 'automated',
+                notes=f'Auto-generated evidence artifact: {os.path.basename(file_path)}',
+                file_path=file_path,
+            ))
+
+        db.session.commit()
+        return evidence_item
+
+    def generate_and_record(self, evidence_name, collected_by='automated'):
+        """Generate an evidence artifact and stamp it back to the catalog.
+
+        Returns dict: {evidence_name, file_path, record_count, stamped, control_id}.
+        """
+        file_path = self.generate_evidence_file_by_name(evidence_name)
+        if not file_path or not os.path.exists(file_path):
+            return {
+                'evidence_name': evidence_name,
+                'file_path': None,
+                'stamped': False,
+                'record_count': None,
+                'control_id': None,
+            }
+        evidence_item = self.stamp_evidence_collection(evidence_name, file_path, collected_by=collected_by)
+        return {
+            'evidence_name': evidence_name,
+            'file_path': file_path,
+            'record_count': self._count_data_rows(file_path),
+            'stamped': bool(evidence_item),
+            'control_id': evidence_item.control_id if evidence_item else None,
+        }
+
     def generate_evidence_file_by_name(self, evidence_name):
         """Generate evidence file based on evidence name"""
         # Map evidence names to generation functions
         evidence_map = {
-            # M365/Intune Evidence - Admin Access
-            'Administrator Access to Application': self.generate_admin_users_file,
-            'Administrator Access to Database': self.generate_admin_users_file,
-            'Administrator Access to Network/Cloud': self.generate_admin_users_file,
-            'Administrator Access to Operating System': self.generate_admin_users_file,
-            
-            # M365/Intune Evidence - User Lists
+            # --- Admin Access (catalog: per-layer) ----------------------
+            # Backed by admin_role_snapshot (Entra directory roles) +
+            # m365_user.is_admin. All four layers map to the same identity
+            # population (a single Entra tenant is the IdP for every layer).
+            'Administrator Access to Application': self.generate_admin_access_file,
+            'Administrator Access to Database': self.generate_admin_access_file,
+            'Administrator Access to Network/Cloud': self.generate_admin_access_file,
+            'Administrator Access to Operating System': self.generate_admin_access_file,
+
+            # --- User Lists (catalog names) -----------------------------
             'Application User List': self.generate_m365_users_file,
             'Database User List': self.generate_m365_users_file,
-            'Network User List': self.generate_m365_users_file,
+            'Network/Cloud User List': self.generate_m365_users_file,
             'Operating System User List': self.generate_m365_users_file,
-            'User Access List': self.generate_m365_users_file,
-            
-            # M365/Intune Evidence - Assets & Devices
-            'Asset Inventory': self.generate_intune_devices_file,
-            'Workstation Asset Inventory': self.generate_intune_devices_file,
-            'Server Asset Inventory': self.generate_intune_devices_file,
-            
-            # M365/Intune Evidence - Antivirus & Software
-            'Antivirus Configuration - Server': self.generate_device_software_file,
-            'Antivirus Configuration - Workstation': self.generate_device_software_file,
-            'Workstation Antivirus Configuration': self.generate_device_software_file,
-            'Server Antivirus Configuration': self.generate_device_software_file,
-            
-            # M365/Intune Evidence - Encryption
-            'Device Disk Encryption': self.generate_intune_devices_file,
-            'Workstation Disk Encryption Configuration': self.generate_intune_devices_file,
-            
+
+            # --- Assets & Devices ---------------------------------------
+            # Asset register enriched with Intune compliance/encryption.
+            'Asset Inventory': self.generate_asset_inventory_file,
+
+            # --- Antivirus (catalog: per-layer) -------------------------
+            # Live endpoint protection state from RMM telemetry.
+            'Antivirus Configuration - Server': self.generate_rmm_antivirus_file,
+            'Antivirus Configuration - Workstation': self.generate_rmm_antivirus_file,
+
+            # --- Encryption ---------------------------------------------
+            'Device Disk Encryption': self.generate_disk_encryption_file,
+
             # Azure Evidence - Network Security
             'Firewall Rules': self.generate_azure_nsg_file,
             'Current Network Diagram': self.generate_azure_network_topology_file,
@@ -1419,13 +1912,12 @@ class EvidenceFileService(EvidenceAzureMixin):
             'Server Disk Encryption Configuration': self.generate_azure_vms_file,
             'Server Encryption': self.generate_azure_vms_file,
             
-            # Microsoft Defender Evidence - Vulnerability & Patching (UPGRADED)
-            'Vulnerability Scan Results': self.generate_defender_vulnerability_scan_file,
-            'Vulnerability Scan Results - External': self.generate_defender_vulnerability_scan_file,
-            'Vulnerability Scan Results - Internal': self.generate_defender_vulnerability_scan_file,
-            'Vulnerability Remediation': self.generate_defender_vulnerability_remediation_file,
-            'Patch Scan': self.generate_defender_patch_scan_file,
-            'Server Scan and Patch': self.generate_defender_patch_scan_file,
+            # --- Vulnerability & Patching (RMM-backed) ------------------
+            # Live local data: vulnerability_cache + cve_patch_job + rmm_agent.
+            'Vulnerability Scan Results': self.generate_rmm_vulnerability_scan_file,
+            'Vulnerability Remediation': self.generate_rmm_vulnerability_remediation_file,
+            'Patch Scan': self.generate_rmm_patch_scan_file,
+            'Server Scan and Patch': self.generate_rmm_patch_scan_file,
             
             # Microsoft Defender Evidence - Security Events (NEW)
             'Security Incident Report': self.generate_security_incidents_file,
@@ -1536,13 +2028,12 @@ class EvidenceFileService(EvidenceAzureMixin):
             try:
                 file_path = self.generate_evidence_file_by_name(item.evidence_name)
                 if file_path:
-                    # Update StrikeGraphEvidence with file path
-                    item.file_path = file_path
-                    item.updated_at = datetime.utcnow()
+                    # Stamp the catalog + write the audit snapshot (commits).
+                    self.stamp_evidence_collection(item.evidence_name, file_path)
                     results.append({
                         'evidence_name': item.evidence_name,
                         'status': 'success',
-                        'file_path': item.file_path,
+                        'file_path': file_path,
                         'source': item.automation_source
                     })
                 else:

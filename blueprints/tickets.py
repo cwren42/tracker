@@ -170,7 +170,8 @@ def tickets():
                                f_category='', f_assignee='', f_type='',
                                base_user_mode=True, now=datetime.now())
     # ── Read filter params ────────────────────────────────────────────────────
-    f_status   = request.args.get('status',   '').strip()
+    # Default view = active work (Open + In Progress). 'all' shows everything incl. Closed.
+    f_status   = request.args.get('status',   'active').strip()
     f_priority = request.args.get('priority', '').strip()
     f_source   = request.args.get('source',   '').strip()
     f_category = request.args.get('category', '').strip()
@@ -208,8 +209,11 @@ def tickets():
     # the user has explicitly filtered by source/type
     if not show_alerts and not f_source and f_type not in ('auto',):
         q = q.filter(SupportTicket.source.notin_(['alert', 'system']))
-    if f_status:
+    if f_status == 'active':
+        q = q.filter(SupportTicket.status.in_(['Open', 'In Progress']))
+    elif f_status and f_status != 'all':
         q = q.filter(SupportTicket.status == f_status)
+    # 'all' (or empty) → no status filter
     if f_priority:
         q = q.filter(SupportTicket.priority == f_priority)
     if f_source:

@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h2><i class="bi bi-list-task"></i> SOC2 Readiness</h2>
-        <p class="text-muted mb-0">Defaulting to the active system-description control queue. Switch the source filter to view broader audit-pack and manual follow-up work.</p>
+        <p class="text-muted mb-0">Control rows are derived live from the SOC 2 control catalog (single source of truth) and match the dashboard. Switch the source filter to view Type 1 pack tasks and manual follow-up work.</p>
     </div>
     <div class="d-flex gap-2">
         <a href="{{ url_for('readiness.automation_status_dashboard') }}" class="btn btn-outline-secondary">
@@ -119,7 +119,11 @@
                 {% for item in items %}
                 <tr>
                     <td>
+                        {% if item.is_control is defined and item.is_control %}
+                        <a href="{{ url_for('soc2.soc2_evidence', control_id=item.control_id) }}" class="fw-semibold text-decoration-none">{{ item.title }}</a>
+                        {% else %}
                         <a href="{{ url_for('readiness.readiness_item_detail', item_id=item.id) }}" class="fw-semibold text-decoration-none">{{ item.title }}</a>
+                        {% endif %}
                         <div class="small text-muted">{{ item.domain or 'Unassigned domain' }}{% if item.audit_alignment %} · {{ item.audit_alignment }}{% endif %}</div>
                     </td>
                     <td>
@@ -134,7 +138,13 @@
                     <td><span class="badge bg-dark-subtle text-dark border">{{ item.priority }}</span></td>
                     <td>{{ item.owner or 'Unassigned' }}</td>
                     <td><span class="text-capitalize">{{ item.source_type.replace('_', ' ') }}</span></td>
-                    <td class="text-muted small">{{ item.next_step or 'No next step recorded yet.' }}</td>
+                    <td class="text-muted small">
+                        {% if item.is_control is defined and item.is_control %}
+                        Status synced from the SOC 2 control catalog.
+                        {% else %}
+                        {{ item.next_step or 'No next step recorded yet.' }}
+                        {% endif %}
+                    </td>
                 </tr>
                 {% else %}
                 <tr>

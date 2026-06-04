@@ -28,6 +28,7 @@ from models import (
     SystemDescription,
     _log_audit,
 )
+from soc2_models import SOC2Control
 from soc2_artifact_service import build_system_description_markdown, get_training_completion_snapshot
 from utils import admin_required
 
@@ -88,6 +89,50 @@ def _summary_counts(items):
         'critical': sum(1 for item in items if item.priority == 'P1-Critical'),
         'manual': sum(1 for item in items if item.source_type == 'manual'),
     }
+
+
+class _ControlReadinessRow:
+    """Read-only readiness row projected directly from a SOC2Control.
+
+    Control implementation status lives in the single-source catalog
+    (soc2_control). The readiness view derives the ``type1_control`` rows
+    from it so the status shown here always matches the SOC 2 dashboard and
+    can never drift into a separate editable copy. ``control_id`` links the
+    row to its evidence page on the SOC 2 dashboard.
+    """
+
+    source_type = 'type1_control'
+    is_control = True
+    owner = None
+
+    def __init__(self, control):
+        self.id = None
+        self.control_id = control.id
+        self.title = control.control_name
+        self.domain = control.control_frequency
+        self.audit_alignment = control.audit_alignment
+        self.status = control.control_progress or 'Not In Place'
+        self.owner = control.control_owner
+        self.frequency = control.control_frequency
+        # Controls do not carry a separate priority; surface open work as P2.
+        self.priority = 'P1-Critical' if self.status == 'Not In Place' else 'P2-High'
+        self.next_step = None
+
+
+def _control_readiness_rows(search_term=None, status=None):
+    query = SOC2Control.query.filter_by(is_active=True)
+    if status:
+        query = query.filter(SOC2Control.control_progress == status)
+    if search_term:
+        ilike_value = f'%{search_term}%'
+        query = query.filter(or_(
+            SOC2Control.control_name.ilike(ilike_value),
+            SOC2Control.audit_alignment.ilike(ilike_value),
+            SOC2Control.control_owner.ilike(ilike_value),
+            SOC2Control.control_frequency.ilike(ilike_value),
+        ))
+    controls = query.order_by(SOC2Control.control_name.asc()).all()
+    return [_ControlReadinessRow(control) for control in controls]
 
 
 def _write_csv_to_zip(archive, filename, header, rows):
@@ -389,29 +434,47 @@ def automation_status_dashboard():
 @login_required
 @admin_required
 def readiness_dashboard():
-    query = SOC2ReadinessItem.query.filter_by(is_active=True)
-
     status = (request.args.get('status') or '').strip()
     priority = (request.args.get('priority') or '').strip()
     source_type = (request.args.get('source_type') or 'type1_control').strip()
     search_term = (request.args.get('q') or '').strip()
 
-    if status:
-        query = query.filter(SOC2ReadinessItem.status == status)
-    if priority:
-        query = query.filter(SOC2ReadinessItem.priority == priority)
-    if source_type and source_type != 'all':
-        query = query.filter(SOC2ReadinessItem.source_type == source_type)
-    if search_term:
-        ilike_value = f'%{search_term}%'
-        query = query.filter(or_(
-            SOC2ReadinessItem.title.ilike(ilike_value),
-            SOC2ReadinessItem.domain.ilike(ilike_value),
-            SOC2ReadinessItem.audit_alignment.ilike(ilike_value),
-            SOC2ReadinessItem.owner.ilike(ilike_value),
-        ))
+    # Control implementation status is owned by the single-source catalog
+    # (soc2_control). The "Current controls" (type1_control) view is derived
+    # straight from it so it always matches the SOC 2 dashboard. The genuinely
+    # separate workstreams (Type 1 pack tasks, manual follow-up) remain
+    # editable rows in soc2_readiness_item.
+    show_controls = source_type in ('type1_control', 'all')
+    show_workstream = source_type != 'type1_control'
 
-    items = query.order_by(SOC2ReadinessItem.priority.asc(), SOC2ReadinessItem.title.asc()).all()
+    items = []
+
+    if show_controls:
+        control_rows = _control_readiness_rows(search_term=search_term or None, status=status or None)
+        if priority:
+            control_rows = [row for row in control_rows if row.priority == priority]
+        items.extend(control_rows)
+
+    if show_workstream:
+        query = SOC2ReadinessItem.query.filter_by(is_active=True)
+        # type1_control rows are now derived from the catalog above; never
+        # surface the (deactivated) legacy duplicates from this table.
+        query = query.filter(SOC2ReadinessItem.source_type != 'type1_control')
+        if source_type and source_type != 'all':
+            query = query.filter(SOC2ReadinessItem.source_type == source_type)
+        if status:
+            query = query.filter(SOC2ReadinessItem.status == status)
+        if priority:
+            query = query.filter(SOC2ReadinessItem.priority == priority)
+        if search_term:
+            ilike_value = f'%{search_term}%'
+            query = query.filter(or_(
+                SOC2ReadinessItem.title.ilike(ilike_value),
+                SOC2ReadinessItem.domain.ilike(ilike_value),
+                SOC2ReadinessItem.audit_alignment.ilike(ilike_value),
+                SOC2ReadinessItem.owner.ilike(ilike_value),
+            ))
+        items.extend(query.order_by(SOC2ReadinessItem.priority.asc(), SOC2ReadinessItem.title.asc()).all())
 
     return render_template(
         'soc2_readiness_dashboard.html',
@@ -431,7 +494,16 @@ def readiness_dashboard():
 @login_required
 @admin_required
 def export_type1_pack():
-    readiness_items = SOC2ReadinessItem.query.filter_by(is_active=True).order_by(SOC2ReadinessItem.priority.asc(), SOC2ReadinessItem.title.asc()).all()
+    # Control rows are derived from the single-source catalog; workstream rows
+    # (Type 1 pack tasks, manual follow-up) come from soc2_readiness_item.
+    control_rows = _control_readiness_rows()
+    workstream_rows = (
+        SOC2ReadinessItem.query
+        .filter(SOC2ReadinessItem.is_active.is_(True), SOC2ReadinessItem.source_type != 'type1_control')
+        .order_by(SOC2ReadinessItem.priority.asc(), SOC2ReadinessItem.title.asc())
+        .all()
+    )
+    readiness_items = control_rows + workstream_rows
     audits = SOC2InternalAudit.query.order_by(SOC2InternalAudit.planned_date.asc().nullslast(), SOC2InternalAudit.id.asc()).all()
     findings = SOC2InternalAuditFinding.query.order_by(SOC2InternalAuditFinding.audit_id.asc(), SOC2InternalAuditFinding.id.asc()).all()
     assets = Asset.query.order_by(Asset.asset_tag.asc()).all()
@@ -457,7 +529,7 @@ def export_type1_pack():
             'readiness_items.csv',
             ['Item Key', 'Title', 'Domain', 'Audit Alignment', 'Priority', 'Status', 'Owner', 'Frequency', 'Source', 'Evidence Reference', 'Next Step', 'Manual Reference'],
             [[
-                item.item_key,
+                getattr(item, 'item_key', None) or (f"control-{item.control_id}" if getattr(item, 'is_control', False) else ''),
                 item.title,
                 item.domain or '',
                 item.audit_alignment or '',
@@ -466,9 +538,9 @@ def export_type1_pack():
                 item.owner or '',
                 item.frequency or '',
                 item.source_type or '',
-                item.evidence_reference or '',
-                item.next_step or '',
-                item.manual_reference or '',
+                getattr(item, 'evidence_reference', None) or '',
+                getattr(item, 'next_step', None) or '',
+                getattr(item, 'manual_reference', None) or '',
             ] for item in readiness_items],
         )
 

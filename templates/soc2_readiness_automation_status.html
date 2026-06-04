@@ -102,6 +102,8 @@
                         <span class="badge bg-warning-subtle text-warning border border-warning-subtle">No Resources</span>
                         {% elif item.status == 'attention' %}
                         <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Attention</span>
+                        {% elif item.status == 'missing' %}
+                        <span class="badge bg-light text-muted border">Not Collected</span>
                         {% else %}
                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Error</span>
                         {% endif %}

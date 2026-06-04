@@ -60,6 +60,29 @@ AUTOMATED_EVIDENCE_EXPORTS = [
     {'evidence_name': 'Vulnerability Remediation', 'zip_path': 'automated_evidence/vulnerability_remediation.xlsx', 'category': 'RMM'},
     {'evidence_name': 'Patch Scan', 'zip_path': 'automated_evidence/patch_scan.xlsx', 'category': 'RMM'},
     {'evidence_name': 'Server Scan and Patch', 'zip_path': 'automated_evidence/server_scan_and_patch.xlsx', 'category': 'RMM'},
+    # ISMS-manual policy evidence (Policy-type catalog rows auto-generated as
+    # PDFs by extracting the relevant IS-section(s) from the published ISMS
+    # Manual; see EvidenceFileService.generate_isms_section_pdf). All 18 resolve
+    # to a real manual section. "Code of Conduct" is intentionally excluded:
+    # it lives in the Employee Handbook, not the ISMS manual.
+    {'evidence_name': 'Acceptable Use Policy', 'zip_path': 'automated_evidence/acceptable_use_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Access Removal Procedures/Checklist', 'zip_path': 'automated_evidence/access_removal_procedures.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Backup Policy', 'zip_path': 'automated_evidence/backup_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Backup Restoration Procedures', 'zip_path': 'automated_evidence/backup_restoration_procedures.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Business Continuity Plan', 'zip_path': 'automated_evidence/business_continuity_plan.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Change Management Policy', 'zip_path': 'automated_evidence/change_management_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Data Classification Policy', 'zip_path': 'automated_evidence/data_classification_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Data Management Policy', 'zip_path': 'automated_evidence/data_management_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Incident Response Plan', 'zip_path': 'automated_evidence/incident_response_plan.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Information Security Policy', 'zip_path': 'automated_evidence/information_security_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Logical Access Policy and Procedures', 'zip_path': 'automated_evidence/logical_access_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Password Policy', 'zip_path': 'automated_evidence/password_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Patch Management Policy', 'zip_path': 'automated_evidence/patch_management_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Record Retention Schedule', 'zip_path': 'automated_evidence/record_retention_schedule.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Risk Management Policy and Procedures', 'zip_path': 'automated_evidence/risk_management_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'System Description Document', 'zip_path': 'automated_evidence/system_description_document.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Vendor Management Policy and Procedures', 'zip_path': 'automated_evidence/vendor_management_policy.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Vulnerability Management Policy', 'zip_path': 'automated_evidence/vulnerability_management_policy.pdf', 'category': 'ISMS'},
 ]
 
 
@@ -72,6 +95,7 @@ AUTOMATED_EVIDENCE_CACHE_DIRS = {
     'Intune': '/var/www/tracker/static/evidence/m365',
     'Defender': '/var/www/tracker/static/evidence/M365/Defender',
     'RMM': '/var/www/tracker/static/evidence/rmm',
+    'ISMS': '/var/www/tracker/static/evidence/isms',
 }
 
 
@@ -175,10 +199,12 @@ def _find_cached_evidence_file(item):
         return None
 
     prefix = f"{_sanitize_evidence_name(item['evidence_name'])}_"
+    # ISMS policy evidence is generated as PDF; the live-data exports are .xlsx.
+    allowed_ext = ('.pdf',) if item.get('category') == 'ISMS' else ('.xlsx',)
     candidates = [
         os.path.join(cache_dir, name)
         for name in os.listdir(cache_dir)
-        if name.startswith(prefix) and name.endswith('.xlsx')
+        if name.startswith(prefix) and name.endswith(allowed_ext)
     ]
     if not candidates:
         return None

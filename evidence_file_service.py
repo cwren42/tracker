@@ -4,6 +4,7 @@ Generates downloadable evidence files for SOC2 compliance
 """
 
 import os
+import re
 import json
 from datetime import datetime, timedelta
 from sqlalchemy import text
@@ -25,6 +26,59 @@ from soc2_models import (
 from teamviewer_evidence_service import TeamViewerEvidenceService
 from defender_service import DefenderService
 from evidence_azure import EvidenceAzureMixin
+
+
+# ---------------------------------------------------------------------------
+# ISMS-manual policy evidence resolution
+# ---------------------------------------------------------------------------
+# The published ISMS Manual (isms_document slug=isms-manual, current version in
+# isms_document_version.markdown_body) is section-addressable: each policy /
+# procedure is a markdown heading of the form ``## IS-...-CIRQ##-...: Title``.
+# For Policy-type StrikeGraphEvidence items we resolve the policy to one or more
+# of these IS-section IDs and extract the section text to a dated PDF artifact.
+#
+# Resolution order at runtime (see EvidenceFileService._resolve_policy_sections):
+#   (a) the linked SOC2Control.authoritative_docs IS-* IDs (single source of truth)
+#   (b) an explicit, manually verified name->section map for items whose control
+#       has no authoritative_docs / no control link (see below)
+#   (c) a last-resort title search of the manual headings
+#
+# Every entry below was verified against ISMS Manual v4 (document_id=1) before
+# being committed: each IS-ID exists as a real heading section in markdown_body.
+POLICY_EVIDENCE_SECTION_MAP = {
+    # control link exists but authoritative_docs is empty -> verified by name
+    'Acceptable Use Policy': ['IS-AHR01-CIRQ02-A00'],
+    # "Access Removal" lives in the Access Control Procedure (§4.2.1 Employee
+    # Termination: keycards/accounts revoked on termination).
+    'Access Removal Procedures/Checklist': ['IS-AIR01-CIRQ04-A00'],
+    'Business Continuity Plan': ['IS-LIR-CIRQ01-A00', 'IS-LIG-CIRQ01-A00'],
+    # no control link at all -> resolved by name against manual headings
+    'Backup Policy': ['IS-AIR01-CIRQ08-A00'],
+    'Backup Restoration Procedures': ['IS-AIR01-CIRQ08-A00'],
+    'Information Security Policy': ['IS-APM01-CIRQ01-A00'],
+    # Supplier Relationships Policy + Supplier Security Review Procedure are the
+    # ISMS-manual home of vendor management (cf. control "Vendor Review").
+    'Vendor Management Policy and Procedures': ['IS-ASR01-CIRQ01-A00', 'IS-ASR01-CIRQ02-A00'],
+    # Technical Vulnerability Management is §4.8 of the Operations Security
+    # Policy (cf. control "Vulnerability Scan" authoritative_docs).
+    'Vulnerability Management Policy': ['IS-AIR01-CIRQ03-A00'],
+}
+
+# Policy items the ISMS manual genuinely does NOT contain (so they must stay
+# Manual and be sourced elsewhere). Recorded here so the resolver logs rather
+# than fabricates. Code of Conduct is in the Employee Handbook, not the ISMS.
+POLICY_EVIDENCE_NOT_IN_MANUAL = {
+    'Code of Conduct',
+}
+
+# IS-section reference tokens that appear in authoritative_docs but are NOT
+# extractable manual sections (external files / formats) -> ignored on resolve.
+_NON_SECTION_AUTH_TOKENS = ('.docx', '.pdf', '.xlsx')
+
+_IS_SECTION_RE = re.compile(r'IS-[A-Z0-9]+-CIRQ[0-9]+(?:-[A-Z0-9]+)?')
+_IS_HEADING_RE = re.compile(
+    r'^(#{1,6})\s+(IS-[A-Z0-9]+-CIRQ[0-9]+(?:-[A-Z0-9]+)?)\s*:\s*(.+)$'
+)
 
 
 class EvidenceFileService(EvidenceAzureMixin):
@@ -1729,6 +1783,300 @@ class EvidenceFileService(EvidenceAzureMixin):
         return file_path
 
     # ------------------------------------------------------------------
+    # ISMS-manual policy evidence generator
+    # ------------------------------------------------------------------
+
+    def _load_isms_manual_body(self):
+        """Return (markdown_body, version_number) for the current published
+        ISMS manual (isms_document slug=isms-manual). Returns (None, None) if
+        the manual or its current version is unavailable."""
+        from models import ISMSDocument, ISMSDocumentVersion
+
+        doc = ISMSDocument.query.filter_by(slug='isms-manual').first()
+        if not doc:
+            return None, None
+        version = None
+        if doc.current_version_id:
+            version = ISMSDocumentVersion.query.get(doc.current_version_id)
+        if version is None:
+            # fall back to the highest version_number for this document
+            version = (ISMSDocumentVersion.query
+                       .filter_by(document_id=doc.id)
+                       .order_by(ISMSDocumentVersion.version_number.desc())
+                       .first())
+        if version is None or not version.markdown_body:
+            return None, None
+        return version.markdown_body, version.version_number
+
+    def _extract_isms_section(self, body, is_id):
+        """Extract one IS-section from the manual markdown body.
+
+        A section runs from its ``## IS-<id>: Title`` heading up to (but not
+        including) the next IS-section heading of the same or shallower level.
+        Non-IS sub-headings (e.g. "## SOC 2 Trust Services Criteria Mapping")
+        that appear *within* a policy are kept as part of the section.
+
+        Returns (title, section_text) or None if the section isn't found.
+        """
+        if not body:
+            return None
+        lines = body.split('\n')
+        start = level = None
+        title = None
+        for i, ln in enumerate(lines):
+            m = _IS_HEADING_RE.match(ln.strip())
+            if m and m.group(2) == is_id:
+                start = i
+                level = len(m.group(1))
+                title = m.group(3).strip()
+                break
+        if start is None:
+            return None
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            m = _IS_HEADING_RE.match(lines[j].strip())
+            if m and len(m.group(1)) <= level:
+                end = j
+                break
+        return title, '\n'.join(lines[start:end]).strip()
+
+    def _find_isms_section_by_name(self, body, evidence_name):
+        """Last-resort resolution: match a policy evidence name to a manual
+        IS-section heading by title similarity. Returns the IS-ID or None."""
+        if not body:
+            return None
+        target = evidence_name.lower()
+        # strip generic suffixes so "Risk Management Policy and Procedures"
+        # still matches a "Risk Management Policy" heading.
+        for suffix in (' and procedures', ' policy and procedures', ' procedures',
+                       ' policy', ' plan', ' schedule'):
+            if target.endswith(suffix):
+                target = target[: -len(suffix)]
+                break
+        target = target.strip()
+        if not target:
+            return None
+        for ln in body.split('\n'):
+            m = _IS_HEADING_RE.match(ln.strip())
+            if m and target in m.group(3).strip().lower():
+                return m.group(2)
+        return None
+
+    def _resolve_policy_sections(self, evidence_item, body):
+        """Resolve a Policy evidence row to a list of ISMS IS-section IDs.
+
+        Order: (a) the linked control's authoritative_docs IS-* IDs;
+        (b) the verified POLICY_EVIDENCE_SECTION_MAP; (c) a manual title search.
+        Returns (is_ids, method) where method is one of
+        'authoritative_docs' | 'name-match' | 'title-search' | None.
+        Only IS-IDs that actually exist as headings in ``body`` are returned.
+        """
+        name = evidence_item.evidence_name
+
+        def _existing(ids):
+            out = []
+            for sid in ids:
+                if sid in out:
+                    continue
+                if self._extract_isms_section(body, sid):
+                    out.append(sid)
+            return out
+
+        # (a) authoritative_docs on the linked control
+        if evidence_item.control_id:
+            control = SOC2Control.query.get(evidence_item.control_id)
+            if control and control.authoritative_docs:
+                # _IS_SECTION_RE only matches IS-* tokens, so external-file
+                # references (e.g. ISMS-Manual.docx) are ignored; _existing()
+                # further drops any IS-ID that isn't an extractable heading.
+                ids = _IS_SECTION_RE.findall(control.authoritative_docs)
+                resolved = _existing(ids)
+                if resolved:
+                    return resolved, 'authoritative_docs'
+
+        # (b) explicit verified map
+        if name in POLICY_EVIDENCE_SECTION_MAP:
+            resolved = _existing(POLICY_EVIDENCE_SECTION_MAP[name])
+            if resolved:
+                return resolved, 'name-match'
+
+        # (c) title search
+        if name not in POLICY_EVIDENCE_NOT_IN_MANUAL:
+            sid = self._find_isms_section_by_name(body, name)
+            if sid:
+                return [sid], 'title-search'
+
+        return [], None
+
+    def _markdown_section_to_flowables(self, section_text, styles):
+        """Convert an extracted ISMS markdown section into reportlab flowables.
+
+        Handles markdown headings (#..######), bullet lists (-/*), simple GFM
+        tables (| a | b |), bold (**x**) and italics (*x*). This is a pragmatic
+        renderer for the manual's structure, not a full markdown engine.
+        """
+        from reportlab.platypus import Table, TableStyle
+        from reportlab.lib import colors
+
+        body_style = styles['isms_body']
+        h2 = styles['isms_h2']
+        h3 = styles['isms_h3']
+        bullet_style = styles['isms_bullet']
+
+        def _inline(text):
+            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            text = re.sub(r'\\([\\`*_{}\[\]()#+\-.!])', r'\1', text)
+            text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+            text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+            return text
+
+        flowables = []
+        lines = section_text.split('\n')
+        i = 0
+        n = len(lines)
+        while i < n:
+            raw = lines[i]
+            line = raw.strip()
+            if not line:
+                i += 1
+                continue
+
+            # GFM table block
+            if line.startswith('|') and i + 1 < n and re.match(r'^\|[\s:|-]+\|?\s*$', lines[i + 1].strip()):
+                table_rows = []
+                while i < n and lines[i].strip().startswith('|'):
+                    cells = [c.strip() for c in lines[i].strip().strip('|').split('|')]
+                    table_rows.append(cells)
+                    i += 1
+                # row index 1 is the --- separator
+                rendered = []
+                for r_idx, cells in enumerate(table_rows):
+                    if r_idx == 1:
+                        continue
+                    rendered.append([Paragraph(_inline(c), body_style) for c in cells])
+                if rendered:
+                    width = 6.9 * inch
+                    ncols = max(len(r) for r in rendered)
+                    col_w = width / ncols if ncols else width
+                    # pad short rows
+                    for r in rendered:
+                        while len(r) < ncols:
+                            r.append(Paragraph('', body_style))
+                    tbl = Table(rendered, colWidths=[col_w] * ncols)
+                    tbl.setStyle(TableStyle([
+                        ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#cbd5e1')),
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e2e8f0')),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                        ('TOPPADDING', (0, 0), (-1, -1), 3),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                    ]))
+                    flowables.append(tbl)
+                    flowables.append(Spacer(1, 8))
+                continue
+
+            # headings
+            hm = re.match(r'^(#{1,6})\s+(.*)$', line)
+            if hm:
+                depth = len(hm.group(1))
+                text = _inline(hm.group(2).strip())
+                flowables.append(Paragraph(text, h2 if depth <= 2 else h3))
+                i += 1
+                continue
+
+            # bullets
+            bm = re.match(r'^[-*]\s+(.*)$', line)
+            if bm:
+                flowables.append(Paragraph(_inline(bm.group(1)), bullet_style))
+                i += 1
+                continue
+
+            flowables.append(Paragraph(_inline(line), body_style))
+            i += 1
+        return flowables
+
+    def generate_isms_section_pdf(self, evidence_name):
+        """Generate an auditor-ready PDF for a Policy evidence item by extracting
+        the relevant section(s) directly from the published ISMS Manual.
+
+        Resolves the evidence item to ISMS IS-section IDs (control
+        authoritative_docs -> verified map -> title search), extracts each
+        section from the current manual version's markdown_body, and renders a
+        dated PDF stamped with the source. Returns the file path, or None if the
+        item cannot be resolved to any manual section (left Manual + logged).
+        """
+        body, version_number = self._load_isms_manual_body()
+        if not body:
+            print(f"[ISMS] manual body unavailable; cannot generate '{evidence_name}'")
+            return None
+
+        evidence_item = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).first()
+        if not evidence_item:
+            print(f"[ISMS] no catalog row for '{evidence_name}'")
+            return None
+
+        is_ids, method = self._resolve_policy_sections(evidence_item, body)
+        if not is_ids:
+            print(f"[ISMS] UNRESOLVED policy evidence '{evidence_name}' "
+                  f"(no ISMS section); leaving Manual.")
+            return None
+
+        sections = []
+        for sid in is_ids:
+            extracted = self._extract_isms_section(body, sid)
+            if extracted:
+                sections.append((sid, extracted[0], extracted[1]))
+        if not sections:
+            print(f"[ISMS] resolved ids {is_ids} for '{evidence_name}' but no section text extracted")
+            return None
+
+        ver_label = f"v{version_number}" if version_number else "v4"
+        generated = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+
+        # styles
+        base = getSampleStyleSheet()
+        styles = {
+            'title': ParagraphStyle('isms_title', parent=base['Heading1'], fontSize=18,
+                                    textColor='#2D4639', spaceAfter=6, alignment=TA_CENTER),
+            'subtitle': ParagraphStyle('isms_subtitle', parent=base['Normal'], fontSize=10,
+                                       textColor='#5b6b62', alignment=TA_CENTER, spaceAfter=4),
+            'source': ParagraphStyle('isms_source', parent=base['Normal'], fontSize=9,
+                                     textColor='#5b6b62', alignment=TA_CENTER, spaceAfter=2),
+            'isms_h2': ParagraphStyle('isms_h2', parent=base['Heading2'], fontSize=13,
+                                      textColor='#2D4639', spaceBefore=12, spaceAfter=6),
+            'isms_h3': ParagraphStyle('isms_h3', parent=base['Heading3'], fontSize=11,
+                                      textColor='#2D4639', spaceBefore=8, spaceAfter=4),
+            'isms_body': ParagraphStyle('isms_body', parent=base['BodyText'], fontSize=9.5,
+                                        alignment=TA_JUSTIFY, spaceAfter=6, leading=13),
+            'isms_bullet': ParagraphStyle('isms_bullet', parent=base['BodyText'], fontSize=9.5,
+                                          leftIndent=16, bulletIndent=6, spaceAfter=3, leading=13),
+        }
+
+        story = []
+        story.append(Paragraph("Cirque Corporation", styles['title']))
+        story.append(Paragraph(evidence_name, styles['subtitle']))
+        section_ids_label = ', '.join(s[0] for s in sections)
+        story.append(Paragraph(
+            f"Extracted from ISMS Manual {ver_label} (published), "
+            f"section {section_ids_label} &mdash; generated {generated}",
+            styles['source']))
+        story.append(Paragraph(f"Resolution method: {method}", styles['source']))
+        story.append(Spacer(1, 0.25 * inch))
+
+        for idx, (sid, sec_title, sec_text) in enumerate(sections):
+            if idx > 0:
+                story.append(PageBreak())
+            story.append(Paragraph(f"{sid}: {sec_title}", styles['isms_h2']))
+            story.append(Spacer(1, 4))
+            story.extend(self._markdown_section_to_flowables(sec_text, styles))
+
+        file_path = self.get_file_path(evidence_name, 'ISMS', 'pdf')
+        SimpleDocTemplate(file_path, pagesize=letter,
+                          topMargin=0.7 * inch, bottomMargin=0.7 * inch).build(story)
+        return file_path
+
+    # ------------------------------------------------------------------
     # Catalog wiring: stamp StrikeGraphEvidence + write EvidenceSnapshot
     # ------------------------------------------------------------------
 
@@ -1967,23 +2315,30 @@ class EvidenceFileService(EvidenceAzureMixin):
             'Network Monitoring Configuration': self.generate_network_traffic_logs_file,
             'Traffic Analysis Report': self.generate_network_traffic_logs_file,
             
-            # ISMS Policy Evidence (PDF generation)
-            'Acceptable Use Policy': self.generate_isms_policy_pdf,
-            'Access Removal Procedures/Checklist': self.generate_isms_policy_pdf,
-            'Backup Policy': self.generate_isms_policy_pdf,
-            'Backup Restoration Procedures': self.generate_isms_policy_pdf,
-            'Change Management Policy': self.generate_isms_policy_pdf,
-            'Code of Conduct': self.generate_isms_policy_pdf,
-            'Data Classification Policy': self.generate_isms_policy_pdf,
-            'Data Deletion': self.generate_isms_policy_pdf,
-            'Data Management Policy': self.generate_isms_policy_pdf,
-            'Incident Response Plan': self.generate_isms_policy_pdf,
-            'Information Security Policy': self.generate_isms_policy_pdf,
-            'Logical Access Policy and Procedures': self.generate_isms_policy_pdf,
-            'Password Policy': self.generate_isms_policy_pdf,
-            'Patch Management Policy': self.generate_isms_policy_pdf,
-            'Vulnerability Management Policy': self.generate_isms_policy_pdf,
-            
+            # ISMS Policy Evidence (PDF generated from the published ISMS Manual,
+            # extracted by IS-section ID -> see generate_isms_section_pdf). These
+            # are the Policy-type StrikeGraphEvidence items that resolve to a real
+            # manual section. "Code of Conduct" is intentionally absent: it lives
+            # in the Employee Handbook, not the ISMS manual.
+            'Acceptable Use Policy': self.generate_isms_section_pdf,
+            'Access Removal Procedures/Checklist': self.generate_isms_section_pdf,
+            'Backup Policy': self.generate_isms_section_pdf,
+            'Backup Restoration Procedures': self.generate_isms_section_pdf,
+            'Business Continuity Plan': self.generate_isms_section_pdf,
+            'Change Management Policy': self.generate_isms_section_pdf,
+            'Data Classification Policy': self.generate_isms_section_pdf,
+            'Data Management Policy': self.generate_isms_section_pdf,
+            'Incident Response Plan': self.generate_isms_section_pdf,
+            'Information Security Policy': self.generate_isms_section_pdf,
+            'Logical Access Policy and Procedures': self.generate_isms_section_pdf,
+            'Password Policy': self.generate_isms_section_pdf,
+            'Patch Management Policy': self.generate_isms_section_pdf,
+            'Record Retention Schedule': self.generate_isms_section_pdf,
+            'Risk Management Policy and Procedures': self.generate_isms_section_pdf,
+            'System Description Document': self.generate_isms_section_pdf,
+            'Vendor Management Policy and Procedures': self.generate_isms_section_pdf,
+            'Vulnerability Management Policy': self.generate_isms_section_pdf,
+
             # Employee Handbook Evidence (PDF generation)
             '1-1. Welcome Statement': self.generate_employee_handbook_pdf,
             '1-6. Non-Disclosure Employee Assignment Agreements': self.generate_employee_handbook_pdf,
@@ -2013,8 +2368,9 @@ class EvidenceFileService(EvidenceAzureMixin):
             return generator_func(evidence_name)
 
         evidence_item = StrikeGraphEvidence.query.filter_by(evidence_name=evidence_name).first()
-        if evidence_item and evidence_item.automation_source == 'ISMS':
-            return self.generate_isms_policy_pdf(evidence_name)
+        if evidence_item and (evidence_item.automation_source == 'ISMS'
+                              or evidence_item.evidence_type == 'Policy'):
+            return self.generate_isms_section_pdf(evidence_name)
         return None
     
     def generate_all_automated_evidence_files(self):

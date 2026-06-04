@@ -999,6 +999,62 @@ def create_rollback(ledger_id, requested_by="operator"):
     return led
 
 
+def park_offboard(employee_id, employee_name, reason="", requested_by="agentic-os"):
+    """Park an employee offboard at /approvals for 1-click review (high-risk: it releases
+    devices + licenses). Idempotent — won't double-park the same employee. Returns the
+    pending ledger id, or None if one is already parked / on failure."""
+    corr = f"offboard-emp-{employee_id}"
+    db = _db()
+    try:
+        existing = db.execute(
+            "SELECT id FROM command_ledger WHERE correlation_id=? AND status='awaiting_approval' "
+            "AND approval_status='pending' LIMIT 1", (corr,)).fetchone()
+    finally:
+        db.close()
+    if existing:
+        return None
+    led = _ledger_log(
+        "offboard_employee", "offboard_employee", object_type="employee",
+        object_id=str(employee_id), requested_by=requested_by, planned_by="offboard-sweep",
+        risk_tier="high", approval_status="pending", correlation_id=corr,
+        status="awaiting_approval",
+        before_state={"replay": {"run_id": None, "node_id": None, "step_id": None,
+                                 "action_type": "offboard_employee",
+                                 "config": {"employee_id": employee_id, "requested_by": requested_by},
+                                 "ctx": {"employee_id": employee_id, "employee_name": employee_name},
+                                 "visited": [], "queue": []},
+                      "policy": reason or f"Directory-disabled: offboard {employee_name}",
+                      "node_label": f"Offboard {employee_name}"},
+    )
+    if led:
+        _notify_parked("offboard_employee", "high", led, f"Offboard {employee_name}")
+    return led
+
+
+def _action_offboard_employee(config: dict, ctx: dict) -> tuple:
+    """Run the offboarding for one employee (unassign devices -> Pending Return, return
+    licenses, hide, checklist ticket). Invoked when an admin approves a parked offboard."""
+    emp_id = config.get("employee_id") or ctx.get("employee_id")
+    if not emp_id:
+        return False, {"error": "no employee_id in offboard action"}
+    try:
+        # approve_action runs handlers in a bare daemon thread → no Flask app context.
+        # This handler uses the ORM, so push one. (Raw-SQL handlers don't need this.)
+        from app import app as _flask_app
+        from models import Employee
+        from blueprints.employees import _offboard_employee
+        with _flask_app.app_context():
+            emp = Employee.query.get(int(emp_id))
+            if not emp:
+                return False, {"error": f"employee {emp_id} not found"}
+            name = emp.name
+            res = _offboard_employee(emp, actor=config.get("requested_by") or "agentic-os")
+        return True, {"employee_id": emp_id, "employee_name": name, **res}
+    except Exception as e:
+        log.exception("offboard_employee action failed for %s", emp_id)
+        return False, {"error": str(e)}
+
+
 # ── NEW ACTION HANDLERS ────────────────────────────────────────────────────────
 
 def _action_create_user(config: dict, ctx: dict) -> tuple:
@@ -1744,6 +1800,7 @@ ACTION_MAP = {
     "apply_gpo":          _action_apply_gpo,
     "wait":               _action_wait,
     "ai_suggest":         _action_ai_suggest,
+    "offboard_employee":  _action_offboard_employee,
 }
 
 

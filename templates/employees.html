@@ -199,7 +199,18 @@
                 </div>
             </div>
         </div>
-        
+
+        <!-- Account-state chips: hide directory-disabled users by default -->
+        {% if not show_hidden %}
+        {% set _as = account_state or 'active' %}
+        <div class="mt-3 d-flex gap-2 align-items-center" aria-label="Account state">
+            <span class="small text-muted me-1">Show:</span>
+            <a href="{{ url_for('employees.employees', account_state='active', search=search, department=department_filter, location=location_filter) }}" class="btn btn-sm {% if _as == 'active' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Active</a>
+            <a href="{{ url_for('employees.employees', account_state='disabled', search=search, department=department_filter, location=location_filter) }}" class="btn btn-sm {% if _as == 'disabled' %}btn-warning{% else %}btn-outline-warning{% endif %}">Disabled</a>
+            <a href="{{ url_for('employees.employees', account_state='all', search=search, department=department_filter, location=location_filter) }}" class="btn btn-sm {% if _as == 'all' %}btn-primary{% else %}btn-outline-secondary{% endif %}">All</a>
+        </div>
+        {% endif %}
+
         <!-- Active Filters -->
         <div class="mt-3" id="activeFilters">
             {% if search or department_filter or location_filter or show_hidden %}

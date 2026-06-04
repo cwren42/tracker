@@ -50,10 +50,26 @@ def employees():
     sort_order = request.args.get('order', 'asc')
     location_filter = request.args.get('location', '').strip()
     show_hidden = request.args.get('show_hidden', '0') == '1' and current_user.role == 'admin'
-    
-    # Base query — show only hidden employees or only visible employees
-    query = Employee.query.filter(Employee.is_visible == False) if show_hidden else Employee.query.filter(Employee.is_visible == True)
-    
+    account_state = request.args.get('account_state', 'active')  # active | disabled | all
+
+    # Base query — hidden set, or visible set filtered by directory account state.
+    if show_hidden:
+        query = Employee.query.filter(Employee.is_visible == False)
+    else:
+        query = Employee.query.filter(Employee.is_visible == True)
+        # Default: hide directory-disabled accounts. NULL = unknown -> keep visible.
+        if account_state == 'active':
+            query = query.filter(
+                db.or_(Employee.ad_enabled.is_(None), Employee.ad_enabled == True)
+            ).filter(
+                db.or_(Employee.m365_account_enabled.is_(None), Employee.m365_account_enabled == True)
+            )
+        elif account_state == 'disabled':
+            query = query.filter(
+                db.or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False)
+            )
+        # account_state == 'all' -> no extra filter
+
     # Apply search filter
     if search:
         search_filter = f"%{search}%"
@@ -216,6 +232,7 @@ def employees():
                          department_filter=department_filter,
                          location_filter=location_filter,
                          show_hidden=show_hidden,
+                         account_state=account_state,
                          sort_by=sort_by,
                          sort_order=sort_order,
                          total_employees=total_employees,
@@ -729,44 +746,39 @@ def delete_employee(employee_id):
     return redirect(url_for('employees.employees'))
 
 
-@bp.route('/employees/<int:employee_id>/offboard', methods=['POST'])
-@login_required
-@manager_required
-@license_required
-def offboard_employee(employee_id):
-    """Offboarding workflow: unassign assets, revoke licenses, create checklist ticket."""
-    employee = Employee.query.get_or_404(employee_id)
-
+def _offboard_employee(employee, actor='system', actor_email=None):
+    """Core offboarding, reusable by the manual button AND the 1-click approval handler:
+    unassign assets (-> 'Pending Return' so they surface for collection), return active
+    licenses, HIDE the employee (is_visible=False), and open an [OFFBOARD] checklist ticket.
+    Returns a result dict. Caller commits are handled here."""
     steps_done = []
 
-    # 1. Unassign all assets
     asset_list = []
     for asset in list(employee.assets):
         asset_list.append(f"{asset.asset_tag} ({asset.name})")
         asset.employee_id = None
-        asset.status = 'Available'
+        asset.status = 'Pending Return'   # surfaces in a "to collect" view, not silently Available
         asset.updated_at = datetime.utcnow()
     if asset_list:
-        steps_done.append(f"Assets unassigned: {', '.join(asset_list)}")
+        steps_done.append(f"Assets unassigned (Pending Return): {', '.join(asset_list)}")
         db.session.flush()
 
-    # 2. Revoke active license assignments
     active_licenses = LicenseAssignment.query.filter_by(
         employee_id=employee.id, status='Active').all()
-    license_list = []
     for la in active_licenses:
         la.status = 'Returned'
         la.returned_date = datetime.utcnow()
-        license_list.append(str(la.id))
-    if license_list:
-        steps_done.append(f"Licenses returned: {len(license_list)}")
+    if active_licenses:
+        steps_done.append(f"Licenses returned: {len(active_licenses)}")
 
-    # 3. Create offboarding checklist ticket
+    # Hide the offboarded employee from the active roster.
+    employee.is_visible = False
+
     checklist = (
         "## Offboarding Checklist\n\n"
         f"**Employee:** {employee.name} ({employee.email or 'no email'})\n"
         f"**Department:** {employee.department or 'N/A'}\n"
-        f"**Initiated by:** {current_user.username}\n\n"
+        f"**Initiated by:** {actor}\n\n"
         "### Automated Steps Completed\n"
     )
     for step in steps_done:
@@ -776,30 +788,38 @@ def offboard_employee(employee_id):
         "- [ ] Disable Active Directory / Azure AD account\n"
         "- [ ] Remove from all security groups and distribution lists\n"
         "- [ ] Revoke MFA tokens and app-specific passwords\n"
-        "- [ ] Collect physical access cards / keys\n"
+        "- [ ] Collect physical access cards / keys (assets marked Pending Return)\n"
         "- [ ] Remove from VPN / remote access\n"
         "- [ ] Archive or transfer email and files\n"
         "- [ ] Update org chart and documentation\n"
     )
-
     ticket = SupportTicket(
         status='Open', priority='High', source='system',
         category='HR / Offboarding',
         subject=f'[OFFBOARD] {employee.name} — Offboarding Checklist',
         description=checklist,
-        reporter_name=current_user.username,
-        reporter_email=current_user.email,
-        created_by_user_id=current_user.id,
+        reporter_name=actor, reporter_email=actor_email,
         created_at=datetime.utcnow(), updated_at=datetime.utcnow())
     db.session.add(ticket)
     db.session.commit()
+    return {'ticket_id': ticket.id, 'assets_unassigned': len(asset_list),
+            'licenses_returned': len(active_licenses)}
 
+
+@bp.route('/employees/<int:employee_id>/offboard', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def offboard_employee(employee_id):
+    """Offboarding workflow: unassign assets, revoke licenses, hide, create checklist ticket."""
+    employee = Employee.query.get_or_404(employee_id)
+    res = _offboard_employee(employee, actor=current_user.username, actor_email=current_user.email)
     flash(
-        f'Offboarding initiated for {employee.name}. '
-        f'Ticket #{ticket.id} created with checklist. '
-        f'{len(asset_list)} asset(s) unassigned, {len(license_list)} license(s) returned.',
+        f"Offboarding complete for {employee.name}. Ticket #{res['ticket_id']} created. "
+        f"{res['assets_unassigned']} asset(s) set Pending Return, "
+        f"{res['licenses_returned']} license(s) returned.",
         'success')
-    return redirect(url_for('employees.view_employee', employee_id=employee.id))
+    return redirect(url_for('employees.employees'))
 
 
 @bp.route('/employees/import', methods=['GET', 'POST'])

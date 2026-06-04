@@ -35,6 +35,11 @@ AD_ASSET_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_ASSET_SYNC_LOCK_PATH', '/tm
 AD_ASSET_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_ASSET_SYNC_INTERVAL_HOURS', '24'))
 DISABLE_AD_ASSET_SYNC = os.environ.get('DISABLE_AD_ASSET_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# Employee offboard sweep: park an offboard (1-click review) for disabled-but-visible users. Daily.
+OFFBOARD_SWEEP_LOCK_PATH = os.environ.get('TRACKER_OFFBOARD_SWEEP_LOCK_PATH', '/tmp/tracker_offboard_sweep.lock')
+OFFBOARD_SWEEP_INTERVAL_HOURS = int(os.environ.get('OFFBOARD_SWEEP_INTERVAL_HOURS', '24'))
+DISABLE_OFFBOARD_SWEEP = os.environ.get('DISABLE_OFFBOARD_SWEEP', '').strip() in ('1', 'true', 'yes', 'on')
+
 DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tmp/tracker_defender_vuln_sync.lock')
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -149,6 +154,19 @@ def start_sync_scheduler(flask_app):
             hours=max(AD_ASSET_SYNC_INTERVAL_HOURS, 1),
             id='ad_asset_sync',
             name='Daily on-prem AD computer sync (AD = source of truth)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+
+    if not DISABLE_OFFBOARD_SWEEP:
+        _scheduler.add_job(
+            func=lambda: run_employee_offboard_sweep_job(flask_app),
+            trigger='interval',
+            hours=max(OFFBOARD_SWEEP_INTERVAL_HOURS, 1),
+            id='employee_offboard_sweep',
+            name='Daily disabled-employee offboard sweep (parks 1-click offboards)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -483,6 +501,39 @@ def run_m365_employee_photo_refresh_job(flask_app):
                     pass
 
                 logger.exception('Scheduled M365 employee photo refresh crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_employee_offboard_sweep_job(flask_app_instance):
+    """Park an offboard (for 1-click review) for every employee that's still visible but
+    disabled in AD/M365 — so disabled users get their devices+licenses released on approval.
+    Idempotent via park_offboard's correlation-id guard."""
+    with _file_lock(OFFBOARD_SWEEP_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('Offboard sweep already running in another worker — skipping')
+            return
+        with flask_app_instance.app_context():
+            try:
+                from extensions import db
+                from models import Employee
+                from sqlalchemy import or_
+                import workflow_engine
+                disabled = Employee.query.filter(
+                    Employee.is_visible == True,
+                    or_(Employee.ad_enabled == False, Employee.m365_account_enabled == False),
+                ).all()
+                parked = 0
+                for e in disabled:
+                    if workflow_engine.park_offboard(e.id, e.name, reason='Directory account disabled'):
+                        parked += 1
+                logger.info('Employee offboard sweep: %d disabled-but-visible, %d newly parked',
+                            len(disabled), parked)
+            except Exception:
+                logger.exception('Employee offboard sweep crashed')
             finally:
                 try:
                     db.session.remove()

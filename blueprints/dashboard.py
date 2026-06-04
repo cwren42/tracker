@@ -1046,6 +1046,16 @@ def _onboard_directory_options():
         ous = svc.list_ous()
         groups_base = Setting.query.filter_by(key='ad_groups_ou_dn').first()
         groups = svc.list_groups(groups_base.value if groups_base and groups_base.value else None)
+        # Tag each group by its sub-OU so the approval card can segregate Privileged
+        # from Standard (least-privilege at a glance). Derived from the DN.
+        for g in groups:
+            dn = (g.get('dn') or '')
+            if 'OU=Privileged Groups' in dn:
+                g['category'] = 'Privileged'
+            elif 'OU=Standard Groups' in dn:
+                g['category'] = 'Standard'
+            else:
+                g['category'] = 'Other'
         return ous, groups
     except Exception:
         current_app.logger.exception('onboard directory options failed')

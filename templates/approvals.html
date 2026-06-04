@@ -140,7 +140,13 @@ function detailBlock(it){
     var ouOpts='<option value="">— select target OU —</option>';
     (S.adOus||[]).forEach(function(ou){ ouOpts+='<option value="'+esc(ou.dn)+'">'+esc(ou.name)+'</option>'; });
     var grpOpts='';
-    (S.adGroups||[]).forEach(function(g){ grpOpts+='<option value="'+esc(g.dn)+'">'+esc(g.name)+'</option>'; });
+    ['Standard','Privileged','Other'].forEach(function(cat){
+      var inCat=(S.adGroups||[]).filter(function(g){ return (g.category||'Other')===cat; });
+      if(!inCat.length) return;
+      grpOpts+='<optgroup label="'+esc(cat)+' ('+inCat.length+')">';
+      inCat.forEach(function(g){ grpOpts+='<option value="'+esc(g.dn)+'">'+esc(g.name)+'</option>'; });
+      grpOpts+='</optgroup>';
+    });
     var noAd=(!(S.adOus||[]).length || !(S.adGroups||[]).length);
     var prov='<div class="small mb-2 p-2" style="background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);">'
       +'<div class="fw-semibold mb-1"><i class="bi bi-diagram-3 me-1"></i>IT: choose AD placement</div>';

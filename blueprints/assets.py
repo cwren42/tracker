@@ -444,12 +444,13 @@ def add_asset():
             replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date()
         
         asset = Asset(
-            asset_tag=request.form.get('asset_tag'),
+            # '' -> NULL: asset_tag & serial_number are UNIQUE; empty strings collide.
+            asset_tag=(request.form.get('asset_tag') or '').strip() or None,
             name=request.form.get('name'),
             category=request.form.get('category'),
             manufacturer=request.form.get('manufacturer'),
             model=request.form.get('model'),
-            serial_number=request.form.get('serial_number'),
+            serial_number=(request.form.get('serial_number') or '').strip() or None,
             purchase_date=purchase_date,
             purchase_cost=float(request.form.get('purchase_cost')) if request.form.get('purchase_cost') else None,
             warranty_expiry=datetime.strptime(request.form.get('warranty_expiry'), '%Y-%m-%d').date() if request.form.get('warranty_expiry') else None,
@@ -624,12 +625,15 @@ def edit_asset(asset_id):
                 file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], photo_filename))
                 asset.photo = photo_filename
         
-        asset.asset_tag = request.form.get('asset_tag')
+        # asset_tag and serial_number carry a UNIQUE constraint. Empty strings collide
+        # (many assets legitimately have no serial), so normalize '' -> NULL — Postgres
+        # allows multiple NULLs but not multiple ''. This was the cause of edit 500s.
+        asset.asset_tag = (request.form.get('asset_tag') or '').strip() or None
         asset.name = request.form.get('name')
         asset.category = request.form.get('category')
         asset.manufacturer = request.form.get('manufacturer')
         asset.model = request.form.get('model')
-        asset.serial_number = request.form.get('serial_number')
+        asset.serial_number = (request.form.get('serial_number') or '').strip() or None
         asset.purchase_date = datetime.strptime(request.form.get('purchase_date'), '%Y-%m-%d').date() if request.form.get('purchase_date') else None
         asset.purchase_cost = float(request.form.get('purchase_cost')) if request.form.get('purchase_cost') else None
         asset.warranty_expiry = datetime.strptime(request.form.get('warranty_expiry'), '%Y-%m-%d').date() if request.form.get('warranty_expiry') else None

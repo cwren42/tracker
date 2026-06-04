@@ -144,6 +144,11 @@ class Asset(db.Model):
     unifi_device_id = db.Column(db.String(100))  # UniFi device UUID / MAC
     unifi_last_seen = db.Column(db.DateTime)  # Last seen from UniFi sync
     unifi_uptime_secs = db.Column(db.Integer)  # Device uptime in seconds
+    # On-prem AD (source of truth for computers). Keyed by objectGUID; reconciled by hostname.
+    ad_device_guid = db.Column(db.String(100))  # AD computer objectGUID
+    ad_dn = db.Column(db.String(400))           # AD distinguishedName
+    ad_enabled = db.Column(db.Boolean)          # AD account enabled (UAC bit)
+    ad_last_logon = db.Column(db.DateTime)      # AD lastLogonTimestamp
     last_seen = db.Column(db.DateTime)  # Last seen timestamp (RMM / TeamViewer / UniFi)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

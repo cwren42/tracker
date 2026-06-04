@@ -98,6 +98,28 @@ def sync_assets_from_unifi():
     return redirect(url_for('assets.assets'))
 
 
+@bp.route('/assets/sync-from-ad', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def sync_assets_from_ad():
+    """Manual on-prem AD computer sync (AD = source of truth for assets)."""
+    try:
+        from ad_asset_service import sync_ad_computers
+        result = sync_ad_computers(current_app._get_current_object(), db, Asset, Setting, AssetHistory)
+        if result.get('error'):
+            flash(f"AD sync: {result['error']}", 'warning')
+        else:
+            flash(f"AD sync complete — {result.get('created',0)} new, "
+                  f"{result.get('updated',0)} updated"
+                  + (f", {result['errors']} errors" if result.get('errors') else ''),
+                  'success' if not result.get('errors') else 'warning')
+    except Exception as e:
+        logger.exception('Manual AD sync failed')
+        flash(f'AD sync failed: {e}', 'danger')
+    return redirect(url_for('assets.assets'))
+
+
 def perform_intune_asset_sync():
     """Core Intune asset sync logic.
 

@@ -30,6 +30,11 @@ UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/trac
 UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '5'))
 DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# On-prem AD computer sync (AD = source of truth for assets). Daily.
+AD_ASSET_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_ASSET_SYNC_LOCK_PATH', '/tmp/tracker_ad_asset_sync.lock')
+AD_ASSET_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_ASSET_SYNC_INTERVAL_HOURS', '24'))
+DISABLE_AD_ASSET_SYNC = os.environ.get('DISABLE_AD_ASSET_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
 DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tmp/tracker_defender_vuln_sync.lock')
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -135,6 +140,19 @@ def start_sync_scheduler(flask_app):
             max_instances=1,
             coalesce=True,
             misfire_grace_time=60,
+        )
+
+    if not DISABLE_AD_ASSET_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_ad_asset_sync_job(flask_app),
+            trigger='interval',
+            hours=max(AD_ASSET_SYNC_INTERVAL_HOURS, 1),
+            id='ad_asset_sync',
+            name='Daily on-prem AD computer sync (AD = source of truth)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
         )
 
     if not DISABLE_DEFENDER_SYNC:
@@ -465,6 +483,27 @@ def run_m365_employee_photo_refresh_job(flask_app):
                     pass
 
                 logger.exception('Scheduled M365 employee photo refresh crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_ad_asset_sync_job(flask_app_instance):
+    """Run the on-prem AD computer sync with a cross-process lock (AD = source of truth)."""
+    with _file_lock(AD_ASSET_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('AD asset sync already running in another worker — skipping')
+            return
+        with flask_app_instance.app_context():
+            try:
+                from app import db, Asset, Setting, AssetHistory
+                from ad_asset_service import sync_ad_computers
+                res = sync_ad_computers(flask_app_instance, db, Asset, Setting, AssetHistory)
+                logger.info('Scheduled AD asset sync complete: %s', res)
+            except Exception:
+                logger.exception('AD asset sync job crashed')
             finally:
                 try:
                     db.session.remove()

@@ -431,7 +431,8 @@ def assets():
         for k, v in db.session.execute(text(
             "SELECT key, value FROM setting WHERE key IN "
             "('intune_asset_sync_last_finished','intune_asset_sync_last_status','intune_asset_sync_last_message',"
-            " 'unifi_last_sync_time','unifi_last_sync_status','unifi_last_sync_message')")).fetchall():
+            " 'unifi_last_sync_time','unifi_last_sync_status','unifi_last_sync_message',"
+            " 'ad_asset_sync_last_finished','ad_asset_sync_last_status','ad_asset_sync_last_message')")).fetchall():
             sync_status[k] = v
     except Exception:
         pass

@@ -51,6 +51,11 @@
                         <button type="submit" class="dropdown-item"><i class="bi bi-router me-2"></i>Sync from UniFi</button>
                     </form>
                 </li>
+                <li>
+                    <form method="POST" action="{{ url_for('assets.sync_assets_from_ad') }}" onsubmit="return confirm('Sync computers from Active Directory? (AD is the source of truth)');">
+                        <button type="submit" class="dropdown-item"><i class="bi bi-pc-display-horizontal me-2"></i>Sync from AD</button>
+                    </form>
+                </li>
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">RMM Agent</h6></li>
                 <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_installer') }}"><i class="bi bi-download me-2"></i>Download Windows Agent (.exe)</a></li>
@@ -132,6 +137,12 @@
     <span><i class="bi bi-router me-1"></i>UniFi synced
         {{ sync_status.get('unifi_last_sync_time','')[:16]|replace('T',' ') }}
         {% if sync_status.get('unifi_last_sync_status') == 'success' %}<i class="bi bi-check-circle-fill text-success ms-1"></i>{% else %}<i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>{% endif %}
+    </span>
+    {% endif %}
+    {% if sync_status.get('ad_asset_sync_last_finished') %}
+    <span><i class="bi bi-pc-display-horizontal me-1"></i>AD synced
+        {{ sync_status.get('ad_asset_sync_last_finished','')[:16]|replace('T',' ') }}
+        {% if sync_status.get('ad_asset_sync_last_status') == 'success' %}<i class="bi bi-check-circle-fill text-success ms-1"></i>{% else %}<i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>{% endif %}
     </span>
     {% endif %}
 </div>

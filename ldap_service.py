@@ -17,6 +17,7 @@ Setting keys used:
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ldap3 import Server, Connection, ALL, SUBTREE, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE
@@ -449,6 +450,105 @@ class LDAPService:
                 'ad_enabled':        enabled,
                 'thumbnail_photo':   thumb,
                 'ou_location':       location,   # inferred region from OU path
+            })
+
+        return results
+
+    def get_all_computers(self) -> list:
+        """Return all computer objects from AD (enabled + disabled) as plain dicts,
+        keyed by objectGUID. The hostname (dNSHostName / cn) is the reconciliation key
+        against assets. Searches the computer OU (falls back to base DN)."""
+        self._ensure()
+        search_base = self.config.computer_ou_dn or self.config.base_dn
+
+        AD_ATTRS = [
+            'objectGUID', 'cn', 'name', 'dNSHostName', 'distinguishedName',
+            'operatingSystem', 'operatingSystemVersion', 'userAccountControl',
+            'lastLogonTimestamp', 'whenCreated', 'description',
+        ]
+        search_filter = "(objectClass=computer)"  # both enabled and disabled
+
+        raw_entries = self.connection.extend.standard.paged_search(
+            search_base=search_base,
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=AD_ATTRS,
+            paged_size=250,
+            generator=False,
+        )
+
+        def _str(v):
+            if v is None:
+                return ''
+            if isinstance(v, list):
+                v = v[0] if v else ''
+            if isinstance(v, bytes):
+                return ''
+            return str(v).strip()
+
+        def _filetime(v):
+            """AD lastLogonTimestamp is 100ns intervals since 1601-01-01; ldap3 may also
+            hand back a datetime directly. Returns a datetime or None."""
+            if isinstance(v, list):
+                v = v[0] if v else None
+            if v is None:
+                return None
+            if isinstance(v, datetime):
+                return v.replace(tzinfo=None)
+            try:
+                ft = int(v)
+                if ft <= 0:
+                    return None
+                return datetime(1601, 1, 1) + timedelta(microseconds=ft // 10)
+            except (ValueError, TypeError, OverflowError):
+                return None
+
+        results = []
+        for entry in (raw_entries or []):
+            if not isinstance(entry, dict):
+                continue
+            dn = entry.get('dn', '')
+            if not dn:
+                continue
+            attrs = entry.get('attributes', {})
+
+            raw_guid = attrs.get('objectGUID')
+            if not raw_guid:
+                continue
+            try:
+                if isinstance(raw_guid, bytes):
+                    guid_str = str(uuid.UUID(bytes_le=raw_guid))
+                elif isinstance(raw_guid, list) and raw_guid:
+                    g = raw_guid[0]
+                    guid_str = str(uuid.UUID(bytes_le=g)) if isinstance(g, bytes) else str(g).strip('{}')
+                else:
+                    guid_str = str(raw_guid).strip('{}')
+            except Exception:
+                continue
+
+            uac = attrs.get('userAccountControl', 0)
+            if isinstance(uac, list):
+                uac = uac[0] if uac else 0
+            try:
+                enabled = not bool(int(uac) & 2)
+            except (ValueError, TypeError):
+                enabled = True
+
+            full_host = _str(attrs.get('dNSHostName')) or _str(attrs.get('name')) or _str(attrs.get('cn'))
+            short_host = full_host.split('.')[0] if full_host else ''
+            _, ou_location = self._parse_ou_dept_location(dn)
+
+            results.append({
+                'ad_guid':            guid_str,
+                'hostname':           full_host,
+                'short_hostname':     short_host,
+                'distinguished_name': dn,
+                'operating_system':   _str(attrs.get('operatingSystem')),
+                'os_version':         _str(attrs.get('operatingSystemVersion')),
+                'ad_enabled':         enabled,
+                'last_logon':         _filetime(attrs.get('lastLogonTimestamp')),
+                'description':        _str(attrs.get('description')) or None,
+                'ou_location':        ou_location or None,
             })
 
         return results

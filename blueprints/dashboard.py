@@ -853,6 +853,42 @@ def _asset_name_map(rows):
             for a in Asset.query.filter(Asset.id.in_(ids)).all()}
 
 
+def _action_effect(at, ctx, device, is_quar):
+    """Plain-English 'what approving this does' — so an approval is self-explanatory months
+    later, not just a cryptic action name."""
+    who = device or 'the target'
+    g = ctx.get
+    if at == 'offboard_employee':
+        return (f"Offboards {who}: unassigns all their devices (set to 'Pending Return' for "
+                "collection), returns their software licenses, hides them from the active "
+                "roster, and opens an offboarding checklist ticket. Does NOT delete the AD/M365 account.")
+    if at == 'apply_fix':
+        return f"Runs the vetted fix “{g('fix_name') or 'fix'}” as SYSTEM on {who}; closes the linked ticket if it succeeds."
+    if at == 'install_local_tool':
+        return f"Silently installs {g('file_name') or 'the tool'} as SYSTEM on {who} (locked to the approved file's hash)."
+    if at == 'uninstall_software':
+        return f"Uninstalls {g('file_name') or 'the software'} from {who}."
+    if at == 'release_quarantine':
+        return (f"Releases this quarantined email to {g('recipient') or 'the recipient'}’s inbox."
+                if is_quar else
+                "Whitelists the sender domain in Exchange — future mail from it is delivered (live mail-flow change).")
+    if at == 'unlock_account':   return f"Unlocks the AD account {g('username') or g('upn') or who}."
+    if at == 'disable_ad_user':  return f"Disables the AD account {g('username') or who} — they can no longer sign in."
+    if at == 'enable_ad_user':   return f"Re-enables the AD account {g('username') or who}."
+    if at == 'reset_password':   return f"Resets the AD password for {g('username') or who}."
+    if at == 'create_user':      return f"Creates a new AD user {g('username') or g('upn') or ''}."
+    if at == 'add_to_group':     return f"Adds {g('username') or who} to the AD group {g('group_name') or g('group_dn') or ''}."
+    if at == 'remove_from_group':return f"Removes {g('username') or who} from the AD group {g('group_name') or g('group_dn') or ''}."
+    if at == 'reboot_device':    return f"Reboots {who} now."
+    if at == 'shutdown_device':  return f"Shuts down {who} now."
+    if at == 'lock_device':      return f"Locks the screen on {who}."
+    if at == 'apply_gpo':        return f"Forces a Group Policy update on {who}."
+    if at in ('deploy_patch', 'install_patches'): return f"Installs the approved Windows update(s) on {who}."
+    if at == 'run_script':       return f"Runs a script as SYSTEM on {who}."
+    if at == 'azure_sync':       return "Triggers an Azure AD Connect delta sync."
+    return f"Runs the “{(at or '').replace('_', ' ')}” action on {who}."
+
+
 def _ledger_display(row, asset_names=None):
     """Serialize a CommandLedger row to a JSON-friendly dict for the approvals inbox.
     Sensitive config values are redacted here, server-side. `asset_names` (from
@@ -903,6 +939,7 @@ def _ledger_display(row, asset_names=None):
         summary = rp.get('node_label') or ''
     return {
         'id': row.id, 'action_type': at, 'label': label, 'summary': summary,
+        'effect': _action_effect(at, ctx, device, is_quar),
         'device': device, 'risk_tier': row.risk_tier or 'low',
         'requested_by': row.requested_by or '', 'correlation_id': row.correlation_id or '',
         'approval_status': row.approval_status, 'status': row.status,

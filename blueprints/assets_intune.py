@@ -120,6 +120,100 @@ def sync_assets_from_ad():
     return redirect(url_for('assets.assets'))
 
 
+# Software-identity that lives on the HDD/OS (moves on a swap). Chassis fields
+# (serial_number, manufacturer, model, hardware_bios_version, asset_tag, purchase_*,
+# warranty_*, location, condition) deliberately STAY with the physical chassis.
+_HDD_BUNDLE = ['name', 'os_version', 'intune_os_version', 'intune_device_id',
+               'azure_ad_device_id', 'intune_last_sync', 'ad_device_guid', 'ad_dn',
+               'ad_enabled', 'ad_last_logon']
+
+
+def _repoint_links(src_id, dst_id, swap):
+    """Move the RMM agent + installed-app rows that travel with the HDD/OS. Best-effort."""
+    for tbl in ('rmm_agent', 'installed_app'):
+        try:
+            if swap:
+                db.session.execute(text(
+                    f"UPDATE {tbl} SET asset_id = CASE WHEN asset_id=:a THEN :b ELSE :a END "
+                    f"WHERE asset_id IN (:a, :b)"), {'a': src_id, 'b': dst_id})
+            else:
+                db.session.execute(text(
+                    f"UPDATE {tbl} SET asset_id=:dst WHERE asset_id=:src"),
+                    {'dst': dst_id, 'src': src_id})
+        except Exception:
+            logger.exception('hdd-transfer: re-point %s failed (non-fatal)', tbl)
+
+
+@bp.route('/assets/<int:asset_id>/hdd-transfer', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def hdd_transfer(asset_id):
+    """Move an HDD/OS identity between chassis. The OS-identity bundle (hostname, OS,
+    Intune/AD device IDs, RMM agent, installed apps, optionally the assigned employee)
+    moves; serial/model/tag/warranty stay with each chassis. Two modes:
+      - 'swap': src <-> target exchange HDDs (both chassis keep their serials).
+      - 'transfer': src's HDD moves INTO target; src becomes an empty chassis (optionally retired).
+    """
+    src = Asset.query.get_or_404(asset_id)
+    data = request.get_json(silent=True) or request.form
+    try:
+        target_id = int(data.get('target_id'))
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'target_id is required'}), 400
+    if target_id == src.id:
+        return jsonify({'ok': False, 'error': 'Pick a different target chassis.'}), 400
+    dst = Asset.query.get_or_404(target_id)
+    mode = (data.get('mode') or 'swap').lower()
+    move_employee = str(data.get('move_employee', 'true')).lower() in ('1', 'true', 'yes', 'on')
+    retire_source = str(data.get('retire_source', 'false')).lower() in ('1', 'true', 'yes', 'on')
+    swap = (mode == 'swap')
+
+    bundle = _HDD_BUNDLE + (['employee_id'] if move_employee else [])
+    src_old_name, dst_old_name = src.name, dst.name
+    try:
+        if swap:
+            for f in bundle:
+                sv, dv = getattr(src, f), getattr(dst, f)
+                setattr(src, f, dv)
+                setattr(dst, f, sv)
+        else:  # one-way: src's HDD -> dst chassis; src left empty
+            for f in bundle:
+                setattr(dst, f, getattr(src, f))
+            for f in _HDD_BUNDLE:
+                setattr(src, f, None)
+            if move_employee:
+                src.employee_id = None
+            # name is NOT NULL — give the now-empty chassis a clear placeholder.
+            src.name = f"Empty chassis — {src.serial_number or src.asset_tag or ('#' + str(src.id))}"
+            if retire_source:
+                src.status = 'Retired'
+        _repoint_links(src.id, dst.id, swap)
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
+        src.updated_at = dst.updated_at = now
+        verb = 'swapped with' if swap else 'transferred to'
+        db.session.add(AssetHistory(asset_id=dst.id, action='HDD/OS Transfer',
+            description=f"Received HDD/OS ({src_old_name}) {('swapped with ' + dst_old_name) if swap else 'transferred in from ' + src_old_name}",
+            user_id=current_user.id))
+        db.session.add(AssetHistory(asset_id=src.id, action='HDD/OS Transfer',
+            description=f"HDD/OS {verb} {dst_old_name}" + (' — chassis retired (parts)' if retire_source else ''),
+            user_id=current_user.id))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('hdd-transfer failed')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+    msg = (f"Swapped HDD/OS between {dst.name} and {src.name}." if swap
+           else f"Moved HDD/OS to {dst.name}; {src.name} left as an empty chassis"
+                + (" (retired)." if retire_source else "."))
+    if request.is_json:
+        return jsonify({'ok': True, 'message': msg, 'redirect': url_for('assets.view_asset', asset_id=dst.id)})
+    flash(msg, 'success')
+    return redirect(url_for('assets.view_asset', asset_id=dst.id))
+
+
 def perform_intune_asset_sync():
     """Core Intune asset sync logic.
 

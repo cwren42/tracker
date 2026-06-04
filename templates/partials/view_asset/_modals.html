@@ -48,3 +48,55 @@
         </div>
     </div>
 </div>
+
+<!-- HDD / OS Transfer Modal -->
+<div class="modal fade" id="hddTransferModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="{{ url_for('assets.hdd_transfer', asset_id=asset.id) }}"
+            onsubmit="return confirm('Apply this HDD/OS transfer? It moves the software identity (hostname, OS, Intune/AD, RMM agent, apps) between chassis.');">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-hdd-fill me-2"></i>Swap / Transfer HDD</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-muted">The OS/identity (hostname, OS, Intune &amp; AD device, RMM agent, installed apps) moves with the HDD. Each chassis keeps its own <strong>serial, model, tag &amp; warranty</strong>.</p>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Other chassis</label>
+            <select name="target_id" class="form-select form-select-sm" required>
+              <option value="">— select the other machine —</option>
+              {% for t in transfer_targets %}
+              <option value="{{ t.id }}">{{ t.name }}{% if t.serial_number %} — {{ t.serial_number }}{% endif %}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Operation</label>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="mode" id="modeSwap" value="swap" checked onchange="document.getElementById('retireWrap').style.display='none'">
+              <label class="form-check-label" for="modeSwap">Swap — the two machines traded HDDs (both keep their serials)</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="mode" id="modeTransfer" value="transfer" onchange="document.getElementById('retireWrap').style.display='block'">
+              <label class="form-check-label" for="modeTransfer">Transfer — move <strong>this</strong> machine's HDD into the other chassis; this one becomes an empty chassis</label>
+            </div>
+          </div>
+          <div class="mb-2" id="retireWrap" style="display:none;">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="retire_source" id="retireSrc" value="true" checked>
+              <label class="form-check-label small" for="retireSrc">Retire this (now-empty) chassis as parts</label>
+            </div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="move_employee" id="moveEmp" value="true" checked>
+            <label class="form-check-label small" for="moveEmp">Move the assigned user with the HDD (uncheck to keep assignments as-is)</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-arrow-left-right me-1"></i>Apply transfer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

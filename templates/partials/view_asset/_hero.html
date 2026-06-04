@@ -54,6 +54,9 @@
                     <li><a class="dropdown-item" href="{{ url_for('assets.edit_asset', asset_id=asset.id) }}">
                         <i class="bi bi-pencil-fill me-2"></i>Edit Asset
                     </a></li>
+                    <li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#hddTransferModal">
+                        <i class="bi bi-hdd-fill me-2"></i>Swap / Transfer HDD
+                    </button></li>
                     <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item" href="{{ url_for('misc.download_agent_installer') }}">
                         <i class="bi bi-download me-2"></i>Download Agent (.msi)

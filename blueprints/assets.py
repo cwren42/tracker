@@ -603,12 +603,17 @@ def view_asset(asset_id):
     except Exception:
         pass
 
+    # Candidate chassis for an HDD/OS transfer (exclude self).
+    transfer_targets = (Asset.query.with_entities(Asset.id, Asset.name, Asset.serial_number)
+                        .filter(Asset.id != asset.id)
+                        .order_by(Asset.name).all())
+
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
                          now=datetime.utcnow,
                          active_loan=active_loan, loan_history=loan_history,
                          rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele,
                          monitoring_profile=monitoring_profile, all_profiles=all_profiles,
-                         vuln_count=vuln_count)
+                         vuln_count=vuln_count, transfer_targets=transfer_targets)
 
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')

@@ -208,6 +208,41 @@ def assets():
     if device_type_filter:
         query = query.filter(Asset.device_type == device_type_filter)
 
+    # Quick category chips that map to indexed columns — applied in SQL (fast), unlike
+    # the post-materialization Python quick_filters below.
+    if quick_filter == 'network':
+        query = query.filter(Asset.category == 'Network Device')
+    elif quick_filter == 'workstations':
+        # Client endpoints: Windows PCs/Macs by device_type, plus the laptop/desktop
+        # categories, but never servers / network gear / VMs.
+        query = query.filter(
+            Asset.device_type.in_(['Windows PC', 'Windows Workstation', 'Mac']) |
+            (Asset.category.in_(['Laptop', 'Desktop', 'Computer', 'Workstation', 'Mini PC', 'Tablet']) &
+             db.func.coalesce(Asset.device_type, '').notin_(['Windows Server', 'Linux Server', 'Network Device', 'Virtual Machine'])))
+    elif quick_filter == 'windows_servers':
+        # device_type is the reliable signal; the category='Server' hosts (Star-Wars-named
+        # boxes) are Windows unless explicitly typed Linux.
+        query = query.filter(
+            (Asset.device_type == 'Windows Server') |
+            ((Asset.category == 'Server') & (db.func.coalesce(Asset.device_type, '') != 'Linux Server')))
+    elif quick_filter == 'linux_servers':
+        query = query.filter(
+            (Asset.device_type == 'Linux Server') |
+            Asset.os_version.ilike('%linux%') | Asset.os_version.ilike('%ubuntu%') | Asset.os_version.ilike('%LTS%'))
+    elif quick_filter == 'mobile':
+        query = query.filter(
+            (Asset.device_type == 'Mobile Device') |
+            Asset.os_version.ilike('%android%') | Asset.os_version.ilike('%ios%'))
+
+    # Source filter — derived from the sync-id columns (intune / unifi / manual).
+    source_filter = request.args.get('source', '')
+    if source_filter == 'intune':
+        query = query.filter(Asset.intune_device_id.isnot(None))
+    elif source_filter == 'unifi':
+        query = query.filter(Asset.unifi_device_id.isnot(None))
+    elif source_filter == 'manual':
+        query = query.filter(Asset.intune_device_id.is_(None), Asset.unifi_device_id.is_(None))
+
     # Date range filters
     if purchase_from:
         try:
@@ -231,7 +266,9 @@ def assets():
         'manufacturer': Asset.manufacturer,
         'serial_number': Asset.serial_number,
         'status': Asset.status,
-        'purchase_date': Asset.purchase_date
+        'purchase_date': Asset.purchase_date,
+        'device_type': Asset.device_type,   # was a dead clickable header
+        'last_seen': Asset.last_seen,        # was a dead clickable header
     }.get(sort_by, Asset.asset_tag)
     
     if sort_dir == 'desc':
@@ -384,6 +421,17 @@ def assets():
     monitoring_profiles = MonitoringProfile.query.filter_by(enabled=True).order_by(MonitoringProfile.name).all()
     backup_policies = RmmBackupPolicy.query.filter_by(enabled=True).order_by(RmmBackupPolicy.name).all()
 
+    # Sync freshness — shown as a "Last synced …" line so staff can see the syncs are alive.
+    sync_status = {}
+    try:
+        for k, v in db.session.execute(text(
+            "SELECT key, value FROM setting WHERE key IN "
+            "('intune_asset_sync_last_finished','intune_asset_sync_last_status','intune_asset_sync_last_message',"
+            " 'unifi_last_sync_time','unifi_last_sync_status','unifi_last_sync_message')")).fetchall():
+            sync_status[k] = v
+    except Exception:
+        pass
+
     # Availability filter (applied after rmm_online_ids is resolved)
     if availability_filter:
         if availability_filter == 'online':
@@ -413,6 +461,7 @@ def assets():
                            location_filter=location_filter,
                            device_type_filter=device_type_filter,
                            logged_in_users=logged_in_users,
+                           sync_status=sync_status,
                            asset_agent_ids={v: k for k, v in agent_id_to_asset_id.items()})
 
 

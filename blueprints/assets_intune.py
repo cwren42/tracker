@@ -76,6 +76,28 @@ def sync_assets_from_intune():
     return redirect(url_for('assets.assets'))
 
 
+@bp.route('/assets/sync-from-unifi', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def sync_assets_from_unifi():
+    """Manual UniFi network-device sync (parity with the Intune button; UniFi was
+    scheduler-only). Same entrypoint the scheduler uses."""
+    try:
+        from unifi_service import sync_unifi_assets
+        result = sync_unifi_assets(current_app._get_current_object(), db, Asset, Setting, AssetHistory, MonitoringAlert)
+        synced = (result or {}).get('synced', 0)
+        created = (result or {}).get('created', 0)
+        updated = (result or {}).get('updated', 0)
+        errors = (result or {}).get('errors', 0)
+        flash(f'UniFi sync complete — {created} new, {updated} updated'
+              + (f', {errors} errors' if errors else ''), 'success' if not errors else 'warning')
+    except Exception as e:
+        logger.exception('Manual UniFi sync failed')
+        flash(f'UniFi sync failed: {e}', 'danger')
+    return redirect(url_for('assets.assets'))
+
+
 def perform_intune_asset_sync():
     """Core Intune asset sync logic.
 

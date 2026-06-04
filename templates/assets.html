@@ -43,7 +43,12 @@
                 <li><a class="dropdown-item" href="{{ url_for('assets.find_duplicate_assets') }}"><i class="bi bi-files me-2"></i>Find Duplicates</a></li>
                 <li>
                     <form method="POST" action="{{ url_for('assets.sync_assets_from_intune') }}" onsubmit="return confirm('Sync all devices from Intune?');">
-                        <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat me-2"></i>Sync from Intune</button>
+                        <button type="submit" class="dropdown-item"><i class="bi bi-microsoft me-2"></i>Sync from Intune</button>
+                    </form>
+                </li>
+                <li>
+                    <form method="POST" action="{{ url_for('assets.sync_assets_from_unifi') }}" onsubmit="return confirm('Sync all network devices from UniFi?');">
+                        <button type="submit" class="dropdown-item"><i class="bi bi-router me-2"></i>Sync from UniFi</button>
                     </form>
                 </li>
                 <li><hr class="dropdown-divider"></li>
@@ -90,15 +95,46 @@
     <a href="{{ url_for('assets.assets', filter='without_agent') }}" class="btn btn-sm {% if _qf == 'without_agent' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
         <i class="bi bi-robot"></i> Without Agent
     </a>
-    <a href="{{ url_for('assets.assets', filter='network_devices') }}" class="btn btn-sm {% if _qf == 'network_devices' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-        <i class="bi bi-diagram-3"></i> Network Devices
-    </a>
     {% if _qf %}
     <a href="{{ url_for('assets.assets') }}" class="btn btn-sm btn-link text-muted text-decoration-none">
         <i class="bi bi-x-lg"></i> Clear
     </a>
     {% endif %}
 </div>
+
+<!-- Device-type chips (the 4 requested) + source chips -->
+{% set _src = request.args.get('source') %}
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center" aria-label="Type filters">
+    <span class="small text-muted me-1">Type:</span>
+    <a href="{{ url_for('assets.assets', filter='workstations') }}" class="btn btn-sm {% if _qf == 'workstations' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-pc-display"></i> Workstations</a>
+    <a href="{{ url_for('assets.assets', filter='network') }}" class="btn btn-sm {% if _qf == 'network' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-diagram-3"></i> Network</a>
+    <a href="{{ url_for('assets.assets', filter='windows_servers') }}" class="btn btn-sm {% if _qf == 'windows_servers' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-windows"></i> Windows Servers</a>
+    <a href="{{ url_for('assets.assets', filter='linux_servers') }}" class="btn btn-sm {% if _qf == 'linux_servers' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-hdd-rack"></i> Linux Servers</a>
+    <a href="{{ url_for('assets.assets', filter='mobile') }}" class="btn btn-sm {% if _qf == 'mobile' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-phone"></i> Mobile Phones</a>
+    <span class="vr mx-1"></span>
+    <span class="small text-muted me-1">Source:</span>
+    <a href="{{ url_for('assets.assets', source='intune') }}" class="btn btn-sm {% if _src == 'intune' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-microsoft"></i> Intune</a>
+    <a href="{{ url_for('assets.assets', source='unifi') }}" class="btn btn-sm {% if _src == 'unifi' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-router"></i> UniFi</a>
+    <a href="{{ url_for('assets.assets', source='manual') }}" class="btn btn-sm {% if _src == 'manual' %}btn-primary{% else %}btn-outline-secondary{% endif %}"><i class="bi bi-pencil-square"></i> Manual</a>
+</div>
+
+<!-- Sync freshness -->
+{% if sync_status %}
+<div class="mb-3 small text-muted d-flex flex-wrap gap-3">
+    {% if sync_status.get('intune_asset_sync_last_finished') %}
+    <span><i class="bi bi-microsoft me-1"></i>Intune synced
+        {{ sync_status.get('intune_asset_sync_last_finished','')[:16]|replace('T',' ') }}
+        {% if sync_status.get('intune_asset_sync_last_status') == 'success' %}<i class="bi bi-check-circle-fill text-success ms-1"></i>{% else %}<i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>{% endif %}
+    </span>
+    {% endif %}
+    {% if sync_status.get('unifi_last_sync_time') %}
+    <span><i class="bi bi-router me-1"></i>UniFi synced
+        {{ sync_status.get('unifi_last_sync_time','')[:16]|replace('T',' ') }}
+        {% if sync_status.get('unifi_last_sync_status') == 'success' %}<i class="bi bi-check-circle-fill text-success ms-1"></i>{% else %}<i class="bi bi-exclamation-triangle-fill text-warning ms-1"></i>{% endif %}
+    </span>
+    {% endif %}
+</div>
+{% endif %}
 
 <!-- Advanced Search & Filters -->
 <div class="card mb-3">

@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, text
 
 from extensions import db, limiter
 from models import (
-    AuditTrail, Asset, AssetHistory, Control, CustomReport, DashboardWidget,
+    AuditTrail, Asset, AssetHistory, CustomReport, DashboardWidget,
     Employee, License, LicenseAssignment, LicenseInfo, MaintenanceWindow,
     MonitoringAlert, MonitoringCheck, MonitoringProfile, Policy, PolicySection,
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,

@@ -44,6 +44,42 @@
                 {% endif %}
                 
                 <p class="mb-0"><strong>Framework Alignment:</strong> {{ control.audit_alignment }}</p>
+
+                {% if control.authoritative_docs %}
+                <div class="mt-3">
+                    <p class="mb-1"><strong>Authoritative ISMS Documents:</strong></p>
+                    <ul class="mb-1">
+                        {% for doc in control.authoritative_docs.split(';') if doc.strip() %}
+                        <li><small>{{ doc.strip() }}</small></li>
+                        {% endfor %}
+                    </ul>
+                    {% if isms_document %}
+                    <small class="text-muted">
+                        <i class="bi bi-journal-text"></i>
+                        Defined in the
+                        <a href="{{ url_for('isms.documents') }}">{{ isms_document.title }}</a>.
+                    </small>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if linked_risks %}
+                <div class="mt-3">
+                    <p class="mb-1"><strong>Linked Risks ({{ linked_risks|length }}):</strong></p>
+                    <ul class="mb-0">
+                        {% for risk in linked_risks %}
+                        <li>
+                            <small>
+                                {{ risk.risk_name }}
+                                {% if risk.risk_combined_score and risk.risk_combined_score != 'NA' %}
+                                <span class="badge bg-secondary">{{ risk.risk_combined_score }}</span>
+                                {% endif %}
+                            </small>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
             </div>
             <div class="col-md-4">
                 <table class="table table-sm">

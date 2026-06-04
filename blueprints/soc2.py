@@ -16,13 +16,13 @@ from sqlalchemy import func, or_, text
 
 from extensions import db, limiter
 from models import (
-    AuditTrail, Asset, AssetHistory, Control, CustomReport, DashboardWidget,
+    AuditTrail, Asset, AssetHistory, CustomReport, DashboardWidget,
     Employee, License, LicenseAssignment, LicenseInfo, MaintenanceWindow,
     MonitoringAlert, MonitoringCheck, MonitoringProfile, Policy, PolicySection,
     ProxmoxBackupJob, ProxmoxZfsPool, RemoteSession, Risk, Setting,
     SupportTicket, TicketActivity, TicketNote, User, now_mst, allowed_file,
     SystemDescription, AzureIntegrationConfig, ControlRiskMapping,
-    SOC2ReadinessItem, SOC2Vendor,
+    SOC2ReadinessItem, SOC2Vendor, ISMSDocument,
 )
 from soc2_models import (
     SOC2Control, EvidenceSnapshot, M365User, IntuneDevice, StrikeGraphEvidence,
@@ -406,10 +406,21 @@ def soc2_evidence(control_id):
 
     # Get all snapshots for this control, newest first
     snapshots = EvidenceSnapshot.query.filter_by(control_id=control_id).order_by(EvidenceSnapshot.snapshot_date.desc()).all()
-    
+
+    # Cross-links: risks mapped to this control, and the ISMS manual doc.
+    linked_risks = (
+        Risk.query.join(ControlRiskMapping, ControlRiskMapping.risk_id == Risk.id)
+        .filter(ControlRiskMapping.control_id == control_id)
+        .order_by(Risk.risk_name.asc())
+        .all()
+    )
+    isms_document = ISMSDocument.query.get(control.isms_document_id) if control.isms_document_id else None
+
     return render_template('soc2_evidence.html',
                          control=control,
                          linked_evidence=linked_evidence,
+                         linked_risks=linked_risks,
+                         isms_document=isms_document,
                          snapshots=snapshots)
 
 

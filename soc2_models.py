@@ -171,6 +171,11 @@ class SOC2Control(db.Model):
     control_progress = db.Column(db.String(50))  # In Place, Partially In Place, Not In Place
     is_active = db.Column(db.Boolean, default=True)
     audit_alignment = db.Column(db.Text)  # SOC2 framework references
+    # Authoritative Cirque ISMS document/section IDs (semicolon-separated, e.g.
+    # "IS-AIR01-CIRQ05-A00 (PAM Procedure); ...") sourced from the Cirque control
+    # descriptions workbook. Resolves to the consolidated ISMS Manual document.
+    authoritative_docs = db.Column(db.Text)
+    isms_document_id = db.Column(db.Integer, db.ForeignKey('isms_document.id'))
     automation_enabled = db.Column(db.Boolean, default=False)
     last_evidence_date = db.Column(db.DateTime)
     next_evidence_date = db.Column(db.DateTime)

@@ -51,7 +51,7 @@ from models import (
     User, AzureIntegrationConfig, Employee, Asset, RemoteSession,
     SupportTicket, TicketNote, TicketActivity, AssetHistory,
     License, LicenseAssignment, Setting, SystemDescription,
-    Policy, PolicySection, Control, Risk, ControlRiskMapping,
+    Policy, PolicySection, Risk, ControlRiskMapping,
     DashboardWidget, CustomReport, LicenseInfo,
     MonitoringProfile, MonitoringCheck, MonitoringAlert,
     MaintenanceWindow, ProxmoxZfsPool, ProxmoxBackupJob,

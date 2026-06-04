@@ -827,18 +827,11 @@ class SOC2PhishingResult(db.Model):
     employee = db.relationship('Employee', foreign_keys=[employee_id])
 
 
-class Control(db.Model):
-    __tablename__ = 'control'
-    id = db.Column(db.Integer, primary_key=True)
-    control_name = db.Column(db.Text, nullable=False, unique=True)
-    control_description = db.Column(db.Text)
-    control_frequency = db.Column(db.String(50))
-    control_owner = db.Column(db.String(200))
-    control_progress = db.Column(db.String(50))
-    is_active = db.Column(db.Boolean, default=True)
-    audit_alignment = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+# NOTE: The legacy `Control` staging model/table was retired in the SOC2 clean
+# rebuild (2026-06). Controls now live in exactly one place: SOC2Control
+# (soc2_models.py). The `control` table was backed up and dropped; risk-to-control
+# links (ControlRiskMapping) now reference soc2_control.id.
+
 
 class Risk(db.Model):
     __tablename__ = 'risk'
@@ -860,7 +853,10 @@ class Risk(db.Model):
 class ControlRiskMapping(db.Model):
     __tablename__ = 'control_risk_mapping'
     id = db.Column(db.Integer, primary_key=True)
-    control_id = db.Column(db.Integer, db.ForeignKey('control.id', ondelete='CASCADE'))
+    # Points at the single source-of-truth control table (soc2_control), NOT the
+    # retired `control` staging table. Risk-to-control links are populated from the
+    # risk register's "Active Controls" column, resolved to SOC2Control ids.
+    control_id = db.Column(db.Integer, db.ForeignKey('soc2_control.id', ondelete='CASCADE'))
     risk_id = db.Column(db.Integer, db.ForeignKey('risk.id', ondelete='CASCADE'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

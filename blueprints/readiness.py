@@ -82,6 +82,25 @@ AUTOMATED_EVIDENCE_EXPORTS = [
     {'evidence_name': 'Risk Management Policy and Procedures', 'zip_path': 'automated_evidence/risk_management_policy.pdf', 'category': 'ISMS'},
     {'evidence_name': 'System Description Document', 'zip_path': 'automated_evidence/system_description_document.pdf', 'category': 'ISMS'},
     {'evidence_name': 'Vulnerability Management Policy', 'zip_path': 'automated_evidence/vulnerability_management_policy.pdf', 'category': 'ISMS'},
+    # Settings-type evidence newly wired to auto-collection. Live-config
+    # "screenshot" exports (.xlsx with current values) where a real source
+    # exists; ISMS documented-standard PDFs (extracted from the linked
+    # control's authoritative_docs IS-sections) otherwise. 'Merge SOD
+    # Configuration Check' is intentionally absent -> stays Manual (no GitLab
+    # integration and no documented-standard control link).
+    #   Live config (xlsx):
+    {'evidence_name': 'Password Settings - Network/Cloud', 'zip_path': 'automated_evidence/password_settings_network_cloud.xlsx', 'category': 'M365'},
+    {'evidence_name': 'Monitoring Tools Enabled', 'zip_path': 'automated_evidence/monitoring_tools_enabled.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Performance Monitoring Alert Configuration', 'zip_path': 'automated_evidence/performance_monitoring_alert_configuration.xlsx', 'category': 'RMM'},
+    {'evidence_name': 'Server Encryption', 'zip_path': 'automated_evidence/server_encryption.xlsx', 'category': 'Azure'},
+    {'evidence_name': 'Separation of Environments', 'zip_path': 'automated_evidence/separation_of_environments.xlsx', 'category': 'Azure'},
+    #   ISMS documented standard (pdf):
+    {'evidence_name': 'Encryption in Transit', 'zip_path': 'automated_evidence/encryption_in_transit.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Intrusion Detection Configuration', 'zip_path': 'automated_evidence/intrusion_detection_configuration.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Security Configuration Standards', 'zip_path': 'automated_evidence/security_configuration_standards.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Password Settings - Application', 'zip_path': 'automated_evidence/password_settings_application.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Password Settings - Database', 'zip_path': 'automated_evidence/password_settings_database.pdf', 'category': 'ISMS'},
+    {'evidence_name': 'Password Settings - Operating System', 'zip_path': 'automated_evidence/password_settings_operating_system.pdf', 'category': 'ISMS'},
 ]
 
 
@@ -95,6 +114,7 @@ AUTOMATED_EVIDENCE_CACHE_DIRS = {
     'Defender': '/var/www/tracker/static/evidence/M365/Defender',
     'RMM': '/var/www/tracker/static/evidence/rmm',
     'ISMS': '/var/www/tracker/static/evidence/isms',
+    'Azure': '/var/www/tracker/static/evidence/azure',
 }
 
 

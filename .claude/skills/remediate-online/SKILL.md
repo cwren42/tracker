@@ -12,7 +12,7 @@ Uses the **reconnect-triggered remediation engine**: enqueue a winget upgrade pe
 ```
 curl -s http://127.0.0.1:8765/agents   # live set; intersect against the affected hosts
 ```
-Pull open/critical rows joined to live agents, grouped by product.
+Pull open/critical rows joined to live agents, **counting DISTINCT (host, product)** — a host has many CVE rows per product, so raw row counts (e.g. "chrome 225") are pairs, not machines. The enqueue is one action per (machine, product); the code dedups, but report distinct hosts.
 
 ## 2. SAFE products only (these stage, no force-close/reboot)
 Enqueue winget upgrades ONLY for: **chrome→Google.Chrome, edge_chromium-based→Microsoft.Edge, firefox→Mozilla.Firefox, 7-zip→7zip.7zip, reader→Adobe.Acrobat.Reader.64-bit**.

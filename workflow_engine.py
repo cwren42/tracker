@@ -1032,8 +1032,16 @@ def park_offboard(employee_id, employee_name, reason="", requested_by="agentic-o
 
 
 def _action_offboard_employee(config: dict, ctx: dict) -> tuple:
-    """Run the offboarding for one employee (unassign devices -> Pending Return, return
-    licenses, hide, checklist ticket). Invoked when an admin approves a parked offboard."""
+    """Full deprovision for one employee — invoked when an admin approves a parked offboard.
+
+    Symmetric with onboarding: ONE gated action does everything.
+      1. Disable the AD/Azure AD account (best-effort + idempotent: "already disabled"
+         or "not found" is non-fatal — we still reclaim assets/licenses).
+      2. Reclaim assets (-> Pending Return) + return licenses + hide the employee +
+         open the [OFFBOARD] checklist ticket (the AD-disable line renders as a
+         completed automated step when step 1 succeeded).
+      3. Fire the Entra (AAD Connect) delta sync so the disable reaches M365 fast.
+    Returns a combined result dict."""
     emp_id = config.get("employee_id") or ctx.get("employee_id")
     if not emp_id:
         return False, {"error": "no employee_id in offboard action"}
@@ -1041,15 +1049,66 @@ def _action_offboard_employee(config: dict, ctx: dict) -> tuple:
         # approve_action runs handlers in a bare daemon thread → no Flask app context.
         # This handler uses the ORM, so push one. (Raw-SQL handlers don't need this.)
         from app import app as _flask_app
-        from models import Employee
+        from models import Employee, Setting
+        from ldap_service import LDAPService, load_ad_config
         from blueprints.employees import _offboard_employee
         with _flask_app.app_context():
             emp = Employee.query.get(int(emp_id))
             if not emp:
                 return False, {"error": f"employee {emp_id} not found"}
             name = emp.name
-            res = _offboard_employee(emp, actor=config.get("requested_by") or "agentic-os")
-        return True, {"employee_id": emp_id, "employee_name": name, **res}
+
+            # ── 1. Disable AD (best-effort + idempotent) ─────────────────────────
+            ad_disabled = False
+            ad_detail = "skipped"
+            identifier = (emp.sam_account_name or emp.email or "").strip()
+            if not identifier:
+                ad_detail = "no sam_account_name/email on employee — AD disable skipped"
+            else:
+                try:
+                    cfg = load_ad_config(Setting)
+                    if not cfg.enabled:
+                        ad_detail = "AD integration not enabled in Settings"
+                    else:
+                        r = LDAPService(cfg).disable_user(identifier)
+                        if r.get("success"):
+                            ad_disabled = True
+                            ad_detail = r.get("message") or "disabled"
+                            emp.ad_enabled = False
+                        else:
+                            err = (r.get("error") or "").lower()
+                            # Idempotent re-run: account gone or already-off is NOT fatal —
+                            # the disable is effectively a no-op, so we proceed with reclaim.
+                            if "not found" in err or "already" in err or "disabled" in err:
+                                ad_detail = f"no-op: {r.get('error')}"
+                                # If AD already reports it disabled, reflect that locally too.
+                                emp.ad_enabled = False
+                            else:
+                                ad_detail = f"disable error (non-fatal): {r.get('error')}"
+                except Exception as e:
+                    ad_detail = f"disable exception (non-fatal): {e}"
+
+            # ── 2. Reclaim assets/licenses + hide + checklist ticket ─────────────
+            res = _offboard_employee(
+                emp, actor=config.get("requested_by") or "agentic-os",
+                ad_disabled=ad_disabled)
+
+            # ── 3. Entra (AAD Connect) delta sync so the disable hits M365 ───────
+            entra_sync = "skipped"
+            try:
+                ok, out = _action_azure_sync({}, ctx)
+                entra_sync = "triggered" if ok else f"sync error: {out.get('error')}"
+            except Exception as e:
+                entra_sync = f"sync error: {e}"
+
+        return True, {
+            "employee_id": emp_id, "employee_name": name,
+            "ad_disabled": ad_disabled, "ad_detail": ad_detail,
+            "entra_sync": entra_sync,
+            "assets_unassigned": res.get("assets_unassigned"),
+            "licenses_returned": res.get("licenses_returned"),
+            "ticket_id": res.get("ticket_id"),
+        }
     except Exception as e:
         log.exception("offboard_employee action failed for %s", emp_id)
         return False, {"error": str(e)}
@@ -1210,6 +1269,11 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
             # (real, must be recorded) even on a partial result — always save sam/ad_dn.
             emp.ad_dn = new_dn
             emp.ad_enabled = account_enabled
+            # Persist the immutable AD linkage (objectGUID) so the standalone
+            # disable-AD button — which guards on emp.ad_guid — works for
+            # freshly-onboarded users. None when read-back failed (non-fatal).
+            if create.get("ad_guid"):
+                emp.ad_guid = create.get("ad_guid")
             if group_errors:
                 emp.onboard_status = "provisioned_partial"
             elif not account_enabled:

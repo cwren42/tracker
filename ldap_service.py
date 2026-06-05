@@ -315,12 +315,33 @@ class LDAPService:
                 if self.connection.result['result'] != 0:
                     return {'success': False, 'error': self.connection.result.get('description'), 'dn': user_dn}
 
+            # Read back the new object's objectGUID so the Employee row can store the
+            # immutable AD linkage (the standalone disable-AD button guards on ad_guid).
+            # Best-effort: a failed read-back must NOT fail the (already-successful) create.
+            ad_guid = None
+            try:
+                self.connection.search(
+                    search_base=user_dn,
+                    search_filter='(objectClass=user)',
+                    search_scope=SUBTREE,
+                    attributes=['objectGUID'],
+                )
+                if self.connection.entries:
+                    raw_guid = self.connection.entries[0].objectGUID.value
+                    if isinstance(raw_guid, bytes):
+                        ad_guid = str(uuid.UUID(bytes_le=raw_guid))
+                    elif raw_guid:
+                        ad_guid = str(raw_guid).strip('{}')
+            except Exception:
+                logger.exception('create_user: objectGUID read-back failed for %s', username)
+
             return {
                 'success': True,
                 'message': 'User created',
                 'dn': user_dn,
                 'password_set': password_set,
                 'enabled': bool(enable and password_set),
+                'ad_guid': ad_guid,
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}

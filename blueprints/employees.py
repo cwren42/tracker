@@ -950,11 +950,15 @@ def verify_and_park_offboards():
     return res
 
 
-def _offboard_employee(employee, actor='system', actor_email=None):
+def _offboard_employee(employee, actor='system', actor_email=None, ad_disabled=False):
     """Core offboarding, reusable by the manual button AND the 1-click approval handler:
     unassign assets (-> 'Pending Return' so they surface for collection), return active
     licenses, HIDE the employee (is_visible=False), and open an [OFFBOARD] checklist ticket.
-    Returns a result dict. Caller commits are handled here."""
+    Returns a result dict. Caller commits are handled here.
+
+    ad_disabled: when True, the approval handler has already disabled the AD/Azure AD
+    account, so the checklist renders that as a COMPLETED automated step instead of a
+    manual to-do."""
     steps_done = []
 
     asset_list = []
@@ -978,6 +982,9 @@ def _offboard_employee(employee, actor='system', actor_email=None):
     # Hide the offboarded employee from the active roster.
     employee.is_visible = False
 
+    if ad_disabled:
+        steps_done.append("Active Directory account disabled (automated)")
+
     checklist = (
         "## Offboarding Checklist\n\n"
         f"**Employee:** {employee.name} ({employee.email or 'no email'})\n"
@@ -987,9 +994,10 @@ def _offboard_employee(employee, actor='system', actor_email=None):
     )
     for step in steps_done:
         checklist += f"- [x] {step}\n"
+    checklist += "\n### Manual Steps Required\n"
+    if not ad_disabled:
+        checklist += "- [ ] Disable Active Directory / Azure AD account\n"
     checklist += (
-        "\n### Manual Steps Required\n"
-        "- [ ] Disable Active Directory / Azure AD account\n"
         "- [ ] Remove from all security groups and distribution lists\n"
         "- [ ] Revoke MFA tokens and app-specific passwords\n"
         "- [ ] Collect physical access cards / keys (assets marked Pending Return)\n"
@@ -1015,14 +1023,24 @@ def _offboard_employee(employee, actor='system', actor_email=None):
 @manager_required
 @license_required
 def offboard_employee(employee_id):
-    """Offboarding workflow: unassign assets, revoke licenses, hide, create checklist ticket."""
+    """Gated offboarding: PARK a high-risk offboard request at /approvals (symmetric with
+    onboarding). IT approval runs the full deprovision (disable AD -> reclaim assets/licenses
+    -> hide -> Entra sync) via workflow_engine._action_offboard_employee. This route no longer
+    deprovisions directly — it only submits the request."""
     employee = Employee.query.get_or_404(employee_id)
-    res = _offboard_employee(employee, actor=current_user.username, actor_email=current_user.email)
-    flash(
-        f"Offboarding complete for {employee.name}. Ticket #{res['ticket_id']} created. "
-        f"{res['assets_unassigned']} asset(s) set Pending Return, "
-        f"{res['licenses_returned']} license(s) returned.",
-        'success')
+    import workflow_engine
+    led_id = workflow_engine.park_offboard(
+        employee.id, employee.name,
+        reason='manual offboard', requested_by=current_user.username)
+    if led_id:
+        flash(
+            f"Offboarding request submitted for approval — review at /approvals.",
+            'success')
+    else:
+        # Idempotent: an offboard for this employee is already parked/pending.
+        flash(
+            f"An offboarding request for {employee.name} is already awaiting approval at /approvals.",
+            'info')
     return redirect(url_for('employees.employees'))
 
 

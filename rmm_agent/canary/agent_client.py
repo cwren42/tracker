@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.20"
+AGENT_VERSION = "2.9.21"
 
 import asyncio
 import base64
@@ -620,46 +620,22 @@ def _create_startup_shortcut_task():
 
 
 def _build_tray_vbs(pythonw_hint: str, tray_py: str) -> str:
-    """Build a Startup VBScript that launches the tray silently (no console).
+    """Build a MINIMAL Startup VBScript that launches the tray silently (no console).
 
-    Robust to a stale interpreter path: rather than hardcoding a single
-    pythonw.exe resolved at write time (which silently no-ops if that path later
-    moves, e.g. an MSI/embedded Python relocation), the VBS resolves a usable
-    pythonw.exe at LAUNCH time. It prefers the hint (the agent's known-current
-    interpreter) and otherwise probes the same locations the agent does, finally
-    falling back to bare 'pythonw.exe' on PATH."""
+    Deliberately tiny — single-line statements only, no Option Explicit / Dim /
+    Array / nested loops / line-continuations. A prior version did launch-time
+    path-probing with all of those and compiled to INVALID VBScript (WSH "syntax
+    error" popup on every login/reboot). The agent resolves a valid pythonw at
+    write time (pythonw_hint) and rewrites this file on every reconnect, so a
+    stale path self-heals on the next agent run; we keep one simple bare-pythonw
+    fallback for safety."""
+    _hint = (pythonw_hint or 'pythonw.exe').replace('"', '""')
     _tray_for_vbs = tray_py.replace('"', '""')
     return (
-        'Option Explicit\r\n'
-        'Dim oShell, oFSO, sPy, sCandidate, oFolders, oFolder, oFile, oExec\r\n'
         'Set oShell = CreateObject("WScript.Shell")\r\n'
         'Set oFSO = CreateObject("Scripting.FileSystemObject")\r\n'
-        'sPy = ""\r\n'
-        # 1. Prefer the agent's known-current interpreter (hint), if still present.
-        f'sCandidate = "{pythonw_hint}"\r\n'
-        'If sCandidate <> "" Then\r\n'
-        '  If oFSO.FileExists(sCandidate) Then sPy = sCandidate\r\n'
-        'End If\r\n'
-        # 2. Probe the usual install locations (same order the agent uses).
-        'If sPy = "" Then\r\n'
-        '  Dim arrGlobs, g\r\n'
-        '  arrGlobs = Array( _\r\n'
-        '    oShell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\Programs\\Python", _\r\n'
-        '    "C:\\Program Files\\Python", _\r\n'
-        '    "C:\\")\r\n'
-        '  For Each g In arrGlobs\r\n'
-        '    If sPy = "" And oFSO.FolderExists(g) Then\r\n'
-        '      For Each oFolder In oFSO.GetFolder(g).SubFolders\r\n'
-        '        If sPy = "" And LCase(Left(oFolder.Name,6)) = "python" Then\r\n'
-        '          sCandidate = oFolder.Path & "\\pythonw.exe"\r\n'
-        '          If oFSO.FileExists(sCandidate) Then sPy = sCandidate\r\n'
-        '        End If\r\n'
-        '      Next\r\n'
-        '    End If\r\n'
-        '  Next\r\n'
-        'End If\r\n'
-        # 3. Last resort: bare pythonw.exe (relies on PATH).
-        'If sPy = "" Then sPy = "pythonw.exe"\r\n'
+        f'sPy = "{_hint}"\r\n'
+        'If Not oFSO.FileExists(sPy) Then sPy = "pythonw.exe"\r\n'
         f'oShell.Run Chr(34) & sPy & Chr(34) & " ""{_tray_for_vbs}""", 0, False\r\n'
     )
 

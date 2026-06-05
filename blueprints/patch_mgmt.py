@@ -311,12 +311,14 @@ def api_patches_deploy():
                 results['deployed'] += 1
                 results['detail'].append({'agent_id': agent_id, 'asset_name': asset_name, 'status': 'deploying'})
             else:
+                # Agent not live — job row stays 'queued' (deploying is only set on a
+                # confirmed send above). The gateway reconnect flush will deliver it.
                 results['offline'] += 1
-                results['detail'].append({'agent_id': agent_id, 'asset_name': asset_name, 'status': 'offline'})
+                results['detail'].append({'agent_id': agent_id, 'asset_name': asset_name, 'status': 'queued (reconnect)'})
         except Exception as e:
             results['offline'] += 1
             results['errors'].append(f"{agent_id}: {e}")
-            results['detail'].append({'agent_id': agent_id, 'asset_name': asset_name, 'status': 'offline'})
+            results['detail'].append({'agent_id': agent_id, 'asset_name': asset_name, 'status': 'queued (reconnect)'})
 
     return jsonify({'ok': True, 'results': results})
 
@@ -544,15 +546,20 @@ def _run_auto_approve():
                 db.session.commit()
                 deployed += 1
             else:
-                # Not delivered — mark failed so it doesn't linger queued forever.
+                # Not delivered (agent not live on the gateway right now). LEAVE IT
+                # QUEUED — the gateway reconnect flush will deliver it next time the
+                # agent connects. Previously this was marked 'failed', which dropped
+                # work for roaming laptops that are rarely online in the window.
                 db.session.execute(text(
-                    "UPDATE rmm_patch_job SET status='failed', notes='not delivered (agent unreachable)', updated_at=NOW() WHERE id=:jid"),
+                    "UPDATE rmm_patch_job SET notes='queued for reconnect delivery (agent not live)', updated_at=NOW() WHERE id=:jid"),
                     {'jid': job_id})
                 db.session.commit()
                 skipped += 1
         except Exception:
+            # Gateway/transport error — also leave queued for the reconnect flush
+            # rather than failing the job into the void.
             db.session.execute(text(
-                "UPDATE rmm_patch_job SET status='failed', notes='dispatch error', updated_at=NOW() WHERE id=:jid"),
+                "UPDATE rmm_patch_job SET notes='queued for reconnect delivery (dispatch error)', updated_at=NOW() WHERE id=:jid"),
                 {'jid': job_id})
             db.session.commit()
             skipped += 1

@@ -915,6 +915,210 @@ def start_background_thread():
 # Defender sync helper (called from UI route)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Products that are OS/system/library level — always accept because they cannot
+# be detected as standalone entries in the installed-apps list. Shared by the
+# sync AND the reconciliation page so both apply the IDENTICAL filter.
+_ALWAYS_ACCEPT = {
+    'windows_11', 'windows_10',
+    '.net', '.net_core', '.net_framework', 'asp.net_core',
+    'chipset_device_software', 'computing_improvement_program',
+    'dynamic_platform_and_thermal_framework', 'dynamic_tuning_technology',
+    'proset_wireless', 'rapid_storage_technology',
+    'hardware_accelerated_execution_manager',
+    # Bundled libraries — cannot validate as standalone apps
+    'openssl', 'log4j', 'libwebp', 'commons_text', 'sqlite', 'qt',
+    # Ambiguous / meta product names
+    'agent', 'update', 'next', 'desktop', 'software_updater',
+    'odbc', 'command_update',
+}
+# Defender product_name → keywords to find in rmm_software.name (lowercase)
+_PRODUCT_KEYWORDS = {
+    'chrome': ['chrome'], 'chrome_for_mac': ['chrome'],
+    'firefox': ['firefox'],
+    'python': ['python'],
+    'jre': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
+    'jdk': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
+    'meetings': ['zoom', 'webex', 'teams', 'goto'],
+    'reader': ['reader', 'acrobat', 'foxit'],
+    'visual_studio_2017': ['visual studio'], 'visual_studio_2022': ['visual studio'],
+    'visual_studio_2013': ['visual studio'],
+    'edge_chromium-based': ['microsoft edge', 'edge'],
+    'edge_webview2_runtime': ['webview2', 'edge'],
+    'mariadb': ['mariadb', 'mysql'],
+    'visual_studio_code': ['visual studio code'], 'visual_studio_code_for_mac': ['visual studio code'],
+    'geforce_experience': ['geforce', 'nvidia'],
+    'vim': ['vim'], 'teams': ['teams'],
+    'vlc_media_player': ['vlc'], 'vlc_media_player_for_mac': ['vlc'],
+    '7-zip': ['7-zip', '7zip'],
+    'office': ['microsoft 365', 'office'],
+    'notepad++': ['notepad++'], 'wireshark': ['wireshark'],
+    'netextender': ['netextender', 'sonicwall'],
+    'git': ['git'], 'gimp': ['gimp'], 'silverlight': ['silverlight'],
+    'illustrator': ['illustrator'],
+    'openoffice': ['openoffice', 'libreoffice'],
+    'sourcetree': ['sourcetree'],
+    'pdf_reader': ['reader', 'acrobat', 'foxit'],
+    'global_vpn_client': ['global vpn', 'sonicwall'],
+    'supportassist': ['supportassist'],
+    'vm_virtualbox': ['virtualbox'],
+    'dragon_center': ['dragon center', 'msi center', 'msi app'],
+    'workstation': ['vmware workstation'],
+    'itunes': ['itunes'], 'webex': ['webex'], 'webex_meetings': ['webex'],
+    'digital_delivery': ['digital delivery', 'autodesk'],
+    'filezilla': ['filezilla'],
+    'synapse': ['razer synapse'], 'winrar': ['winrar'],
+    'tera_term': ['tera term'],
+    'nodejs': ['node.js', 'nodejs', 'node '],
+    'acrobat_reader_dc': ['acrobat', 'reader'],
+    'pycharm': ['pycharm', 'jetbrains'],
+    'skype': ['skype'],
+    'tortoisesvn': ['tortoisesvn'],
+    'creative_cloud': ['creative cloud'],
+    'codemeter_runtime': ['codemeter'],
+    'keepass': ['keepass'],
+    'photoshop_elements': ['photoshop'],
+    'tightvnc': ['tightvnc'], 'ultravnc': ['ultravnc'],
+    'snagit': ['snagit'], 'mobaxterm': ['mobaxterm'],
+    'xmind': ['xmind'], 'beyond_compare': ['beyond compare'],
+    'expressvpn': ['expressvpn'],
+    'viscosity_for_mac': ['viscosity'],
+    'wibukey': ['wibu', 'codemeter'],
+    'everything': ['everything'],
+}
+
+
+def build_machine_asset_map(con, machines):
+    """Map each Defender machine GUID → tracked asset_id using the SAME match
+    ladder the sync uses (rmm_telemetry exact/short, asset.name exact/short, then
+    single-match normalized punctuation-insensitive keys). Returns
+    (machine_asset_map, unmapped) where unmapped is a list of dicts describing
+    machines we could NOT map (for the coverage panel). Read-only.
+
+    Kept in lockstep with the inline logic in sync_defender_vulnerabilities()
+    (~line 950) so the reconciliation waterfall reproduces it exactly."""
+    machine_asset_map = {}
+    unmapped = []
+
+    def _norm(s):
+        return ''.join(c for c in (s or '').lower() if c.isalnum())
+
+    for m in machines:
+        machine_id = m.get('id')
+        fqdn = m.get('computerDnsName', '')
+        excluded = bool(m.get('isExcluded'))
+        merged   = bool(m.get('mergedIntoMachineId'))
+        if not machine_id or not fqdn:
+            # Defender row without an id/name can't be mapped or even named. These
+            # are typically Defender-side excluded/merged/duplicate entries that
+            # the sync also skips — flag as a Defender-side state, not a Tracker
+            # coverage gap.
+            if machine_id:
+                if merged:
+                    reason = 'Defender-side: merged into another machine record'
+                elif excluded:
+                    reason = 'Defender-side: excluded from monitoring' + (f' ({m.get("exclusionReason")})' if m.get('exclusionReason') else '')
+                else:
+                    reason = 'Defender-side: no DNS name reported (cannot be mapped)'
+                unmapped.append({'machine_id': machine_id, 'name': fqdn or '(no DNS name)',
+                                 'reason': reason, 'defender_side': True})
+            continue
+        short_name = fqdn.split('.')[0]
+        short_norm = _norm(short_name)
+
+        asset_row = con.execute(
+            "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
+            (fqdn,)
+        ).fetchone()
+        if not asset_row and short_name:
+            asset_row = con.execute(
+                "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
+                (short_name,)
+            ).fetchone()
+        if not asset_row:
+            asset_row = con.execute(
+                "SELECT id AS asset_id FROM asset WHERE LOWER(name)=LOWER(?) AND status!='Disposed' LIMIT 1",
+                (fqdn,)
+            ).fetchone()
+        if not asset_row and short_name:
+            asset_row = con.execute(
+                "SELECT id AS asset_id FROM asset WHERE LOWER(name)=LOWER(?) AND status!='Disposed' LIMIT 1",
+                (short_name,)
+            ).fetchone()
+        if not asset_row and short_norm:
+            norm_rows = con.execute(
+                "SELECT id AS asset_id FROM asset "
+                "WHERE regexp_replace(LOWER(name), '[^a-z0-9]', '', 'g') = ? "
+                "AND status!='Disposed' LIMIT 2",
+                (short_norm,)
+            ).fetchall()
+            if len(norm_rows) == 1:
+                asset_row = norm_rows[0]
+        if not asset_row and short_norm:
+            norm_rows = con.execute(
+                "SELECT DISTINCT t.asset_id FROM rmm_telemetry t "
+                "WHERE regexp_replace(LOWER(t.hostname), '[^a-z0-9]', '', 'g') = ? "
+                "AND t.asset_id > 0 LIMIT 2",
+                (short_norm,)
+            ).fetchall()
+            if len(norm_rows) == 1:
+                asset_row = norm_rows[0]
+
+        if asset_row and asset_row['asset_id']:
+            machine_asset_map[machine_id] = asset_row['asset_id']
+        else:
+            # Classify WHY it is unmapped, so the coverage gap is visible.
+            nm = (short_name or '').lower()
+            if merged:
+                reason = 'Defender-side: merged into another machine record'
+                ds = True
+            elif excluded:
+                reason = 'Defender-side: excluded from monitoring' + (f' ({m.get("exclusionReason")})' if m.get('exclusionReason') else '')
+                ds = True
+            elif any(k in nm for k in ('printer', 'print', 'ricoh', 'npi', 'nas', 'iosafe', 'scan', 'hp24', 'hp48')):
+                reason = 'No asset match (printer / NAS / appliance — likely ex-inventory)'
+                ds = False
+            else:
+                reason = 'No asset match (untracked device — short name not in asset/RMM inventory)'
+                ds = False
+            unmapped.append({'machine_id': machine_id, 'name': fqdn, 'reason': reason, 'defender_side': ds})
+
+    return machine_asset_map, unmapped
+
+
+def build_software_present_fn(con):
+    """Return a predicate software_present(asset_id, product_name) -> bool that
+    mirrors the sync's _software_present false-positive filter. Read-only.
+
+    Kept in lockstep with the inline logic in sync_defender_vulnerabilities()
+    (~line 1124)."""
+    asset_software: dict = {}
+    try:
+        for _row in con.execute(
+            """SELECT ra.asset_id, lower(rs.name) AS sw_name
+               FROM rmm_software rs
+               JOIN rmm_agent ra ON ra.agent_id = rs.agent_id
+               WHERE ra.asset_id IS NOT NULL"""
+        ).fetchall():
+            _aid = _row['asset_id']
+            asset_software.setdefault(_aid, set()).add(_row['sw_name'])
+    except Exception as _sw_err:
+        logger.warning(f'reconciliation: could not load software inventory for validation: {_sw_err}')
+
+    def software_present(asset_id, product_name: str) -> bool:
+        pn = (product_name or '').lower().strip()
+        if not pn or pn in _ALWAYS_ACCEPT:
+            return True
+        installed = asset_software.get(asset_id)
+        if installed is None:
+            return True  # no RMM inventory — accept conservatively
+        keywords = _PRODUCT_KEYWORDS.get(pn)
+        if keywords is None:
+            return True  # unknown product — accept conservatively
+        return any(any(kw in sw for sw in installed) for kw in keywords)
+
+    return software_present
+
+
 def sync_defender_vulnerabilities():
     """
     Pull vulnerabilities from Defender API into vulnerability_cache
@@ -946,193 +1150,15 @@ def sync_defender_vulnerabilities():
             )
             vuln_count += 1
 
-        # Build machine_id → asset_id map from Defender machines list
+        # Build machine_id → asset_id map from Defender machines list, using the
+        # shared match-ladder helper (kept in lockstep with the reconciliation
+        # page so its waterfall reproduces this exactly).
         machines  = svc.get_machines()
-        machine_asset_map = {}  # Defender machine GUID → tracker asset_id
-        matched = 0
-        for m in machines:
-            machine_id = m.get('id')
-            fqdn = m.get('computerDnsName', '')
-            if not machine_id or not fqdn:
-                continue
-            # Short name is everything before the first dot (handles FQDNs like HOST.domain.local)
-            short_name = fqdn.split('.')[0]
+        machine_asset_map, _unmapped = build_machine_asset_map(con, machines)
+        logger.info(f'Defender sync: matched {len(machine_asset_map)}/{len(machines)} Defender machines to tracked assets')
 
-            # Normalized key: lowercase, strip every non-alphanumeric char. This
-            # collapses hostname/asset-name punctuation differences (hyphens,
-            # underscores, dots) so 'chris-home' matches an asset named 'ChrisHome'
-            # and 'IT_CHRIS_LENOVO' matches 'IT-CHRIS-LENOVO'.
-            def _norm(s):
-                return ''.join(c for c in (s or '').lower() if c.isalnum())
-            short_norm = _norm(short_name)
-
-            asset_row = None
-            # NOTE on the asset_id>0 guard: rmm_telemetry can carry orphan rows with
-            # asset_id=0/NULL (a hostname seen by an agent that was never linked to an
-            # asset). Those rows must NOT short-circuit matching — a 0 here is falsy
-            # downstream (line ~1110 `if not asset_id`) and the machine silently lands
-            # in the unmapped bucket even when a real asset exists by name. Require a
-            # positive asset_id on every telemetry-based match.
-            # 1. Exact match against rmm_telemetry hostname
-            asset_row = con.execute(
-                "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
-                (fqdn,)
-            ).fetchone()
-            # 2. Short-name match against rmm_telemetry
-            if not asset_row and short_name:
-                asset_row = con.execute(
-                    "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
-                    (short_name,)
-                ).fetchone()
-            # 3. Exact match against asset.name
-            if not asset_row:
-                asset_row = con.execute(
-                    "SELECT id AS asset_id FROM asset WHERE LOWER(name)=LOWER(?) AND status!='Disposed' LIMIT 1",
-                    (fqdn,)
-                ).fetchone()
-            # 4. Short-name match against asset.name
-            if not asset_row and short_name:
-                asset_row = con.execute(
-                    "SELECT id AS asset_id FROM asset WHERE LOWER(name)=LOWER(?) AND status!='Disposed' LIMIT 1",
-                    (short_name,)
-                ).fetchone()
-            # 5. Normalized (punctuation-insensitive) short-name match against
-            #    asset.name. Last resort, and ONLY when it resolves to exactly one
-            #    non-disposed asset — an ambiguous normalized key is left unmapped
-            #    rather than guessing, so we never attach Defender findings to the
-            #    wrong device.
-            if not asset_row and short_norm:
-                norm_rows = con.execute(
-                    "SELECT id AS asset_id FROM asset "
-                    "WHERE regexp_replace(LOWER(name), '[^a-z0-9]', '', 'g') = ? "
-                    "AND status!='Disposed' LIMIT 2",
-                    (short_norm,)
-                ).fetchall()
-                if len(norm_rows) == 1:
-                    asset_row = norm_rows[0]
-                elif len(norm_rows) > 1:
-                    logger.info(
-                        f'Defender sync: normalized key {short_norm!r} (from {fqdn!r}) '
-                        f'matched multiple assets — left unmapped to avoid mis-attribution'
-                    )
-            # 6. Normalized short-name match against rmm_telemetry hostname (also
-            #    single-match guarded, asset_id>0).
-            if not asset_row and short_norm:
-                norm_rows = con.execute(
-                    "SELECT DISTINCT t.asset_id FROM rmm_telemetry t "
-                    "WHERE regexp_replace(LOWER(t.hostname), '[^a-z0-9]', '', 'g') = ? "
-                    "AND t.asset_id > 0 LIMIT 2",
-                    (short_norm,)
-                ).fetchall()
-                if len(norm_rows) == 1:
-                    asset_row = norm_rows[0]
-            # Guard: only accept a positive asset_id (defends against any stray 0/NULL).
-            if asset_row and asset_row['asset_id']:
-                machine_asset_map[machine_id] = asset_row['asset_id']
-                matched += 1
-        logger.info(f'Defender sync: matched {matched}/{len(machines)} Defender machines to tracked assets')
-
-        # ── Software-presence validation ──────────────────────────────────────
-        # Products that are OS/system/library level — always accept because they
-        # cannot be detected as standalone entries in the installed-apps list.
-        _ALWAYS_ACCEPT = {
-            'windows_11', 'windows_10',
-            '.net', '.net_core', '.net_framework', 'asp.net_core',
-            'chipset_device_software', 'computing_improvement_program',
-            'dynamic_platform_and_thermal_framework', 'dynamic_tuning_technology',
-            'proset_wireless', 'rapid_storage_technology',
-            'hardware_accelerated_execution_manager',
-            # Bundled libraries — cannot validate as standalone apps
-            'openssl', 'log4j', 'libwebp', 'commons_text', 'sqlite', 'qt',
-            # Ambiguous / meta product names
-            'agent', 'update', 'next', 'desktop', 'software_updater',
-            'odbc', 'command_update',
-        }
-        # Defender product_name → keywords to find in rmm_software.name (lowercase)
-        _PRODUCT_KEYWORDS = {
-            'chrome': ['chrome'], 'chrome_for_mac': ['chrome'],
-            'firefox': ['firefox'],
-            'python': ['python'],
-            'jre': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
-            'jdk': ['java', 'jre', 'jdk', 'temurin', 'liberica', 'corretto', 'zulu'],
-            'meetings': ['zoom', 'webex', 'teams', 'goto'],
-            'reader': ['reader', 'acrobat', 'foxit'],
-            'visual_studio_2017': ['visual studio'], 'visual_studio_2022': ['visual studio'],
-            'visual_studio_2013': ['visual studio'],
-            'edge_chromium-based': ['microsoft edge', 'edge'],
-            'edge_webview2_runtime': ['webview2', 'edge'],
-            'mariadb': ['mariadb', 'mysql'],
-            'visual_studio_code': ['visual studio code'], 'visual_studio_code_for_mac': ['visual studio code'],
-            'geforce_experience': ['geforce', 'nvidia'],
-            'vim': ['vim'], 'teams': ['teams'],
-            'vlc_media_player': ['vlc'], 'vlc_media_player_for_mac': ['vlc'],
-            '7-zip': ['7-zip', '7zip'],
-            'office': ['microsoft 365', 'office'],
-            'notepad++': ['notepad++'], 'wireshark': ['wireshark'],
-            'netextender': ['netextender', 'sonicwall'],
-            'git': ['git'], 'gimp': ['gimp'], 'silverlight': ['silverlight'],
-            'illustrator': ['illustrator'],
-            'openoffice': ['openoffice', 'libreoffice'],
-            'sourcetree': ['sourcetree'],
-            'pdf_reader': ['reader', 'acrobat', 'foxit'],
-            'global_vpn_client': ['global vpn', 'sonicwall'],
-            'supportassist': ['supportassist'],
-            'vm_virtualbox': ['virtualbox'],
-            'dragon_center': ['dragon center', 'msi center', 'msi app'],
-            'workstation': ['vmware workstation'],
-            'itunes': ['itunes'], 'webex': ['webex'], 'webex_meetings': ['webex'],
-            'digital_delivery': ['digital delivery', 'autodesk'],
-            'filezilla': ['filezilla'],
-            'synapse': ['razer synapse'], 'winrar': ['winrar'],
-            'tera_term': ['tera term'],
-            'nodejs': ['node.js', 'nodejs', 'node '],
-            'acrobat_reader_dc': ['acrobat', 'reader'],
-            'pycharm': ['pycharm', 'jetbrains'],
-            'skype': ['skype'],
-            'tortoisesvn': ['tortoisesvn'],
-            'creative_cloud': ['creative cloud'],
-            'codemeter_runtime': ['codemeter'],
-            'keepass': ['keepass'],
-            'photoshop_elements': ['photoshop'],
-            'tightvnc': ['tightvnc'], 'ultravnc': ['ultravnc'],
-            'snagit': ['snagit'], 'mobaxterm': ['mobaxterm'],
-            'xmind': ['xmind'], 'beyond_compare': ['beyond compare'],
-            'expressvpn': ['expressvpn'],
-            'viscosity_for_mac': ['viscosity'],
-            'wibukey': ['wibu', 'codemeter'],
-            'everything': ['everything'],
-        }
-
-        # Build per-asset installed-software set from RMM agent inventory.
-        # Only assets that have rmm_software data are in this dict; assets
-        # without data are treated conservatively (no filtering applied).
-        _asset_software: dict = {}
-        try:
-            for _row in con.execute(
-                """SELECT ra.asset_id, lower(rs.name) AS sw_name
-                   FROM rmm_software rs
-                   JOIN rmm_agent ra ON ra.agent_id = rs.agent_id
-                   WHERE ra.asset_id IS NOT NULL"""
-            ).fetchall():
-                _aid = _row['asset_id']
-                if _aid not in _asset_software:
-                    _asset_software[_aid] = set()
-                _asset_software[_aid].add(_row['sw_name'])
-        except Exception as _sw_err:
-            logger.warning(f'Defender sync: could not load software inventory for validation: {_sw_err}')
-
-        def _software_present(asset_id, product_name: str) -> bool:
-            """Return True if this CVE should be inserted for this asset."""
-            pn = (product_name or '').lower().strip()
-            if not pn or pn in _ALWAYS_ACCEPT:
-                return True
-            installed = _asset_software.get(asset_id)
-            if installed is None:
-                return True  # no RMM inventory — accept conservatively
-            keywords = _PRODUCT_KEYWORDS.get(pn)
-            if keywords is None:
-                return True  # unknown product — accept conservatively
-            return any(any(kw in sw for sw in installed) for kw in keywords)
+        # ── Software-presence validation (shared helper) ──────────────────────
+        _software_present = build_software_present_fn(con)
         # ─────────────────────────────────────────────────────────────────────
 
         # Bulk-fetch ALL machine-CVE pairs in one API call (much faster than per-machine calls)

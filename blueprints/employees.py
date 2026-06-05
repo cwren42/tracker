@@ -1157,6 +1157,7 @@ def import_employees():
 
 @bp.route('/employees/export/csv')
 @login_required
+@manager_required
 @license_required
 def export_employees_csv():
     """Export all employees to CSV"""
@@ -1268,6 +1269,7 @@ def upload_employee_photo(employee_id):
 
 @bp.route('/employees/id-cards')
 @login_required
+@manager_required
 @license_required
 def id_card_designer():
     """Bulk ID card designer — print any selection of employees."""
@@ -1307,6 +1309,7 @@ def id_card_designer():
 
 @bp.route('/employees/<int:employee_id>/id-card')
 @login_required
+@manager_required
 @license_required
 def employee_id_card(employee_id):
     """Single-employee card preview / print page."""

@@ -26,12 +26,14 @@
             </button>
         </form>
         {% endif %}
+        {% if current_user.role in ['admin', 'manager'] %}
         <a href="{{ url_for('employees.export_employees_csv') }}" class="btn btn-success btn-sm">
             <i class="bi bi-download"></i> <span class="d-none d-md-inline">Export</span>
         </a>
         <a href="{{ url_for('employees.id_card_designer') }}" class="btn btn-info btn-sm">
             <i class="bi bi-credit-card-2-front"></i> <span class="d-none d-md-inline">ID Cards</span>
         </a>
+        {% endif %}
         {% if current_user.role in ['admin', 'manager', 'hr'] %}
         <a href="{{ url_for('employees.onboard_request') }}" class="btn btn-success btn-sm">
             <i class="bi bi-person-badge"></i> <span class="d-none d-md-inline">Onboard New Hire</span>

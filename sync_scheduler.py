@@ -600,8 +600,10 @@ def run_ad_delete_sweep_job(flask_app_instance):
     the irreversible delete runs only when a human approves the parked request at /approvals.
 
     Selection: offboarded_at IS NOT NULL AND offboarded_at <= (now - N days) AND
+    ad_enabled == False (still disabled in AD) AND is_visible == False (still hidden) AND
     onboard_status != 'deleted' (still has an AD object) AND no pending delete_ad_user
-    already parked. N comes from Setting('offboard_delete_after_days'), default 30.
+    already parked AND no prior denied delete_ad_user for this employee (deny = stop).
+    N comes from Setting('offboard_delete_after_days'), default 30.
     Idempotent via park_ad_delete's correlation-id + status guards."""
     from datetime import timedelta
     with _file_lock(AD_DELETE_SWEEP_LOCK_PATH) as acquired:
@@ -630,9 +632,15 @@ def run_ad_delete_sweep_job(flask_app_instance):
                 now_local = datetime.strptime(workflow_engine._now(), "%Y-%m-%d %H:%M:%S")
                 cutoff = now_local - timedelta(days=days)
 
+                # Only park a delete for an account that is STILL offboarded: disabled in AD
+                # (ad_enabled == False) AND hidden (is_visible == False). A reactivated /
+                # rehired / unhidden employee must NOT be a candidate even if a stale
+                # offboarded_at lingers — those paths also clear offboarded_at (defense in depth).
                 candidates = (Employee.query
                               .filter(Employee.offboarded_at.isnot(None))
                               .filter(Employee.offboarded_at <= cutoff)
+                              .filter(Employee.ad_enabled == False)
+                              .filter(Employee.is_visible == False)
                               .filter(db.func.coalesce(Employee.onboard_status, '') != 'deleted')
                               .all())
 

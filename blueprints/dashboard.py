@@ -1112,6 +1112,15 @@ def approvals_bulk():
             continue
         try:
             if action == 'approve':
+                # Permanent/irreversible actions are NOT bulk-approvable — they require the
+                # individual one-click confirm (don't rely on the client-side JS exclusion).
+                # delete_ad_user permanently removes an AD object; onboard_employee needs the
+                # OU/groups custom approve route.
+                at = workflow_engine.get_action_type(rid)
+                if at in ('delete_ad_user', 'onboard_employee'):
+                    results.append({'id': rid, 'ok': False, 'skipped': True,
+                                    'error': f'{at} cannot be bulk-approved — use the individual confirm.'})
+                    continue
                 claimed, info = workflow_engine.approve_action(rid, approver)
                 ok = bool(claimed) and not info.get('error')
                 results.append({'id': rid, 'ok': ok, 'error': None if ok else info.get('error', 'could not approve')})

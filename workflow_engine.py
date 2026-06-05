@@ -749,6 +749,17 @@ def approve_action(row_id, approver):
     return True, {"approved": True, "action_type": action_type, "by": approver}
 
 
+def get_action_type(row_id):
+    """Return the action_type of a ledger row (or None). Used by bulk-approve to refuse
+    irreversible actions (delete_ad_user) server-side."""
+    db = _db()
+    try:
+        row = db.execute("SELECT action_type FROM command_ledger WHERE id=?", (row_id,)).fetchone()
+    finally:
+        db.close()
+    return row["action_type"] if row else None
+
+
 def deny_action(row_id, approver, reason=""):
     """Deny a parked action — atomic claim, no dispatch."""
     before = _claim_pending(row_id, to_approval_status="denied", to_status="denied")
@@ -1133,7 +1144,12 @@ def park_ad_delete(employee_id, employee_name, requested_by="agentic-os",
 
     IDEMPOTENT — won't double-park: returns None if a pending/awaiting delete_ad_user is
     already parked for this employee, or if the employee is already 'deleted'. Returns the
-    pending ledger id, or None."""
+    pending ledger id, or None.
+
+    DENY = STOP: if a prior delete_ad_user for this same employee was DENIED, we do NOT
+    re-park it (otherwise a denied permanent delete would resurrect every night forever).
+    To legitimately re-arm a delete later, clear/supersede that denied ledger row (e.g.
+    update its status away from 'denied') — then the next sweep will park afresh."""
     corr = f"ad-delete-emp-{employee_id}"
     db = _db()
     try:
@@ -1147,12 +1163,22 @@ def park_ad_delete(employee_id, employee_name, requested_by="agentic-os",
                     return None
         except Exception:
             log.exception("park_ad_delete status precheck failed (continuing to dup-guard)")
+        # Deny = stop: a previously DENIED delete for this employee suppresses re-parking.
+        denied = db.execute(
+            "SELECT id FROM command_ledger WHERE correlation_id=? AND action_type='delete_ad_user' "
+            "AND approval_status='denied' LIMIT 1",
+            (corr,)).fetchone()
         existing = db.execute(
             "SELECT id FROM command_ledger WHERE correlation_id=? AND action_type='delete_ad_user' "
             "AND status='awaiting_approval' AND approval_status='pending' LIMIT 1",
             (corr,)).fetchone()
     finally:
         db.close()
+    if denied:
+        log.info("park_ad_delete: suppressed for employee %s — a prior delete_ad_user was DENIED "
+                 "(ledger #%s); re-park requires an explicit re-arm (clear the denied row).",
+                 employee_id, denied["id"])
+        return None
     if existing:
         return None
     led = _ledger_log(
@@ -1199,17 +1225,53 @@ def _action_delete_ad_user(config: dict, ctx: dict) -> tuple:
                 return False, {"error": f"employee {emp_id} not found"}
             name = emp.name
 
+            ad_dn = (emp.ad_dn or "").strip()
             identifier = (emp.sam_account_name or emp.email or "").strip()
-            if not identifier:
-                return False, {"error": "no sam_account_name/email on employee — cannot delete AD object"}
+            if not ad_dn and not identifier:
+                return False, {"error": "no ad_dn/sam_account_name/email on employee — cannot delete AD object"}
 
             cfg = load_ad_config(Setting)
             if not cfg.enabled:
                 return False, {"error": "AD integration not enabled in Settings"}
 
-            r = LDAPService(cfg).delete_user(identifier)
-            deleted = bool(r.get("success"))
-            detail = r.get("message") or r.get("error") or ""
+            svc = LDAPService(cfg)
+
+            # Defense in depth: re-check the LIVE AD object before deleting. We prefer the
+            # stored immutable-ish ad_dn (a re-resolved sam/email could have been recycled to
+            # a NEW hire across the 30-day gap) and we ABORT unless the live object is disabled.
+            #   disabled -> delete   |   absent -> idempotent success   |   enabled -> HARD ABORT
+            #   error/anything-else  -> fail loudly (don't delete on an unknown state)
+            if ad_dn:
+                live_state = svc.get_account_state_by_dn(ad_dn)
+                target_desc = f"DN {ad_dn}"
+            else:
+                live_state = svc.get_account_state(identifier)
+                target_desc = identifier
+
+            if live_state == "enabled":
+                # Stale/wrong request slipped through — the object is LIVE. Never delete it.
+                # Leave the employee + ledger intact so a human can investigate.
+                detail = (f"ABORTED: AD object ({target_desc}) is ENABLED, not disabled — "
+                          "refusing to delete a live/re-enabled account.")
+                log.error("delete_ad_user %s: %s", emp_id, detail)
+                return False, {"employee_id": emp_id, "employee_name": name,
+                               "deleted": False, "aborted": True, "detail": detail}
+            if live_state == "absent":
+                # Object already gone — idempotent success (already deleted / out of scope).
+                deleted, detail = True, f"no-op: AD object ({target_desc}) already absent"
+                r = {"success": True}
+            elif live_state == "disabled":
+                r = svc.delete_user_by_dn(ad_dn) if ad_dn else svc.delete_user(identifier)
+                deleted = bool(r.get("success"))
+                detail = r.get("message") or r.get("error") or ""
+            else:
+                # 'error' (or unexpected) — do NOT delete on an unknown live state.
+                detail = (f"ABORTED: could not verify AD object ({target_desc}) state "
+                          f"({live_state}) before delete.")
+                log.error("delete_ad_user %s: %s", emp_id, detail)
+                return False, {"employee_id": emp_id, "employee_name": name,
+                               "deleted": False, "aborted": True, "detail": detail}
+
             if not deleted:
                 err = (r.get("error") or "").lower()
                 if "not found" in err:
@@ -1218,7 +1280,7 @@ def _action_delete_ad_user(config: dict, ctx: dict) -> tuple:
                     detail = f"no-op: {r.get('error')}"
                 else:
                     # Real delete failure — fail loudly so the ledger records it and a human retries.
-                    log.error("delete_ad_user failed for %s: %s", identifier, r.get("error"))
+                    log.error("delete_ad_user failed for %s: %s", target_desc, r.get("error"))
                     return False, {"employee_id": emp_id, "employee_name": name,
                                    "deleted": False, "detail": detail}
 

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from ldap3 import Server, Connection, ALL, SUBTREE, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE
+from ldap3 import Server, Connection, ALL, SUBTREE, BASE, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE
 from ldap3.core.exceptions import LDAPException
 
 logger = logging.getLogger(__name__)
@@ -193,6 +193,59 @@ class LDAPService:
             self.connection.delete(user.entry_dn)
             if self.connection.result['result'] == 0:
                 return {'success': True, 'message': f'User {username_or_upn} deleted', 'dn': user.entry_dn}
+            return {'success': False, 'error': self.connection.result.get('description')}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            self.disconnect()
+
+    def get_account_state_by_dn(self, dn: str) -> str:
+        """Live AD account state for the object AT this exact DN:
+        'enabled' | 'disabled' | 'absent' | 'error'. Unlike get_account_state (which
+        resolves by sam/upn/mail and could match a recycled identifier on a NEW hire),
+        this is pinned to the stored immutable-ish DN."""
+        try:
+            self._ensure()
+            self.connection.search(
+                search_base=dn,
+                search_filter='(objectClass=user)',
+                search_scope=BASE,
+                attributes=['userAccountControl', 'objectClass'],
+            )
+            if not self.connection.entries:
+                return 'absent'
+            u = self.connection.entries[0]
+            uac = u.userAccountControl.value if hasattr(u, 'userAccountControl') else None
+            if uac is None:
+                return 'enabled'
+            return 'disabled' if (int(uac) & 2) else 'enabled'
+        except Exception:
+            logger.exception('get_account_state_by_dn failed for %s', dn)
+            return 'error'
+
+    def delete_user_by_dn(self, dn: str) -> dict:
+        """Delete the AD user object AT this exact DN — read-then-write: confirm the object
+        exists, is a user, and is DISABLED before removing it. Pinning to the stored DN (not
+        re-resolving sam/email, which can have been recycled to a new hire) closes the
+        wrong-object risk across the 30-day retention gap. 'not found' = idempotent success."""
+        try:
+            self._ensure()
+            self.connection.search(
+                search_base=dn,
+                search_filter='(objectClass=user)',
+                search_scope=BASE,
+                attributes=['userAccountControl', 'objectClass', 'sAMAccountName'],
+            )
+            if not self.connection.entries:
+                return {'success': False, 'error': f'User at DN {dn} not found in AD'}
+            u = self.connection.entries[0]
+            uac = u.userAccountControl.value if hasattr(u, 'userAccountControl') else None
+            if uac is not None and not (int(uac) & 2):
+                # Live object at this DN is ENABLED — refuse to delete a live account.
+                return {'success': False, 'error': f'Account at DN {dn} is ENABLED — refusing to delete'}
+            self.connection.delete(dn)
+            if self.connection.result['result'] == 0:
+                return {'success': True, 'message': f'User at DN {dn} deleted', 'dn': dn}
             return {'success': False, 'error': self.connection.result.get('description')}
         except Exception as e:
             return {'success': False, 'error': str(e)}

@@ -279,6 +279,11 @@ def bulk_update_employees():
     elif action == 'unhide' and current_user.role == 'admin':
         for emp in employees_to_update:
             emp.is_visible = True
+            # Reactivation: clear the offboard clock so the AD-delete sweep can't park a
+            # delete for an account that's been restored to visible.
+            emp.offboarded_at = None
+            if (emp.onboard_status or '').lower() == 'deleted':
+                emp.onboard_status = None
         db.session.commit()
         flash(f'Restored {len(employees_to_update)} employee(s) to visible.', 'success')
 
@@ -461,6 +466,12 @@ def run_ad_employee_sync():
             emp.sam_account_name = u.get('sam_account_name') or emp.sam_account_name
             emp.ad_dn            = u.get('distinguished_name')
             emp.ad_enabled       = u.get('ad_enabled', True)
+            # Rehire/reactivation: if AD now reports the account ENABLED, clear any lingering
+            # offboard clock so the AD-delete sweep can never park a delete for a live account.
+            if emp.ad_enabled and emp.offboarded_at is not None:
+                emp.offboarded_at = None
+                if (emp.onboard_status or '').lower() == 'deleted':
+                    emp.onboard_status = None
             emp.ad_last_sync     = now
             if email:
                 emp.email = email
@@ -861,7 +872,14 @@ def edit_employee(employee_id):
             if current_user.role == 'admin':
                 # getlist returns all values; checkbox sends '1' when checked
                 is_visible_vals = request.form.getlist('is_visible')
+                was_hidden = not employee.is_visible
                 employee.is_visible = '1' in is_visible_vals
+                # Reactivation via the edit form: restoring a hidden employee to visible
+                # clears the offboard clock so the AD-delete sweep can't park a delete.
+                if employee.is_visible and was_hidden:
+                    employee.offboarded_at = None
+                    if (employee.onboard_status or '').lower() == 'deleted':
+                        employee.onboard_status = None
             
             db.session.commit()
             
@@ -935,6 +953,11 @@ def verify_and_park_offboards():
                     res['parked'] += 1
             elif state == 'enabled':
                 e.ad_enabled = True   # sync false-flagged an active user — self-heal
+                # AD says ENABLED -> the account is live again (reactivated/false-flag).
+                # Clear the offboard clock so the AD-delete sweep can't park a delete.
+                e.offboarded_at = None
+                if (e.onboard_status or '').lower() == 'deleted':
+                    e.onboard_status = None
                 res['healed'] += 1
             else:  # 'absent' or 'error' — too weak to auto-offboard
                 res['absent' if state == 'absent' else 'errors'] += 1

@@ -1417,10 +1417,21 @@ class EvidenceFileService(EvidenceAzureMixin):
         return ws_summary
 
     def generate_rmm_vulnerability_scan_file(self, evidence_name):
-        """Vulnerability scan results from the live RMM vulnerability_cache.
+        """Vulnerability scan results: the CVE catalog (vulnerability_cache) PLUS
+        the true per-device OPEN exposure from device_vulnerability (Defender).
 
-        Source: vulnerability_cache (CVE catalog synced from the RMM scanner),
-        ordered by severity then CVSS. Includes a dated summary sheet.
+        Two data sheets:
+          - 'Vulnerability Scan' : the CVE catalog synced from the scanner,
+            ordered by severity then CVSS.
+          - 'Open Findings'      : per-(asset, CVE) findings currently 'Open' in
+            device_vulnerability (the authoritative live exposure). This is the
+            real audit posture — the count of what is actually open, by severity,
+            and on which machines.
+
+        The summary reports BOTH the catalog size and the live open posture so
+        the artifact cannot be misread as all-clear. Open-exposure figures are
+        pulled live from device_vulnerability (Defender-sourced); no value is
+        hard-coded.
         """
         sev_rank = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3, 'Unknown': 4}
         rows = db.session.execute(text(
@@ -1450,15 +1461,69 @@ class EvidenceFileService(EvidenceAzureMixin):
             by_sev[r[2] or 'Unknown'] = by_sev.get(r[2] or 'Unknown', 0) + 1
             if r[7] and (latest_sync is None or r[7] > latest_sync):
                 latest_sync = r[7]
+
+        # --- Live OPEN exposure from device_vulnerability (Defender) ----------
+        # Authoritative per-device finding state. Until 2026-06-05 a Defender
+        # close-by-absence timestamp race (fix 7bbaf27) falsely marked these
+        # 'Remediated'; the table now reflects true exposure.
+        open_rows = db.session.execute(text(
+            """SELECT dv.severity, dv.cve_id,
+                      COALESCE(a.name, dv.agent_id) AS device,
+                      dv.product_name, dv.cvss, dv.synced_at
+               FROM device_vulnerability dv
+               LEFT JOIN asset a ON a.id = dv.asset_id
+               WHERE dv.status = 'Open'
+               ORDER BY (CASE dv.severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1
+                                          WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3
+                                          ELSE 4 END), dv.cve_id"""
+        )).fetchall()
+
+        ws_open = wb.create_sheet('Open Findings')
+        open_headers = ['Severity', 'CVE ID', 'Device', 'Product', 'CVSS', 'Scan Date', 'Source']
+        self.style_header_row(ws_open, open_headers)
+        open_by_sev = {}
+        open_scan_dt = None
+        for row_idx, r in enumerate(open_rows, 2):
+            sev = r[0] or 'Unknown'
+            open_by_sev[sev] = open_by_sev.get(sev, 0) + 1
+            if r[5] and (open_scan_dt is None or r[5] > open_scan_dt):
+                open_scan_dt = r[5]
+            ws_open.cell(row_idx, 1, sev)
+            ws_open.cell(row_idx, 2, r[1] or '')
+            ws_open.cell(row_idx, 3, r[2] or '')
+            ws_open.cell(row_idx, 4, self._sanitize_for_excel((r[3] or '')[:80]))
+            ws_open.cell(row_idx, 5, r[4] if r[4] is not None else '')
+            ws_open.cell(row_idx, 6, r[5].strftime('%Y-%m-%d %H:%M') if r[5] else '')
+            ws_open.cell(row_idx, 7, 'Microsoft Defender for Endpoint')
+
+        open_total = len(open_rows)
+        open_cves = len({r[1] for r in open_rows if r[1]})
+        open_assets = len({r[2] for r in open_rows if r[2]})
+        crit_assets = len({r[2] for r in open_rows if (r[0] == 'Critical' and r[2])})
+        crit_cves = len({r[1] for r in open_rows if (r[0] == 'Critical' and r[1])})
+
         self._summary_sheet(wb, [
             ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
             ('Last Scanner Sync', latest_sync.strftime('%Y-%m-%d %H:%M') if latest_sync else 'Unknown'),
-            ('Total Vulnerabilities', len(rows)),
-            ('Critical', by_sev.get('Critical', 0)),
-            ('High', by_sev.get('High', 0)),
-            ('Medium', by_sev.get('Medium', 0)),
-            ('Low', by_sev.get('Low', 0)),
-            ('Data Source', 'RMM vulnerability scanner (vulnerability_cache)'),
+            ('-- CVE Catalog (vulnerability_cache) --', ''),
+            ('Distinct Vulnerabilities (catalog)', len(rows)),
+            ('Catalog Critical', by_sev.get('Critical', 0)),
+            ('Catalog High', by_sev.get('High', 0)),
+            ('Catalog Medium', by_sev.get('Medium', 0)),
+            ('Catalog Low', by_sev.get('Low', 0)),
+            ('-- Live Open Exposure (device_vulnerability / Defender) --', ''),
+            ('Open Findings (device-CVE pairs)', open_total),
+            ('Open Distinct CVEs', open_cves),
+            ('Affected Assets', open_assets),
+            ('Open Critical (pairs)', open_by_sev.get('Critical', 0)),
+            ('Open Critical (distinct CVEs)', crit_cves),
+            ('Open Critical (affected assets)', crit_assets),
+            ('Open High (pairs)', open_by_sev.get('High', 0)),
+            ('Open Medium (pairs)', open_by_sev.get('Medium', 0)),
+            ('Open Low (pairs)', open_by_sev.get('Low', 0)),
+            ('Open Exposure Scan Date', open_scan_dt.strftime('%Y-%m-%d %H:%M') if open_scan_dt else 'Unknown'),
+            ('Open Exposure Source', 'Microsoft Defender for Endpoint (device_vulnerability)'),
+            ('Data Source', 'RMM vulnerability scanner (vulnerability_cache) + Defender (device_vulnerability)'),
         ])
         file_path = self.get_file_path(evidence_name, 'RMM')
         wb.save(file_path)
@@ -1501,13 +1566,42 @@ class EvidenceFileService(EvidenceAzureMixin):
         installed = sum(1 for r in rows if r[5] == 'installed')
         superseded = sum(1 for r in rows if r[5] == 'superseded')
         devices = len({r[0] for r in rows if r[0]})
+
+        # Open-vs-remediated context from device_vulnerability so this artifact
+        # cannot be misread as an all-clear posture. The "remediated" figures
+        # above are patch JOBS; the figures below are the authoritative live
+        # finding state (Defender). Until 2026-06-05 a close-by-absence race
+        # (fix 7bbaf27) falsely flipped open findings to 'Remediated'; pulled
+        # live here, nothing hard-coded.
+        dv = db.session.execute(text(
+            """SELECT
+                  COUNT(*) FILTER (WHERE status = 'Open')                                  AS open_total,
+                  COUNT(DISTINCT cve_id) FILTER (WHERE status = 'Open')                     AS open_cves,
+                  COUNT(DISTINCT asset_id) FILTER (WHERE status = 'Open')                   AS open_assets,
+                  COUNT(*) FILTER (WHERE status = 'Open' AND severity = 'Critical')         AS open_crit,
+                  COUNT(*) FILTER (WHERE status = 'Open' AND severity = 'High')             AS open_high,
+                  COUNT(*) FILTER (WHERE status = 'Remediated')                             AS rem_total,
+                  MAX(synced_at)                                                            AS scan_dt
+               FROM device_vulnerability"""
+        )).fetchone()
+
         self._summary_sheet(wb, [
             ('Report Generated', datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')),
+            ('-- Patch Jobs (cve_patch_job) --', ''),
             ('Total Remediation Records', len(rows)),
             ('Patches Installed', installed),
             ('Superseded', superseded),
             ('Devices Covered', devices),
-            ('Data Source', 'RMM patch engine (cve_patch_job + vulnerability_cache)'),
+            ('-- Live Finding State (device_vulnerability / Defender) --', ''),
+            ('Findings Remediated', dv[5] if dv else 0),
+            ('Findings Still Open', dv[0] if dv else 0),
+            ('Open Distinct CVEs', dv[1] if dv else 0),
+            ('Open Affected Assets', dv[2] if dv else 0),
+            ('Open Critical', dv[3] if dv else 0),
+            ('Open High', dv[4] if dv else 0),
+            ('Finding State Scan Date', dv[6].strftime('%Y-%m-%d %H:%M') if (dv and dv[6]) else 'Unknown'),
+            ('Finding State Source', 'Microsoft Defender for Endpoint (device_vulnerability)'),
+            ('Data Source', 'RMM patch engine (cve_patch_job + vulnerability_cache) + Defender (device_vulnerability)'),
         ])
         file_path = self.get_file_path(evidence_name, 'RMM')
         wb.save(file_path)

@@ -75,6 +75,7 @@
                             <option value="viewer"     {% if user.role == 'viewer'     %}selected{% endif %}>Viewer</option>
                             <option value="eagle_eyes" {% if user.role == 'eagle_eyes' %}selected{% endif %}>Eagle Eyes</option>
                             <option value="manager"    {% if user.role == 'manager'    %}selected{% endif %}>Manager</option>
+                            <option value="hr"         {% if user.role == 'hr'         %}selected{% endif %}>HR (employees + onboarding)</option>
                             <option value="admin"      {% if user.role == 'admin'      %}selected{% endif %}>Admin</option>
                         </select>
                         <div id="roleDesc" class="form-text mt-1"></div>

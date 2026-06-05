@@ -25,6 +25,7 @@
                 <button type="button" class="btn btn-outline-secondary active" onclick="setRole(this,'all')">All</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'admin')">Admin</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'manager')">Manager</button>
+                <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'hr')">HR</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'eagle_eyes')">Eagle Eyes</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'viewer')">Viewer</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="setRole(this,'base_user')">Base User</button>
@@ -60,6 +61,7 @@
                                     {% elif user.role == 'manager' %}bg-warning text-dark
                                     {% elif user.role == 'eagle_eyes' %}bg-primary text-white
                                     {% elif user.role == 'base_user' %}bg-info text-dark
+                                    {% elif user.role == 'hr' %}bg-success text-white
                                     {% else %}bg-secondary text-white{% endif %}"
                                     style="width:40px;height:40px;min-width:40px;font-size:.95rem;">
                                     {{ user.display_name[0]|upper }}
@@ -84,6 +86,8 @@
                                 <span class="badge bg-primary">Eagle Eyes</span>
                             {% elif user.role == 'base_user' %}
                                 <span class="badge bg-info text-dark">Base User</span>
+                            {% elif user.role == 'hr' %}
+                                <span class="badge bg-success">HR</span>
                             {% else %}
                                 <span class="badge bg-secondary">Viewer</span>
                             {% endif %}

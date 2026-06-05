@@ -958,16 +958,30 @@ def sync_defender_vulnerabilities():
             # Short name is everything before the first dot (handles FQDNs like HOST.domain.local)
             short_name = fqdn.split('.')[0]
 
+            # Normalized key: lowercase, strip every non-alphanumeric char. This
+            # collapses hostname/asset-name punctuation differences (hyphens,
+            # underscores, dots) so 'chris-home' matches an asset named 'ChrisHome'
+            # and 'IT_CHRIS_LENOVO' matches 'IT-CHRIS-LENOVO'.
+            def _norm(s):
+                return ''.join(c for c in (s or '').lower() if c.isalnum())
+            short_norm = _norm(short_name)
+
             asset_row = None
+            # NOTE on the asset_id>0 guard: rmm_telemetry can carry orphan rows with
+            # asset_id=0/NULL (a hostname seen by an agent that was never linked to an
+            # asset). Those rows must NOT short-circuit matching — a 0 here is falsy
+            # downstream (line ~1110 `if not asset_id`) and the machine silently lands
+            # in the unmapped bucket even when a real asset exists by name. Require a
+            # positive asset_id on every telemetry-based match.
             # 1. Exact match against rmm_telemetry hostname
             asset_row = con.execute(
-                "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) LIMIT 1",
+                "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
                 (fqdn,)
             ).fetchone()
             # 2. Short-name match against rmm_telemetry
             if not asset_row and short_name:
                 asset_row = con.execute(
-                    "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) LIMIT 1",
+                    "SELECT t.asset_id FROM rmm_telemetry t WHERE LOWER(t.hostname)=LOWER(?) AND t.asset_id > 0 LIMIT 1",
                     (short_name,)
                 ).fetchone()
             # 3. Exact match against asset.name
@@ -982,7 +996,38 @@ def sync_defender_vulnerabilities():
                     "SELECT id AS asset_id FROM asset WHERE LOWER(name)=LOWER(?) AND status!='Disposed' LIMIT 1",
                     (short_name,)
                 ).fetchone()
-            if asset_row:
+            # 5. Normalized (punctuation-insensitive) short-name match against
+            #    asset.name. Last resort, and ONLY when it resolves to exactly one
+            #    non-disposed asset — an ambiguous normalized key is left unmapped
+            #    rather than guessing, so we never attach Defender findings to the
+            #    wrong device.
+            if not asset_row and short_norm:
+                norm_rows = con.execute(
+                    "SELECT id AS asset_id FROM asset "
+                    "WHERE regexp_replace(LOWER(name), '[^a-z0-9]', '', 'g') = ? "
+                    "AND status!='Disposed' LIMIT 2",
+                    (short_norm,)
+                ).fetchall()
+                if len(norm_rows) == 1:
+                    asset_row = norm_rows[0]
+                elif len(norm_rows) > 1:
+                    logger.info(
+                        f'Defender sync: normalized key {short_norm!r} (from {fqdn!r}) '
+                        f'matched multiple assets — left unmapped to avoid mis-attribution'
+                    )
+            # 6. Normalized short-name match against rmm_telemetry hostname (also
+            #    single-match guarded, asset_id>0).
+            if not asset_row and short_norm:
+                norm_rows = con.execute(
+                    "SELECT DISTINCT t.asset_id FROM rmm_telemetry t "
+                    "WHERE regexp_replace(LOWER(t.hostname), '[^a-z0-9]', '', 'g') = ? "
+                    "AND t.asset_id > 0 LIMIT 2",
+                    (short_norm,)
+                ).fetchall()
+                if len(norm_rows) == 1:
+                    asset_row = norm_rows[0]
+            # Guard: only accept a positive asset_id (defends against any stray 0/NULL).
+            if asset_row and asset_row['asset_id']:
                 machine_asset_map[machine_id] = asset_row['asset_id']
                 matched += 1
         logger.info(f'Defender sync: matched {matched}/{len(machines)} Defender machines to tracked assets')

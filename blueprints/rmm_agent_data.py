@@ -501,14 +501,18 @@ def api_rmm_patch_jobs_deploy(agent_id, job_id):
         with _req.urlopen(req, timeout=10) as resp:
             result = _json.loads(resp.read())
         if not result.get('ok'):
-            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error')}), 502
+            # Agent not live on the gateway — DO NOT mark 'deploying' into the void.
+            # The job row stays 'queued'; the gateway reconnect flush will deliver it
+            # the next time this agent connects.
+            return jsonify({'ok': False, 'error': result.get('error', 'Gateway error'),
+                            'queued': True}), 502
     except _err.HTTPError as e:
         body = e.read().decode()
-        return jsonify({'ok': False, 'error': f'Gateway {e.code}: {body}'}), 502
+        return jsonify({'ok': False, 'error': f'Gateway {e.code}: {body}', 'queued': True}), 502
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 502
+        return jsonify({'ok': False, 'error': str(e), 'queued': True}), 502
 
-    # Mark as deploying
+    # Confirmed send to a live agent → mark as deploying.
     db.session.execute(
         text("UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW(), updated_at=NOW() WHERE id=:jid"),
         {'jid': job_id}

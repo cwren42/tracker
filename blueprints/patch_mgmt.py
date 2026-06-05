@@ -74,7 +74,7 @@ def api_patches_pending():
             agents = list(r[8]) if r[8] else []
             names  = list(r[9]) if r[9] else []
             # Count job statuses across agents for this update
-            job_counts = {'completed': 0, 'failed': 0, 'deploying': 0, 'queued': 0}
+            job_counts = {'completed': 0, 'failed': 0, 'deploying': 0, 'queued': 0, 'no_op': 0}
             for a in agents:
                 s = agent_job_status.get(a)
                 if s in job_counts:
@@ -358,10 +358,11 @@ def api_patches_job_status():
                 if uid not in by_update:
                     by_update[uid] = {
                         'completed': 0, 'failed': 0,
-                        'deploying': 0, 'queued': 0,
+                        'deploying': 0, 'queued': 0, 'no_op': 0,
                         'latest_at': updated_at.isoformat() if updated_at else None,
                     }
-                s = status if status in ('completed', 'failed', 'deploying', 'queued') else 'queued'
+                # 'no_op' = agent found nothing to install (terminal, NOT a failure).
+                s = status if status in ('completed', 'failed', 'deploying', 'queued', 'no_op') else 'queued'
                 by_update[uid][s] = by_update[uid].get(s, 0) + 1
 
         return jsonify({'ok': True, 'by_agent': by_agent, 'by_update': by_update})
@@ -431,7 +432,7 @@ def _cleanup_patch_jobs():
                AND (updated_at IS NULL OR updated_at < NOW() - interval '6 hours')""")).rowcount
         purged = db.session.execute(text("""
             DELETE FROM rmm_patch_job
-             WHERE status IN ('completed','failed')
+             WHERE status IN ('completed','failed','no_op')
                AND COALESCE(completed_at, updated_at, created_at) < NOW() - interval '30 days'""")).rowcount
         db.session.commit()
         return stuck, purged

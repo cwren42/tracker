@@ -689,8 +689,22 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                         cur  = get_cursor(conn)
                         error     = result.get("error") or ""
                         installed = int(result.get("installed") or 0)
+                        # No-op deploys (the agent found nothing to install) are NOT
+                        # failures — they were polluting the 'failed' bucket (~2.9k rows).
+                        # Mirror the cve_patch_result pattern: guard genuine transient
+                        # failures FIRST so we never swallow a real error, then classify
+                        # the no-op cases to a non-failed 'no_op' status.
+                        _noop_errors = ("No matching pending updates", "No update IDs specified")
+                        _transient_fail = any(kw in error for kw in (
+                            "timed out", "download failed", "timed_out",
+                            "connection", "network", "exit code", "No output from installer",
+                        ))
                         if installed > 0:
                             new_status = "completed"
+                        elif _transient_fail:
+                            new_status = "failed"
+                        elif error in _noop_errors:
+                            new_status = "no_op"
                         elif error:
                             new_status = "failed"
                         else:

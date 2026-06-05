@@ -340,6 +340,251 @@ def api_vuln_deploy(cve_id):
     return jsonify(ok=True, dispatched=dispatched, errors=errors, total=len(rows), sent=len(dispatched))
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# BROWSER REMEDIATION (winget-via-remediation-queue)
+# ════════════════════════════════════════════════════════════════════════════════
+# Queues a least-disruptive `winget upgrade` run_script for the relevant browser(s)
+# on a target agent. Persists to rmm_remediation_queue via the gateway's
+# /remediation/<agent>/enqueue endpoint, which dispatches immediately if the agent
+# is live on the WS or leaves it queued for the reconnect flush (roaming laptops are
+# offline most of the time). The reconnect engine correlates the script_result back
+# by negative session_id and flips the row to completed/failed. winget upgrade is a
+# no-op if the package is already current, so re-queueing is harmless; the browser
+# CVE clears on the next Defender re-scan once the box reports the updated version.
+
+# Map our device_vulnerability.product_name families to a winget package id. We do
+# NOT use the agent's dedicated `winget_install` handler here: that path only does
+# `install` and emits `install_done`, which the remediation result-correlator does
+# not understand. The run_script path emits a proper `script_result` (exit_code),
+# which is what the engine flips on. Windows-only (winget); a chrome_for_mac asset
+# cannot be serviced this way and is excluded by the selection query.
+_BROWSER_WINGET = {
+    'chrome':  'Google.Chrome',
+    'edge':    'Microsoft.Edge',
+    'firefox': 'Mozilla.Firefox',
+}
+
+# Least-disruptive: stages the update, no --force / no force-close, no reboot.
+# Idempotent (winget no-ops if already current). Note: the agent caps run_script
+# timeout at 300s, so a 600s request is clamped to 300 by the agent — browser
+# upgrades finish well within that.
+_BROWSER_REMEDIATION_TIMEOUT = 600
+
+
+def _browser_from_product(product_name: str):
+    """Return the browser family key ('chrome'|'edge'|'firefox') for a
+    device_vulnerability.product_name, or None (e.g. chrome_for_mac -> None)."""
+    p = (product_name or '').lower()
+    if 'mac' in p:
+        return None
+    if 'chrome' in p:
+        return 'chrome'
+    if 'edge' in p:
+        return 'edge'
+    if 'firefox' in p:
+        return 'firefox'
+    return None
+
+
+def _winget_upgrade_code(pkg: str) -> str:
+    r"""PowerShell that runs `winget upgrade` for one package id.
+
+    The agent runs as SYSTEM (NSSM service), and a bare `winget` is NOT on
+    SYSTEM's PATH — the App Installer lives per-user under
+    %LOCALAPPDATA%\Microsoft\WindowsApps and (machine-wide) under
+    C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*. So we resolve
+    winget.exe explicitly (mirroring the agent's own _find_winget glob order) and
+    invoke the full path, the same way the agent's dedicated winget handler does.
+    Idempotent: winget upgrade no-ops (exits 0) if the package is already current.
+    """
+    return (
+        "$ErrorActionPreference='Stop'; "
+        "$wg=(Get-Command winget -ErrorAction SilentlyContinue).Source; "
+        "if(-not $wg){"
+        "$c=Get-ChildItem 'C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_*\\winget.exe' "
+        "-ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -Last 1; "
+        "if($c){$wg=$c.FullName}}; "
+        "if(-not $wg){"
+        "$u=Get-ChildItem 'C:\\Users\\*\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe' "
+        "-ErrorAction SilentlyContinue | Select-Object -First 1; "
+        "if($u){$wg=$u.FullName}}; "
+        "if(-not $wg){Write-Error 'winget.exe not found'; exit 9}; "
+        f"& $wg upgrade --id {pkg} --silent "
+        "--accept-source-agreements --accept-package-agreements; "
+        "$rc=$LASTEXITCODE; "
+        # winget exits 0x8A15002B (-1978335189) == 'No applicable upgrade found'
+        # i.e. already current -> treat as success (idempotent no-op).
+        "if($rc -eq -1978335189){Write-Output 'Already up to date (no applicable upgrade).'; exit 0}; "
+        "exit $rc"
+    )
+
+
+def _winget_upgrade_payload(browser: str) -> dict:
+    """Build the run_script message body that updates one browser via winget."""
+    pkg = _BROWSER_WINGET[browser]
+    return {
+        'type':    'run_script',
+        'shell':   'powershell',
+        'code':    _winget_upgrade_code(pkg),
+        'timeout': _BROWSER_REMEDIATION_TIMEOUT,
+    }
+
+
+def _enqueue_browser_remediation(agent_id, asset_id, browser, created_by):
+    """Enqueue a single browser-update run_script for one agent via the gateway.
+
+    Idempotent: if a queued/deploying remediation row already targets the same
+    winget package for this agent, skip rather than double-queue. Returns a dict
+    describing the outcome (status one of: skipped, queued, deploying, error)."""
+    pkg = _BROWSER_WINGET.get(browser)
+    if not pkg:
+        return {'agent_id': agent_id, 'browser': browser, 'status': 'error',
+                'error': f'unknown browser {browser!r}'}
+
+    # Dedup: a pending (not-yet-terminal) row whose payload mentions this package.
+    con = _alert_svc._get_db()
+    try:
+        existing = con.execute(
+            """SELECT id, status FROM rmm_remediation_queue
+               WHERE agent_id = %s
+                 AND action_type = 'run_script'
+                 AND status IN ('queued', 'deploying')
+                 AND payload LIKE %s
+               ORDER BY id DESC LIMIT 1""",
+            (agent_id, f'%--id {pkg} %')
+        ).fetchone()
+    finally:
+        con.close()
+    if existing:
+        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+                'status': 'skipped', 'reason': 'already pending',
+                'existing_id': existing['id'], 'existing_status': existing['status']}
+
+    body = _winget_upgrade_payload(browser)
+    enqueue = {
+        'action_type': 'run_script',
+        'payload':     body,
+        'asset_id':    asset_id,
+        'created_by':  created_by,
+    }
+    try:
+        import urllib.request as _req
+        req = _req.Request(
+            f"{RMM_GATEWAY_INTERNAL}/remediation/{agent_id}/enqueue",
+            data=json.dumps(enqueue).encode(),
+            headers={'Content-Type': 'application/json'}, method='POST'
+        )
+        with _req.urlopen(req, timeout=10) as resp:
+            gw = json.loads(resp.read())
+    except Exception as e:
+        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+                'status': 'error', 'error': str(e)}
+    if not gw.get('ok'):
+        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+                'status': 'error', 'error': gw.get('error', 'gateway error')}
+    # gw['status'] is 'deploying' (dispatched to a live WS now) or 'queued'
+    # (offline -> waits for the reconnect flush). gw['delivered'] reflects that.
+    return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+            'status': gw.get('status', 'queued'),
+            'delivered': gw.get('delivered', False),
+            'row_id': gw.get('id')}
+
+
+@bp.route('/api/vulnerabilities/browser-remediate', methods=['POST'])
+@login_required
+@admin_required
+def api_browser_remediate():
+    """Queue least-disruptive winget browser updates for the machines that have an
+    Open/Critical browser CVE, delivered via the reconnect-triggered remediation
+    engine. Idempotent (dedups pending same-package rows; winget upgrade no-ops if
+    current).
+
+    Body JSON (one of):
+      { "asset_id": <int> }                 -> just that asset's affected browser(s)
+      { "agent_id": "HOST", "browsers": ["chrome"] }  -> explicit single target
+      { "batch": true }                     -> all browser-affected Windows agents
+
+    Selection join: device_vulnerability.asset_id -> asset.id -> rmm_agent.asset_id;
+    rmm_agent.agent_id is the WS hostname. Only enabled agents; mac excluded."""
+    data       = request.get_json(force=True) or {}
+    asset_id   = data.get('asset_id')
+    agent_id   = data.get('agent_id')
+    browsers   = data.get('browsers')
+    batch      = bool(data.get('batch'))
+    created_by = current_user.id if current_user.is_authenticated else None
+
+    # ── Explicit single-agent target (used by validation) ──────────────────────
+    if agent_id and browsers:
+        # Resolve asset_id for the queue row if not supplied.
+        if not asset_id:
+            con = _alert_svc._get_db()
+            try:
+                r = con.execute(
+                    "SELECT asset_id FROM rmm_agent WHERE agent_id=%s AND enabled=true LIMIT 1",
+                    (agent_id,)
+                ).fetchone()
+            finally:
+                con.close()
+            asset_id = r['asset_id'] if r else None
+        results = [_enqueue_browser_remediation(agent_id, asset_id, b, created_by)
+                   for b in browsers if b in _BROWSER_WINGET]
+        return jsonify(ok=True, mode='explicit', agent_id=agent_id, results=results,
+                       enqueued=sum(1 for x in results if x['status'] in ('queued', 'deploying')))
+
+    # ── Asset / batch selection from the Open-Critical browser CVE set ─────────
+    con = _alert_svc._get_db()
+    try:
+        params = []
+        where_asset = ''
+        if asset_id and not batch:
+            where_asset = 'AND dv.asset_id = %s'
+            params.append(asset_id)
+        elif not batch:
+            return jsonify(ok=False, error='provide asset_id, (agent_id+browsers), or batch=true'), 400
+        rows = con.execute(
+            f"""SELECT DISTINCT ra.agent_id, dv.asset_id, dv.product_name
+                FROM device_vulnerability dv
+                JOIN asset a       ON a.id = dv.asset_id
+                JOIN rmm_agent ra  ON ra.asset_id = a.id AND ra.enabled = true
+                WHERE dv.severity = 'Critical'
+                  AND dv.status NOT IN ('Closed','Remediated','Exception')
+                  AND ( (lower(dv.product_name) LIKE '%%chrome%%' AND lower(dv.product_name) NOT LIKE '%%mac%%')
+                        OR lower(dv.product_name) LIKE '%%edge%%'
+                        OR lower(dv.product_name) LIKE '%%firefox%%' )
+                  {where_asset}""",
+            tuple(params)
+        ).fetchall()
+    finally:
+        con.close()
+
+    # Collapse to one (agent, browser) per pair so a machine with multiple CVE rows
+    # for the same browser is enqueued once.
+    seen = set()
+    targets = []
+    for r in rows:
+        b = _browser_from_product(r['product_name'])
+        if not b:
+            continue
+        key = (r['agent_id'], b)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append((r['agent_id'], r['asset_id'], b))
+
+    results = [_enqueue_browser_remediation(aid, asid, b, created_by)
+               for (aid, asid, b) in targets]
+    dispatched = [x for x in results if x['status'] == 'deploying']
+    queued     = [x for x in results if x['status'] == 'queued']
+    skipped    = [x for x in results if x['status'] == 'skipped']
+    errors     = [x for x in results if x['status'] == 'error']
+    agents = sorted({x['agent_id'] for x in results})
+    return jsonify(ok=True, mode='batch' if batch else 'asset',
+                   agents=len(agents), pairs=len(results),
+                   dispatched=len(dispatched), queued=len(queued),
+                   skipped=len(skipped), errors=len(errors),
+                   results=results)
+
+
 @bp.route('/api/vulnerabilities/cve-patch-jobs')
 @login_required
 @admin_required

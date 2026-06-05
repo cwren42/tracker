@@ -106,6 +106,17 @@ def manager_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def hr_required(f):
+    """Decorator to require HR, manager, or admin role (submit new-hire onboarding)."""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager', 'hr']:
+            flash('Access denied. HR privileges required.', 'danger')
+            return redirect(url_for('dashboard.index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 def eagle_eyes_required(f):
     """Decorator to require admin or eagle_eyes role"""
     from functools import wraps

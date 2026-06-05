@@ -43,6 +43,7 @@ class User(UserMixin, db.Model):
             'viewer': ['view'],
             'eagle_eyes': ['view'],
             'base_user': ['view'],
+            'hr': ['view', 'onboard'],  # HR: see employees + submit new-hire onboarding requests
         }
         return permission in permissions.get(self.role, [])
 

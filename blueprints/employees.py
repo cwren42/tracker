@@ -28,7 +28,7 @@ from models import (
 )
 from soc2_models import SOC2Control, EvidenceSnapshot
 from utils import (
-    admin_required, manager_required, eagle_eyes_required,
+    admin_required, manager_required, hr_required, eagle_eyes_required,
     ticket_access_required, license_required,
     send_email, send_admin_notification, send_asset_assignment_email,
     send_warranty_expiry_alert, send_lifecycle_alert,
@@ -630,16 +630,15 @@ ONBOARD_DEPARTMENTS = ['Admin', 'Engineering', 'Executive', 'Finance', 'HR', 'IT
 
 @bp.route('/employees/onboard-request', methods=['GET', 'POST'])
 @login_required
-@manager_required
+@hr_required
 @license_required
 def onboard_request():
     """New-hire onboarding / access-request intake (segregation of duties: HR submits
     the people data here; IT approves at /approvals and supplies the AD OU + groups,
     which triggers real provisioning).
 
-    NOTE: there is no dedicated HR role in this app, so this is gated to
-    @manager_required (the same decorator other employee write-routes use). If an HR
-    role is added later, swap the decorator.
+    Gated to @hr_required (admin/manager/hr): the HR role can submit onboarding
+    requests but cannot edit/offboard/delete employees (that stays manager/admin).
 
     On submit this creates the Employee row (onboard_status='requested'), parks a
     high-risk onboard_employee approval, and opens an [ONBOARD] tracking ticket.

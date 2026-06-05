@@ -450,7 +450,8 @@ def _run_auto_approve():
       * only to ONLINE agents (no permanent-queued backlog)
       * deduped against agents that already have an open job (no nightly pileup)
       * reboot gated by policy (allow_reboot flag, default off) — honored by the agent
-      * non-delivered jobs are marked failed, not left queued forever
+      * non-delivered jobs are left 'queued' (NOT marked failed) — the gateway's
+        reconnect flush delivers them when the roaming agent next comes online
     """
     if not _truthy(_patch_setting('patch_auto_deploy_enabled', 'true'), default=True):
         logger.info('patch auto-approve: disabled by setting')

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 from contextlib import asynccontextmanager
 from typing import Dict
 
@@ -145,18 +146,50 @@ _REMEDIATION_FLUSH_BATCH = 5
 _FLUSH_DEBOUNCE_S = 30
 _last_flush_at: Dict[str, float] = {}
 
+# Retry cap: a job picked up but never finished (agent sleeps mid-run) cycles
+# deploying -> stale-reset -> queued -> re-flush. Without a cap that loops forever.
+# Once a row's dispatch `attempts` exceeds this, abandon it (terminal) instead of
+# redelivering. The per-agent debounce + batch cap above is also bumped by this.
+_REMEDIATION_MAX_ATTEMPTS = 3
+
+# Reconnect-storm throttle: the per-agent 30s debounce above is per-process and
+# in-memory, so a rmm-gateway restart drops it and every reconnecting agent (the
+# whole fleet, ~64 boxes) would flush at once — a thundering herd of installs.
+# Two cheap global guards bound the dispatch rate without changing per-agent logic:
+#   1) a small randomized jitter sleep before each agent's flush, and
+#   2) a process-wide semaphore capping how many agents flush concurrently.
+_FLUSH_JITTER_MAX_S = 4.0          # 0..N s randomized pre-flush sleep
+_FLUSH_MAX_CONCURRENCY = 4         # at most this many agents flushing at once
+# Created lazily so it binds to the running event loop, not import time.
+_flush_semaphore: "asyncio.Semaphore | None" = None
+
+
+def _get_flush_semaphore() -> asyncio.Semaphore:
+    global _flush_semaphore
+    if _flush_semaphore is None:
+        _flush_semaphore = asyncio.Semaphore(_FLUSH_MAX_CONCURRENCY)
+    return _flush_semaphore
+
 
 async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
     """Deliver queued OS Windows-Update jobs (rmm_patch_job, status='queued') to a
     just-connected agent. Marks each 'deploying' ONLY after a confirmed send.
-    Idempotent: never touches terminal rows (completed/no_op/failed). Returns the
-    number of jobs dispatched."""
+    Idempotent: never touches terminal rows (completed/no_op/failed).
+
+    Dedup: re-queued rows can pile up with the SAME update_ids set (e.g. SARA-LENOVO
+    had 5 identical jobs), which would run the identical WUA install N times on one
+    reconnect. Before dispatch we collapse the batch by (agent_id, update_ids): send
+    ONE job per distinct update set and mark the rest 'superseded' (terminal).
+
+    Retry cap: each dispatch bumps `attempts`; a job that has already been dispatched
+    too many times (cap exceeded) is moved to terminal 'abandoned' rather than
+    redelivered forever. Returns the number of jobs actually dispatched."""
     dispatched = 0
     try:
         conn = get_conn()
         cur = get_cursor(conn)
         cur.execute(
-            """SELECT id, update_ids, kb_ids, titles
+            """SELECT id, update_ids, kb_ids, titles, COALESCE(attempts, 0) AS attempts
                  FROM rmm_patch_job
                 WHERE agent_id=%s AND status='queued'
                 ORDER BY id ASC
@@ -166,7 +199,38 @@ async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
         rows = cur.fetchall()
         cur.close()
         conn.close()
+
+        # Collapse duplicates by the raw update_ids text (the persisted JSON string is
+        # stable for identical sets — see SARA's 5 rows). Keep the first (lowest id),
+        # mark the rest 'superseded' so they are never re-flushed.
+        seen_update_ids = set()
         for row in rows:
+            key = row["update_ids"] or "[]"
+            if key in seen_update_ids:
+                _c = get_conn(); _cur = get_cursor(_c)
+                _cur.execute(
+                    "UPDATE rmm_patch_job SET status='superseded', updated_at=NOW() "
+                    "WHERE id=%s AND status='queued'",
+                    (row["id"],),
+                )
+                _c.commit(); _cur.close(); _c.close()
+                print(f"[gw] os-patch flush: superseded duplicate job={row['id']} {agent_id} (same update_ids)", flush=True)
+                continue
+            seen_update_ids.add(key)
+
+            # Retry cap: abandon a job that has been dispatched too many times.
+            if row["attempts"] >= _REMEDIATION_MAX_ATTEMPTS:
+                _c = get_conn(); _cur = get_cursor(_c)
+                _cur.execute(
+                    "UPDATE rmm_patch_job SET status='abandoned', updated_at=NOW() "
+                    "WHERE id=%s AND status='queued'",
+                    (row["id"],),
+                )
+                _c.commit(); _cur.close(); _c.close()
+                print(f"[gw] os-patch flush: abandoned job={row['id']} {agent_id} "
+                      f"after {row['attempts']} attempts (cap {_REMEDIATION_MAX_ATTEMPTS})", flush=True)
+                continue
+
             payload = json.dumps({
                 "type":       "install_patches",
                 "job_id":     row["id"],
@@ -180,10 +244,13 @@ async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
                 # Send failed — leave the job 'queued' for the next reconnect.
                 print(f"[gw] os-patch flush send failed job={row['id']} {agent_id}: {_se}", flush=True)
                 break
-            # Confirmed send → mark deploying (guarded so a concurrent result can't be clobbered).
+            # Confirmed send → mark deploying + bump attempts (guarded so a concurrent
+            # result can't be clobbered).
             _c = get_conn(); _cur = get_cursor(_c)
             _cur.execute(
-                "UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW(), updated_at=NOW() "
+                "UPDATE rmm_patch_job "
+                "SET status='deploying', attempts=COALESCE(attempts,0)+1, "
+                "    deployed_at=NOW(), updated_at=NOW() "
                 "WHERE id=%s AND status='queued'",
                 (row["id"],),
             )
@@ -201,13 +268,18 @@ async def _flush_remediation_queue(websocket, agent_id: str) -> int:
     status='queued') to a just-connected agent. Stamps a unique correlation
     session_id into the payload (the agent echoes it back in script_result, which
     the result handler uses to mark the row terminal). Marks 'deploying' ONLY after
-    a confirmed send. Idempotent. Returns the number of actions dispatched."""
+    a confirmed send. Idempotent.
+
+    Retry cap: each dispatch bumps `attempts`; a row that has already been dispatched
+    too many times (cap exceeded) is moved to terminal 'abandoned' rather than
+    redelivered forever (the deploying->stale-reset->queued->re-flush loop).
+    Returns the number of actions dispatched."""
     dispatched = 0
     try:
         conn = get_conn()
         cur = get_cursor(conn)
         cur.execute(
-            """SELECT id, action_type, payload
+            """SELECT id, action_type, payload, COALESCE(attempts, 0) AS attempts
                  FROM rmm_remediation_queue
                 WHERE agent_id=%s AND status='queued'
                 ORDER BY id ASC
@@ -218,6 +290,18 @@ async def _flush_remediation_queue(websocket, agent_id: str) -> int:
         cur.close()
         conn.close()
         for row in rows:
+            # Retry cap: abandon a row that has been dispatched too many times.
+            if row["attempts"] >= _REMEDIATION_MAX_ATTEMPTS:
+                _c = get_conn(); _cur = get_cursor(_c)
+                _cur.execute(
+                    "UPDATE rmm_remediation_queue SET status='abandoned', updated_at=NOW() "
+                    "WHERE id=%s AND status='queued'",
+                    (row["id"],),
+                )
+                _c.commit(); _cur.close(); _c.close()
+                print(f"[gw] remediation flush: abandoned id={row['id']} {agent_id} "
+                      f"after {row['attempts']} attempts (cap {_REMEDIATION_MAX_ATTEMPTS})", flush=True)
+                continue
             try:
                 body = json.loads(row["payload"] or "{}")
             except Exception:
@@ -235,7 +319,8 @@ async def _flush_remediation_queue(websocket, agent_id: str) -> int:
             _c = get_conn(); _cur = get_cursor(_c)
             _cur.execute(
                 "UPDATE rmm_remediation_queue "
-                "SET status='deploying', session_id=%s, deployed_at=NOW(), updated_at=NOW() "
+                "SET status='deploying', session_id=%s, attempts=COALESCE(attempts,0)+1, "
+                "    deployed_at=NOW(), updated_at=NOW() "
                 "WHERE id=%s AND status='queued'",
                 (corr_session_id, row["id"]),
             )
@@ -258,8 +343,15 @@ async def _flush_queued_work(websocket, agent_id: str) -> None:
         print(f"[gw] flush debounced for {agent_id} ({now - last:.0f}s since last)", flush=True)
         return
     _last_flush_at[agent_id] = now
-    await _flush_os_patch_jobs(websocket, agent_id)
-    await _flush_remediation_queue(websocket, agent_id)
+
+    # Reconnect-storm throttle. The per-agent debounce above is in-memory, so a
+    # gateway restart drops it and the whole fleet reconnects ~simultaneously. A
+    # randomized jitter + a process-wide concurrency cap spread the dispatch out so
+    # we don't fan a wall of installs to all agents at once (thundering herd).
+    await asyncio.sleep(random.uniform(0, _FLUSH_JITTER_MAX_S))
+    async with _get_flush_semaphore():
+        await _flush_os_patch_jobs(websocket, agent_id)
+        await _flush_remediation_queue(websocket, agent_id)
 
 
 async def _stale_job_reset_loop():
@@ -307,7 +399,11 @@ async def _stale_job_reset_loop():
 async def _failed_job_retry_loop():
     """Background task: every 2 hours, reset transient-failed CVE patch jobs back
     to queued for currently-online agents so they are retried automatically.
-    Only resets jobs that have been failed for at least 2 hours to allow cool-down."""
+    Only resets jobs that have been failed for at least 2 hours to allow cool-down.
+
+    NOTE: this cve_patch_job retry loop has NO attempt cap — a perpetually-failing
+    job is reset every 2h indefinitely. Left as-is per review; add a per-job attempt
+    cap (mirroring rmm_patch_job/rmm_remediation_queue.attempts) in a future pass."""
     await asyncio.sleep(120)  # initial delay
     while True:
         await asyncio.sleep(7200)  # every 2 hours
@@ -640,11 +736,28 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
             # job actively installing on an agent that briefly flapped is NOT yanked
             # out from under an in-progress WUA run. This is what was leaving roaming
             # laptops (e.g. SARA-LENOVO) stuck 'deploying' forever.
+            #
+            # Retry cap: a job that has already been dispatched too many times and
+            # still never finished is perpetually stuck — abandon it (terminal)
+            # instead of re-queueing it forever. Do this FIRST so the re-queue below
+            # never picks up an over-cap row.
+            _cur.execute(
+                "UPDATE rmm_patch_job SET status='abandoned', updated_at=NOW() "
+                "WHERE agent_id=%s AND status='deploying' AND completed_at IS NULL "
+                "AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '5 minutes') "
+                "AND COALESCE(attempts,0) >= %s",
+                (agent_id, _REMEDIATION_MAX_ATTEMPTS)
+            )
+            _abandoned_os = _cur.rowcount
+            if _abandoned_os:
+                print(f"[gw] abandoned {_abandoned_os} perpetually-stuck OS patch job(s) for "
+                      f"{agent_id} (>= {_REMEDIATION_MAX_ATTEMPTS} attempts)", flush=True)
             _cur.execute(
                 "UPDATE rmm_patch_job SET status='queued', updated_at=NOW() "
                 "WHERE agent_id=%s AND status='deploying' AND completed_at IS NULL "
-                "AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '5 minutes')",
-                (agent_id,)
+                "AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '5 minutes') "
+                "AND COALESCE(attempts,0) < %s",
+                (agent_id, _REMEDIATION_MAX_ATTEMPTS)
             )
             _stale_os = _cur.rowcount
             if _stale_os:
@@ -983,6 +1096,11 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     stderr = (payload.get("stderr") or "")
                     if exit_code == 0:
                         rq_status = "completed"
+                    elif exit_code is None:
+                        # Missing/None exit code: we cannot confirm the remediation
+                        # actually succeeded (e.g. a winget upgrade). Treat as failed
+                        # rather than optimistically calling it completed.
+                        rq_status = "failed"
                     elif exit_code == -1 and "Timed out" in stderr:
                         rq_status = "failed"
                     elif isinstance(exit_code, int) and exit_code != 0:

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.18"
+AGENT_VERSION = "2.9.19"
 
 import asyncio
 import base64
@@ -433,12 +433,39 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
         print(f'[tray] _setup_tray error: {e}', flush=True)
 
 
+def _tray_pids(_sp):
+    """Return a list of PIDs for running pythonw.exe processes whose command
+    line references tray.py. Returns [] on any failure (treat as 'none found')."""
+    try:
+        _r = _sp.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+             'Get-WmiObject Win32_Process | Where-Object { $_.Name -eq "pythonw.exe" '
+             '-and $_.CommandLine -like "*tray.py*" } | '
+             'ForEach-Object { $_.ProcessId }'],
+            capture_output=True, text=True, timeout=15,
+        )
+        if _r.returncode != 0:
+            return []
+        return [int(x) for x in (_r.stdout or '').split() if x.strip().isdigit()]
+    except Exception:
+        return []
+
+
 def _create_startup_shortcut_task():
     """Write tray startup entries to All-Users and per-user Startup folders,
-    then launch the tray immediately in the current interactive user's session."""
-    import subprocess as _sp, glob as _glob
+    then (re-)launch the tray immediately in the current interactive user's session.
 
-    # -- 1. Find pythonw.exe --------------------------------------------------
+    HARDENING (BRIAN-MSI): we never kill the running tray before we've confirmed a
+    viable relaunch path. Order is: (1) resolve a usable pythonw.exe + tray.py and
+    confirm both exist, (2) ALWAYS (re)write the Startup VBS so a future login is
+    armed, (3) only if a viable launch path exists do we kill the old tray and start
+    the new one, (4) verify the new tray actually came up. If no usable interpreter /
+    tray.py is found we leave any running tray untouched -- we never end trayless."""
+    import subprocess as _sp, glob as _glob, time as _time
+
+    _tray_py = r'C:\CirqueRMM\tray.py'
+
+    # -- 1. Resolve a usable pythonw.exe -------------------------------------
     pythonw_path = ''
     _candidate = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
     if os.path.isfile(_candidate):
@@ -456,19 +483,28 @@ def _create_startup_shortcut_task():
         try:
             _r = _sp.run(['where', 'pythonw.exe'], capture_output=True, text=True, timeout=5)
             if _r.returncode == 0:
-                pythonw_path = _r.stdout.strip().splitlines()[0].strip()
+                for _line in _r.stdout.strip().splitlines():
+                    _line = _line.strip()
+                    if _line and os.path.isfile(_line):
+                        pythonw_path = _line; break
         except Exception:
             pass
-    if not pythonw_path:
-        print('[tray] No pythonw.exe found -- cannot launch tray', flush=True)
-        return
 
-    # -- 2. Write VBScript to startup folders (SYSTEM can write directly) ----
-    # VBS runs pythonw.exe silently so no console window appears
-    _vbs = (
-        'Set oShell = CreateObject("WScript.Shell")\r\n'
-        f'oShell.Run Chr(34) & "{pythonw_path}" & Chr(34) & " C:\\CirqueRMM\\tray.py", 0, False\r\n'
-    )
+    # A launch is "viable" only if BOTH the interpreter and tray.py exist on disk.
+    _launch_viable = bool(pythonw_path) and os.path.isfile(pythonw_path) and os.path.isfile(_tray_py)
+    if not _launch_viable:
+        if not pythonw_path:
+            print('[tray] No pythonw.exe found -- NOT killing running tray; arming Startup VBS only', flush=True)
+        elif not os.path.isfile(_tray_py):
+            print(f'[tray] tray.py missing at {_tray_py} -- NOT killing running tray; arming Startup VBS only', flush=True)
+
+    # -- 2. ALWAYS (re)write the Startup VBS so login-relaunch is armed -------
+    # The VBS resolves pythonw.exe at LAUNCH time (robust to a stale interpreter
+    # path that moved after write time, e.g. an MSI/embedded Python relocation).
+    # It prefers our known-current interpreter (passed as a hint) and falls back
+    # to the same discovery order the agent uses, so a moved path can't no-op it.
+    _vbs_hint = (pythonw_path or '').replace('"', '""')
+    _vbs = _build_tray_vbs(_vbs_hint, _tray_py)
     # All-Users startup
     _common_startup = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
     try:
@@ -498,7 +534,16 @@ def _create_startup_shortcut_task():
         except Exception as _e:
             print(f'[tray] User startup write failed ({_uname}): {_e}', flush=True)
 
-    # -- 3. Kill any existing tray.py process --------------------------------
+    # If we can't launch, STOP here. The currently-running tray (if any) stays
+    # alive, and the Startup VBS we just wrote will (re)launch on next login.
+    if not _launch_viable:
+        print('[tray] Relaunch not viable -- left running tray (if any) in place; Startup VBS armed', flush=True)
+        return
+
+    # -- 3. Kill the old tray, THEN launch the new one -----------------------
+    # Only reached when we have a viable interpreter + tray.py, so we never end
+    # up trayless: a replacement launch immediately follows the kill.
+    _pre_pids = set(_tray_pids(_sp))
     try:
         _sp.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command',
@@ -509,7 +554,6 @@ def _create_startup_shortcut_task():
         )
     except Exception:
         pass
-    import time as _time
     _time.sleep(2)
 
     # -- 4. Immediate launch in the active interactive user's session ---------
@@ -553,6 +597,71 @@ def _create_startup_shortcut_task():
         print(f'[tray] Launch: {_out}', flush=True)
     if _err and _result.returncode != 0:
         print(f'[tray] Launch stderr: {_err[:300]}', flush=True)
+
+    # -- 5. Verify the relaunch actually came up (poll up to ~5s) ------------
+    # A new tray PID (not in the pre-kill set) means the interactive launch
+    # succeeded. If none appears we log it; the Startup VBS armed in step 2
+    # is the safety net for the next login.
+    _came_up = False
+    for _ in range(5):
+        _time.sleep(1)
+        _now = set(_tray_pids(_sp))
+        if _now - _pre_pids:
+            _came_up = True
+            break
+        if _now:  # any tray at all (e.g. relaunch reused detection) counts as alive
+            _came_up = True
+            break
+    if _came_up:
+        print('[tray] Relaunch confirmed: tray.py process is running', flush=True)
+    else:
+        print('[tray] WARNING: relaunch not confirmed within ~5s -- '
+              'Startup VBS is armed to recover on next login', flush=True)
+
+
+def _build_tray_vbs(pythonw_hint: str, tray_py: str) -> str:
+    """Build a Startup VBScript that launches the tray silently (no console).
+
+    Robust to a stale interpreter path: rather than hardcoding a single
+    pythonw.exe resolved at write time (which silently no-ops if that path later
+    moves, e.g. an MSI/embedded Python relocation), the VBS resolves a usable
+    pythonw.exe at LAUNCH time. It prefers the hint (the agent's known-current
+    interpreter) and otherwise probes the same locations the agent does, finally
+    falling back to bare 'pythonw.exe' on PATH."""
+    _tray_for_vbs = tray_py.replace('"', '""')
+    return (
+        'Option Explicit\r\n'
+        'Dim oShell, oFSO, sPy, sCandidate, oFolders, oFolder, oFile, oExec\r\n'
+        'Set oShell = CreateObject("WScript.Shell")\r\n'
+        'Set oFSO = CreateObject("Scripting.FileSystemObject")\r\n'
+        'sPy = ""\r\n'
+        # 1. Prefer the agent's known-current interpreter (hint), if still present.
+        f'sCandidate = "{pythonw_hint}"\r\n'
+        'If sCandidate <> "" Then\r\n'
+        '  If oFSO.FileExists(sCandidate) Then sPy = sCandidate\r\n'
+        'End If\r\n'
+        # 2. Probe the usual install locations (same order the agent uses).
+        'If sPy = "" Then\r\n'
+        '  Dim arrGlobs, g\r\n'
+        '  arrGlobs = Array( _\r\n'
+        '    oShell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\Programs\\Python", _\r\n'
+        '    "C:\\Program Files\\Python", _\r\n'
+        '    "C:\\")\r\n'
+        '  For Each g In arrGlobs\r\n'
+        '    If sPy = "" And oFSO.FolderExists(g) Then\r\n'
+        '      For Each oFolder In oFSO.GetFolder(g).SubFolders\r\n'
+        '        If sPy = "" And LCase(Left(oFolder.Name,6)) = "python" Then\r\n'
+        '          sCandidate = oFolder.Path & "\\pythonw.exe"\r\n'
+        '          If oFSO.FileExists(sCandidate) Then sPy = sCandidate\r\n'
+        '        End If\r\n'
+        '      Next\r\n'
+        '    End If\r\n'
+        '  Next\r\n'
+        'End If\r\n'
+        # 3. Last resort: bare pythonw.exe (relies on PATH).
+        'If sPy = "" Then sPy = "pythonw.exe"\r\n'
+        f'oShell.Run Chr(34) & sPy & Chr(34) & " ""{_tray_for_vbs}""", 0, False\r\n'
+    )
 
 def _ensure_rustdesk_password() -> str:
     """Return the permanent RustDesk access password for this machine.

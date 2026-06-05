@@ -510,7 +510,7 @@ def api_rmm_patch_jobs_deploy(agent_id, job_id):
 
     # Mark as deploying
     db.session.execute(
-        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW() - INTERVAL '7 hours', updated_at=NOW() - INTERVAL '7 hours' WHERE id=:jid"),
+        text("UPDATE rmm_patch_job SET status='deploying', deployed_at=NOW(), updated_at=NOW() WHERE id=:jid"),
         {'jid': job_id}
     )
     db.session.commit()

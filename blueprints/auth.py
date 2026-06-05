@@ -174,9 +174,13 @@ def login_microsoft_callback():
     display_name = user_info.get('displayName', '')
     azure_id = user_info.get('id')
     
-    # Check if user exists in database
-    user = User.query.filter_by(email=email).first()
-    
+    # Check if user exists in database. Match on azure_id first (immutable, the most
+    # reliable tie), then fall back to a CASE-INSENSITIVE email match — Graph may return
+    # 'mail'/UPN in different casing than a pre-provisioned account was created with, and
+    # a case-sensitive match would wrongly create a duplicate viewer account.
+    user = (User.query.filter_by(azure_id=azure_id).first() if azure_id else None) \
+        or User.query.filter(func.lower(User.email) == (email or '').lower()).first()
+
     if not user:
         # Auto-create user account from Azure AD
         username = email.split('@')[0]  # Use email prefix as username

@@ -165,7 +165,7 @@
         <div class="nav-section-label">Security &amp; Compliance</div>
 
         <!-- Security group -->
-        {% set _sec_eps = ['vulnerability_dashboard','alert_center','workflows','patch_mgmt.patch_dashboard'] %}
+        {% set _sec_eps = ['vulnerability_dashboard','vulnerabilities.vulnerability_reconciliation','alert_center','workflows','patch_mgmt.patch_dashboard'] %}
         <a class="sidebar-link sidebar-parent {% if request.endpoint in _sec_eps %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-security" role="button"
            aria-expanded="{% if request.endpoint in _sec_eps %}true{% else %}false{% endif %}">
@@ -174,6 +174,7 @@
         </a>
         <ul class="sidebar-submenu collapse {% if request.endpoint in _sec_eps %}show{% endif %}" id="sub-security">
             <li><a class="sidebar-link {% if request.endpoint == 'vulnerabilities.vulnerability_dashboard' %}active{% endif %}" href="{{ url_for('vulnerabilities.vulnerability_dashboard') }}"><i class="bi bi-bug"></i><span class="link-label">Vulnerabilities</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint == 'vulnerabilities.vulnerability_reconciliation' %}active{% endif %}" href="{{ url_for('vulnerabilities.vulnerability_reconciliation') }}"><i class="bi bi-clipboard-data"></i><span class="link-label">Reconciliation</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint == 'patch_mgmt.patch_dashboard' %}active{% endif %}" href="{{ url_for('patch_mgmt.patch_dashboard') }}"><i class="bi bi-patch-check-fill text-warning"></i><span class="link-label">Patch Management</span></a></li>
             {% if current_user.role == 'admin' %}<li><a class="sidebar-link {% if request.endpoint == 'monitoring.alert_center' %}active{% endif %}" href="{{ url_for('misc.alert_center') }}"><i class="bi bi-bell-fill"></i><span class="link-label">Alert Center</span></a></li>{% endif %}
             <li><a class="sidebar-link {% if request.endpoint == 'ai.workflows' %}active{% endif %}" href="{{ url_for('ai.workflows') }}"><i class="bi bi-diagram-3"></i><span class="link-label">Workflows</span></a></li>

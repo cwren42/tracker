@@ -75,7 +75,7 @@
 const TIER_COLOR={high:'var(--danger)',medium:'var(--warning)',low:'var(--muted)',critical:'var(--danger)'};
 const TIER_BG={high:'var(--danger-bg)',medium:'var(--warning-bg)',low:'var(--surface-2)',critical:'var(--danger-bg)'};
 const ICON={release_quarantine:'bi-envelope-exclamation',install_local_tool:'bi-box-seam',apply_fix:'bi-tools',unlock_account:'bi-unlock',
-  offboard_employee:'bi-person-dash',disable_ad_user:'bi-person-x',enable_ad_user:'bi-person-check',reset_password:'bi-key',
+  offboard_employee:'bi-person-dash',disable_ad_user:'bi-person-x',delete_ad_user:'bi-person-x-fill',enable_ad_user:'bi-person-check',reset_password:'bi-key',
   add_to_group:'bi-people',remove_from_group:'bi-people',create_user:'bi-person-plus',reboot_device:'bi-arrow-clockwise',
   shutdown_device:'bi-power',lock_device:'bi-lock',apply_gpo:'bi-shield-lock',run_script:'bi-terminal',azure_sync:'bi-cloud-arrow-up',
   install_patches:'bi-patch-check',deploy_patch:'bi-patch-check'};
@@ -238,12 +238,12 @@ function renderPending(){
 function renderBulkbar(){
   var n=S.selected.size, el=document.getElementById('bulkbar');
   if(!n){ el.innerHTML=''; return; }
-  var sel=[...S.selected].map(findItem).filter(Boolean), anyEmail=sel.some(i=>i.is_email||i.is_onboard);
+  var sel=[...S.selected].map(findItem).filter(Boolean), anyEmail=sel.some(i=>i.is_email||i.is_onboard||i.is_delete);
   el.innerHTML='<div class="appr-bulkbar"><span><strong>'+n+'</strong> selected</span>'
-    +'<button class="btn btn-sm btn-primary"'+(anyEmail?' disabled title="Email items need release/whitelist — handle each"':'')+' onclick="bulkAction(\'approve\')"><i class="bi bi-check-lg me-1"></i>Approve</button>'
+    +'<button class="btn btn-sm btn-primary"'+(anyEmail?' disabled title="Some selected items need an individual confirm — handle each"':'')+' onclick="bulkAction(\'approve\')"><i class="bi bi-check-lg me-1"></i>Approve</button>'
     +'<button class="btn btn-sm btn-outline-secondary" onclick="bulkAction(\'deny\')"><i class="bi bi-x-lg me-1"></i>Deny</button>'
     +'<button class="btn btn-sm btn-link text-muted ms-auto p-0" onclick="clearSel()">clear</button></div>'
-    +(anyEmail?'<div class="text-muted small mb-2" style="font-size:.72rem;">Email approvals are excluded from bulk-approve (they need release vs. whitelist). Bulk-deny works on all.</div>':'');
+    +(anyEmail?'<div class="text-muted small mb-2" style="font-size:.72rem;">Email approvals, onboards, and AD deletions are excluded from bulk-approve (each needs an individual confirm). Bulk-deny works on all.</div>':'');
 }
 function resultCell(it){
   if(it.status==='succeeded')return '<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Succeeded</span>';
@@ -337,7 +337,7 @@ function pollOne(id,tries){ fetch('/api/approvals/'+id+'/status').then(r=>r.json
     else setTimeout(()=>pollOne(id,tries+1),1500);
   }).catch(()=>setTimeout(()=>pollOne(id,tries+1),2000)); }
 function bulkAction(action){ var ids=[...S.selected].map(findItem).filter(Boolean);
-  if(action==='approve')ids=ids.filter(i=>!i.is_email&&!i.is_onboard); ids=ids.map(i=>i.id);
+  if(action==='approve')ids=ids.filter(i=>!i.is_email&&!i.is_onboard&&!i.is_delete); ids=ids.map(i=>i.id);
   if(!ids.length){alert('Nothing applicable selected.');return;}
   var reason=''; if(action==='deny'){reason=prompt('Deny '+ids.length+' item(s) — reason (optional):','')||'';} else if(!confirm('Approve & run '+ids.length+' action(s)?'))return;
   fetch('/approvals/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,action:action,reason:reason})}).then(r=>r.json()).then(function(d){

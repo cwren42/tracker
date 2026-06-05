@@ -43,6 +43,8 @@
             <i class="bi bi-server"></i> AD Account Disabled
         </span>
         {% endif %}
+        {% endif %}
+        {% if current_user.role in ['admin', 'manager', 'hr'] %}
         <button type="button" class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#offboardModal">
             <i class="bi bi-box-arrow-right"></i> Offboard
         </button>

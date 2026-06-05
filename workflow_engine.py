@@ -717,6 +717,9 @@ def approve_action(row_id, approver):
     def _run():
         config = replay.get("config") or {}
         ctx = dict(replay.get("ctx") or {})
+        # Surface the human who approved so handlers can attribute the action (e.g. the
+        # delete_ad_user note credits the real approver, not the sweep that parked it).
+        ctx.setdefault("approver", approver)
         step_id = replay.get("step_id")
         run_id = replay.get("run_id")
         try:
@@ -744,6 +747,17 @@ def approve_action(row_id, approver):
 
     threading.Thread(target=_run, daemon=True, name=f"approve-{row_id}").start()
     return True, {"approved": True, "action_type": action_type, "by": approver}
+
+
+def get_action_type(row_id):
+    """Return the action_type of a ledger row (or None). Used by bulk-approve to refuse
+    irreversible actions (delete_ad_user) server-side."""
+    db = _db()
+    try:
+        row = db.execute("SELECT action_type FROM command_ledger WHERE id=?", (row_id,)).fetchone()
+    finally:
+        db.close()
+    return row["action_type"] if row else None
 
 
 def deny_action(row_id, approver, reason=""):
@@ -1075,6 +1089,12 @@ def _action_offboard_employee(config: dict, ctx: dict) -> tuple:
                             ad_disabled = True
                             ad_detail = r.get("message") or "disabled"
                             emp.ad_enabled = False
+                            # Start the 30-day AD-deletion retention clock at the moment the
+                            # disable succeeds. Use the SAME now-function (_now, local/America-
+                            # Denver) the sweep compares against so the day-math is tz-consistent.
+                            # Only stamp once — re-runs of an idempotent offboard must not reset it.
+                            if not emp.offboarded_at:
+                                emp.offboarded_at = datetime.strptime(_now(), "%Y-%m-%d %H:%M:%S")
                         else:
                             err = (r.get("error") or "").lower()
                             # Idempotent re-run: account gone or already-off is NOT fatal —
@@ -1111,6 +1131,201 @@ def _action_offboard_employee(config: dict, ctx: dict) -> tuple:
         }
     except Exception as e:
         log.exception("offboard_employee action failed for %s", emp_id)
+        return False, {"error": str(e)}
+
+
+# ── Delayed AD deletion (30-day offboard retention → human 1-click confirm) ──────
+
+def park_ad_delete(employee_id, employee_name, requested_by="agentic-os",
+                   disabled_since=None, ticket_id=None):
+    """Park a PERMANENT AD-account deletion at /approvals for a 1-click human confirm.
+    This is the final stage of offboarding: after the retention window, the daily sweep
+    calls this. It only PARKS — the irreversible delete runs only when a human approves.
+
+    IDEMPOTENT — won't double-park: returns None if a pending/awaiting delete_ad_user is
+    already parked for this employee, or if the employee is already 'deleted'. Returns the
+    pending ledger id, or None.
+
+    DENY = STOP: if a prior delete_ad_user for this same employee was DENIED, we do NOT
+    re-park it (otherwise a denied permanent delete would resurrect every night forever).
+    To legitimately re-arm a delete later, clear/supersede that denied ledger row (e.g.
+    update its status away from 'denied') — then the next sweep will park afresh."""
+    corr = f"ad-delete-emp-{employee_id}"
+    db = _db()
+    try:
+        # Already deleted? Nothing to park.
+        try:
+            from app import app as _flask_app
+            from models import Employee
+            with _flask_app.app_context():
+                emp = Employee.query.get(int(employee_id))
+                if emp and (emp.onboard_status or "").lower() == "deleted":
+                    return None
+        except Exception:
+            log.exception("park_ad_delete status precheck failed (continuing to dup-guard)")
+        # Deny = stop: a previously DENIED delete for this employee suppresses re-parking.
+        denied = db.execute(
+            "SELECT id FROM command_ledger WHERE correlation_id=? AND action_type='delete_ad_user' "
+            "AND approval_status='denied' LIMIT 1",
+            (corr,)).fetchone()
+        existing = db.execute(
+            "SELECT id FROM command_ledger WHERE correlation_id=? AND action_type='delete_ad_user' "
+            "AND status='awaiting_approval' AND approval_status='pending' LIMIT 1",
+            (corr,)).fetchone()
+    finally:
+        db.close()
+    if denied:
+        log.info("park_ad_delete: suppressed for employee %s — a prior delete_ad_user was DENIED "
+                 "(ledger #%s); re-park requires an explicit re-arm (clear the denied row).",
+                 employee_id, denied["id"])
+        return None
+    if existing:
+        return None
+    led = _ledger_log(
+        "delete_ad_user", "delete_ad_user", object_type="employee",
+        object_id=str(employee_id), requested_by=requested_by, planned_by="ad-delete-sweep",
+        risk_tier="high", approval_status="pending", correlation_id=corr,
+        status="awaiting_approval",
+        before_state={"replay": {"run_id": None, "node_id": None, "step_id": None,
+                                 "action_type": "delete_ad_user",
+                                 "config": {"employee_id": employee_id, "requested_by": requested_by},
+                                 "ctx": {"employee_id": employee_id, "employee_name": employee_name,
+                                         "disabled_since": disabled_since, "ticket_id": ticket_id}},
+                      "policy": (f"{employee_name}: 30-day offboard retention elapsed — this permanently "
+                                 "removes the AD object. Requires manual one-click confirm."),
+                      "node_label": f"Delete AD account {employee_name}",
+                      "disabled_since": disabled_since, "ticket_id": ticket_id},
+    )
+    if led:
+        _notify_parked("delete_ad_user", "high", led, f"Delete AD account {employee_name}")
+    return led
+
+
+def _action_delete_ad_user(config: dict, ctx: dict) -> tuple:
+    """PERMANENTLY delete an offboarded employee's AD account — invoked ONLY when a human
+    approves a parked delete_ad_user at /approvals. Never runs automatically.
+
+    Idempotent: if the object is already gone ("not found"), that is treated as success.
+    On success: mark onboard_status='deleted', clear ad_dn, ad_enabled=False; fire a best-
+    effort Entra delta sync; thread a note onto the [OFFBOARD] checklist ticket. Returns a
+    result dict. Fails loudly (returns False) on a real delete error."""
+    emp_id = config.get("employee_id") or ctx.get("employee_id")
+    if not emp_id:
+        return False, {"error": "no employee_id in delete_ad_user action"}
+    try:
+        # approve_action runs handlers in a bare daemon thread → push an app context (ORM).
+        from app import app as _flask_app
+        from models import Employee, Setting, SupportTicket, TicketNote
+        from ldap_service import LDAPService, load_ad_config
+        from extensions import db as _db_ext
+        approver = ctx.get("approver") or config.get("requested_by") or "approver"
+        with _flask_app.app_context():
+            emp = Employee.query.get(int(emp_id))
+            if not emp:
+                return False, {"error": f"employee {emp_id} not found"}
+            name = emp.name
+
+            ad_dn = (emp.ad_dn or "").strip()
+            identifier = (emp.sam_account_name or emp.email or "").strip()
+            if not ad_dn and not identifier:
+                return False, {"error": "no ad_dn/sam_account_name/email on employee — cannot delete AD object"}
+
+            cfg = load_ad_config(Setting)
+            if not cfg.enabled:
+                return False, {"error": "AD integration not enabled in Settings"}
+
+            svc = LDAPService(cfg)
+
+            # Defense in depth: re-check the LIVE AD object before deleting. We prefer the
+            # stored immutable-ish ad_dn (a re-resolved sam/email could have been recycled to
+            # a NEW hire across the 30-day gap) and we ABORT unless the live object is disabled.
+            #   disabled -> delete   |   absent -> idempotent success   |   enabled -> HARD ABORT
+            #   error/anything-else  -> fail loudly (don't delete on an unknown state)
+            if ad_dn:
+                live_state = svc.get_account_state_by_dn(ad_dn)
+                target_desc = f"DN {ad_dn}"
+            else:
+                live_state = svc.get_account_state(identifier)
+                target_desc = identifier
+
+            if live_state == "enabled":
+                # Stale/wrong request slipped through — the object is LIVE. Never delete it.
+                # Leave the employee + ledger intact so a human can investigate.
+                detail = (f"ABORTED: AD object ({target_desc}) is ENABLED, not disabled — "
+                          "refusing to delete a live/re-enabled account.")
+                log.error("delete_ad_user %s: %s", emp_id, detail)
+                return False, {"employee_id": emp_id, "employee_name": name,
+                               "deleted": False, "aborted": True, "detail": detail}
+            if live_state == "absent":
+                # Object already gone — idempotent success (already deleted / out of scope).
+                deleted, detail = True, f"no-op: AD object ({target_desc}) already absent"
+                r = {"success": True}
+            elif live_state == "disabled":
+                r = svc.delete_user_by_dn(ad_dn) if ad_dn else svc.delete_user(identifier)
+                deleted = bool(r.get("success"))
+                detail = r.get("message") or r.get("error") or ""
+            else:
+                # 'error' (or unexpected) — do NOT delete on an unknown live state.
+                detail = (f"ABORTED: could not verify AD object ({target_desc}) state "
+                          f"({live_state}) before delete.")
+                log.error("delete_ad_user %s: %s", emp_id, detail)
+                return False, {"employee_id": emp_id, "employee_name": name,
+                               "deleted": False, "aborted": True, "detail": detail}
+
+            if not deleted:
+                err = (r.get("error") or "").lower()
+                if "not found" in err:
+                    # Object already gone — idempotent success (e.g. sweep re-park or manual cleanup).
+                    deleted = True
+                    detail = f"no-op: {r.get('error')}"
+                else:
+                    # Real delete failure — fail loudly so the ledger records it and a human retries.
+                    log.error("delete_ad_user failed for %s: %s", target_desc, r.get("error"))
+                    return False, {"employee_id": emp_id, "employee_name": name,
+                                   "deleted": False, "detail": detail}
+
+            # Success (or already-gone): reflect the permanent deletion locally.
+            emp.onboard_status = "deleted"
+            emp.ad_dn = None
+            emp.ad_enabled = False
+            _db_ext.session.commit()
+
+            # Best-effort Entra (AAD Connect) delta sync so the deletion propagates to M365.
+            entra_sync = "skipped"
+            try:
+                ok, out = _action_azure_sync({}, ctx)
+                entra_sync = "triggered" if ok else f"sync error: {out.get('error')}"
+            except Exception as e:
+                entra_sync = f"sync error: {e}"
+
+            # Thread a note onto the [OFFBOARD] checklist ticket (prefer stored ticket_id).
+            try:
+                today = datetime.now().strftime("%Y-%m-%d")
+                body = (f"AD account permanently deleted on {today} "
+                        f"(approved by {approver}). {detail}".strip())
+                tkt = None
+                tid = ctx.get("ticket_id")
+                if tid:
+                    tkt = SupportTicket.query.get(int(tid))
+                if tkt is None:
+                    tkt = (SupportTicket.query
+                           .filter(SupportTicket.subject.like(f"[OFFBOARD] {name}%"))
+                           .order_by(SupportTicket.id.desc()).first())
+                if tkt is not None:
+                    # system/automated note: no user_id, internal-only (tech-facing).
+                    note = TicketNote(ticket_id=tkt.id, content=body,
+                                      user_id=None, is_internal=True, is_reply=False,
+                                      created_at=datetime.utcnow())
+                    _db_ext.session.add(note)
+                    tkt.updated_at = datetime.utcnow()
+                    _db_ext.session.commit()
+            except Exception:
+                log.exception("delete_ad_user: failed to thread note onto offboard ticket (non-fatal)")
+
+        return True, {"employee_id": emp_id, "employee_name": name,
+                      "deleted": deleted, "detail": detail, "entra_sync": entra_sync}
+    except Exception as e:
+        log.exception("delete_ad_user action failed for %s", emp_id)
         return False, {"error": str(e)}
 
 
@@ -2129,6 +2344,7 @@ ACTION_MAP = {
     "ai_suggest":         _action_ai_suggest,
     "offboard_employee":  _action_offboard_employee,
     "onboard_employee":   _action_onboard_employee,
+    "delete_ad_user":     _action_delete_ad_user,
 }
 
 

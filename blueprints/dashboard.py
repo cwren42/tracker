@@ -862,6 +862,11 @@ def _action_effect(at, ctx, device, is_quar):
         return (f"Offboards {who}: unassigns all their devices (set to 'Pending Return' for "
                 "collection), returns their software licenses, hides them from the active "
                 "roster, and opens an offboarding checklist ticket. Does NOT delete the AD/M365 account.")
+    if at == 'delete_ad_user':
+        since = g('disabled_since')
+        return (f"PERMANENTLY deletes the Active Directory account for {who}"
+                + (f" (disabled since {since})" if since else "")
+                + ". This removes the AD object and propagates to M365 — irreversible.")
     if at == 'apply_fix':
         return f"Runs the vetted fix “{g('fix_name') or 'fix'}” as SYSTEM on {who}; closes the linked ticket if it succeeds."
     if at == 'install_local_tool':
@@ -902,7 +907,7 @@ def _ledger_display(row, asset_names=None):
     params = {k: ('[redacted]' if any(s in k.lower() for s in _SENS_KEYS) else v)
               for k, v in cfg.items() if not k.startswith('_')}
     device = ctx.get('hostname') or ''
-    if not device and (row.object_type == 'employee' or at == 'offboard_employee'):
+    if not device and (row.object_type == 'employee' or at in ('offboard_employee', 'delete_ad_user')):
         # Employee-scoped action → target is the person, never an asset.
         device = ctx.get('employee_name') or ('employee #' + str(row.object_id or ''))
     if not device:
@@ -937,6 +942,12 @@ def _ledger_display(row, asset_names=None):
     elif at == 'onboard_employee':
         label = 'Onboard new hire'
         summary = ctx.get('employee_name') or rp.get('node_label') or ''
+    elif at == 'delete_ad_user':
+        nm = ctx.get('employee_name') or rp.get('node_label') or ''
+        label = f'Delete AD account — {nm}' if nm else 'Delete AD account'
+        since = bs.get('disabled_since') or ctx.get('disabled_since')
+        summary = (f'disabled since {since}; retention elapsed — this permanently removes the AD object.'
+                   if since else 'retention elapsed — this permanently removes the AD object.')
     else:
         label = rp.get('node_label') or at.replace('_', ' ').title()
         summary = rp.get('node_label') or ''
@@ -959,6 +970,8 @@ def _ledger_display(row, asset_names=None):
         'policy': bs.get('policy', ''), 'params': params,
         'is_onboard': at == 'onboard_employee',
         'onboard': (bs.get('onboard') if at == 'onboard_employee' else None),
+        'is_delete': at == 'delete_ad_user',
+        'disabled_since': bs.get('disabled_since') or ctx.get('disabled_since'),
         'ledger_url': url_for('dashboard.ledger_detail', row_id=row.id),
     }
 
@@ -1099,6 +1112,15 @@ def approvals_bulk():
             continue
         try:
             if action == 'approve':
+                # Permanent/irreversible actions are NOT bulk-approvable — they require the
+                # individual one-click confirm (don't rely on the client-side JS exclusion).
+                # delete_ad_user permanently removes an AD object; onboard_employee needs the
+                # OU/groups custom approve route.
+                at = workflow_engine.get_action_type(rid)
+                if at in ('delete_ad_user', 'onboard_employee'):
+                    results.append({'id': rid, 'ok': False, 'skipped': True,
+                                    'error': f'{at} cannot be bulk-approved — use the individual confirm.'})
+                    continue
                 claimed, info = workflow_engine.approve_action(rid, approver)
                 ok = bool(claimed) and not info.get('error')
                 results.append({'id': rid, 'ok': ok, 'error': None if ok else info.get('error', 'could not approve')})

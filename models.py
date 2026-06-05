@@ -43,7 +43,7 @@ class User(UserMixin, db.Model):
             'viewer': ['view'],
             'eagle_eyes': ['view'],
             'base_user': ['view'],
-            'hr': ['view', 'onboard'],  # HR: see employees + submit new-hire onboarding requests
+            'hr': ['view', 'onboard', 'offboard'],  # HR: see employees + submit new-hire onboarding AND offboarding requests (both gated by IT approval)
         }
         return permission in permissions.get(self.role, [])
 
@@ -93,7 +93,11 @@ class Employee(db.Model):
     manager = db.Column(db.String(150))
     start_date = db.Column(db.Date)
     work_type = db.Column(db.String(20))            # 'remote' / 'local'
-    onboard_status = db.Column(db.String(20))       # 'requested' / 'provisioned'
+    onboard_status = db.Column(db.String(20))       # 'requested' / 'provisioned' / 'deleted'
+    # Stamped when an offboard approval successfully DISABLES the AD account — starts the
+    # 30-day retention clock for the delayed AD-deletion sweep. Only set via the offboard
+    # flow (never backfilled) so long-disabled legacy accounts are not mass-deleted.
+    offboarded_at = db.Column(db.DateTime, nullable=True)
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
 
 class Asset(db.Model):

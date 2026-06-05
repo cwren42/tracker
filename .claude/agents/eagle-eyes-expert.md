@@ -23,3 +23,9 @@ managed device fleet (built on top of the RMM agent's telemetry).
 ## How you work
 - Read with **safedb**; UI via **theme** (both Eagle Eyes pages were just converted to light — keep them token-based); verify+deploy via **ship**; risky → **tracker-reviewer**.
 - This subsystem can be sensitive (employee monitoring) — be careful and accurate about what is/isn't captured.
+
+## Git / working-tree hygiene (MANDATORY — all agents)
+The Tracker's **canary agent build, the RMM gateway, and SOC2 evidence are served from the on-disk working tree** — so whatever branch is checked out is literally what production serves/runs. This caused repeated incidents.
+- Do your work, commit to a branch if you like — but **before you finish, `git checkout main`** so the on-disk (production-served) files match `main`. **Never end your turn with the working tree on a feature branch.**
+- Report the **branch name + commit hash** you created so the parent can merge from `main` and ship deliberately. Do NOT assume `git push origin main` from a feature branch does anything — it pushes the (unchanged) `main` ref.
+- You cannot `sudo`-restart services; build + verify, then hand the restart/ship to the parent.

@@ -9,6 +9,16 @@ The standard safe change→deploy loop. App lives at `/var/www/tracker`, runs un
 systemd **`tracker.service`** (5 gunicorn workers on 127.0.0.1:8000). Related units:
 `rmm-gateway.service`, `cirquermm-agent.service`.
 
+## 0. Preflight — working tree (do this FIRST)
+The canary agent build, the RMM gateway, and SOC2 evidence are served from the **on-disk working tree**, so the served files = whatever branch is checked out. Before anything:
+```
+git branch --show-current ; git status --short
+```
+- **If not on `main`**: STOP. A feature branch is checked out → production is serving that branch's files, and `git push origin main` would push the unchanged `main`. Either `git checkout main` (then merge the branch deliberately) or confirm with the operator first. Never ship from a stray feature branch.
+- **Uncommitted changes**: confirm they're the intended edits, not a half-applied/stale state. Especially watch `rmm_agent/canary/*`, `rmm_gateway/*`, and `evidence_file_service.py` — served-vs-committed drift there is silent and prod-facing.
+- After merging a branch to `main`, re-run `git log --oneline -1` to confirm `main` actually advanced before pushing (the "Already up to date" / "Everything up-to-date" surprise = you were on the wrong ref).
+- If the change touches `rmm_gateway/*`, also restart **`rmm-gateway.service`**; if it touches agent files under `rmm_agent/canary/*`, no restart — agents pull on their cycle (see the **canary-deploy** skill).
+
 ## 1. Verify BEFORE deploy
 - **Python**: `venv/bin/python -m py_compile <files>`
 - **Jinja template**: `venv/bin/python -c "from jinja2 import Environment, FileSystemLoader; e=Environment(loader=FileSystemLoader('templates')); e.parse(open('templates/<f>').read()); print('OK')"`

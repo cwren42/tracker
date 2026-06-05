@@ -55,3 +55,4 @@ Thumbs.db
 
 # Agent update signing private key — never commit
 .agent_signing/
+.claude/scheduled_tasks.lock

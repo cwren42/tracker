@@ -1020,7 +1020,7 @@ def _offboard_employee(employee, actor='system', actor_email=None, ad_disabled=F
 
 @bp.route('/employees/<int:employee_id>/offboard', methods=['POST'])
 @login_required
-@manager_required
+@hr_required
 @license_required
 def offboard_employee(employee_id):
     """Gated offboarding: PARK a high-risk offboard request at /approvals (symmetric with

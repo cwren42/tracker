@@ -40,6 +40,11 @@ OFFBOARD_SWEEP_LOCK_PATH = os.environ.get('TRACKER_OFFBOARD_SWEEP_LOCK_PATH', '/
 OFFBOARD_SWEEP_INTERVAL_HOURS = int(os.environ.get('OFFBOARD_SWEEP_INTERVAL_HOURS', '24'))
 DISABLE_OFFBOARD_SWEEP = os.environ.get('DISABLE_OFFBOARD_SWEEP', '').strip() in ('1', 'true', 'yes', 'on')
 
+# AD-deletion sweep: after a retention window (default 30 days) past offboarded_at, PARK a
+# permanent AD-delete for 1-click human confirm. Parks only — never deletes directly. Daily.
+AD_DELETE_SWEEP_LOCK_PATH = os.environ.get('TRACKER_AD_DELETE_SWEEP_LOCK_PATH', '/tmp/tracker_ad_delete_sweep.lock')
+DISABLE_AD_DELETE_SWEEP = os.environ.get('DISABLE_AD_DELETE_SWEEP', '').strip() in ('1', 'true', 'yes', 'on')
+
 # AD/M365 employee sync (refresh ad_enabled etc.) — daily, so disables are detected. Then parks.
 AD_EMPLOYEE_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_EMPLOYEE_SYNC_LOCK_PATH', '/tmp/tracker_ad_employee_sync.lock')
 AD_EMPLOYEE_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_EMPLOYEE_SYNC_INTERVAL_HOURS', '24'))
@@ -189,6 +194,20 @@ def start_sync_scheduler(flask_app):
             max_instances=1,
             coalesce=True,
             misfire_grace_time=300,
+        )
+
+    if not DISABLE_AD_DELETE_SWEEP:
+        _scheduler.add_job(
+            func=lambda: run_ad_delete_sweep_job(flask_app),
+            trigger='cron',
+            hour=4,
+            minute=30,
+            id='ad_delete_sweep',
+            name='Daily AD-deletion sweep (30-day offboard retention)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
         )
 
     if not DISABLE_DEFENDER_SYNC:
@@ -568,6 +587,72 @@ def run_employee_offboard_sweep_job(flask_app_instance):
                 logger.info('Employee offboard sweep (verified): %s', pres)
             except Exception:
                 logger.exception('Employee offboard sweep crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_ad_delete_sweep_job(flask_app_instance):
+    """PARK a permanent AD-delete (for 1-click human confirm) for every employee whose
+    30-day offboard retention window has elapsed. PARKS ONLY — it never deletes directly;
+    the irreversible delete runs only when a human approves the parked request at /approvals.
+
+    Selection: offboarded_at IS NOT NULL AND offboarded_at <= (now - N days) AND
+    onboard_status != 'deleted' (still has an AD object) AND no pending delete_ad_user
+    already parked. N comes from Setting('offboard_delete_after_days'), default 30.
+    Idempotent via park_ad_delete's correlation-id + status guards."""
+    from datetime import timedelta
+    with _file_lock(AD_DELETE_SWEEP_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('AD-delete sweep already running in another worker — skipping')
+            return
+        with flask_app_instance.app_context():
+            try:
+                from extensions import db
+                from models import Employee, Setting
+                import workflow_engine
+
+                # Retention window (default 30); read the Setting if present, else 30.
+                days = 30
+                try:
+                    s = Setting.query.filter_by(key='offboard_delete_after_days').first()
+                    if s and str(s.value).strip():
+                        days = int(str(s.value).strip())
+                except Exception:
+                    logger.exception('AD-delete sweep: bad offboard_delete_after_days Setting — using 30')
+                    days = 30
+                if days < 0:
+                    days = 30
+
+                # Cutoff in the SAME local clock (_now) that stamped offboarded_at — tz-consistent.
+                now_local = datetime.strptime(workflow_engine._now(), "%Y-%m-%d %H:%M:%S")
+                cutoff = now_local - timedelta(days=days)
+
+                candidates = (Employee.query
+                              .filter(Employee.offboarded_at.isnot(None))
+                              .filter(Employee.offboarded_at <= cutoff)
+                              .filter(db.func.coalesce(Employee.onboard_status, '') != 'deleted')
+                              .all())
+
+                parked = skipped = 0
+                for emp in candidates:
+                    ticket_id = None  # found by [OFFBOARD] subject at delete time
+                    led = workflow_engine.park_ad_delete(
+                        emp.id, emp.name, requested_by='ad-delete-sweep',
+                        disabled_since=(emp.offboarded_at.strftime("%Y-%m-%d %H:%M:%S")
+                                        if emp.offboarded_at else None),
+                        ticket_id=ticket_id)
+                    if led:
+                        parked += 1
+                    else:
+                        skipped += 1  # already parked or already deleted
+                logger.info('AD-delete sweep: retention=%sd cutoff=%s candidates=%s parked=%s skipped=%s',
+                            days, cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+                            len(candidates), parked, skipped)
+            except Exception:
+                logger.exception('AD-delete sweep crashed')
             finally:
                 try:
                     db.session.remove()

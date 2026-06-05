@@ -34,6 +34,7 @@ RISK_TIERS = {
     # ── Directory / identity changes — privilege & access impact ──
     "create_user":       "high",   # provisions a new identity
     "disable_ad_user":   "high",
+    "delete_ad_user":    "high",   # PERMANENTLY removes the AD object — irreversible, always 1-click human confirm
     "enable_ad_user":    "medium",
     "reset_password":    "high",
     "unlock_account":    "medium",

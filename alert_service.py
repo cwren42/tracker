@@ -16,7 +16,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 
 import requests
 
@@ -1119,6 +1119,182 @@ def build_software_present_fn(con):
     return software_present
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# RECONCILIATION SNAPSHOT
+# Compute the Defender-side reconciliation waterfall / metrics / coverage from an
+# already-fetched (machines, machine_vulns) pull and persist it as a JSON blob in
+# the `setting` table so the reconciliation PAGE can render INSTANTLY off the DB
+# (no live Defender API on GET). This is the EXACT same math the old synchronous
+# blueprint helper did — only the Defender-derived half is frozen here; the page
+# overlays live device_vulnerability counts (fast SQL) at render time so the
+# Tracker bottom line / drift always reflect the current DB.
+#
+# Snapshot is written:
+#   1. during every sync_defender_vulnerabilities() run (machines + vulns in hand
+#      already — nearly free), and
+#   2. by the page's async "Refresh from Defender" background thread.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RECON_SNAPSHOT_SETTING_KEY = 'vuln_reconciliation_snapshot'
+
+
+def _recon_severity_norm(s):
+    s = (s or '').strip().lower()
+    if s == 'critical':       return 'Critical'
+    if s == 'high':           return 'High'
+    if s in ('medium', 'med'): return 'Medium'
+    if s == 'low':            return 'Low'
+    return 'Other'
+
+
+def compute_reconciliation_snapshot(con, machines, machine_vulns, fetched_at):
+    """Reproduce the sync's mapping + filters against an already-fetched Defender
+    pull and return the Defender-derived reconciliation snapshot as a plain dict
+    (JSON-serializable). Read-only against the DB.
+
+    GRAIN — device_vulnerability has UNIQUE(asset_id, cve_id) and the sync upserts
+    ON CONFLICT, so the Tracker bottom line is DISTINCT (asset, CVE) pairs, NOT raw
+    Defender feed rows. Defender's bulk feed returns one row per
+    (machine, CVE, *product*), so the same (machine, CVE) can appear several times.
+    A pair counts as kept if ANY of its product rows passes the software filter
+    (mirrors the DB: one surviving row inserts the pair).
+
+    Waterfall (DISTINCT machine-CVE pairs grain):
+        Defender raw distinct (machine,CVE)   = N
+          − pairs on unmapped machines        = −A   (coverage gap)
+          − software-not-present false-pos    = −B   (_software_present, all fail)
+          = kept (machine,CVE)                → collapse to DISTINCT (asset,CVE) = Y
+    """
+    machine_asset_map, unmapped = build_machine_asset_map(con, machines)
+    software_present = build_software_present_fn(con)
+
+    raw_rows = 0
+    pair_info = {}
+    raw_machine_ids = set()
+    raw_cves_by_sev = {'Critical': set(), 'High': set(), 'Medium': set(), 'Low': set(), 'Other': set()}
+
+    for mv in machine_vulns:
+        machine_id = mv.get('machineId', '')
+        cve_id     = mv.get('cveId', '')
+        if not cve_id:
+            continue
+        raw_rows += 1
+        sev = _recon_severity_norm(mv.get('severity'))
+        if machine_id:
+            raw_machine_ids.add(machine_id)
+        raw_cves_by_sev[sev].add(cve_id)
+
+        key = (machine_id, cve_id)
+        asset_id = machine_asset_map.get(machine_id)
+        info = pair_info.get(key)
+        if info is None:
+            info = {'sev': sev, 'asset_id': asset_id, 'kept': False}
+            pair_info[key] = info
+        if asset_id and not info['kept']:
+            if software_present(asset_id, mv.get('productName', '')):
+                info['kept'] = True
+
+    raw_pairs        = len(pair_info)
+    unmapped_pairs   = 0
+    filtered_pairs   = 0
+    reconciled_pairs = 0
+    rec_asset_ids    = set()
+    rec_cves_by_sev  = {'Critical': set(), 'High': set(), 'Medium': set(), 'Low': set(), 'Other': set()}
+    rec_pairs_seen   = set()
+
+    for (machine_id, cve_id), info in pair_info.items():
+        if not info['asset_id']:
+            unmapped_pairs += 1
+            continue
+        if not info['kept']:
+            filtered_pairs += 1
+            continue
+        ak = (info['asset_id'], cve_id)
+        if ak in rec_pairs_seen:
+            continue
+        rec_pairs_seen.add(ak)
+        reconciled_pairs += 1
+        rec_asset_ids.add(info['asset_id'])
+        rec_cves_by_sev[info['sev']].add(cve_id)
+
+    # ── Coverage panel sourcing ──
+    gap      = sorted([u for u in unmapped if not u.get('defender_side')], key=lambda u: u['name'].lower())
+    defsider = sorted([u for u in unmapped if u.get('defender_side')],     key=lambda u: u['name'].lower())
+    coverage = {
+        'defender_machines':   len(machines),
+        'mapped_machines':     len(machine_asset_map),
+        'unmapped_machines':   len(unmapped),
+        'coverage_gap_count':  len(gap),
+        'defender_side_count': len(defsider),
+        'gap':                 [{'name': u['name'], 'reason': u['reason']} for u in gap],
+        'defender_side':       [{'name': u['name'], 'reason': u['reason']} for u in defsider],
+    }
+
+    kept_machine_pairs = raw_pairs - unmapped_pairs - filtered_pairs
+
+    def _sev_counts(d):
+        return {k: len(v) for k, v in d.items()}
+
+    snapshot = {
+        'fetched_at':  fetched_at.astimezone(timezone.utc).isoformat(),
+        # Defender-side waterfall numbers (the live-DB tracker_open/drift/ties_out
+        # are overlaid by the page at render time, not frozen here).
+        'waterfall': {
+            'raw_feed_rows':              raw_rows,
+            'defender_raw':               raw_pairs,
+            'minus_unmapped':             unmapped_pairs,
+            'minus_filtered':             filtered_pairs,
+            'kept_machine_pairs':         kept_machine_pairs,
+            'computed_open':              reconciled_pairs,
+            'machine_to_asset_collapse':  kept_machine_pairs - reconciled_pairs,
+        },
+        'defender_metrics': {
+            'machines':      len(raw_machine_ids),
+            'pairs':         raw_pairs,
+            'cves_by_sev':   _sev_counts(raw_cves_by_sev),
+            'distinct_cves': len(set().union(*raw_cves_by_sev.values())) if raw_cves_by_sev else 0,
+        },
+        'reconciled_metrics': {
+            'machines':      len(rec_asset_ids),
+            'pairs':         reconciled_pairs,
+            'cves_by_sev':   _sev_counts(rec_cves_by_sev),
+            'distinct_cves': len(set().union(*rec_cves_by_sev.values())) if rec_cves_by_sev else 0,
+        },
+        'coverage': coverage,
+    }
+    return snapshot
+
+
+def write_reconciliation_snapshot(con, snapshot):
+    """Persist the reconciliation snapshot JSON to the shared `setting` row.
+    Cross-worker (DB-backed) and idempotent — overwrites the single row."""
+    import json as _json
+    payload = _json.dumps(snapshot)
+    con.execute(
+        """INSERT INTO setting (key, value) VALUES (?, ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value""",
+        (RECON_SNAPSHOT_SETTING_KEY, payload)
+    )
+
+
+def compute_and_store_reconciliation_snapshot(con, machines, machine_vulns, fetched_at):
+    """Compute + persist the reconciliation snapshot in one call. Best-effort:
+    never raises into the sync's main path (a snapshot failure must not fail the
+    sync)."""
+    try:
+        snap = compute_reconciliation_snapshot(con, machines, machine_vulns, fetched_at)
+        write_reconciliation_snapshot(con, snap)
+        logger.info(
+            'Reconciliation snapshot stored: defender_raw=%s computed_open=%s '
+            'coverage_gap=%s', snap['waterfall']['defender_raw'],
+            snap['waterfall']['computed_open'], snap['coverage']['coverage_gap_count']
+        )
+        return snap
+    except Exception as _snap_err:
+        logger.warning('Reconciliation snapshot computation failed: %s', _snap_err, exc_info=True)
+        return None
+
+
 def sync_defender_vulnerabilities():
     """
     Pull vulnerabilities from Defender API into vulnerability_cache
@@ -1267,6 +1443,14 @@ def sync_defender_vulnerabilities():
             cleared = raw.rowcount
             if cleared:
                 logger.info(f'Defender sync: auto-closed {cleared} CVEs no longer reported by Defender')
+
+        # ── Persist the reconciliation snapshot from THIS pull (machines +
+        # all_machine_vulns are already in hand, so the waterfall math is nearly
+        # free here). The page reads this DB-backed snapshot instead of pulling
+        # Defender live on every load. Best-effort: never fails the sync. ──
+        compute_and_store_reconciliation_snapshot(
+            con, machines, all_machine_vulns, sync_start
+        )
 
         con.commit()
         con.close()

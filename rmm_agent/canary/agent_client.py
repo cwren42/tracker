@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.19"
+AGENT_VERSION = "2.9.20"
 
 import asyncio
 import base64
@@ -5158,17 +5158,20 @@ async def main() -> None:
                             code  = payload.get("code", "")
                             tout  = min(int(payload.get("timeout", 60)), 300)
                             try:
+                                loop = asyncio.get_event_loop()
                                 if shell == "cmd":
-                                    r = subprocess.run(
-                                        ["cmd", "/c", code], capture_output=True,
+                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
+                                        ["cmd.exe", "/c", code], capture_output=True,
                                         text=True, timeout=tout,
-                                    )
+                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
+                                    ))
                                 else:
-                                    r = subprocess.run(
-                                        ["powershell", "-NonInteractive", "-NoProfile",
+                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
+                                        ["powershell.exe", "-NonInteractive", "-NoProfile",
                                          "-ExecutionPolicy", "Bypass", "-Command", code],
                                         capture_output=True, text=True, timeout=tout,
-                                    )
+                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
+                                    ))
                                 await ws.send(json.dumps({
                                     "type": "script_result", "session_id": session_id,
                                     "exit_code": r.returncode,

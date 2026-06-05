@@ -145,7 +145,7 @@ def ticket_access_required(f):
     from functools import wraps
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager', 'eagle_eyes', 'viewer', 'base_user']:
+        if not current_user.is_authenticated or current_user.role not in ['admin', 'manager', 'eagle_eyes', 'viewer', 'base_user', 'hr']:
             flash('Access denied.', 'danger')
             return redirect(url_for('dashboard.index'))
         return f(*args, **kwargs)

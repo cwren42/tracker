@@ -40,6 +40,9 @@ def index():
     # Eagle Eyes role: their home is the fleet monitor, not the full dashboard
     if current_user.role == 'eagle_eyes':
         return redirect(url_for('rmm.rmm_eagle_eyes_fleet'))
+    # HR: their home is the Employees page (where onboarding/offboarding lives)
+    if current_user.role == 'hr':
+        return redirect(url_for('employees.employees'))
     # Base users and viewers: their home is tickets
     if current_user.role in ['base_user', 'viewer']:
         return redirect(url_for('tickets.tickets'))

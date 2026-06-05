@@ -57,7 +57,7 @@
         <button class="btn btn-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Reopen</button>
       </form>
     {% endif %}
-    {% if current_user.role not in ['base_user', 'eagle_eyes', 'viewer'] %}
+    {% if current_user.role not in ['base_user', 'eagle_eyes', 'viewer', 'hr'] %}
     <button class="btn btn-outline-secondary btn-sm" id="aiTriageBtn" onclick="aiTriage({{ ticket.id }})">
       <i class="bi bi-robot me-1"></i>AI Triage
     </button>
@@ -473,7 +473,7 @@
           {% for w in wlist %}
           <div class="d-flex align-items-center justify-content-between small py-1">
             <span><i class="bi bi-person-fill me-1 text-muted"></i>{{ w.user.display_name if w.user else '—' }}</span>
-            {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+            {% if current_user.role not in ['eagle_eyes', 'viewer', 'hr'] %}
             <form method="POST" action="{{ url_for('tickets.update_ticket_watchers', ticket_id=ticket.id) }}" class="d-inline">
               <input type="hidden" name="action" value="remove">
               <input type="hidden" name="user_id" value="{{ w.user_id }}">
@@ -484,7 +484,7 @@
           {% endfor %}
         </div>
         {% endif %}
-        {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+        {% if current_user.role not in ['eagle_eyes', 'viewer', 'hr'] %}
         <form method="POST" action="{{ url_for('tickets.update_ticket_watchers', ticket_id=ticket.id) }}" class="d-flex gap-2 mt-1">
           <input type="hidden" name="action" value="add">
           <select name="user_id" class="form-select form-select-sm">
@@ -518,7 +518,7 @@
               <span class="badge {% if lnk.linked_ticket.status == 'Open' %}bg-success{% elif lnk.linked_ticket.status == 'In Progress' %}bg-primary{% else %}bg-secondary{% endif %} ms-1" style="font-size:10px;">{{ lnk.linked_ticket.status }}</span>
               {% endif %}
             </a>
-            {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+            {% if current_user.role not in ['eagle_eyes', 'viewer', 'hr'] %}
             <form method="POST" action="{{ url_for('tickets.update_ticket_links', ticket_id=ticket.id) }}" class="d-inline">
               <input type="hidden" name="action" value="remove">
               <input type="hidden" name="link_id" value="{{ lnk.id }}">
@@ -529,7 +529,7 @@
           {% endfor %}
         </div>
         {% endif %}
-        {% if current_user.role not in ['eagle_eyes', 'viewer'] %}
+        {% if current_user.role not in ['eagle_eyes', 'viewer', 'hr'] %}
         <form method="POST" action="{{ url_for('tickets.update_ticket_links', ticket_id=ticket.id) }}" class="d-flex gap-2 mt-1">
           <input type="hidden" name="action" value="add">
           <div class="input-group input-group-sm">
@@ -568,7 +568,7 @@
     </div>
     {% endif %}
 
-    {% if current_user.role not in ['base_user', 'eagle_eyes', 'viewer'] %}
+    {% if current_user.role not in ['base_user', 'eagle_eyes', 'viewer', 'hr'] %}
     <!-- AI Suggestion Panel -->
     <div class="card shadow-sm mb-3" id="ai-panel">
       <div class="card-header fw-semibold d-flex align-items-center">

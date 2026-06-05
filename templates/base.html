@@ -45,7 +45,7 @@
 
     <div class="sidebar-nav">
 
-        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] %}
+        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer', 'hr'] %}
         <a class="sidebar-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}"
            href="{{ url_for('dashboard.index') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Dashboard">
             <i class="bi bi-house-door-fill"></i><span class="link-label">Dashboard</span>
@@ -82,14 +82,14 @@
         {% endif %}
         {% endif %}
 
-        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer'] %}
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer', 'hr'] %}
         <a class="sidebar-link {% if request.endpoint in ['tickets','new_ticket','view_ticket'] %}active{% endif %}"
            href="{{ url_for('tickets.tickets') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Tickets">
             <i class="bi bi-ticket-perforated-fill"></i><span class="link-label">Tickets</span>
         </a>
         {% endif %}
 
-        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer'] %}
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer', 'hr'] %}
         <a class="sidebar-link {% if request.endpoint and 'quarantine' in request.endpoint %}active{% endif %}"
            href="{{ url_for('quarantine.quarantine_list') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Email Security">
             <i class="bi bi-envelope-exclamation-fill" style="color:#74c0fc"></i><span class="link-label">Email Security</span>
@@ -106,20 +106,24 @@
         {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] %}
         <div class="nav-section-label">IT Management</div>
 
+        {% if current_user.role != 'hr' %}
         <a class="sidebar-link {% if request.endpoint == 'assets.assets' %}active{% endif %}"
            href="{{ url_for('assets.assets') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Assets">
             <i class="bi bi-laptop"></i><span class="link-label">Assets</span>
         </a>
+        {% endif %}
 
         <a class="sidebar-link {% if request.endpoint in ['employees','add_employee','edit_employee'] %}active{% endif %}"
            href="{{ url_for('employees.employees') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Employees">
             <i class="bi bi-people-fill"></i><span class="link-label">Employees</span>
         </a>
 
+        {% if current_user.role != 'hr' %}
         <a class="sidebar-link {% if request.endpoint == 'licenses.licenses' %}active{% endif %}"
            href="{{ url_for('licenses.licenses') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Licenses">
             <i class="bi bi-key-fill"></i><span class="link-label">Licenses</span>
         </a>
+        {% endif %}
         {% endif %}
 
         {% if current_user.role == 'admin' %}
@@ -236,7 +240,7 @@
         </ul>
         {% endif %}
 
-        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] and current_user.role != 'admin' %}
+        {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer', 'hr'] and current_user.role != 'admin' %}
         <!-- manager-level reports -->
         <div class="nav-section-label">Reports</div>
         <a class="sidebar-link {% if request.endpoint == 'reports.reports' %}active{% endif %}"
@@ -313,6 +317,8 @@
                     <span class="badge bg-warning text-dark">Eagle Eyes</span>
                 {% elif current_user.role == 'base_user' %}
                     <span class="badge bg-info text-dark">User</span>
+                {% elif current_user.role == 'hr' %}
+                    <span class="badge bg-success">HR</span>
                 {% else %}
                     <span class="badge bg-secondary">Viewer</span>
                 {% endif %}

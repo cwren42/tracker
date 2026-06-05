@@ -153,8 +153,8 @@ def _resolve_reporter_email(name, hostname=None, asset_id=None):
 def tickets():
     from collections import defaultdict
     from types import SimpleNamespace
-    # Base users, eagle_eyes, and viewers only see their own submitted tickets
-    if current_user.role in ('base_user', 'eagle_eyes', 'viewer'):
+    # Base users, eagle_eyes, viewers, and HR only see their own submitted tickets
+    if current_user.role in ('base_user', 'eagle_eyes', 'viewer', 'hr'):
         tickets = SupportTicket.query.filter_by(
             created_by_user_id=current_user.id
         ).order_by(SupportTicket.created_at.desc()).all()

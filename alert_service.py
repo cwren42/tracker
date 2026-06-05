@@ -1093,13 +1093,21 @@ def sync_defender_vulnerabilities():
         # Bulk-fetch ALL machine-CVE pairs in one API call (much faster than per-machine calls)
         all_machine_vulns = svc.get_all_machine_vulnerabilities()
         import datetime as _dt
-        sync_start = _dt.datetime.utcnow()
+        # tz-aware UTC (belt-and-suspenders). The seen-set below is the real
+        # guard against the close-by-absence race; sync_start is no longer used
+        # to decide what to close.
+        sync_start = _dt.datetime.now(_dt.timezone.utc)
         dev_count = 0
         filtered_count = 0
+        unmapped_count = 0          # Defender machine-CVE pairs with no mapped asset
+        # (asset_id, cve_id) pairs we actually inserted/confirmed THIS run. Only
+        # findings absent from this set may be closed by close-by-absence.
+        seen_pairs: set = set()
         for mv in all_machine_vulns:
             machine_id = mv.get('machineId', '')
             asset_id   = machine_asset_map.get(machine_id)
             if not asset_id:
+                unmapped_count += 1
                 continue  # skip machines we can't map to a tracked asset
             cve_id = mv.get('cveId', '')
             if not cve_id:
@@ -1128,28 +1136,64 @@ def sync_defender_vulnerabilities():
                  mv.get('severity', 'Unknown'), mv.get('cvssV3', 0) or 0,
                  product_name)
             )
+            seen_pairs.add((asset_id, cve_id))
             dev_count += 1
 
         if filtered_count:
             logger.info(f'Defender sync: filtered {filtered_count} CVEs where software not found in device inventory')
+        if unmapped_count:
+            logger.warning(
+                f'Defender sync: skipped {unmapped_count} Defender machine-CVE pairs '
+                f'with no mapped tracked asset (silent coverage gap — reconciliation needed)'
+            )
 
-        # Close-by-absence: if Defender no longer reports a CVE for an asset it
-        # monitors, the vulnerability has been resolved — mark it Remediated.
+        # Close-by-absence: if Defender no longer reports a (asset, CVE) pair for
+        # an asset it monitors, the vulnerability has been resolved — mark it
+        # Remediated. We compare against the EXACT set of pairs Defender confirmed
+        # THIS run (seen_pairs), NOT a synced_at/sync_start timestamp window — the
+        # timestamp approach falsely closed every freshly-inserted row because a
+        # naive-UTC sync_start was interpreted in the session TZ and shifted into
+        # the future. A row is only closed when it is genuinely no longer reported.
+        # A human 'Accepted' risk-acceptance is never touched (sticky).
         defender_asset_ids = list(set(machine_asset_map.values()))
         if defender_asset_ids:
-            cur = con.execute(
+            import psycopg2.extras as _pg_extras
+            raw = con.cursor()._c  # raw psycopg2 cursor (RealDictCursor)
+            # Stage the confirmed pairs in a TEMP TABLE (dropped on commit). This
+            # keeps the anti-join index-friendly and avoids a ~94k-element IN-list.
+            raw.execute(
+                "CREATE TEMP TABLE _defender_seen "
+                "(asset_id BIGINT, cve_id TEXT) ON COMMIT DROP"
+            )
+            if seen_pairs:
+                _pg_extras.execute_values(
+                    raw,
+                    "INSERT INTO _defender_seen (asset_id, cve_id) VALUES %s",
+                    list(seen_pairs),
+                    page_size=5000,
+                )
+                raw.execute(
+                    "CREATE INDEX ON _defender_seen (asset_id, cve_id)"
+                )
+            # Close only Open/Exception findings on Defender-monitored assets that
+            # are NOT in the confirmed set this run.
+            raw.execute(
                 """
-                UPDATE device_vulnerability
+                UPDATE device_vulnerability dv
                 SET status = 'Remediated',
                     remediation_note = 'Cleared by Defender re-assessment: no longer flagged as vulnerable',
                     updated_at = NOW()
-                WHERE asset_id = ANY(%s)
-                  AND status IN ('Open', 'Exception')
-                  AND synced_at < %s
+                WHERE dv.asset_id = ANY(%s)
+                  AND dv.status IN ('Open', 'Exception')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM _defender_seen s
+                      WHERE s.asset_id = dv.asset_id
+                        AND s.cve_id   = dv.cve_id
+                  )
                 """,
-                (defender_asset_ids, sync_start)
+                (defender_asset_ids,)
             )
-            cleared = cur._c.rowcount
+            cleared = raw.rowcount
             if cleared:
                 logger.info(f'Defender sync: auto-closed {cleared} CVEs no longer reported by Defender')
 

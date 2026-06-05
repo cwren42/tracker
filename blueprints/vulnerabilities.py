@@ -88,17 +88,20 @@ def vulnerability_dashboard():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RECONCILIATION — trace Tracker vuln numbers back to Defender (the external,
-# independently-verifiable source). Pulls Defender LIVE, reproduces the sync's
-# mapping + false-positive filters, and renders the math as a waterfall so a
-# small Tracker↔Defender delta is explained (documented filters) rather than
-# hidden. Read-only. The live Defender pull is cached briefly so the page is not
-# slow on every load; "Refresh from Defender" forces a fresh pull.
+# independently-verifiable source). The Defender-side half of the waterfall
+# (raw distinct pairs by severity, mapping/filter subtractions, coverage lists)
+# is computed during the Defender sync and PERSISTED as a JSON snapshot in the
+# `setting` table (key=vuln_reconciliation_snapshot) by alert_service. The page
+# GET reads ONLY that stored snapshot + the live device_vulnerability DB counts
+# (fast SQL) — it NEVER pulls Defender live, so it renders in <1s. The snapshot's
+# fetched_at is shown so freshness is honest. "Refresh from Defender" triggers a
+# non-blocking background thread that re-pulls + rewrites the snapshot.
+# Read-only except the snapshot write.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Module-level cache of the (expensive) live Defender pull. The pull is the same
-# set of API calls the sync uses (get_machines + get_all_machine_vulnerabilities).
-_RECON_CACHE = {'data': None, 'fetched_at': None}
-_RECON_TTL_SECONDS = 180
+# Cross-worker (process-wide is not enough under gunicorn) refresh status, kept
+# in a DB setting so the page's poller sees a consistent state across workers.
+_RECON_REFRESH_FLAG_KEY = 'vuln_reconciliation_refreshing'
 
 
 def _severity_norm(s):
@@ -110,235 +113,237 @@ def _severity_norm(s):
     return 'Other'
 
 
-def _pull_defender_live():
-    """Pull machines + machine-CVE pairs LIVE from Defender. Returns
-    (machines, machine_vulns, fetched_at_utc). Raises on hard failure so the
-    caller can surface an honest error rather than fabricate numbers."""
-    from defender_service import DefenderService
-    svc = DefenderService()
-    machines = svc.get_machines()
-    machine_vulns = svc.get_all_machine_vulnerabilities()
-    return machines, machine_vulns, datetime.now(timezone.utc)
+def _fmt_mst(raw):
+    """Format a UTC datetime / ISO string / DB timestamp into MST display."""
+    if not raw:
+        return None
+    _MST = timezone(timedelta(hours=-7))
+    try:
+        if isinstance(raw, datetime):
+            _dt = raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+        else:
+            _dt = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+            if _dt.tzinfo is None:
+                _dt = _dt.replace(tzinfo=timezone.utc)
+        return _dt.astimezone(_MST).strftime('%Y-%m-%d %I:%M:%S %p') + ' MST'
+    except Exception:
+        return str(raw)[:16]
 
 
-def _get_defender_pull(force=False):
-    """Return the cached live pull, refreshing if forced or stale."""
-    now = datetime.now(timezone.utc)
-    cached = _RECON_CACHE['data']
-    if (not force and cached is not None and _RECON_CACHE['fetched_at']
-            and (now - _RECON_CACHE['fetched_at']).total_seconds() < _RECON_TTL_SECONDS):
-        return cached, _RECON_CACHE['fetched_at'], True
-    machines, machine_vulns, fetched_at = _pull_defender_live()
-    _RECON_CACHE['data'] = (machines, machine_vulns)
-    _RECON_CACHE['fetched_at'] = fetched_at
-    return (machines, machine_vulns), fetched_at, False
+def _load_recon_snapshot(con):
+    """Read the stored reconciliation snapshot JSON from the `setting` row, or
+    None if no sync has captured one yet (cold start)."""
+    row = con.execute(
+        "SELECT value FROM setting WHERE key=%s",
+        (_alert_svc.RECON_SNAPSHOT_SETTING_KEY,)
+    ).fetchone()
+    if not row or not row['value']:
+        return None
+    try:
+        return json.loads(row['value'])
+    except Exception:
+        logger.warning('Stored reconciliation snapshot is not valid JSON')
+        return None
 
 
-def _build_reconciliation(force_refresh=False):
-    """Reproduce the sync's mapping + filters against a LIVE Defender pull and
-    compute the reconciliation waterfall + locked metrics. Read-only.
+def _live_tracker_counts(con):
+    """The authoritative Tracker bottom line straight from device_vulnerability
+    (status=Open). Fast SQL — safe to run on every GET."""
+    tracker_open_pairs = con.execute(
+        "SELECT COUNT(*) AS c FROM device_vulnerability WHERE status='Open'"
+    ).fetchone()['c']
+    tracker_machines = con.execute(
+        "SELECT COUNT(DISTINCT asset_id) AS c FROM device_vulnerability WHERE status='Open'"
+    ).fetchone()['c']
+    tracker_sev_rows = con.execute(
+        """SELECT severity, COUNT(DISTINCT cve_id) AS c
+           FROM device_vulnerability WHERE status='Open' GROUP BY severity"""
+    ).fetchall()
+    tracker_cves_by_sev = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Other': 0}
+    for r in tracker_sev_rows:
+        tracker_cves_by_sev[_severity_norm(r['severity'])] = r['c']
+    tracker_distinct_cves = con.execute(
+        "SELECT COUNT(DISTINCT cve_id) AS c FROM device_vulnerability WHERE status='Open'"
+    ).fetchone()['c']
+    last_sync_raw = con.execute(
+        "SELECT MAX(synced_at) FROM device_vulnerability"
+    ).fetchone()[0]
+    return {
+        'open_pairs':    tracker_open_pairs,
+        'machines':      tracker_machines,
+        'cves_by_sev':   tracker_cves_by_sev,
+        'distinct_cves': tracker_distinct_cves,
+        'last_sync_raw': last_sync_raw,
+    }
 
-    GRAIN — this is the load-bearing definition. device_vulnerability has a
-    UNIQUE(asset_id, cve_id) constraint and the sync upserts ON CONFLICT, so the
-    Tracker bottom line is DISTINCT (asset, CVE) pairs — NOT raw Defender feed
-    rows. Defender's bulk feed returns one row per (machine, CVE, *product*), so
-    the same (machine, CVE) can appear several times (e.g. a CVE attributed to
-    multiple software entries). We therefore reconcile on DISTINCT pairs, and a
-    pair counts as kept if ANY of its product rows passes the software filter
-    (mirrors the DB: one surviving row inserts the pair).
 
-    Waterfall (DISTINCT device-CVE pairs grain):
-        Defender raw distinct (machine,CVE)   = N
-          − pairs on unmapped machines        = −A   (coverage gap)
-          − software-not-present false-pos    = −B   (_software_present, all-products-fail)
-          = Tracker device_vulnerability Open = Y     (ties to the DB ± live drift)
-    """
-    (machines, machine_vulns), fetched_at, from_cache = _get_defender_pull(force=force_refresh)
-
+def _build_reconciliation_view():
+    """Assemble the page's template context from the STORED Defender snapshot +
+    the LIVE device_vulnerability counts. No Defender API call. Returns
+    (data, snapshot_present). When no snapshot exists yet (cold start), data
+    carries only the live Tracker numbers and snapshot_present is False so the
+    page can render the 'not yet captured' state instead of blocking."""
     con = _alert_svc._get_db()
     try:
-        # Reproduce the EXACT sync mapping + filter via the shared helpers.
-        machine_asset_map, unmapped = _alert_svc.build_machine_asset_map(con, machines)
-        software_present = _alert_svc.build_software_present_fn(con)
-
-        # ── First pass: collapse the per-product feed to DISTINCT (machine, CVE)
-        #    pairs, recording (a) whether the machine maps to an asset and (b)
-        #    whether ANY product row for that pair passes the software filter. ──
-        raw_rows = 0                 # raw feed rows (per machine×CVE×product) — context only
-        pair_info = {}               # (machine_id, cve_id) -> {'sev','asset_id','kept'}
-        raw_machine_ids = set()
-        raw_cves_by_sev = {'Critical': set(), 'High': set(), 'Medium': set(), 'Low': set(), 'Other': set()}
-
-        for mv in machine_vulns:
-            machine_id = mv.get('machineId', '')
-            cve_id     = mv.get('cveId', '')
-            if not cve_id:
-                continue
-            raw_rows += 1
-            sev = _severity_norm(mv.get('severity'))
-            if machine_id:
-                raw_machine_ids.add(machine_id)
-            raw_cves_by_sev[sev].add(cve_id)
-
-            key = (machine_id, cve_id)
-            asset_id = machine_asset_map.get(machine_id)
-            info = pair_info.get(key)
-            if info is None:
-                info = {'sev': sev, 'asset_id': asset_id, 'kept': False}
-                pair_info[key] = info
-            # Pair is kept if it maps to an asset AND at least one product row
-            # for it survives the software-presence filter.
-            if asset_id and not info['kept']:
-                if software_present(asset_id, mv.get('productName', '')):
-                    info['kept'] = True
-
-        # ── Second pass: classify each DISTINCT pair into the waterfall buckets ──
-        raw_pairs        = len(pair_info)   # N : distinct (machine, CVE) pairs
-        unmapped_pairs   = 0                # A : pairs on machines with no asset
-        filtered_pairs   = 0                # B : mapped but every product row filtered out
-        reconciled_pairs = 0               # Y : distinct (asset, CVE) that would be stored
-        rec_asset_ids    = set()
-        rec_cves_by_sev  = {'Critical': set(), 'High': set(), 'Medium': set(), 'Low': set(), 'Other': set()}
-        rec_pairs_seen   = set()            # distinct (asset_id, cve_id)
-
-        for (machine_id, cve_id), info in pair_info.items():
-            if not info['asset_id']:
-                unmapped_pairs += 1
-                continue
-            if not info['kept']:
-                filtered_pairs += 1
-                continue
-            # Surviving pair → de-dupe to (asset, CVE), the actual DB grain.
-            ak = (info['asset_id'], cve_id)
-            if ak in rec_pairs_seen:
-                continue
-            rec_pairs_seen.add(ak)
-            reconciled_pairs += 1
-            rec_asset_ids.add(info['asset_id'])
-            rec_cves_by_sev[info['sev']].add(cve_id)
-
-        # ── Tracker side: the authoritative bottom line straight from the DB ──
-        tracker_open_pairs = con.execute(
-            "SELECT COUNT(*) AS c FROM device_vulnerability WHERE status='Open'"
-        ).fetchone()['c']
-        tracker_machines = con.execute(
-            "SELECT COUNT(DISTINCT asset_id) AS c FROM device_vulnerability WHERE status='Open'"
-        ).fetchone()['c']
-        tracker_sev_rows = con.execute(
-            """SELECT severity, COUNT(DISTINCT cve_id) AS c
-               FROM device_vulnerability WHERE status='Open' GROUP BY severity"""
-        ).fetchall()
-        tracker_cves_by_sev = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Other': 0}
-        for r in tracker_sev_rows:
-            tracker_cves_by_sev[_severity_norm(r['severity'])] = r['c']
-        tracker_distinct_cves = con.execute(
-            "SELECT COUNT(DISTINCT cve_id) AS c FROM device_vulnerability WHERE status='Open'"
-        ).fetchone()['c']
-
-        last_sync_raw = con.execute("SELECT MAX(synced_at) FROM device_vulnerability").fetchone()[0]
+        snap = _load_recon_snapshot(con)
+        tracker = _live_tracker_counts(con)
+        refreshing = (con.execute(
+            "SELECT value FROM setting WHERE key=%s", (_RECON_REFRESH_FLAG_KEY,)
+        ).fetchone() or {}).get('value') == '1'
     finally:
         con.close()
 
-    # ── Coverage panel sourcing ──
-    # Split the unmapped list into a genuine Tracker coverage gap (named devices
-    # we simply don't have an asset for) vs Defender-side state (excluded / merged
-    # / no-DNS rows the sync skips regardless). Only the former is a coverage gap.
-    gap      = sorted([u for u in unmapped if not u.get('defender_side')], key=lambda u: u['name'].lower())
-    defsider = sorted([u for u in unmapped if u.get('defender_side')],     key=lambda u: u['name'].lower())
-    coverage = {
-        'defender_machines':   len(machines),
-        'mapped_machines':     len(machine_asset_map),
-        'unmapped_machines':   len(unmapped),
-        'coverage_gap_count':  len(gap),
-        'defender_side_count': len(defsider),
-        'gap':                 gap,
-        'defender_side':       defsider,
+    tracker_metrics = {
+        'machines':      tracker['machines'],
+        'pairs':         tracker['open_pairs'],
+        'cves_by_sev':   tracker['cves_by_sev'],
+        'distinct_cves': tracker['distinct_cves'],
     }
+    last_sync_mst = _fmt_mst(tracker['last_sync_raw'])
 
-    # ── Waterfall: live computed pairs reconciled to the DB bottom line ──
-    # Arithmetic is on DISTINCT (machine, CVE) pairs. The kept count then
-    # collapses to DISTINCT (asset, CVE) — the exact device_vulnerability grain —
-    # via reconciled_pairs (only differs if two machines map to one asset).
-    kept_machine_pairs = raw_pairs - unmapped_pairs - filtered_pairs
-    waterfall = {
-        'raw_feed_rows':    raw_rows,               # context: per machine×CVE×product
-        'defender_raw':     raw_pairs,              # N : distinct (machine, CVE)
-        'minus_unmapped':   unmapped_pairs,         # A
-        'minus_filtered':   filtered_pairs,         # B
-        'kept_machine_pairs': kept_machine_pairs,   # distinct kept (machine, CVE)
-        'computed_open':    reconciled_pairs,       # Y : distinct (asset, CVE) — DB grain
-        'machine_to_asset_collapse': kept_machine_pairs - reconciled_pairs,
-        'tracker_open':     tracker_open_pairs,     # what the DB actually holds (last sync)
-        # The live-computed bottom is what a sync run NOW would store; the DB
-        # reflects the LAST sync. Any gap is the legitimate continuous-drift note.
-        'ties_out':         reconciled_pairs == tracker_open_pairs,
-        'drift':            reconciled_pairs - tracker_open_pairs,
-    }
+    if not snap:
+        # Cold start: no Defender snapshot captured yet. Render the page with
+        # only the Tracker-side numbers + a clear prompt. Never block.
+        return {
+            'snapshot_present': False,
+            'refreshing':       refreshing,
+            'last_sync_mst':    last_sync_mst,
+            'metrics':          {'tracker': tracker_metrics},
+        }, False
 
-    def _sev_counts(d):
-        return {k: len(v) for k, v in d.items()}
+    wf = dict(snap['waterfall'])
+    # Overlay the live DB bottom line + drift onto the frozen Defender waterfall.
+    wf['tracker_open'] = tracker['open_pairs']
+    wf['drift']        = wf['computed_open'] - tracker['open_pairs']
+    wf['ties_out']     = wf['drift'] == 0
 
-    metrics = {
-        'defender': {
-            'machines':     len(raw_machine_ids),
-            'pairs':        raw_pairs,
-            'cves_by_sev':  _sev_counts(raw_cves_by_sev),
-            'distinct_cves': len(set().union(*raw_cves_by_sev.values())) if raw_cves_by_sev else 0,
+    data = {
+        'snapshot_present':  True,
+        'refreshing':        refreshing,
+        'waterfall':         wf,
+        'metrics': {
+            'defender':   snap['defender_metrics'],
+            'reconciled': snap['reconciled_metrics'],
+            'tracker':    tracker_metrics,
         },
-        'reconciled': {
-            'machines':     len(rec_asset_ids),
-            'pairs':        reconciled_pairs,
-            'cves_by_sev':  _sev_counts(rec_cves_by_sev),
-            'distinct_cves': len(set().union(*rec_cves_by_sev.values())) if rec_cves_by_sev else 0,
-        },
-        'tracker': {
-            'machines':     tracker_machines,
-            'pairs':        tracker_open_pairs,
-            'cves_by_sev':  tracker_cves_by_sev,
-            'distinct_cves': tracker_distinct_cves,
-        },
-    }
-
-    # ── Freshness / trust cues (rendered in MST like the rest of the vuln UI) ──
-    _MST = timezone(timedelta(hours=-7))
-    defender_pull_mst = fetched_at.astimezone(_MST).strftime('%Y-%m-%d %I:%M:%S %p') + ' MST'
-    last_sync_mst = None
-    if last_sync_raw:
-        try:
-            if isinstance(last_sync_raw, datetime):
-                _dt = last_sync_raw if last_sync_raw.tzinfo else last_sync_raw.replace(tzinfo=timezone.utc)
-            else:
-                _dt = datetime.fromisoformat(str(last_sync_raw).replace('Z', '+00:00'))
-                if _dt.tzinfo is None:
-                    _dt = _dt.replace(tzinfo=timezone.utc)
-            last_sync_mst = _dt.astimezone(_MST).strftime('%Y-%m-%d %I:%M %p') + ' MST'
-        except Exception:
-            last_sync_mst = str(last_sync_raw)[:16]
-
-    return {
-        'waterfall':         waterfall,
-        'metrics':           metrics,
-        'coverage':          coverage,
-        'defender_pull_mst': defender_pull_mst,
+        'coverage':          snap['coverage'],
+        'defender_pull_mst': _fmt_mst(snap.get('fetched_at')),
         'last_sync_mst':     last_sync_mst,
-        'from_cache':        from_cache,
-        'cache_ttl':         _RECON_TTL_SECONDS,
     }
+    return data, True
 
 
 @bp.route('/vulnerabilities/reconciliation')
 @login_required
 @admin_required
 def vulnerability_reconciliation():
-    force = request.args.get('refresh') == '1'
+    """Renders INSTANTLY from the stored Defender snapshot + live DB counts.
+    NEVER pulls Defender live on GET. ?refresh=1 kicks the async background
+    re-pull (non-blocking) and redirects back to the clean URL."""
+    if request.args.get('refresh') == '1':
+        _start_recon_refresh()
+        return redirect(url_for('vulnerabilities.vulnerability_reconciliation'))
     error = None
     data = None
     try:
-        data = _build_reconciliation(force_refresh=force)
+        data, _present = _build_reconciliation_view()
     except Exception as e:
-        logger.exception('Vulnerability reconciliation failed')
+        logger.exception('Vulnerability reconciliation view failed')
         error = str(e)
     return render_template('vulnerability_reconciliation.html', data=data, error=error)
+
+
+# ── Async "Refresh from Defender" ──────────────────────────────────────────────
+# Same daemon-thread pattern as /api/vulnerabilities/sync: the request returns
+# immediately while a background thread does the 11.5s live pull, recomputes the
+# waterfall, and rewrites the snapshot. The request thread NEVER blocks on the API.
+
+def _start_recon_refresh():
+    """Spawn a daemon thread that re-pulls Defender and rewrites the snapshot.
+    Idempotent: if a refresh is already in flight (DB flag set), do nothing."""
+    _app = current_app._get_current_object()
+
+    con = _alert_svc._get_db()
+    try:
+        already = (con.execute(
+            "SELECT value FROM setting WHERE key=%s", (_RECON_REFRESH_FLAG_KEY,)
+        ).fetchone() or {}).get('value') == '1'
+        if already:
+            con.close()
+            return False
+        con.execute(
+            """INSERT INTO setting (key, value) VALUES (%s, '1')
+               ON CONFLICT (key) DO UPDATE SET value='1'""",
+            (_RECON_REFRESH_FLAG_KEY,)
+        )
+        con.commit()
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+    def _bg():
+        with _app.app_context():
+            con2 = _alert_svc._get_db()
+            try:
+                from defender_service import DefenderService
+                svc = DefenderService()
+                machines = svc.get_machines()
+                machine_vulns = svc.get_all_machine_vulnerabilities()
+                _alert_svc.compute_and_store_reconciliation_snapshot(
+                    con2, machines, machine_vulns, datetime.now(timezone.utc)
+                )
+                con2.commit()
+                logger.info('Reconciliation snapshot refreshed from Defender (async)')
+            except Exception as e:
+                logger.error(f'Async reconciliation refresh failed: {e}', exc_info=True)
+            finally:
+                # Always clear the in-flight flag, even on failure.
+                try:
+                    con2.execute(
+                        """INSERT INTO setting (key, value) VALUES (%s, '0')
+                           ON CONFLICT (key) DO UPDATE SET value='0'""",
+                        (_RECON_REFRESH_FLAG_KEY,)
+                    )
+                    con2.commit()
+                except Exception:
+                    pass
+                try:
+                    con2.close()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_bg, daemon=True, name='recon-refresh').start()
+    return True
+
+
+@bp.route('/api/vulnerabilities/reconciliation/refresh', methods=['POST'])
+@login_required
+@admin_required
+def api_recon_refresh():
+    started = _start_recon_refresh()
+    return jsonify(ok=True, started=started,
+                   message='Refresh started' if started else 'Refresh already in progress')
+
+
+@bp.route('/api/vulnerabilities/reconciliation/status')
+@login_required
+@admin_required
+def api_recon_status():
+    """Tiny status endpoint the page polls after triggering a refresh. Reports
+    whether a refresh is in flight + the snapshot's current fetched_at."""
+    con = _alert_svc._get_db()
+    try:
+        snap = _load_recon_snapshot(con)
+        refreshing = (con.execute(
+            "SELECT value FROM setting WHERE key=%s", (_RECON_REFRESH_FLAG_KEY,)
+        ).fetchone() or {}).get('value') == '1'
+    finally:
+        con.close()
+    return jsonify(ok=True, refreshing=refreshing,
+                   has_snapshot=snap is not None,
+                   fetched_at=(snap or {}).get('fetched_at'))
 
 
 @bp.route('/api/vulnerabilities/sync', methods=['POST'])

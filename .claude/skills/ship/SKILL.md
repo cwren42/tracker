@@ -18,6 +18,7 @@ git branch --show-current ; git status --short
 - **Uncommitted changes**: confirm they're the intended edits, not a half-applied/stale state. Especially watch `rmm_agent/canary/*`, `rmm_gateway/*`, and `evidence_file_service.py` — served-vs-committed drift there is silent and prod-facing.
 - After merging a branch to `main`, re-run `git log --oneline -1` to confirm `main` actually advanced before pushing (the "Already up to date" / "Everything up-to-date" surprise = you were on the wrong ref).
 - If the change touches `rmm_gateway/*`, also restart **`rmm-gateway.service`**; if it touches agent files under `rmm_agent/canary/*`, no restart — agents pull on their cycle (see the **canary-deploy** skill).
+- **DB migration ordering:** if the branch adds a `migrate_*.py`, the migration file itself only exists on the branch until merged — so **merge first, THEN run the migration, THEN restart the dependent service.** A service that references a new column will error if restarted before the migration runs (bit us once: gateway restarted before `rmm_remediation_queue.ticket_id` existed). For an additive nullable column the safe order is: merge → `venv/bin/python migrate_*.py` → restart gateway/tracker.
 
 ## 1. Verify BEFORE deploy
 - **Python**: `venv/bin/python -m py_compile <files>`

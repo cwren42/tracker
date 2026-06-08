@@ -38,9 +38,10 @@ AUTO_RESOLVE_GRACE_MINUTES = 20   # ~4 missed 5-min cycles
 REOPEN_WINDOW_DAYS = 7
 
 # Alert types that represent a CONTINUOUS condition (on/off state).
-# When the condition clears, the open ticket is auto-closed with a note.
-# Event-based types (new_local_admin, cve_critical, cve_high) are intentionally
-# excluded — they fire once and the ticket needs human review.
+# When the condition clears (no telemetry sample re-fires it for the grace
+# window), the open ticket is auto-closed by _resolve_cleared_alerts().
+# Event-based types (new_local_admin) are intentionally excluded — they fire
+# once and the ticket needs human review.
 _AUTO_RESOLVE_TYPES = frozenset({
     'offline', 'cpu_high', 'ram_high',
     'disk_critical', 'disk_low',
@@ -48,6 +49,29 @@ _AUTO_RESOLVE_TYPES = frozenset({
     'av_disabled', 'firewall_off', 'pending_reboot',
     'failed_logins', 'not_seen', 'cve_unpatched',
 })
+
+# Alert types that must DEDUP (track an alert_state row + reuse the open ticket
+# instead of spamming a new one each cooldown cycle) but whose lifecycle is NOT
+# driven by telemetry-gap grace windows. CVE alerts live here: a fresh detection
+# of the SAME CVE must collapse onto the existing open ticket, and the ticket is
+# only auto-closed when Defender confirms the CVE is remediated across all
+# devices (see _resolve_remediated_cve_alerts()), never by the grace window.
+# These are deliberately NOT in _AUTO_RESOLVE_TYPES so _resolve_cleared_alerts
+# never time-closes a still-exposed CVE just because the daily feed went quiet.
+_DEDUP_TYPES = frozenset({
+    'cve_critical', 'cve_high',
+})
+
+# Types whose alert_state identity is keyed by a per-event token (e.g. the CVE
+# id) rather than by target host/asset, so each distinct CVE is its own evolving
+# ticket. The dedup token is passed into _fire_alert(dedup_token=...).
+_TOKEN_KEYED_TYPES = _DEDUP_TYPES
+
+# Terminal ticket statuses for alert-lifecycle purposes. 'Resolved' is used by
+# the CVE remediation loop (auto-close on remediation); it must be treated as
+# terminal everywhere in this file so dedup/reopen never reuse a resolved ticket
+# and the open-checks don't double-close it. SQL fragment kept in one place.
+_TERMINAL_TICKET_SQL = "('Closed','Merged','Resolved')"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,8 +195,18 @@ def _ensure_alert_state_table(con):
     con.commit()
 
 
-def _alert_key(rule, agent_id, asset_id):
-    """Stable identity for one alert condition on one target."""
+def _alert_key(rule, agent_id, asset_id, dedup_token=None):
+    """Stable identity for one alert condition.
+
+    Normally keyed by (rule, target host/asset). For token-keyed types (CVE
+    alerts) the identity is (rule, dedup_token) — e.g. ``21:cve:CVE-2026-9998``
+    — so a repeat detection of the SAME CVE matches the existing open
+    alert_state row and collapses onto its ticket instead of creating a new one.
+    Without the token every CVE under a rule shared one key (or, since CVE types
+    never persisted state at all, never matched) — that was the dup-storm bug.
+    """
+    if dedup_token:
+        return f"{rule['id']}:cve:{dedup_token}"
     return f"{rule['id']}:{agent_id or ''}:{asset_id or 0}"
 
 
@@ -184,7 +218,7 @@ def _get_alert_state(con, alert_key):
 
 
 def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id,
-                        bump=False):
+                        bump=False, dedup_token=None):
     """
     Track that this alert condition is currently active.
     Upserts: insert on first fire, update last_seen_at on subsequent fires.
@@ -198,9 +232,9 @@ def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id,
     - Always clears resolved_at so a re-firing condition reactivates its state.
     """
     alert_type = rule['alert_type']
-    if alert_type not in _AUTO_RESOLVE_TYPES:
+    if alert_type not in _AUTO_RESOLVE_TYPES and alert_type not in _DEDUP_TYPES:
         return
-    alert_key = _alert_key(rule, agent_id, asset_id)
+    alert_key = _alert_key(rule, agent_id, asset_id, dedup_token)
     con.execute("""
         INSERT INTO alert_state
             (rule_id, category, alert_type, alert_key, agent_id, asset_id, hostname,
@@ -217,7 +251,8 @@ def _upsert_alert_state(con, rule, agent_id, asset_id, hostname, ticket_id,
 
 
 def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
-                                 message, agent_id, asset_id, hostname, rule_id):
+                                 message, agent_id, asset_id, hostname, rule_id,
+                                 dedup_token=None):
     """
     Return the ticket_id for this alert condition, deduplicated across close.
 
@@ -233,7 +268,7 @@ def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
     None if ticket creation failed).
     """
     subject   = f'[ALERT] {label}'
-    alert_key = _alert_key(rule, agent_id, asset_id)
+    alert_key = _alert_key(rule, agent_id, asset_id, dedup_token)
     state     = _get_alert_state(con, alert_key)
 
     # occurrence_count in alert_state is the source of truth; it is incremented
@@ -255,9 +290,9 @@ def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
     # 1. Reuse the OPEN ticket the state already tracks, if it's still open.
     if state and state['ticket_id']:
         open_t = con.execute(
-            """SELECT id FROM support_ticket
+            f"""SELECT id FROM support_ticket
                WHERE id = ? AND source = 'alert'
-                 AND status NOT IN ('Closed','Merged')""",
+                 AND status NOT IN {_TERMINAL_TICKET_SQL}""",
             (state['ticket_id'],)
         ).fetchone()
         if open_t:
@@ -281,11 +316,30 @@ def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
             return open_t['id']
 
     # 2. Re-open the most recent CLOSED matching alert ticket within the window.
-    if match_sql:
+    #
+    # For token-keyed (CVE) types the generic subject ("[ALERT] New Critical CVE
+    # Detected") and shared hostname ("Defender Vulnerability Feed") are NOT a
+    # safe match key — they would collapse DIFFERENT CVEs onto one ticket. So we
+    # reopen strictly via the per-CVE alert_state row's tracked ticket_id (the
+    # state persists across close and is keyed on the CVE id). Non-token types
+    # keep the original subject+target match.
+    recent_closed = None
+    if dedup_token:
+        if state and state['ticket_id']:
+            recent_closed = con.execute(
+                f"""SELECT id FROM support_ticket
+                    WHERE id = ? AND source = 'alert'
+                      AND status IN {_TERMINAL_TICKET_SQL}
+                      AND closed_at IS NOT NULL
+                      AND closed_at > NOW() - INTERVAL '{int(REOPEN_WINDOW_DAYS)} days'
+                    LIMIT 1""",
+                (state['ticket_id'],)
+            ).fetchone()
+    elif match_sql:
         recent_closed = con.execute(
             f"""SELECT id FROM support_ticket
                 WHERE source = 'alert'
-                  AND status IN ('Closed','Merged')
+                  AND status IN {_TERMINAL_TICKET_SQL}
                   AND subject = ?
                   AND {match_sql}
                   AND closed_at IS NOT NULL
@@ -294,30 +348,30 @@ def _open_or_reopen_alert_ticket(con, rule, label, cat, priority, assigned_uid,
                 LIMIT 1""",
             (subject, match_val)
         ).fetchone()
-        if recent_closed:
-            tid = recent_closed['id']
-            con.execute(
-                """UPDATE support_ticket
-                   SET status='Open', closed_at=NULL, closed_by_user_id=NULL,
-                       priority=?, updated_at=NOW()
-                   WHERE id=?""",
-                (priority, tid)
-            )
-            con.execute(
-                """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
-                   VALUES (?, NULL, ?, NOW())""",
-                (tid, f'[Alert] Re-fired (occurrence {occ}): {message}\n\n'
-                      f'Condition recurred; re-opening this ticket instead of '
-                      f'creating a new one.')
-            )
-            con.execute(
-                """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
-                   VALUES (?, NULL, 'alert_reopened', ?, NOW())""",
-                (tid, f'Re-opened by alert engine (occurrence {occ}): {message}')
-            )
-            logger.info(f'Re-opened alert ticket #{tid} for "{subject}" on '
-                        f'{hostname or asset_id} (occurrence {occ}).')
-            return tid
+    if recent_closed:
+        tid = recent_closed['id']
+        con.execute(
+            """UPDATE support_ticket
+               SET status='Open', closed_at=NULL, closed_by_user_id=NULL,
+                   priority=?, updated_at=NOW()
+               WHERE id=?""",
+            (priority, tid)
+        )
+        con.execute(
+            """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+               VALUES (?, NULL, ?, NOW())""",
+            (tid, f'[Alert] Re-fired (occurrence {occ}): {message}\n\n'
+                  f'Condition recurred; re-opening this ticket instead of '
+                  f'creating a new one.')
+        )
+        con.execute(
+            """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
+               VALUES (?, NULL, 'alert_reopened', ?, NOW())""",
+            (tid, f'Re-opened by alert engine (occurrence {occ}): {message}')
+        )
+        logger.info(f'Re-opened alert ticket #{tid} for "{subject}" on '
+                    f'{hostname or asset_id} (occurrence {occ}).')
+        return tid
 
     # 3. No reusable ticket — create a fresh one.
     csat_token = str(uuid.uuid4()).replace('-', '')
@@ -368,9 +422,9 @@ def _resolve_cleared_alerts(con, eval_started_at):
             continue
         # Auto-close the linked ticket only if it's still open AND alert-sourced.
         open_ticket = con.execute(
-            """SELECT id FROM support_ticket
+            f"""SELECT id FROM support_ticket
                WHERE id = ? AND source = 'alert'
-                 AND status NOT IN ('Closed','Merged')""",
+                 AND status NOT IN {_TERMINAL_TICKET_SQL}""",
             (s['ticket_id'],)
         ).fetchone()
         if not open_ticket:
@@ -402,11 +456,111 @@ def _resolve_cleared_alerts(con, eval_started_at):
         con.commit()
 
 
+def _resolve_remediated_cve_alerts(con, today_str=None):
+    """Closed-loop auto-close for CVE alert tickets (the remediation half).
+
+    For every ACTIVE CVE alert_state row (alert_type in _DEDUP_TYPES,
+    resolved_at IS NULL) whose CVE no longer has ANY open exposure in
+    device_vulnerability — i.e. ``COUNT(*) FILTER (status='Open') = 0`` for that
+    cve_id — auto-close the linked open ticket and mark the state resolved.
+
+    HARD GATE: the close is driven SOLELY by device_vulnerability having zero
+    Open rows for the CVE. We never trust vulnerability_cache.exposed_machines
+    (it can lag). A CVE with even one Open device row is skipped. MUST run AFTER
+    the Defender close-by-absence step so device_vulnerability reflects current
+    truth before we read it.
+
+    Idempotent: guarded by resolved_at IS NULL + status NOT IN(Closed,Merged),
+    and only ever touches source='alert' tickets. Does not commit — the caller
+    owns the transaction. Returns the number of tickets closed.
+    """
+    from models import now_mst
+    if today_str is None:
+        today_str = now_mst().strftime('%Y-%m-%d')
+
+    # The CVE id is stored on the alert_state key as "<rule>:cve:<CVE-ID>".
+    states = con.execute(
+        """SELECT id, alert_key, ticket_id, alert_type
+           FROM alert_state
+           WHERE alert_type = ANY(%s)
+             AND resolved_at IS NULL""",
+        (list(_DEDUP_TYPES),)
+    ).fetchall()
+
+    closed = 0
+    for s in states:
+        key = s['alert_key'] or ''
+        marker = ':cve:'
+        if marker not in key:
+            continue
+        cve_id = key.split(marker, 1)[1]
+        if not cve_id:
+            continue
+
+        # HARD GATE: count Open exposure rows for this exact CVE. Anything > 0
+        # means the CVE is still live — do NOT close.
+        row = con.execute(
+            """SELECT COUNT(*) AS open_rows
+               FROM device_vulnerability
+               WHERE cve_id = ? AND status = 'Open'""",
+            (cve_id,)
+        ).fetchone()
+        open_rows = (row['open_rows'] if row else 0) or 0
+        if open_rows > 0:
+            continue  # still exposed — never fabricate a remediated close
+
+        # Remediated everywhere. Mark the state resolved (idempotent).
+        con.execute(
+            "UPDATE alert_state SET resolved_at = NOW() WHERE id = ? AND resolved_at IS NULL",
+            (s['id'],)
+        )
+
+        if not s['ticket_id']:
+            continue
+        open_ticket = con.execute(
+            f"""SELECT id FROM support_ticket
+               WHERE id = ? AND source = 'alert'
+                 AND status NOT IN {_TERMINAL_TICKET_SQL}""",
+            (s['ticket_id'],)
+        ).fetchone()
+        if not open_ticket:
+            continue
+
+        con.execute(
+            """UPDATE support_ticket
+               SET status='Resolved', closed_at=NOW(), updated_at=NOW()
+               WHERE id=?""",
+            (s['ticket_id'],)
+        )
+        con.execute(
+            """INSERT INTO ticket_note (ticket_id, user_id, content, created_at)
+               VALUES (?, NULL, ?, NOW())""",
+            (s['ticket_id'],
+             f'Auto-resolved: Defender confirms {cve_id} remediated across all '
+             f'devices on {today_str} (0 open exposures in device_vulnerability). '
+             f'Ticket closed by the CVE remediation loop.')
+        )
+        con.execute(
+            """INSERT INTO ticket_activity (ticket_id, user_id, action, detail, created_at)
+               VALUES (?, NULL, 'auto_resolved', ?, NOW())""",
+            (s['ticket_id'],
+             f'{cve_id} remediated across all devices; closed by CVE remediation loop.')
+        )
+        closed += 1
+        logger.info(f'CVE remediation loop: auto-resolved ticket #{s["ticket_id"]} '
+                    f'— {cve_id} no longer exposed on any device.')
+    return closed
+
+
 def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
-                hostname=None, extra_html=''):
+                hostname=None, extra_html='', dedup_token=None):
     """
     Create alert_log row, optional ticket, email, Teams notification, bell.
     `rule` is a sqlite3.Row from alert_rule.
+
+    `dedup_token` (e.g. a CVE id) gives token-keyed alert types a stable
+    per-event identity so repeated detections of the SAME event collapse onto
+    one evolving ticket instead of spawning a new one each cooldown cycle.
     """
     rule_id       = rule['id']
     category      = rule['category']
@@ -437,7 +591,7 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
         # auto-resolved while we're in the cooldown window. NOT a new occurrence.
         try:
             _upsert_alert_state(con, rule, agent_id, asset_id, hostname,
-                                ticket_id=None, bump=False)
+                                ticket_id=None, bump=False, dedup_token=dedup_token)
         except Exception:
             pass
         return  # already fired recently
@@ -454,7 +608,8 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
             cat = cat_map.get(category, 'General')
             ticket_id = _open_or_reopen_alert_ticket(
                 con, rule, label, cat, priority, assigned_uid,
-                message, agent_id, asset_id, hostname, rule_id)
+                message, agent_id, asset_id, hostname, rule_id,
+                dedup_token=dedup_token)
         except Exception as e:
             logger.error(f'Auto-ticket open/reopen failed: {e}')
 
@@ -462,7 +617,7 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     # bump=True: this is a real fire (cooldown elapsed), so count the occurrence.
     try:
         _upsert_alert_state(con, rule, agent_id, asset_id, hostname,
-                            ticket_id, bump=True)
+                            ticket_id, bump=True, dedup_token=dedup_token)
     except Exception as e:
         logger.debug(f'alert_state upsert failed (table may not exist yet): {e}')
 
@@ -792,7 +947,8 @@ def _eval_vulnerability_alerts(con, rules_by_type):
             _fire_alert(con, rule_crit,
                         f'Critical CVE detected: {v["cve_id"]} — {v["name"]} '
                         f'({v["exposed_machines"]} device(s) exposed).',
-                        hostname='Defender Vulnerability Feed')
+                        hostname='Defender Vulnerability Feed',
+                        dedup_token=v["cve_id"])
 
     if rule_high and rule_high['enabled']:
         new_highs = con.execute(
@@ -806,7 +962,8 @@ def _eval_vulnerability_alerts(con, rules_by_type):
             _fire_alert(con, rule_high,
                         f'High CVE detected: {v["cve_id"]} — {v["name"]} '
                         f'({v["exposed_machines"]} device(s) exposed).',
-                        hostname='Defender Vulnerability Feed')
+                        hostname='Defender Vulnerability Feed',
+                        dedup_token=v["cve_id"])
 
     if rule_old and rule_old['enabled']:
         thresh_days = int(rule_old['threshold_value'] or 30)
@@ -1443,6 +1600,19 @@ def sync_defender_vulnerabilities():
             cleared = raw.rowcount
             if cleared:
                 logger.info(f'Defender sync: auto-closed {cleared} CVEs no longer reported by Defender')
+
+        # ── Closed-loop: auto-resolve CVE alert tickets whose CVE now has ZERO
+        # open exposure. MUST run here — AFTER close-by-absence above — so the
+        # device_vulnerability table reflects Defender's current truth before we
+        # gate on it. Strictly gated (0 Open rows for the CVE), idempotent, and
+        # only touches source='alert' tickets. Best-effort: never fail the sync.
+        try:
+            cve_closed = _resolve_remediated_cve_alerts(con)
+            if cve_closed:
+                logger.info(f'Defender sync: CVE remediation loop auto-resolved '
+                            f'{cve_closed} alert ticket(s) (CVE remediated everywhere)')
+        except Exception as e:
+            logger.error(f'CVE remediation loop failed (non-fatal): {e}', exc_info=True)
 
         # ── Persist the reconciliation snapshot from THIS pull (machines +
         # all_machine_vulns are already in hand, so the waterfall math is nearly

@@ -1128,6 +1128,12 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     # If this remediation was tied to a ticket (e.g. the disk
                     # diagnostic), attach the script output as a ticket note. Only
                     # the row we actually transitioned (n==1) posts — idempotent.
+                    # INVARIANT (verified): a completed/failed row is TERMINAL and is
+                    # never reset back to 'deploying'. Both stale-reset paths (the
+                    # _stale_job_reset_loop and the per-agent reconnect flush) scope
+                    # their UPDATE to WHERE status='deploying', so a re-delivered or
+                    # replayed script_result for an already-terminal row matches 0
+                    # rows here (n==0) and posts no duplicate note. Safe.
                     if n and _rrow and _rrow.get("ticket_id"):
                         try:
                             _stdout = (payload.get("stdout") or "").strip()

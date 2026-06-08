@@ -562,15 +562,47 @@ _DISK_SCRIPT_TIMEOUT = 240
 
 
 def _enqueue_remediation(agent_id, asset_id, action_type, payload,
-                         ticket_id=None, dedup_substr=None):
+                         ticket_id=None, dedup_substr=None, once_per_ticket=False):
     """POST a run_script remediation to the gateway's reconnect-remediation
     engine. Online → dispatched now; offline → queued for the reconnect flush
-    (best-effort, never raises). Idempotent guard: if dedup_substr is given and a
-    queued/deploying row for this agent already contains it, skip re-queuing.
+    (best-effort, never raises).
+
+    Idempotent guards (both keyed on dedup_substr appearing in payload):
+      * default: skip if a queued/deploying row for this AGENT already contains
+        it (don't double-dispatch the same in-flight action).
+      * once_per_ticket=True: skip if ANY row for this TICKET already carries the
+        action in ANY status (queued/deploying/completed/failed/abandoned). Used
+        for the destructive disk cleanup and the diagnostic so a disk that stays
+        full doesn't re-fire either of them every cooldown cycle — once we've
+        attempted it for a ticket, leave the ticket for a human.
 
     Returns a small dict describing the outcome (status: skipped/queued/
     deploying/error)."""
-    if dedup_substr:
+    if once_per_ticket and ticket_id and dedup_substr:
+        # Once-per-ticket: any prior attempt (terminal or not) for THIS ticket
+        # short-circuits. The disk loop re-opens the same evolving ticket each
+        # cooldown cycle; without this, a still-full disk re-queues the cleanup
+        # hourly, indefinitely. Match on ticket_id so a completed/failed/abandoned
+        # row still blocks the re-run.
+        con = _get_db()
+        try:
+            prior = con.execute(
+                """SELECT id, status FROM rmm_remediation_queue
+                   WHERE ticket_id = %s
+                     AND action_type = 'run_script'
+                     AND payload LIKE %s
+                   ORDER BY id DESC LIMIT 1""",
+                (ticket_id, f'%{dedup_substr}%')
+            ).fetchone()
+        except Exception:
+            prior = None
+        finally:
+            con.close()
+        if prior:
+            return {'agent_id': agent_id, 'status': 'skipped',
+                    'reason': 'already attempted for ticket',
+                    'existing_id': prior['id']}
+    elif dedup_substr:
         con = _get_db()
         try:
             existing = con.execute(
@@ -665,11 +697,10 @@ def _disk_cleanup_code(letter: str) -> str:
     return f'''$ErrorActionPreference='SilentlyContinue'
 $root='{root}'
 $freed=0.0
-function Clean($label,$path,$pattern){{
+function Clean($label,$path){{
   if(-not (Test-Path $path)){{ "{{0}}: n/a" -f $label; return }}
   $before=(Get-ChildItem -LiteralPath $path -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
-  if($pattern){{ Get-ChildItem -LiteralPath $path -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue }}
-  else {{ Get-ChildItem -LiteralPath $path -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue }}
+  Get-ChildItem -LiteralPath $path -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue
   $after=(Get-ChildItem -LiteralPath $path -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
   $gb=[math]::Round((($before-$after))/1GB,3); if($gb -lt 0){{ $gb=0 }}
   $script:freed += $gb
@@ -693,10 +724,14 @@ Get-ChildItem -LiteralPath (Join-Path $root 'Users') -Directory -Force -EA Silen
     Clean ("Firefox cache: " + $_.Name) (Join-Path $_.FullName 'cache2')
   }}
 }}
-# Recycle Bin (Clear-RecycleBin is the supported, contained API)
-try {{ $rbBefore=(Get-ChildItem -LiteralPath (Join-Path $root '$Recycle.Bin') -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
-  Clear-RecycleBin -DriveLetter $root.Substring(0,1) -Force -EA SilentlyContinue
-  $rbAfter=(Get-ChildItem -LiteralPath (Join-Path $root '$Recycle.Bin') -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+# Recycle Bin — C-anchored ONLY. Clear-RecycleBin -DriveLetter C is unreliable
+# (on many builds it empties EVERY volume's recycle bin, which would violate the
+# C:-only contract and could purge a data/backup volume). So we delete only the
+# C-rooted $Recycle.Bin contents the same allowlisted way as every other path.
+try {{ $rb=(Join-Path $root '$Recycle.Bin')
+  $rbBefore=(Get-ChildItem -LiteralPath $rb -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  Get-ChildItem -LiteralPath $rb -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue
+  $rbAfter=(Get-ChildItem -LiteralPath $rb -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
   $rbGb=[math]::Round((($rbBefore-$rbAfter))/1GB,3); if($rbGb -lt 0){{ $rbGb=0 }}; $freed+=$rbGb
   "Recycle Bin: freed $rbGb GB" }} catch {{ "Recycle Bin: skipped" }}
 ""
@@ -717,9 +752,14 @@ def _dispatch_disk_diagnostic(agent_id, asset_id, host, letter, ticket_id):
         'code':    _disk_diagnostic_code(letter),
         'timeout': _DISK_SCRIPT_TIMEOUT,
     }
+    # dedup_substr must be a literal that survives into the stored payload. The
+    # script header is "=== Disk diagnostic for $drv ===" — $drv is a runtime var,
+    # so match on the literal prefix "Disk diagnostic for" (not the letter, which
+    # is never substituted server-side). once_per_ticket: one diagnostic note per
+    # ticket is enough — don't pile a fresh one on every hourly cooldown cycle.
     res = _enqueue_remediation(
         agent_id, asset_id, 'run_script', payload, ticket_id=ticket_id,
-        dedup_substr=f'Disk diagnostic for {letter}')
+        dedup_substr='Disk diagnostic for', once_per_ticket=True)
     if res.get('status') == 'error':
         # Host likely offline / gateway unreachable — note it on the ticket so the
         # tech knows the diagnostic didn't run. Best-effort, never raises.
@@ -753,9 +793,16 @@ def _dispatch_disk_cleanup(agent_id, asset_id, host, letter, ticket_id):
         'code':    _disk_cleanup_code(letter),
         'timeout': _DISK_SCRIPT_TIMEOUT,
     }
+    # once_per_ticket: the cleanup DELETES files — attempt it at most once per
+    # ticket. The disk loop re-opens the same evolving ticket every cooldown cycle
+    # for a disk that stays full; without this guard the destructive cleanup would
+    # re-queue hourly, indefinitely. If a single safe-cleanup didn't recover the
+    # drive (e.g. Installer/user-data bloat we intentionally never touch), leave it
+    # for a human. Matches ANY prior row (queued/deploying/completed/failed/
+    # abandoned) for this ticket carrying 'Safe cache cleanup on'.
     res = _enqueue_remediation(
         agent_id, asset_id, 'run_script', payload, ticket_id=ticket_id,
-        dedup_substr='Safe cache cleanup on')
+        dedup_substr='Safe cache cleanup on', once_per_ticket=True)
     logger.info(f'disk-loop: cleanup {res.get("status")} for {host} {letter} '
                 f'(ticket #{ticket_id})')
 
@@ -977,10 +1024,10 @@ def _eval_agent_alerts(con, rules_by_type):
 
                     pct_free = 100 - (d.get('percent', 100))
                     drive    = d.get('device', '?')
-                    # OS-drive flag drives Part-4 auto-cleanup eligibility: only the
-                    # Windows OS volume (C:) or the Linux root get the safe-cache
-                    # cleanup — NEVER a data/backup volume (a fixed D:/E:).
-                    is_os_drive = is_windows_os or is_linux_os
+                    # Auto-cleanup eligibility (Part 4): only the Windows OS volume
+                    # (C:) gets the safe-cache cleanup — NEVER a data/backup volume
+                    # (a fixed D:/E:) and NEVER the Linux root (cleanup is C:-only
+                    # PowerShell). Gated below on is_windows_os at the call site.
                     for rtype in ('disk_critical', 'disk_low'):
                         rule = rules_by_type.get(rtype)
                         if rule and rule['enabled'] and pct_free <= rule['threshold_value']:
@@ -989,12 +1036,15 @@ def _eval_agent_alerts(con, rules_by_type):
                                         f'{pct_free:.1f}% (threshold {rule["threshold_value"]:.0f}%).',
                                         agent_id=aid, asset_id=asset_id, hostname=host)
                             # New ticket just created (cooldown elapsed) → attach a
-                            # read-only diagnostic, and for a FIXED OS drive on a
-                            # disk_critical, kick off the safe auto-cleanup.
+                            # read-only diagnostic, and for the Windows OS drive (C:)
+                            # on a disk_critical, kick off the safe auto-cleanup.
                             if tid:
                                 _dispatch_disk_diagnostic(
                                     aid, asset_id, host, letter, tid)
-                                if rtype == 'disk_critical' and is_os_drive:
+                                # Auto-cleanup is Windows C:-only (PowerShell, C-
+                                # anchored allowlist). Skip it outright for the Linux
+                                # root rather than calling into the C:-only no-op.
+                                if rtype == 'disk_critical' and is_windows_os:
                                     _dispatch_disk_cleanup(
                                         aid, asset_id, host, letter, tid)
                             break  # only fire the most severe

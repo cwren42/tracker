@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.21"
+AGENT_VERSION = "2.9.22"
 
 import asyncio
 import base64
@@ -1122,6 +1122,39 @@ def _get_domain() -> str:
     return os.environ.get("USERDNSDOMAIN", "")
 
 
+def _get_drive_types() -> dict:
+    """Return a map {drive_letter_upper: DriveType_int} from Win32_LogicalDisk.
+
+    Win32_LogicalDisk.DriveType: 2=removable, 3=fixed (local HDD/SSD),
+    4=network, 5=optical/mounted-ISO (CD-ROM/mounted image). Windows-only;
+    returns {} on non-Windows or failure (callers degrade gracefully).
+    Single WMI/CIM round-trip per telemetry cycle -- lightweight.
+    """
+    if platform.system() != "Windows":
+        return {}
+    try:
+        data = _ps_json(
+            "Get-CimInstance Win32_LogicalDisk | "
+            "Select-Object DeviceID,DriveType | ConvertTo-Json -Compress",
+            timeout=10,
+        )
+        if not data:
+            return {}
+        if isinstance(data, dict):
+            data = [data]
+        out = {}
+        for row in data:
+            try:
+                dev = (row.get("DeviceID") or "").strip().rstrip("\\").upper()
+                if dev:
+                    out[dev] = int(row.get("DriveType"))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
+
+
 def _get_cpu_name() -> str:
     try:
         import winreg
@@ -2102,16 +2135,24 @@ def collect_telemetry(agent_id: str) -> dict:
 
     # Disk partitions
     disks = []
+    _drive_types = _get_drive_types()  # {C: 3, D: 5, ...}; {} off-Windows
     for part in psutil.disk_partitions(all=False):
         try:
             usage = psutil.disk_usage(part.mountpoint)
-            disks.append({
+            # Match the WMI DeviceID (e.g. "C:") against the mountpoint letter.
+            _letter = (part.mountpoint or "").strip().rstrip("\\").rstrip("/").upper()
+            disk = {
                 "device":     part.device,
                 "mountpoint": part.mountpoint,
                 "total_gb":   round(usage.total  / (1024 ** 3), 1),
                 "free_gb":    round(usage.free   / (1024 ** 3), 1),
                 "percent":    usage.percent,
-            })
+                # NTFS/CDFS/exFAT/... -- CDFS strongly implies optical/mounted-ISO.
+                "fstype":     part.fstype,
+            }
+            if _letter in _drive_types:
+                disk["drive_type"] = _drive_types[_letter]
+            disks.append(disk)
         except Exception:
             pass
 

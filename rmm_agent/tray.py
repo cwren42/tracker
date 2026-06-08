@@ -20,10 +20,12 @@ Launched at user login via a shortcut in:
 
 import base64
 import ctypes
+import hashlib
 import io
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import sys
@@ -58,6 +60,15 @@ _CONFIG_PATH = r'C:\CirqueRMM\tray_config.json'
 # little metadata) per line, appended on failure and rewritten on a successful
 # flush.
 _SPOOL_PATH = r'C:\CirqueRMM\ticket_spool.jsonl'
+
+# ── Install-software feature ──────────────────────────────────────────────────
+# Sanctioned drop folder, provisioned by the agent (agent_client.py runs as
+# SYSTEM and grants the user write access). Users stage an installer here, then
+# request it via the tray; an admin approves and the agent installs it as SYSTEM.
+_ITTOOLS_DIR = r'C:\ITTOOLS'
+# MUST stay byte-for-byte identical to the server's _ITTOOLS_FILE_RE
+# (workflow_engine.py) so the picker never offers a file the server will reject.
+_ITTOOLS_FILE_RE = re.compile(r'^[A-Za-z0-9 ._()\-]{1,160}\.(exe|msi|bat|cmd|ps1|msix|appx)$', re.I)
 _SPOOL_MAX_ENTRIES = 200          # hard cap so a long outage can't grow forever
 _SPOOL_MAX_AGE_DAYS = 14          # drop tickets older than this on flush
 _spool_lock = threading.Lock()    # serialise read/append/rewrite of the spool
@@ -109,6 +120,110 @@ def _save_ico(path: str) -> None:
         f.write(base64.b64decode(_ICO_B64))
 
 
+# ── shared UI theming: DPI-aware, branded header, one consistent ttk look ────
+_LOGO_WHITE_B64 = "iVBORw0KGgoAAAANSUhEUgAAACIAAAAgCAYAAAB3j6rJAAAELUlEQVR4nJWXW6hVVRSG9+WcJOrcyoJ6MNKOZL742oVO3qBTPUVPFZGJKGFE9NqD0EUxK4roNYjIJOuISBH0FF3xlF1B6MnKtBQRM4/b7dlfD/Mfrn/NvdfZ2wWLudacc4z5j39c1li1WsUFNIA6MAl8B1yj93qVjMnWgYaevwDu13Ozn2wvZU2Nb5OulwZVZrKPSPZroHnZQEzRHVLUBs4Dy93aCtm62BwBjgIXpWPjoIaUgEjhV1JyXuNMP2VmxAuSaQHzAjUWLr8cNoLWtsawbG0VGIurm4H/BMB1bB+IFaP1auAI0NE9Z8+HxFiXZWbE+wagZbLngGX93FsDhjRuk6KOKF0tJWHhptwyA3FXxuADwOfSBbB3QVaM1iXAWVP0jNZf1vs8cAwYd1Yo4upbO/Rjra3PXDRVCcYsetfY+BVYBAzp4L+MlZ0GIGQfMzZawApb22d6Z2VEowrE7doYbNyn+UUaN9pBc6RiV9c9AvxhQF+XzLDWl5OyL3Rv6GLFaP3SaP0kW2vqnrU9H5mOSNeOmBszkGHoLjPkKDBKuJciQB+2TReAlZRLdSi7x/YBrNf8s3qfB06SYi2yMMYJ4LjJRjoPRZBeRUrXoPXNXsFkYD40678X/cPAT8bWnkwmxs1myBywlCgDwHO2eBK4jiyYzD0N4BZSOodlm7VnWu9tAbozB0MK/B8M8O44YAlw2th4ujK1yuzsMFccA67V/AGK66AOzt27zmQ7wJoasN8EZ0VxIzv0SpJ/J4AxzeXpvEvzK0lxcIaUJQ9VuGi35DrAbzXgUwPyDeW6EJasAk4BJ4B/gHsr/D2p+cXAjcANwES4NgPyjrFypEaq/f+aZVsuRXJZcK8B/plU6K4gBWtXOle4M3TdbSAApmPD82bZcbmggQUscBOp9EeZfkrzefleTQrsKGR1ByKdB7vAa2GUVGByf4cFwU4UrYty0WLNz2i+Q2oru77Oputx09FCzZYfssE2lLoxyl3XYbPmLa3dSoqRvBsL3SE/CvxpBr96aZ9tyinbl1nizXBcB8zinZqbpyjxYUToeNGM/ZvUkBfM2cYpbQx/r9N8fPQeNUUXgNvMveOkehKs7NBaxMpSUtcW61v87F4R/YE2Rjc2TCpKI5Q/A29YAIYLNhnQc6QKHHr3mN4fsUKXAwkal1Eu30/2CNQTpFrRoBxDTcrpHM32lMlC8aGs7NIC/XZD/zupT/FaszVXZLJrskPXAp9RXPsXBJFF9xgpnaPpPWPPv5AK2ULN84yBOUvxTWmRMmzh5llKwt9PSFk7G6erLDI3TVJO55B9rS8bPVhpkD6CUPxgRTM8yA9WNNvxg9WdrgOAybuxtu5S11YhG0aM6/A86IcGAtEDzHtS9IrPDygb1XoWpevAbGSW1Um/BIeB6wcKslqXew8BD/Yz4n9TxO/xVCpB7wAAAABJRU5ErkJggg=="
+_PALETTE = {
+    'maroon':   '#8B1A2B',
+    'maroon_d': '#6E141F',
+    'panel':    '#f4f5f7',
+    'surface':  '#ffffff',
+    'text':     '#1f2430',
+    'muted':    '#6b7280',
+    'border':   '#d6dae0',
+    'danger':   '#c0392b',
+}
+_photo_refs = []   # keep PhotoImage refs alive (Tk garbage-collects them otherwise)
+_dpi_done = False
+
+
+def _set_dpi_aware():
+    """Per-monitor DPI awareness so Windows stops bitmap-stretching (blurring) our
+    windows on high-DPI displays. Must run before the first Tk window is created."""
+    global _dpi_done
+    if _dpi_done:
+        return
+    _dpi_done = True
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor v2
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()        # fallback: system DPI
+    except Exception:
+        pass
+
+
+def _apply_theme(root):
+    """Apply one consistent ttk theme + palette to a dialog. Never raises — a theming
+    failure must never stop the dialog from opening."""
+    from tkinter import ttk
+    try:
+        root.configure(bg=_PALETTE['panel'])
+    except Exception:
+        pass
+    try:
+        st = ttk.Style(root)
+        try:
+            st.theme_use('clam')
+        except Exception:
+            pass
+        st.configure('.', font=('Segoe UI', 10), background=_PALETTE['panel'], foreground=_PALETTE['text'])
+        st.configure('TFrame', background=_PALETTE['panel'])
+        st.configure('TLabel', background=_PALETTE['panel'], foreground=_PALETTE['text'])
+        st.configure('Muted.TLabel', foreground=_PALETTE['muted'])
+        st.configure('Field.TLabel', font=('Segoe UI', 9, 'bold'))
+        st.configure('TEntry', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'],
+                     lightcolor=_PALETTE['border'], darkcolor=_PALETTE['border'], padding=4)
+        st.configure('TCombobox', fieldbackground=_PALETTE['surface'], bordercolor=_PALETTE['border'], padding=3)
+        st.map('TEntry', bordercolor=[('focus', _PALETTE['maroon'])])
+        st.map('TCombobox', bordercolor=[('focus', _PALETTE['maroon'])])
+        st.configure('Primary.TButton', font=('Segoe UI', 10, 'bold'), foreground='white',
+                     background=_PALETTE['maroon'], bordercolor=_PALETTE['maroon'],
+                     focuscolor=_PALETTE['maroon'], padding=(16, 7), relief='flat')
+        st.map('Primary.TButton',
+               background=[('active', _PALETTE['maroon_d']), ('pressed', _PALETTE['maroon_d'])],
+               foreground=[('disabled', '#e9c6cc')])
+        st.configure('Ghost.TButton', font=('Segoe UI', 10), foreground=_PALETTE['maroon'],
+                     background=_PALETTE['panel'], bordercolor=_PALETTE['border'],
+                     padding=(14, 7), relief='flat')
+        st.map('Ghost.TButton', background=[('active', '#e9ebef')])
+        return st
+    except Exception:
+        return None
+
+
+def _branded_header(root, title):
+    """Maroon header bar with the white Cirque logo + title. Never raises — falls back
+    to a plain maroon title bar if the logo can't load."""
+    import tkinter as tk
+    hdr = tk.Frame(root, bg=_PALETTE['maroon'], height=58)
+    hdr.pack(fill='x')
+    hdr.pack_propagate(False)
+    try:
+        img = tk.PhotoImage(data=_LOGO_WHITE_B64)
+        _photo_refs.append(img)
+        tk.Label(hdr, image=img, bg=_PALETTE['maroon']).pack(side='left', padx=(16, 10))
+    except Exception:
+        pass
+    try:
+        tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
+                 font=('Segoe UI Semibold', 14)).pack(side='left', pady=15)
+    except Exception:
+        tk.Label(hdr, text=title, bg=_PALETTE['maroon'], fg='white',
+                 font=('Segoe UI', 14, 'bold')).pack(side='left', pady=15)
+    return hdr
+
+
+def _window_icon(root):
+    """Set the window/taskbar icon from the embedded ICO."""
+    try:
+        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
+        _save_ico(ico_path)
+        root.iconbitmap(ico_path)
+    except Exception:
+        pass
+
+
 def _get_username() -> str:
     try:
         import ctypes
@@ -137,6 +252,50 @@ def _get_username() -> str:
 
 def _get_hostname() -> str:
     return socket.gethostname()
+
+
+def _list_ittools_installers() -> list:
+    """Return sorted bare filenames in C:\\ITTOOLS that match the server's
+    allowed-installer regex. Only top-level files (no recursion / subdirs)."""
+    names = []
+    try:
+        for name in os.listdir(_ITTOOLS_DIR):
+            full = os.path.join(_ITTOOLS_DIR, name)
+            if os.path.isfile(full) and _ITTOOLS_FILE_RE.match(name):
+                names.append(name)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        _log(f'ITTOOLS listing failed: {e}')
+    return sorted(names, key=str.lower)
+
+
+def _sha256_file(name: str) -> str:
+    """Compute the UPPERCASE hex SHA-256 of C:\\ITTOOLS\\<name>."""
+    h = hashlib.sha256()
+    with open(os.path.join(_ITTOOLS_DIR, name), 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest().upper()
+
+
+def _fetch_fixes(tracker_url: str, api_key: str, timeout: int = 15) -> list:
+    """GET the vetted one-click fix library from the server.
+
+    Authenticated with the SAME Bearer tray_api_key the ticket POST uses (scope
+    create_tickets) and the SAME TLS posture as _post_ticket (_ssl_ctx). Returns
+    a list of {id, name, description} dicts. Raises on transport / non-2xx so the
+    caller can show an error.
+    """
+    req = urllib.request.Request(
+        f'{tracker_url}/rmm/agent/fixes',
+        headers={'Authorization': f'Bearer {api_key}'},
+        method='GET',
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
+        body = json.loads(resp.read())
+    fixes = body.get('fixes') or []
+    return [f for f in fixes if isinstance(f, dict) and f.get('id') is not None and f.get('name')]
 
 
 def _pending_reboot() -> bool:
@@ -368,21 +527,13 @@ def _show_ticket_form(config: dict) -> None:
     root.resizable(False, False)
     root.attributes('-topmost', True)
 
-    # Window icon
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
     # ── layout ──────────────────────────────────────────────────────────────
     pad = dict(padx=12, pady=6)
 
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Submit IT Ticket', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Submit IT Ticket')
 
     f = tk.Frame(root, padx=16, pady=12)
     f.pack(fill='both', expand=True)
@@ -479,6 +630,287 @@ def _show_ticket_form(config: dict) -> None:
     root.mainloop()
 
 
+# ── install-software picker ───────────────────────────────────────────────────
+
+def _show_install_software_form(config: dict) -> None:
+    """Open a tkinter dialog letting the user pick an installer staged in
+    C:\\ITTOOLS and submit a software-install request. Reuses the existing
+    ticket transport (_post_ticket) + offline spool (_spool_ticket)."""
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
+    cfg = _load_config() or config
+    tracker_url = _resolve_tracker_url(cfg)
+    api_key     = cfg.get('tray_api_key', '')
+    asset_id    = cfg.get('asset_id', '')
+    hostname    = _get_hostname()
+    username    = _get_username()
+
+    files = _list_ittools_installers()
+
+    root = tk.Tk()
+    root.title('Install Software')
+    root.resizable(False, False)
+    root.attributes('-topmost', True)
+    _apply_theme(root)
+    _window_icon(root)
+
+    pad = dict(padx=12, pady=6)
+    _branded_header(root, 'Install Software')
+
+    f = tk.Frame(root, padx=16, pady=12)
+    f.pack(fill='both', expand=True)
+
+    if not files:
+        tk.Label(f, text=('No installers found in C:\\ITTOOLS.\n\n'
+                          'Copy an installer (.exe, .msi, .bat, .cmd, .ps1,\n'
+                          '.msix or .appx) into C:\\ITTOOLS, then reopen this.'),
+                 font=('Segoe UI', 9), justify='left', anchor='w').grid(row=0, column=0, columnspan=2, sticky='w', **pad)
+        def _open_folder():
+            try:
+                os.makedirs(_ITTOOLS_DIR, exist_ok=True)
+            except Exception:
+                pass
+            subprocess.Popen(['explorer', _ITTOOLS_DIR])
+        tk.Button(f, text='Open C:\\ITTOOLS', font=('Segoe UI', 10), padx=12, pady=6,
+                  relief='flat', command=_open_folder).grid(row=1, column=0, pady=(6, 2))
+        tk.Button(f, text='Close', font=('Segoe UI', 10), padx=12, pady=6,
+                  relief='flat', command=root.destroy).grid(row=1, column=1, pady=(6, 2))
+        root.mainloop()
+        return
+
+    # File picker
+    tk.Label(f, text='Installer *', font=('Segoe UI', 9, 'bold'), anchor='w').grid(row=0, column=0, sticky='w', **pad)
+    file_var = tk.StringVar(value=files[0])
+    ttk.Combobox(f, textvariable=file_var, values=files, state='readonly', width=46).grid(row=0, column=1, sticky='ew', **pad)
+
+    # Silent args (optional)
+    tk.Label(f, text='Silent args', font=('Segoe UI', 9), anchor='w', fg='#555').grid(row=1, column=0, sticky='w', **pad)
+    args_var = tk.StringVar()
+    args_entry = ttk.Entry(f, textvariable=args_var, width=48)
+    args_entry.grid(row=1, column=1, sticky='ew', **pad)
+    tk.Label(f, text='e.g.  /S   or   /qn /norestart   (leave blank if unsure)',
+             font=('Segoe UI', 8), fg='#888', anchor='w').grid(row=2, column=1, sticky='w', padx=12)
+
+    # Justification (required, mirrors the ticket flow)
+    tk.Label(f, text='Reason *', font=('Segoe UI', 9, 'bold'), anchor='nw').grid(row=3, column=0, sticky='nw', **pad)
+    reason_text = tk.Text(f, width=46, height=5, font=('Segoe UI', 9), wrap='word')
+    reason_text.grid(row=3, column=1, sticky='ew', **pad)
+
+    status_var = tk.StringVar()
+    tk.Label(f, textvariable=status_var, fg='#555', font=('Segoe UI', 8)).grid(row=4, column=0, columnspan=2, sticky='w', padx=12)
+
+    def _submit():
+        file_name = file_var.get().strip()
+        reason    = reason_text.get('1.0', 'end').strip()
+        args      = args_var.get().strip()
+        if not file_name or not _ITTOOLS_FILE_RE.match(file_name):
+            messagebox.showwarning('Pick an Installer', 'Please choose a valid installer from C:\\ITTOOLS.', parent=root)
+            return
+        if not reason:
+            messagebox.showwarning('Reason Required', 'Please enter a short reason for this install.', parent=root)
+            return
+        if not tracker_url or not api_key:
+            messagebox.showerror('Not Configured', 'Tray config is missing. Contact IT.', parent=root)
+            return
+
+        btn_submit.config(state='disabled', text='Submitting…')
+        status_var.set('Computing checksum…')
+        root.update()
+        try:
+            sha = _sha256_file(file_name)
+        except Exception as e:
+            _log(f'sha256 failed for {file_name}: {e}')
+            messagebox.showerror('Read Error', f'Could not read {file_name}. Is it still in C:\\ITTOOLS?', parent=root)
+            btn_submit.config(state='normal', text='Request Install')
+            status_var.set('')
+            return
+
+        payload = {
+            'subject':       f'Software install request: {file_name}',
+            'description':   reason,
+            'source':        'tray',
+            'asset_id':      int(asset_id) if str(asset_id).isdigit() else None,
+            'reporter_name': username or None,
+            'hostname':      hostname,
+            'software_request': {
+                'file_name': file_name,
+                'sha256':    sha,
+                'args':      args,
+            },
+        }
+        status_var.set('Sending…')
+        root.update()
+        try:
+            ticket_id = _post_ticket(tracker_url, api_key, payload)
+            status_var.set(f'✓ Request #{ticket_id} submitted — awaiting IT approval.')
+            _toast('Install Requested',
+                   f"IT received your request to install {file_name} (#{ticket_id}). "
+                   "It will install once approved.")
+            _run_in_thread(_flush_spool, tracker_url, api_key)
+            root.after(2200, root.destroy)
+        except Exception as e:
+            _log(f'install request failed, spooling: {e}')
+            _spool_ticket(payload)
+            status_var.set("No connection to IT right now — saved, will send when you're back online.")
+            _toast('Request Saved',
+                   "No connection to IT right now — your install request is saved and "
+                   "will send automatically once you're back online.")
+            root.after(2600, root.destroy)
+
+    btn_frame = tk.Frame(f)
+    btn_frame.grid(row=5, column=0, columnspan=2, pady=(6, 2))
+    btn_submit = tk.Button(btn_frame, text='Request Install', bg='#8B1A2B', fg='white',
+                           font=('Segoe UI', 10, 'bold'), padx=16, pady=6,
+                           relief='flat', cursor='hand2', command=_submit)
+    btn_submit.pack(side='left', padx=6)
+    tk.Button(btn_frame, text='Cancel', font=('Segoe UI', 10), padx=12, pady=6,
+              relief='flat', command=root.destroy).pack(side='left', padx=6)
+
+    f.columnconfigure(1, weight=1)
+    reason_text.focus_set()
+    root.mainloop()
+
+
+# ── request-a-fix picker ──────────────────────────────────────────────────────
+
+def _show_request_fix_form(config: dict) -> None:
+    """Open a tkinter dialog letting the user pick a vetted one-click fix and
+    submit a fix request. Fetches the fix library via GET /rmm/agent/fixes (same
+    Bearer tray_api_key as the ticket POST) and reuses the existing ticket
+    transport (_post_ticket) + offline spool (_spool_ticket)."""
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
+    cfg = _load_config() or config
+    tracker_url = _resolve_tracker_url(cfg)
+    api_key     = cfg.get('tray_api_key', '')
+    asset_id    = cfg.get('asset_id', '')
+    hostname    = _get_hostname()
+    username    = _get_username()
+
+    # Fetch the fix library up front so we can show names + descriptions.
+    fixes = []
+    fetch_error = None
+    if not tracker_url or not api_key:
+        fetch_error = 'Tray config is missing. Contact IT.'
+    else:
+        try:
+            fixes = _fetch_fixes(tracker_url, api_key)
+        except Exception as e:
+            _log(f'fetch fixes failed: {e}')
+            fetch_error = "Couldn't reach IT to load available fixes. Try again later."
+
+    root = tk.Tk()
+    root.title('Request a Fix')
+    root.resizable(False, False)
+    root.attributes('-topmost', True)
+    _apply_theme(root)
+    _window_icon(root)
+
+    pad = dict(padx=12, pady=6)
+    _branded_header(root, 'Request a Fix')
+
+    f = tk.Frame(root, padx=16, pady=12)
+    f.pack(fill='both', expand=True)
+
+    if fetch_error or not fixes:
+        msg = fetch_error or ('No fixes are available right now.\n\n'
+                              'Contact IT if you were expecting one.')
+        tk.Label(f, text=msg, font=('Segoe UI', 9), justify='left',
+                 anchor='w').grid(row=0, column=0, columnspan=2, sticky='w', **pad)
+        tk.Button(f, text='Close', font=('Segoe UI', 10), padx=12, pady=6,
+                  relief='flat', command=root.destroy).grid(row=1, column=0, columnspan=2, pady=(6, 2))
+        root.mainloop()
+        return
+
+    # Map display name -> fix id (names shown in the dropdown).
+    name_to_id = {fx['name']: fx['id'] for fx in fixes}
+    id_to_desc = {fx['id']: (fx.get('description') or '') for fx in fixes}
+    names = [fx['name'] for fx in fixes]
+
+    # Fix picker
+    tk.Label(f, text='Fix *', font=('Segoe UI', 9, 'bold'), anchor='w').grid(row=0, column=0, sticky='w', **pad)
+    fix_var = tk.StringVar(value=names[0])
+    ttk.Combobox(f, textvariable=fix_var, values=names, state='readonly', width=46).grid(row=0, column=1, sticky='ew', **pad)
+
+    # Description help text (updates with the selected fix)
+    desc_var = tk.StringVar(value=id_to_desc.get(name_to_id[names[0]], ''))
+    tk.Label(f, textvariable=desc_var, font=('Segoe UI', 8), fg='#888', anchor='w',
+             justify='left', wraplength=360).grid(row=1, column=1, sticky='w', padx=12)
+
+    def _on_pick(*_a):
+        fid = name_to_id.get(fix_var.get().strip())
+        desc_var.set(id_to_desc.get(fid, ''))
+    fix_var.trace_add('write', _on_pick)
+
+    # What's wrong? (required reason)
+    tk.Label(f, text="What's wrong? *", font=('Segoe UI', 9, 'bold'), anchor='nw').grid(row=2, column=0, sticky='nw', **pad)
+    reason_text = tk.Text(f, width=46, height=5, font=('Segoe UI', 9), wrap='word')
+    reason_text.grid(row=2, column=1, sticky='ew', **pad)
+
+    status_var = tk.StringVar()
+    tk.Label(f, textvariable=status_var, fg='#555', font=('Segoe UI', 8)).grid(row=3, column=0, columnspan=2, sticky='w', padx=12)
+
+    def _submit():
+        fix_name = fix_var.get().strip()
+        fix_id   = name_to_id.get(fix_name)
+        reason   = reason_text.get('1.0', 'end').strip()
+        if fix_id is None:
+            messagebox.showwarning('Pick a Fix', 'Please choose a fix from the list.', parent=root)
+            return
+        if not reason:
+            messagebox.showwarning('Reason Required', "Please describe what's wrong.", parent=root)
+            return
+        if not tracker_url or not api_key:
+            messagebox.showerror('Not Configured', 'Tray config is missing. Contact IT.', parent=root)
+            return
+
+        btn_submit.config(state='disabled', text='Submitting…')
+        payload = {
+            'subject':       f'Fix request: {fix_name}',
+            'description':   reason,
+            'source':        'tray',
+            'asset_id':      int(asset_id) if str(asset_id).isdigit() else None,
+            'reporter_name': username or None,
+            'hostname':      hostname,
+            'fix_request': {
+                'fix_id': int(fix_id),
+            },
+        }
+        status_var.set('Sending…')
+        root.update()
+        try:
+            ticket_id = _post_ticket(tracker_url, api_key, payload)
+            status_var.set(f'✓ Request #{ticket_id} submitted — awaiting IT approval.')
+            _toast('Fix Requested',
+                   f"IT received your request for '{fix_name}' (#{ticket_id}). "
+                   "It will run once approved.")
+            _run_in_thread(_flush_spool, tracker_url, api_key)
+            root.after(2200, root.destroy)
+        except Exception as e:
+            _log(f'fix request failed, spooling: {e}')
+            _spool_ticket(payload)
+            status_var.set("No connection to IT right now — saved, will send when you're back online.")
+            _toast('Request Saved',
+                   "No connection to IT right now — your fix request is saved and "
+                   "will send automatically once you're back online.")
+            root.after(2600, root.destroy)
+
+    btn_frame = tk.Frame(f)
+    btn_frame.grid(row=4, column=0, columnspan=2, pady=(6, 2))
+    btn_submit = tk.Button(btn_frame, text='Request Fix', bg='#8B1A2B', fg='white',
+                           font=('Segoe UI', 10, 'bold'), padx=16, pady=6,
+                           relief='flat', cursor='hand2', command=_submit)
+    btn_submit.pack(side='left', padx=6)
+    tk.Button(btn_frame, text='Cancel', font=('Segoe UI', 10), padx=12, pady=6,
+              relief='flat', command=root.destroy).pack(side='left', padx=6)
+
+    f.columnconfigure(1, weight=1)
+    reason_text.focus_set()
+    root.mainloop()
+
+
 # ── computer info dialog ─────────────────────────────────────────────────────
 
 def _show_info_dialog(config: dict) -> None:
@@ -497,17 +929,10 @@ def _show_info_dialog(config: dict) -> None:
     root.resizable(False, False)
     root.attributes('-topmost', True)
 
-    try:
-        ico_path = os.path.join(os.path.dirname(sys.argv[0]), '_tray_icon.ico')
-        _save_ico(ico_path)
-        root.iconbitmap(ico_path)
-    except Exception:
-        pass
+    _apply_theme(root)
+    _window_icon(root)
 
-    header = tk.Frame(root, bg='#8B1A2B', height=52)
-    header.pack(fill='x')
-    tk.Label(header, text='  ◈◈  Computer Info', bg='#8B1A2B', fg='white',
-             font=('Segoe UI', 13, 'bold')).pack(side='left', padx=10, pady=12)
+    _branded_header(root, 'Computer Info')
 
     f = tk.Frame(root, padx=20, pady=16)
     f.pack(fill='both')
@@ -568,7 +993,29 @@ def _acquire_single_instance_mutex():
     return handle  # keep alive for process lifetime
 
 
+def _get_agent_version() -> str:
+    """Best-effort agent version for display in the tray menu. Reads AGENT_VERSION from
+    agent_client.py next to the tray (always present), falling back to version.txt."""
+    d = os.path.dirname(os.path.abspath(sys.argv[0]))
+    try:
+        import re as _re
+        with open(os.path.join(d, 'agent_client.py'), encoding='utf-8') as f:
+            for line in f:
+                mt = _re.match(r'\s*AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', line)
+                if mt:
+                    return mt.group(1)
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(d, 'version.txt'), encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        pass
+    return 'unknown'
+
+
 def main():
+    _set_dpi_aware()   # process-wide, before any window (correct place for DPI)
     _mutex = _acquire_single_instance_mutex()  # exit if another tray is running
 
     try:
@@ -599,11 +1046,16 @@ def main():
 
     # Build menu
     reboot_label = '⚠ Pending Reboot!' if reboot else 'Check for Updates'
+    _agent_ver = _get_agent_version()
 
     menu = pystray.Menu(
         pystray.MenuItem('Submit IT Ticket',
                          lambda icon, item: _run_in_thread(_show_ticket_form, config),
                          default=True),
+        pystray.MenuItem('Install software',
+                         lambda icon, item: _run_in_thread(_show_install_software_form, config)),
+        pystray.MenuItem('Request a fix',
+                         lambda icon, item: _run_in_thread(_show_request_fix_form, config)),
         pystray.MenuItem('Open IT Portal',
                          lambda icon, item: webbrowser.open(_resolve_tracker_url(_load_config()))),
         pystray.Menu.SEPARATOR,
@@ -611,6 +1063,8 @@ def main():
                          lambda icon, item: _run_in_thread(_show_info_dialog, config)),
         pystray.MenuItem(reboot_label,
                          lambda icon, item: _run_in_thread(_show_updates_dialog)),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(f'Agent v{_agent_ver}', lambda icon, item: None, enabled=False),
     )
 
     icon_img = _get_icon_image()

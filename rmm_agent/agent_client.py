@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.7"
+AGENT_VERSION = "2.9.22"
 
 import asyncio
 import base64
@@ -66,6 +66,96 @@ def _ssl_ctx():
         return ctx
     except Exception:
         return None
+
+
+def _verifying_ssl_ctx():
+    """Best-effort *chain-validating* SSL context for update fetches (R1).
+
+    Validates the server certificate chain but tolerates a hostname mismatch
+    (the internal cert may not match the URL we dial). This is defense-in-depth
+    only: the RSA signature verification on the payload is the real integrity
+    guard, so callers MUST fall back to the unverified _ssl_ctx() on any cert
+    error rather than breaking updates for agents whose internal CA isn't
+    chain-trusted. Returns None on failure (caller falls back)."""
+    try:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        return ctx
+    except Exception:
+        return None
+
+
+def _open_update_url(req, timeout):
+    """Open an update-related request, preferring a chain-verifying TLS context
+    and falling back to the unverified context on any SSL/cert error (R1).
+
+    Confidentiality is best-effort here; payload integrity is enforced
+    separately by RSA signature verification. We therefore never let a cert
+    failure block a LAN update."""
+    import ssl as _ssl
+    vctx = _verifying_ssl_ctx()
+    if vctx is not None:
+        try:
+            return urllib.request.urlopen(req, context=vctx, timeout=timeout)
+        except _ssl.SSLError as e:
+            print(f"[update] verifying TLS fetch failed ({e}); falling back to unverified (sig still enforced)", flush=True)
+        except urllib.error.URLError as e:
+            # URLError wraps SSLCertVerificationError on most stacks
+            if isinstance(getattr(e, "reason", None), _ssl.SSLError):
+                print(f"[update] verifying TLS fetch failed ({e.reason}); falling back to unverified (sig still enforced)", flush=True)
+            else:
+                raise
+    return urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Self-update payload signature verification (CANARY only)
+# Server signs the served agent_client.py / tray.py with RSA-3072 PKCS1v15
+# SHA-256; we verify the detached hex signature before swapping any payload.
+# Fail-closed: no sig / bad sig / verify error => do NOT apply the update.
+# ---------------------------------------------------------------------------
+_UPDATE_PUB_E = 65537
+_UPDATE_PUB_N = int("c60971a6afa233df8868968ff69b438104eb928ae33c79089eb855d96f148a43db05216929f2534beea5ccbfcfd3f905fb4c8f259d91958dd955ea3c6be1118f3ffea3c72ebeb5a6d1b1ec6a88ab959406f78e38c801d88909874fd7497b08772b987c5c7652ded9ef928b17544a4bfc7d52e1889f20cf8293e778cf64eabac8c3c85600d0af5874270be30a049fc0fecc50e1584a7899976398bba82dcacd82211fbe210012de186be7bbd496f1eef3d7a1cd7f8f3165bf00eab9fa60f4b25af628f54b9b7790258a93cd4edf6c7274e31e8708ae4a83511d9bf69bdd22e4794f1ec11fa378c777300ab238b93bba5283d629259ead16413df74a3b7318804d11f7a93c2af48b157e73bb780059cbd4fc0d0fa55a7ea65c03ba496336e6fc86e2101221f44945980cc9cbc5a9a0c9a28da0f34d2852f219e22e461e33ffda1c922351e738d633adf82b4f9f29f2f5a2fa859e6aa4b49d64ab3c5896bbcfd0e554b191cfcd4c83ec7b730b66e9f988df75ca3ef69def7ad8307ec3d1a958a91f", 16)
+_SHA256_DER = bytes.fromhex("3031300d060960864801650304020105000420")  # PKCS#1 v1.5 SHA-256 DigestInfo
+
+
+def _verify_update_sig(data: bytes, sig_hex: str) -> bool:
+    try:
+        sig = bytes.fromhex(sig_hex)
+        k = (_UPDATE_PUB_N.bit_length() + 7) // 8
+        if len(sig) != k:
+            return False
+        m = pow(int.from_bytes(sig, "big"), _UPDATE_PUB_E, _UPDATE_PUB_N)
+        em = m.to_bytes(k, "big")
+        if em[0:2] != b"\x00\x01":
+            return False
+        try:
+            sep = em.index(b"\x00", 2)
+        except ValueError:
+            return False
+        if sep < 10 or any(b != 0xFF for b in em[2:sep]):
+            return False
+        return em[sep + 1:] == _SHA256_DER + hashlib.sha256(data).digest()
+    except Exception:
+        return False
+
+
+def _fetch_update_sig(sig_url: str, ctx=None, timeout: int = 15) -> str:
+    """Fetch a detached signature from a *-sig endpoint. Returns the hex sig
+    string, or '' on any error / missing sig (caller fails closed).
+
+    Uses the verifying-with-fallback TLS opener (R1); the legacy `ctx` arg is
+    ignored and kept only for call-site compatibility."""
+    try:
+        req = urllib.request.Request(sig_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+        with _open_update_url(req, timeout) as r:
+            obj = json.loads(r.read())
+        return str(obj.get("sig") or "")
+    except Exception as e:
+        print(f"[update] signature fetch failed: {e}", flush=True)
+        return ""
 
 
 def _ps_json(script: str, timeout: int = 15):
@@ -270,7 +360,7 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
         ctx.verify_mode = _ssl.CERT_NONE
         try:
             req = _ur.Request(tray_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-            with _ur.urlopen(req, timeout=20, context=ctx) as resp:
+            with _open_update_url(req, 20) as resp:
                 new_src = resp.read()
             # Only write if changed
             existing = b''
@@ -278,10 +368,19 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
                 with open(_TRAY_PY_PATH, 'rb') as fh:
                     existing = fh.read()
             if new_src != existing:
-                os.makedirs(os.path.dirname(_TRAY_PY_PATH), exist_ok=True)
-                with open(_TRAY_PY_PATH, 'wb') as fh:
-                    fh.write(new_src)
-                print('[tray] tray.py updated', flush=True)
+                # Signature gate (CANARY): verify the served tray.py before writing.
+                # Fail-closed -- no sig / bad sig leaves the existing tray.py in place.
+                tray_sig_url = f"{tracker_url}/rmm/agent/tray-sig?agent_id={agent_id}&token={token}"
+                tray_sig = _fetch_update_sig(tray_sig_url, ctx)
+                if not tray_sig:
+                    print('[tray] No signature returned for tray.py -- skipping update (fail-closed)', flush=True)
+                elif not _verify_update_sig(new_src, tray_sig):
+                    print('[tray] Signature verification FAILED for tray.py -- skipping update (fail-closed)', flush=True)
+                else:
+                    os.makedirs(os.path.dirname(_TRAY_PY_PATH), exist_ok=True)
+                    with open(_TRAY_PY_PATH, 'wb') as fh:
+                        fh.write(new_src)
+                    print('[tray] Signature verified -- tray.py updated', flush=True)
         except Exception as dl_err:
             print(f'[tray] download failed: {dl_err}', flush=True)
 
@@ -334,12 +433,39 @@ def _setup_tray(tracker_url: str, agent_id: str, token: str) -> None:
         print(f'[tray] _setup_tray error: {e}', flush=True)
 
 
+def _tray_pids(_sp):
+    """Return a list of PIDs for running pythonw.exe processes whose command
+    line references tray.py. Returns [] on any failure (treat as 'none found')."""
+    try:
+        _r = _sp.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+             'Get-WmiObject Win32_Process | Where-Object { $_.Name -eq "pythonw.exe" '
+             '-and $_.CommandLine -like "*tray.py*" } | '
+             'ForEach-Object { $_.ProcessId }'],
+            capture_output=True, text=True, timeout=15,
+        )
+        if _r.returncode != 0:
+            return []
+        return [int(x) for x in (_r.stdout or '').split() if x.strip().isdigit()]
+    except Exception:
+        return []
+
+
 def _create_startup_shortcut_task():
     """Write tray startup entries to All-Users and per-user Startup folders,
-    then launch the tray immediately in the current interactive user's session."""
-    import subprocess as _sp, glob as _glob
+    then (re-)launch the tray immediately in the current interactive user's session.
 
-    # -- 1. Find pythonw.exe --------------------------------------------------
+    HARDENING (BRIAN-MSI): we never kill the running tray before we've confirmed a
+    viable relaunch path. Order is: (1) resolve a usable pythonw.exe + tray.py and
+    confirm both exist, (2) ALWAYS (re)write the Startup VBS so a future login is
+    armed, (3) only if a viable launch path exists do we kill the old tray and start
+    the new one, (4) verify the new tray actually came up. If no usable interpreter /
+    tray.py is found we leave any running tray untouched -- we never end trayless."""
+    import subprocess as _sp, glob as _glob, time as _time
+
+    _tray_py = r'C:\CirqueRMM\tray.py'
+
+    # -- 1. Resolve a usable pythonw.exe -------------------------------------
     pythonw_path = ''
     _candidate = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
     if os.path.isfile(_candidate):
@@ -357,19 +483,28 @@ def _create_startup_shortcut_task():
         try:
             _r = _sp.run(['where', 'pythonw.exe'], capture_output=True, text=True, timeout=5)
             if _r.returncode == 0:
-                pythonw_path = _r.stdout.strip().splitlines()[0].strip()
+                for _line in _r.stdout.strip().splitlines():
+                    _line = _line.strip()
+                    if _line and os.path.isfile(_line):
+                        pythonw_path = _line; break
         except Exception:
             pass
-    if not pythonw_path:
-        print('[tray] No pythonw.exe found -- cannot launch tray', flush=True)
-        return
 
-    # -- 2. Write VBScript to startup folders (SYSTEM can write directly) ----
-    # VBS runs pythonw.exe silently so no console window appears
-    _vbs = (
-        'Set oShell = CreateObject("WScript.Shell")\r\n'
-        f'oShell.Run Chr(34) & "{pythonw_path}" & Chr(34) & " C:\\CirqueRMM\\tray.py", 0, False\r\n'
-    )
+    # A launch is "viable" only if BOTH the interpreter and tray.py exist on disk.
+    _launch_viable = bool(pythonw_path) and os.path.isfile(pythonw_path) and os.path.isfile(_tray_py)
+    if not _launch_viable:
+        if not pythonw_path:
+            print('[tray] No pythonw.exe found -- NOT killing running tray; arming Startup VBS only', flush=True)
+        elif not os.path.isfile(_tray_py):
+            print(f'[tray] tray.py missing at {_tray_py} -- NOT killing running tray; arming Startup VBS only', flush=True)
+
+    # -- 2. ALWAYS (re)write the Startup VBS so login-relaunch is armed -------
+    # The VBS resolves pythonw.exe at LAUNCH time (robust to a stale interpreter
+    # path that moved after write time, e.g. an MSI/embedded Python relocation).
+    # It prefers our known-current interpreter (passed as a hint) and falls back
+    # to the same discovery order the agent uses, so a moved path can't no-op it.
+    _vbs_hint = (pythonw_path or '').replace('"', '""')
+    _vbs = _build_tray_vbs(_vbs_hint, _tray_py)
     # All-Users startup
     _common_startup = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
     try:
@@ -399,7 +534,16 @@ def _create_startup_shortcut_task():
         except Exception as _e:
             print(f'[tray] User startup write failed ({_uname}): {_e}', flush=True)
 
-    # -- 3. Kill any existing tray.py process --------------------------------
+    # If we can't launch, STOP here. The currently-running tray (if any) stays
+    # alive, and the Startup VBS we just wrote will (re)launch on next login.
+    if not _launch_viable:
+        print('[tray] Relaunch not viable -- left running tray (if any) in place; Startup VBS armed', flush=True)
+        return
+
+    # -- 3. Kill the old tray, THEN launch the new one -----------------------
+    # Only reached when we have a viable interpreter + tray.py, so we never end
+    # up trayless: a replacement launch immediately follows the kill.
+    _pre_pids = set(_tray_pids(_sp))
     try:
         _sp.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command',
@@ -410,7 +554,6 @@ def _create_startup_shortcut_task():
         )
     except Exception:
         pass
-    import time as _time
     _time.sleep(2)
 
     # -- 4. Immediate launch in the active interactive user's session ---------
@@ -454,6 +597,47 @@ def _create_startup_shortcut_task():
         print(f'[tray] Launch: {_out}', flush=True)
     if _err and _result.returncode != 0:
         print(f'[tray] Launch stderr: {_err[:300]}', flush=True)
+
+    # -- 5. Verify the relaunch actually came up (poll up to ~5s) ------------
+    # A new tray PID (not in the pre-kill set) means the interactive launch
+    # succeeded. If none appears we log it; the Startup VBS armed in step 2
+    # is the safety net for the next login.
+    _came_up = False
+    for _ in range(5):
+        _time.sleep(1)
+        _now = set(_tray_pids(_sp))
+        if _now - _pre_pids:
+            _came_up = True
+            break
+        if _now:  # any tray at all (e.g. relaunch reused detection) counts as alive
+            _came_up = True
+            break
+    if _came_up:
+        print('[tray] Relaunch confirmed: tray.py process is running', flush=True)
+    else:
+        print('[tray] WARNING: relaunch not confirmed within ~5s -- '
+              'Startup VBS is armed to recover on next login', flush=True)
+
+
+def _build_tray_vbs(pythonw_hint: str, tray_py: str) -> str:
+    """Build a MINIMAL Startup VBScript that launches the tray silently (no console).
+
+    Deliberately tiny — single-line statements only, no Option Explicit / Dim /
+    Array / nested loops / line-continuations. A prior version did launch-time
+    path-probing with all of those and compiled to INVALID VBScript (WSH "syntax
+    error" popup on every login/reboot). The agent resolves a valid pythonw at
+    write time (pythonw_hint) and rewrites this file on every reconnect, so a
+    stale path self-heals on the next agent run; we keep one simple bare-pythonw
+    fallback for safety."""
+    _hint = (pythonw_hint or 'pythonw.exe').replace('"', '""')
+    _tray_for_vbs = tray_py.replace('"', '""')
+    return (
+        'Set oShell = CreateObject("WScript.Shell")\r\n'
+        'Set oFSO = CreateObject("Scripting.FileSystemObject")\r\n'
+        f'sPy = "{_hint}"\r\n'
+        'If Not oFSO.FileExists(sPy) Then sPy = "pythonw.exe"\r\n'
+        f'oShell.Run Chr(34) & sPy & Chr(34) & " ""{_tray_for_vbs}""", 0, False\r\n'
+    )
 
 def _ensure_rustdesk_password() -> str:
     """Return the permanent RustDesk access password for this machine.
@@ -701,11 +885,90 @@ def _write_rustdesk_config() -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# C:\ITTOOLS provisioning (Install-software feature)
+# ---------------------------------------------------------------------------
+# A sanctioned drop folder for user-staged installers. Lives at the protected
+# C:\ root (only SYSTEM/Admins can *run* from it -- the agent does that as
+# SYSTEM after admin approval), but BUILTIN\Users get write+read so a non-admin
+# user can drop an installer in via Explorer. The systray "Install software"
+# picker enumerates this folder and the server runs the chosen file as SYSTEM.
+_ITTOOLS_DIR = r"C:\ITTOOLS"
+# Sentinel so we provision the ACL exactly once, not on every heartbeat. Its
+# presence means "folder + ACL already set"; we still cheaply re-create the
+# folder if it's been deleted.
+_ITTOOLS_MARKER = os.path.join(_ITTOOLS_DIR, ".provisioned")
+
+
+def ensure_ittools_dir() -> None:
+    """Idempotently ensure C:\\ITTOOLS exists and is user-writable.
+
+    Runs as SYSTEM (this service). Creates the folder and grants BUILTIN\\Users
+    modify rights so a non-admin can stage installers, while the folder stays at
+    the protected C:\\ root. Heavy ACL work is gated behind a sentinel file so we
+    don't re-run icacls every startup/heartbeat (avoids thrashing the ACL).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        already = os.path.isdir(_ITTOOLS_DIR) and os.path.isfile(_ITTOOLS_MARKER)
+        # Cheap: make sure the folder exists even if the marker says provisioned
+        # (folder could have been deleted out from under us).
+        os.makedirs(_ITTOOLS_DIR, exist_ok=True)
+        if already:
+            return
+        # Grant BUILTIN\Users modify (M) with object+container inheritance so
+        # files dropped later inherit it. Localised-safe via the *S-1-5-32-545*
+        # SID for the Users group rather than the (translatable) name.
+        subprocess.run(
+            ["icacls", _ITTOOLS_DIR, "/grant", "*S-1-5-32-545:(OI)(CI)M"],
+            capture_output=True, timeout=30,
+            creationflags=0x08000000,
+        )
+        try:
+            with open(_ITTOOLS_MARKER, "w", encoding="utf-8") as _fh:
+                _fh.write("provisioned by CirqueRMM agent\n")
+            # Hide the sentinel so it doesn't clutter the user's view.
+            subprocess.run(["attrib", "+h", _ITTOOLS_MARKER],
+                           capture_output=True, timeout=10,
+                           creationflags=0x08000000)
+        except Exception:
+            pass
+        print(f"[ittools] Provisioned {_ITTOOLS_DIR} (Users:modify)", flush=True)
+    except Exception as e:
+        print(f"[ittools] provisioning failed: {e}", flush=True)
+
+
+def _parse_semver(v) -> tuple:
+    """Parse a dotted version string into a tuple of ints for ordered compare.
+
+    Defensive against malformed/missing values: non-numeric or empty
+    components become 0, and a missing/None version parses to (0,) so it sorts
+    BELOW any real release (and would therefore be refused as a downgrade).
+    Used by the refuse-downgrade gate (R9) -- integer-tuple compare, NOT a
+    string compare, so 2.9.10 correctly sorts ABOVE 2.9.9."""
+    parts = []
+    for chunk in str(v or "").split("."):
+        chunk = chunk.strip()
+        try:
+            parts.append(int(chunk))
+        except (TypeError, ValueError):
+            # tolerate things like "2.9.11-rc1" -> take leading digits, else 0
+            digits = ""
+            for ch in chunk:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            parts.append(int(digits) if digits else 0)
+    return tuple(parts) if parts else (0,)
+
+
 def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
     try:
         url = f"{tracker_url}/rmm/agent/version?agent_id={agent_id}&token={token}"
         req = urllib.request.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=10) as r:
+        with _open_update_url(req, 10) as r:
             data = json.loads(r.read())
 
         server_checksum = data.get("checksum", "")
@@ -716,15 +979,46 @@ def check_for_update(tracker_url: str, agent_id: str, token: str) -> bool:
             print(f"[update] Up to date ({AGENT_VERSION})", flush=True)
             return False
 
+        # Refuse downgrades (CANARY R9): a stale or malicious OLDER served file
+        # must never silently downgrade the agent. Compare served vs local as
+        # INTEGER semver tuples (NOT string compare -- "2.9.10" < "2.9.9" as
+        # strings would be a bug). Only swap when served is STRICTLY greater.
+        # Intentional rollback is performed by releasing a HIGHER version number
+        # that contains the desired (older-behaving) code -- never by serving a
+        # lower number. This gate is IN ADDITION to the checksum-diff gate and
+        # the RSA signature verification below.
+        served_ver = _parse_semver(data.get("version"))
+        local_ver = _parse_semver(AGENT_VERSION)
+        if served_ver < local_ver:
+            print(f"[update] refusing downgrade: served {data.get('version')} < running {AGENT_VERSION}", flush=True)
+            return False
+        if served_ver == local_ver:
+            # Same version but checksum differs (e.g. rebuild) -- no version
+            # advance, so treat as a no-op to stay consistent with R9 intent.
+            print(f"[update] served version equals running ({AGENT_VERSION}) -- no version advance, skipping", flush=True)
+            return False
+
         print(f"[update] New version {data.get('version')} available -- downloading...", flush=True)
         file_url = f"{tracker_url}/rmm/agent/file?agent_id={agent_id}&token={token}"
         req2 = urllib.request.Request(file_url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-        with urllib.request.urlopen(req2, context=_ssl_ctx(), timeout=30) as r:
+        with _open_update_url(req2, 30) as r:
             new_code = r.read()
 
         if server_checksum and hashlib.sha256(new_code).hexdigest() != server_checksum:
             print("[update] Checksum mismatch -- aborting", flush=True)
             return False
+
+        # Signature gate (CANARY): verify a detached RSA signature of the EXACT
+        # bytes we are about to swap in. Fail-closed -- no sig / bad sig aborts.
+        sig_url = f"{tracker_url}/rmm/agent/file-sig?agent_id={agent_id}&token={token}"
+        sig = _fetch_update_sig(sig_url, _ssl_ctx())
+        if not sig:
+            print("[update] No signature returned for agent_client.py -- aborting (fail-closed)", flush=True)
+            return False
+        if not _verify_update_sig(new_code, sig):
+            print("[update] Signature verification FAILED for agent_client.py -- aborting (fail-closed)", flush=True)
+            return False
+        print("[update] Signature verified for agent_client.py", flush=True)
 
         tmp = current_path + ".new"
         old = current_path + ".old"
@@ -826,6 +1120,39 @@ def _get_domain() -> str:
     except Exception:
         pass
     return os.environ.get("USERDNSDOMAIN", "")
+
+
+def _get_drive_types() -> dict:
+    """Return a map {drive_letter_upper: DriveType_int} from Win32_LogicalDisk.
+
+    Win32_LogicalDisk.DriveType: 2=removable, 3=fixed (local HDD/SSD),
+    4=network, 5=optical/mounted-ISO (CD-ROM/mounted image). Windows-only;
+    returns {} on non-Windows or failure (callers degrade gracefully).
+    Single WMI/CIM round-trip per telemetry cycle -- lightweight.
+    """
+    if platform.system() != "Windows":
+        return {}
+    try:
+        data = _ps_json(
+            "Get-CimInstance Win32_LogicalDisk | "
+            "Select-Object DeviceID,DriveType | ConvertTo-Json -Compress",
+            timeout=10,
+        )
+        if not data:
+            return {}
+        if isinstance(data, dict):
+            data = [data]
+        out = {}
+        for row in data:
+            try:
+                dev = (row.get("DeviceID") or "").strip().rstrip("\\").upper()
+                if dev:
+                    out[dev] = int(row.get("DriveType"))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
 
 
 def _get_cpu_name() -> str:
@@ -1808,16 +2135,24 @@ def collect_telemetry(agent_id: str) -> dict:
 
     # Disk partitions
     disks = []
+    _drive_types = _get_drive_types()  # {C: 3, D: 5, ...}; {} off-Windows
     for part in psutil.disk_partitions(all=False):
         try:
             usage = psutil.disk_usage(part.mountpoint)
-            disks.append({
+            # Match the WMI DeviceID (e.g. "C:") against the mountpoint letter.
+            _letter = (part.mountpoint or "").strip().rstrip("\\").rstrip("/").upper()
+            disk = {
                 "device":     part.device,
                 "mountpoint": part.mountpoint,
                 "total_gb":   round(usage.total  / (1024 ** 3), 1),
                 "free_gb":    round(usage.free   / (1024 ** 3), 1),
                 "percent":    usage.percent,
-            })
+                # NTFS/CDFS/exFAT/... -- CDFS strongly implies optical/mounted-ISO.
+                "fstype":     part.fstype,
+            }
+            if _letter in _drive_types:
+                disk["drive_type"] = _drive_types[_letter]
+            disks.append(disk)
         except Exception:
             pass
 
@@ -2069,39 +2404,62 @@ def _run_dialog_in_user_session(ps_code: str, timeout_ms: int = 36 * 60 * 1000) 
         kernel32.CloseHandle(h_token)
 
 
-def _install_patches_wua(update_ids: list) -> dict:
-    """Install specific Windows Updates by Update ID (GUID) using the WUA COM API."""
-    if not update_ids:
-        return {"installed": 0, "reboot_required": False, "error": "No update IDs specified"}
-    ids_ps = ", ".join(f'"{v}"' for v in update_ids)
+def _install_patches_wua(update_ids: list, kb_ids=None, titles=None) -> dict:
+    """Install specific Windows Updates via the WUA COM API, matching the LIVE pending
+    set by UpdateID OR KB article. Defender/signature UpdateIDs rotate (often hourly),
+    so a stale snapshot UpdateID frequently no longer matches — but the KB number is
+    stable. KBs come from kb_ids and are also parsed out of the titles the server sends.
+    After installing, re-scans to report how many targeted updates are still pending
+    (post-install verification)."""
+    import re as _re
+    kbs = set()
+    for k in (kb_ids or []):
+        m = _re.search(r'(\d{6,7})', str(k))
+        if m:
+            kbs.add(m.group(1))
+    for t in (titles or []):
+        for m in _re.findall(r'KB(\d{6,7})', str(t), _re.I):
+            kbs.add(m)
+    if not update_ids and not kbs:
+        return {"installed": 0, "reboot_required": False, "error": "No update IDs or KBs specified"}
+    ids_ps = ", ".join(f'"{v}"' for v in (update_ids or []))
+    kbs_ps = ", ".join(f'"{v}"' for v in sorted(kbs))
     script = f"""
 $ids = @({ids_ps})
+$kbs = @({kbs_ps})
+function Match-U($u) {{
+    if ($ids -contains $u.Identity.UpdateID) {{ return $true }}
+    if ($kbs.Count -gt 0) {{ foreach ($kb in $u.KBArticleIDs) {{ if ($kbs -contains [string]$kb) {{ return $true }} }} }}
+    return $false
+}}
 try {{
     $Sess   = New-Object -ComObject Microsoft.Update.Session
     $Search = $Sess.CreateUpdateSearcher()
     $Found  = $Search.Search("IsInstalled=0 and IsHidden=0")
     $coll   = New-Object -ComObject Microsoft.Update.UpdateColl
-    foreach ($u in $Found.Updates) {{
-        if ($ids -contains $u.Identity.UpdateID) {{ [void]$coll.Add($u) }}
-    }}
+    foreach ($u in $Found.Updates) {{ if (Match-U $u) {{ [void]$coll.Add($u) }} }}
     if ($coll.Count -eq 0) {{
-        @{{installed=0;reboot_required=$false;error="No matching pending updates"}} | ConvertTo-Json -Compress
+        @{{installed=0;reboot_required=$false;still_pending=0;error="No matching pending updates"}} | ConvertTo-Json -Compress
         exit
     }}
-    $dl = $Sess.CreateUpdateDownloader()
-    $dl.Updates = $coll
-    [void]$dl.Download()
-    $inst = $Sess.CreateUpdateInstaller()
-    $inst.Updates = $coll
+    $dl = $Sess.CreateUpdateDownloader(); $dl.Updates = $coll; [void]$dl.Download()
+    $inst = $Sess.CreateUpdateInstaller(); $inst.Updates = $coll
     $res  = $inst.Install()
+    # post-install verification: re-scan and count targeted updates still pending
+    $still = 0
+    try {{
+        $F2 = $Search.Search("IsInstalled=0 and IsHidden=0")
+        foreach ($u in $F2.Updates) {{ if (Match-U $u) {{ $still++ }} }}
+    }} catch {{}}
     @{{
         installed       = $coll.Count
         reboot_required = $res.RebootRequired
         result_code     = $res.ResultCode
+        still_pending   = $still
         error           = ""
     }} | ConvertTo-Json -Compress
 }} catch {{
-    @{{installed=0;reboot_required=$false;error=$_.Exception.Message}} | ConvertTo-Json -Compress
+    @{{installed=0;reboot_required=$false;still_pending=0;error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
     result = _ps_json(script, timeout=30 * 60)  # up to 30 min for large patches
@@ -2111,6 +2469,7 @@ try {{
         "installed":       int(result.get("installed") or 0),
         "reboot_required": bool(result.get("reboot_required")),
         "result_code":     result.get("result_code"),
+        "still_pending":   int(result.get("still_pending") or 0),
         "error":           result.get("error") or "",
     }
 
@@ -3162,33 +3521,33 @@ async def shell_output_loop(session: ShellSession, ws, stop_event: asyncio.Event
 # ---------------------------------------------------------------------------
 
 # Module-level state for the persistent Eagle Eyes window-query helper.
-# The helper is a PowerShell script running in the interactive user's session
-# that polls GetForegroundWindow() every 2 s and writes the result to a file.
-# PowerShell is used instead of Python because corporate AV/EDR policies
-# typically whitelist powershell.exe; a Python child spawned from a SYSTEM
-# service doing window/process enumeration is often killed by EDR.
+# Eagle Eyes is Cirque IT's SANCTIONED activity-monitoring feature. This helper is a
+# named, declarable component: it is meant to be identifiable by endpoint security and
+# allow-listed, NOT hidden. It runs in the interactive user's desktop session (the only
+# context where the foreground window is visible to query) and reports the active
+# app/window title back to the monitoring server while monitoring is enabled for the user.
 _ee_helper_hproc: "ctypes.wintypes.HANDLE | None" = None   # process handle
 _EE_OUT_DIR      = r"C:\ProgramData\CirqueRMM"
-_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\ee_win.json"
-_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\ee_helper.cs"
-_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\ee_helper.exe"
+_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
+_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
+_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.exe"
 # csc.exe ships with every .NET 4.x install (present on all modern Windows)
 _EE_CSC          = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
-# C# source for ee_helper.exe -- compiled once via csc.exe on the Windows host.
+# C# source for CirqueEagleHelper.exe -- compiled once via csc.exe on the Windows host.
 # Runs as the interactive user (CreateProcessAsUserW), loops every 10 s.
 # Uses GetForegroundWindow() -- the correct Win32 API for active window detection.
 #
-# Why C# instead of PowerShell:
-#   PowerShell .ps1 scripts are scanned by AMSI before any line executes.
-#   Corporate EDR products block scripts that loop + enumerate processes + write
-#   files (classic malware pattern) regardless of -ExecutionPolicy Bypass.
-#   A compiled PE is evaluated differently: AV scans the binary, NOT the source,
-#   so there are no AMSI script-content rules to trigger.
+# Why a small compiled C# helper (rather than the SYSTEM service polling directly):
+#   GetForegroundWindow() only returns a meaningful result from the interactive user's
+#   desktop session, which the SYSTEM-context service cannot query itself. A tiny native
+#   helper launched into that session is lighter and steadier for a 10 s poll loop than
+#   re-spawning a script each tick. The helper is deliberately named CirqueEagleHelper.exe
+#   and documented so Defender/EDR and any admin can recognise and allow-list it -- this
+#   is a sanctioned monitoring tool and is not concealed from endpoint security.
 #
 # Diagnostic output:
-#   ee_diag.txt -- written on start + each iteration so we can see exactly
-#                 where execution stops if something goes wrong.
+#   CirqueEagleHelper_diag.txt -- written on start + each iteration for troubleshooting.
 _EE_HELPER_CS_SRC = r"""
 using System;
 using System.IO;
@@ -3198,8 +3557,8 @@ using System.Diagnostics;
 using System.Threading;
 
 class EagleEyes {
-    const string OutFile  = @"C:\ProgramData\CirqueRMM\ee_win.json";
-    const string DiagFile = @"C:\ProgramData\CirqueRMM\ee_diag.txt";
+    const string OutFile  = @"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json";
+    const string DiagFile = @"C:\ProgramData\CirqueRMM\CirqueEagleHelper_diag.txt";
     const int    Interval = 10000; // ms
 
     [DllImport("user32.dll")]
@@ -3210,6 +3569,14 @@ class EagleEyes {
 
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetTickCount();
+
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
 
     static string J(string s) {
         return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", " ");
@@ -3238,7 +3605,16 @@ class EagleEyes {
                 GetWindowThreadProcessId(hwnd, out pid);
                 string pname = "";
                 try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
-                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\"}";
+                // Idle is computed HERE, inside the interactive user session: GetLastInputInfo
+                // only sees the calling session's input, so the SYSTEM service in session 0
+                // cannot measure the user's idle time (it reported bogus, ever-growing idle).
+                uint idleSec = 0;
+                try {
+                    LASTINPUTINFO lii = new LASTINPUTINFO();
+                    lii.cbSize = (uint)Marshal.SizeOf(lii);
+                    if (GetLastInputInfo(ref lii)) { idleSec = (GetTickCount() - lii.dwTime) / 1000u; }
+                } catch { }
+                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\",\"i\":" + idleSec + "}";
                 File.WriteAllText(OutFile, json);
                 File.AppendAllText(DiagFile, n + " ok p=" + pname +
                     " t=" + title.Substring(0, Math.Min(60, title.Length)) + Environment.NewLine);
@@ -3382,20 +3758,20 @@ def _ee_ensure_helper() -> bool:
         return False
 
     # Write C# source and compile to exe (one-time; reused on subsequent calls).
-    # Compilation runs as SYSTEM (no AMSI restriction on subprocess calls).
-    # The resulting EXE is a normal PE -- EDR evaluates it differently from
-    # PS1 scripts, bypassing the AMSI script-content rules that blocked us.
+    # A small compiled helper is simply the cleanest way to query the interactive
+    # session's foreground window on a steady loop; the binary is named and documented
+    # (CirqueEagleHelper.exe) so endpoint security and admins can identify/allow-list it.
     import subprocess as _sp
     try:
         with open(_EE_HELPER_CS, "w", encoding="utf-8") as _f:
             _f.write(_EE_HELPER_CS_SRC)
     except Exception as _e:
         kernel32.CloseHandle(dup_token)
-        _ee_log(f"write ee_helper.cs failed: {_e}")
+        _ee_log(f"write CirqueEagleHelper.cs failed: {_e}")
         return False
 
     if not os.path.exists(_EE_HELPER_EXE):
-        _ee_log("compiling ee_helper.cs ...")
+        _ee_log("compiling CirqueEagleHelper.cs ...")
         r = _sp.run(
             [_EE_CSC, '/nologo', '/target:exe', f'/out:{_EE_HELPER_EXE}', _EE_HELPER_CS],
             capture_output=True, text=True, timeout=30,
@@ -3483,17 +3859,19 @@ def _ee_ensure_helper() -> bool:
 
 
 def _get_active_window_info() -> tuple:
-    """Return (process_name, window_title) for the foreground window.
+    """Return (process_name, window_title, idle_seconds) for the foreground window.
 
-    Reads the JSON file maintained by the persistent helper process that runs
-    inside the interactive user session.  Returns ('', '') on failure or when
-    not on Windows.
+    Reads the JSON maintained by the helper that runs inside the interactive user
+    session. Idle is computed THERE — GetLastInputInfo only sees input from within
+    the calling session, so the SYSTEM service in session 0 cannot measure the user's
+    idle time (the old session-0 _get_idle_seconds reported bogus ever-growing idle,
+    which made every event look idle). Returns ('', '', 0) on failure / non-Windows.
     """
     if sys.platform != "win32":
-        return ("", "")
+        return ("", "", 0)
     try:
         if not _ee_ensure_helper():
-            return ("", "")
+            return ("", "", 0)
         # Give the helper up to 4 s to produce a first result after fresh start
         import time as _time
         for _ in range(4):
@@ -3504,9 +3882,13 @@ def _get_active_window_info() -> tuple:
             data = json.loads(f.read().strip())
         proc  = (data.get("p") or "").strip()
         title = (data.get("t") or "").strip()
-        return (proc, title)
+        try:
+            idle = max(0, int(data.get("i") or 0))
+        except (TypeError, ValueError):
+            idle = 0
+        return (proc, title, idle)
     except Exception:
-        return ("", "")
+        return ("", "", 0)
 
 
 def _get_idle_seconds() -> int:
@@ -4316,6 +4698,10 @@ async def main() -> None:
     if check_for_update(tracker_url, agent_id, token):
         sys.exit(7)  # non-zero so NSSM always restarts after update
 
+    # Provision the C:\ITTOOLS drop folder for the "Install software" feature
+    # (idempotent; gated behind a sentinel so it doesn't thrash the ACL).
+    ensure_ittools_dir()
+
     # Sync RustDesk peer ID on startup (fast, non-blocking)
     sync_rustdesk_id(tracker_url, agent_id, token)
 
@@ -4489,9 +4875,10 @@ async def main() -> None:
                         await asyncio.sleep(poll_s)
                         now = datetime.now()
 
-                        # Active window + idle state
-                        proc, title = await loop.run_in_executor(None, _get_active_window_info)
-                        idle_s      = await loop.run_in_executor(None, _get_idle_seconds)
+                        # Active window + idle state. idle_s comes from the user-session
+                        # helper (session-0 GetLastInputInfo is blind to the interactive
+                        # user, so the old _get_idle_seconds() reported bogus idle).
+                        proc, title, idle_s = await loop.run_in_executor(None, _get_active_window_info)
                         is_idle     = idle_s >= IDLE_THRESH_S
 
                         if proc != last_process or title != last_title:
@@ -4730,17 +5117,23 @@ async def main() -> None:
 
                         # --- Install approved patches ---
                         if msg_type == "install_patches":
-                            job_id     = payload.get("job_id")
-                            update_ids = payload.get("update_ids") or []
-                            print(f"[agent] install_patches job={job_id} count={len(update_ids)}", flush=True)
+                            job_id       = payload.get("job_id")
+                            update_ids   = payload.get("update_ids") or []
+                            kb_ids       = payload.get("kb_ids") or []
+                            titles       = payload.get("titles") or []
+                            allow_reboot = bool(payload.get("allow_reboot", False))
+                            print(f"[agent] install_patches job={job_id} count={len(update_ids)} allow_reboot={allow_reboot}", flush=True)
                             loop2 = asyncio.get_event_loop()
-                            result = await loop2.run_in_executor(None, _install_patches_wua, update_ids)
+                            result = await loop2.run_in_executor(None, _install_patches_wua, update_ids, kb_ids, titles)
                             await ws.send(json.dumps({
                                 "type":   "patch_install_result",
                                 "job_id": job_id,
                                 "result": result,
                             }))
-                            if result.get("reboot_required") and not result.get("error"):
+                            # Only reboot when the server explicitly allows it. Otherwise the
+                            # reboot stays pending (reboot_required is reported) and the user
+                            # reboots on their own schedule via the tray.
+                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
                             continue
 
@@ -4749,7 +5142,8 @@ async def main() -> None:
                             job_id       = payload.get("job_id")
                             cve_ids      = payload.get("cve_ids") or []
                             product_name = payload.get("product_name") or ''
-                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids} product={product_name}", flush=True)
+                            allow_reboot = bool(payload.get("allow_reboot", False))
+                            print(f"[agent] install_cve_patches job={job_id} cves={cve_ids} product={product_name} allow_reboot={allow_reboot}", flush=True)
                             loop2 = asyncio.get_event_loop()
                             result = await loop2.run_in_executor(
                                 None, _find_and_install_cve_patches, cve_ids, product_name
@@ -4759,7 +5153,7 @@ async def main() -> None:
                                 "job_id": job_id,
                                 "result": result,
                             }))
-                            if result.get("reboot_required") and not result.get("error"):
+                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
                             continue
 
@@ -4781,17 +5175,20 @@ async def main() -> None:
                             code  = payload.get("code", "")
                             tout  = min(int(payload.get("timeout", 60)), 300)
                             try:
+                                loop = asyncio.get_event_loop()
                                 if shell == "cmd":
-                                    r = subprocess.run(
-                                        ["cmd", "/c", code], capture_output=True,
+                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
+                                        ["cmd.exe", "/c", code], capture_output=True,
                                         text=True, timeout=tout,
-                                    )
+                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
+                                    ))
                                 else:
-                                    r = subprocess.run(
-                                        ["powershell", "-NonInteractive", "-NoProfile",
+                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
+                                        ["powershell.exe", "-NonInteractive", "-NoProfile",
                                          "-ExecutionPolicy", "Bypass", "-Command", code],
                                         capture_output=True, text=True, timeout=tout,
-                                    )
+                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
+                                    ))
                                 await ws.send(json.dumps({
                                     "type": "script_result", "session_id": session_id,
                                     "exit_code": r.returncode,

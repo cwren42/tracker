@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # How often to run the evaluator (seconds)
 EVAL_INTERVAL_S = 300   # 5 minutes
 
+# Internal address of the RMM WebSocket gateway. Same default the Flask app uses
+# (RMM_GATEWAY_INTERNAL); the disk loop POSTs run_script remediations here.
+RMM_GATEWAY_INTERNAL = os.environ.get('RMM_GATEWAY_INTERNAL', 'http://127.0.0.1:8765')
+
 # Only one Gunicorn worker should run the evaluator per cycle
 ALERT_EVAL_LOCK_PATH = '/tmp/tracker_alert_eval.lock'
 
@@ -552,6 +556,210 @@ def _resolve_remediated_cve_alerts(con, today_str=None):
     return closed
 
 
+# ── Disk-space loop: diagnostic + safe auto-cleanup ──────────────────────────
+# The agent caps run_script at ~300s; both scripts are bounded well under that.
+_DISK_SCRIPT_TIMEOUT = 240
+
+
+def _enqueue_remediation(agent_id, asset_id, action_type, payload,
+                         ticket_id=None, dedup_substr=None):
+    """POST a run_script remediation to the gateway's reconnect-remediation
+    engine. Online → dispatched now; offline → queued for the reconnect flush
+    (best-effort, never raises). Idempotent guard: if dedup_substr is given and a
+    queued/deploying row for this agent already contains it, skip re-queuing.
+
+    Returns a small dict describing the outcome (status: skipped/queued/
+    deploying/error)."""
+    if dedup_substr:
+        con = _get_db()
+        try:
+            existing = con.execute(
+                """SELECT id, status FROM rmm_remediation_queue
+                   WHERE agent_id = %s
+                     AND action_type = 'run_script'
+                     AND status IN ('queued', 'deploying')
+                     AND payload LIKE %s
+                   ORDER BY id DESC LIMIT 1""",
+                (agent_id, f'%{dedup_substr}%')
+            ).fetchone()
+        except Exception:
+            existing = None
+        finally:
+            con.close()
+        if existing:
+            return {'agent_id': agent_id, 'status': 'skipped',
+                    'reason': 'already pending', 'existing_id': existing['id']}
+
+    body = {
+        'action_type': action_type,
+        'payload':     payload,
+        'asset_id':    asset_id,
+        'created_by':  None,
+        'ticket_id':   ticket_id,
+    }
+    try:
+        resp = requests.post(
+            f"{RMM_GATEWAY_INTERNAL}/remediation/{agent_id}/enqueue",
+            json=body, timeout=10,
+        )
+        gw = resp.json()
+    except Exception as e:
+        logger.warning(f'disk-loop enqueue failed for {agent_id}: {e}')
+        return {'agent_id': agent_id, 'status': 'error', 'error': str(e)}
+    return {'agent_id': agent_id, 'status': gw.get('status', 'queued'),
+            'delivered': gw.get('delivered', False), 'row_id': gw.get('id')}
+
+
+def _disk_diagnostic_code(letter: str) -> str:
+    """READ-ONLY 'what's filling it' script for one Windows drive.
+
+    Get-*/Measure-Object only — never deletes or modifies anything. Reports the
+    drive type, top-level folders by size on the affected drive, the known hog
+    paths, and the largest >1GB files. `letter` is e.g. 'C:'."""
+    drv = letter.rstrip('\\').rstrip('/')  # 'C:'
+    root = drv + '\\'
+    # NB: all paths below are inspected with Get-ChildItem/Measure-Object only.
+    return f'''$ErrorActionPreference='SilentlyContinue'
+$drv='{drv}'; $root='{root}'
+function SizeGB($p){{ if(Test-Path $p){{ $b=(Get-ChildItem -LiteralPath $p -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum; if($b){{ [math]::Round($b/1GB,2) }} else {{ 0 }} }} else {{ 'n/a' }} }}
+$ld = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$drv'"
+"=== Disk diagnostic for $drv ==="
+if($ld){{ "DriveType={{0}} (2=removable 3=fixed 4=network 5=optical/mounted)  FileSystem={{1}}  FreeGB={{2}}  SizeGB={{3}}" -f $ld.DriveType,$ld.FileSystem,[math]::Round($ld.FreeSpace/1GB,1),[math]::Round($ld.Size/1GB,1) }}
+""
+"=== Top folders by size (depth 1) ==="
+Get-ChildItem -LiteralPath $root -Directory -Force -EA SilentlyContinue | ForEach-Object {{
+  $sz=(Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  [PSCustomObject]@{{ Folder=$_.FullName; GB=[math]::Round(($sz)/1GB,2) }}
+}} | Sort-Object GB -Descending | Select-Object -First 12 | Format-Table -Auto | Out-String
+""
+"=== Known hogs ==="
+$tmp=$env:TEMP
+"Windows\\Temp           : $(SizeGB (Join-Path $root 'Windows\\Temp')) GB"
+"%TEMP% ($tmp): $(SizeGB $tmp) GB"
+"SoftwareDistribution\\Download: $(SizeGB (Join-Path $root 'Windows\\SoftwareDistribution\\Download')) GB"
+"Windows\\Installer      : $(SizeGB (Join-Path $root 'Windows\\Installer')) GB  (orphaned-MSI — needs validation, NOT auto-cleaned)"
+"Windows.old            : $(SizeGB (Join-Path $root 'Windows.old')) GB"
+$rb = Join-Path $root '$Recycle.Bin'
+"Recycle Bin            : $(SizeGB $rb) GB"
+$pf = Join-Path $root 'pagefile.sys'; if(Test-Path $pf){{ "pagefile.sys           : $([math]::Round((Get-Item $pf -Force).Length/1GB,2)) GB" }}
+$hb = Join-Path $root 'hiberfil.sys'; if(Test-Path $hb){{ "hiberfil.sys           : $([math]::Round((Get-Item $hb -Force).Length/1GB,2)) GB" }}
+$wim = Get-ChildItem -LiteralPath $root -Recurse -Force -Include *.iso,*.wim,*.vhd,*.vhdx -EA SilentlyContinue | Where-Object {{ $_.Length -gt 1GB }} | Select-Object -First 5
+if($wim){{ ""; "=== Large disk-image files (mounted ISO/WIM/VHD?) ==="; $wim | ForEach-Object {{ "{{0}}  {{1}} GB" -f $_.FullName,[math]::Round($_.Length/1GB,2) }} }}
+""
+"=== Largest files >1GB (top 15) ==="
+Get-ChildItem -LiteralPath $root -Recurse -Force -File -EA SilentlyContinue | Where-Object {{ $_.Length -gt 1GB }} | Sort-Object Length -Descending | Select-Object -First 15 | ForEach-Object {{ "{{0}}  {{1}} GB" -f $_.FullName,[math]::Round($_.Length/1GB,2) }}
+'''
+
+
+def _disk_cleanup_code(letter: str) -> str:
+    """SAFE auto-cleanup for one Windows OS drive (C: only — caller-gated).
+
+    Deletes ONLY well-known safe caches and logs exactly what was freed per path.
+    Strict allowlist — NEVER user data (Downloads), NEVER Windows\\Installer
+    (orphaned-MSI needs validation), NEVER data/backup volumes. Idempotent
+    (re-runnable; already-empty paths free 0) and bounded (per-path try/catch,
+    -Force -Recurse with -EA SilentlyContinue so locked files are skipped, not
+    fatal)."""
+    drv = letter.rstrip('\\').rstrip('/')
+    root = drv + '\\'
+    return f'''$ErrorActionPreference='SilentlyContinue'
+$root='{root}'
+$freed=0.0
+function Clean($label,$path,$pattern){{
+  if(-not (Test-Path $path)){{ "{{0}}: n/a" -f $label; return }}
+  $before=(Get-ChildItem -LiteralPath $path -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  if($pattern){{ Get-ChildItem -LiteralPath $path -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue }}
+  else {{ Get-ChildItem -LiteralPath $path -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue }}
+  $after=(Get-ChildItem -LiteralPath $path -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  $gb=[math]::Round((($before-$after))/1GB,3); if($gb -lt 0){{ $gb=0 }}
+  $script:freed += $gb
+  "{{0}}: freed {{1}} GB ({{2}})" -f $label,$gb,$path
+}}
+"=== Safe cache cleanup on $root (OS drive) ==="
+# ── SAFE-CACHE ALLOWLIST (the ONLY paths this script touches) ──
+Clean 'Windows\\Temp'              (Join-Path $root 'Windows\\Temp')
+Clean 'WU cache (SoftwareDistribution\\Download)' (Join-Path $root 'Windows\\SoftwareDistribution\\Download')
+# Per-user %TEMP% across all profiles
+Get-ChildItem -LiteralPath (Join-Path $root 'Users') -Directory -Force -EA SilentlyContinue | ForEach-Object {{
+  Clean ("User TEMP: " + $_.Name) (Join-Path $_.FullName 'AppData\\Local\\Temp')
+}}
+# Browser caches (Chrome/Edge/Firefox) per profile — caches only, never profile data
+Get-ChildItem -LiteralPath (Join-Path $root 'Users') -Directory -Force -EA SilentlyContinue | ForEach-Object {{
+  $u=$_.FullName
+  Clean ("Chrome cache: " + $_.Name) (Join-Path $u 'AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache')
+  Clean ("Edge cache: "   + $_.Name) (Join-Path $u 'AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache')
+  # Firefox: delete ONLY the per-profile cache2 dirs — never the profile itself.
+  Get-ChildItem -LiteralPath (Join-Path $u 'AppData\\Local\\Mozilla\\Firefox\\Profiles') -Directory -Force -EA SilentlyContinue | ForEach-Object {{
+    Clean ("Firefox cache: " + $_.Name) (Join-Path $_.FullName 'cache2')
+  }}
+}}
+# Recycle Bin (Clear-RecycleBin is the supported, contained API)
+try {{ $rbBefore=(Get-ChildItem -LiteralPath (Join-Path $root '$Recycle.Bin') -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  Clear-RecycleBin -DriveLetter $root.Substring(0,1) -Force -EA SilentlyContinue
+  $rbAfter=(Get-ChildItem -LiteralPath (Join-Path $root '$Recycle.Bin') -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+  $rbGb=[math]::Round((($rbBefore-$rbAfter))/1GB,3); if($rbGb -lt 0){{ $rbGb=0 }}; $freed+=$rbGb
+  "Recycle Bin: freed $rbGb GB" }} catch {{ "Recycle Bin: skipped" }}
+""
+"=== TOTAL FREED: {{0}} GB ===" -f [math]::Round($freed,2)
+"NOTE: Downloads, Windows\\Installer, and data/backup volumes are intentionally NOT touched."
+'''
+
+
+def _dispatch_disk_diagnostic(agent_id, asset_id, host, letter, ticket_id):
+    """Best-effort: enqueue the READ-ONLY disk diagnostic for `host`, tied to the
+    disk ticket so the result lands as a ticket note. Never blocks ticket
+    creation. Windows-only (PowerShell)."""
+    if not letter or not letter.endswith(':'):
+        return  # Linux/macOS: skip the PowerShell diagnostic
+    payload = {
+        'type':    'run_script',
+        'shell':   'powershell',
+        'code':    _disk_diagnostic_code(letter),
+        'timeout': _DISK_SCRIPT_TIMEOUT,
+    }
+    res = _enqueue_remediation(
+        agent_id, asset_id, 'run_script', payload, ticket_id=ticket_id,
+        dedup_substr=f'Disk diagnostic for {letter}')
+    if res.get('status') == 'error':
+        # Host likely offline / gateway unreachable — note it on the ticket so the
+        # tech knows the diagnostic didn't run. Best-effort, never raises.
+        try:
+            con = _get_db()
+            con.execute(
+                "INSERT INTO ticket_note (ticket_id, user_id, content, created_at) "
+                "VALUES (%s, NULL, %s, NOW())",
+                (ticket_id, f'[Auto] Disk diagnostic could not be dispatched to '
+                            f'{host} (offline/unreachable): {res.get("error")}'))
+            con.commit(); con.close()
+        except Exception:
+            pass
+    else:
+        logger.info(f'disk-loop: diagnostic {res.get("status")} for {host} {letter} '
+                    f'(ticket #{ticket_id})')
+
+
+def _dispatch_disk_cleanup(agent_id, asset_id, host, letter, ticket_id):
+    """Best-effort: enqueue the SAFE auto-cleanup for a FIXED OS drive (C:) on a
+    disk_critical. Frees only allowlisted caches; logs what it freed. The existing
+    disk_critical auto-resolve closes the ticket if free space recovers; if not
+    (e.g. Installer bloat), the ticket stays open with the diagnostic note."""
+    # Defense-in-depth: only the Windows OS drive. The caller already gates on
+    # is_os_drive, but never let cleanup run against anything but C:.
+    if (letter or '').upper() != 'C:':
+        return
+    payload = {
+        'type':    'run_script',
+        'shell':   'powershell',
+        'code':    _disk_cleanup_code(letter),
+        'timeout': _DISK_SCRIPT_TIMEOUT,
+    }
+    res = _enqueue_remediation(
+        agent_id, asset_id, 'run_script', payload, ticket_id=ticket_id,
+        dedup_substr='Safe cache cleanup on')
+    logger.info(f'disk-loop: cleanup {res.get("status")} for {host} {letter} '
+                f'(ticket #{ticket_id})')
+
+
 def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
                 hostname=None, extra_html='', dedup_token=None):
     """
@@ -594,7 +802,7 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
                                 ticket_id=None, bump=False, dedup_token=dedup_token)
         except Exception:
             pass
-        return  # already fired recently
+        return None  # already fired recently
 
     # Create / re-open ticket (deduplicated across close — one evolving ticket
     # per (rule, host) instead of a fresh ticket every cooldown cycle).
@@ -672,6 +880,7 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
                     f'{message}{" | Hostname: " + hostname if hostname else ""}')
 
     logger.info(f'Alert fired: [{category}] {alert_type} — {message}')
+    return ticket_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -736,22 +945,58 @@ def _eval_agent_alerts(con, rules_by_type):
             try:
                 disks = json.loads(disk_json)
                 for d in (disks if isinstance(disks, list) else []):
-                    # Only alert on the OS drive: C:\ on Windows, / on Linux/macOS.
-                    # Skip secondary, USB, virtual, and network drives.
                     mp = (d.get('mountpoint') or '').strip()
-                    is_windows_os = mp.upper().rstrip('\\').rstrip('/') == 'C:'
+                    letter = mp.upper().rstrip('\\').rstrip('/')  # 'C:' / 'D:' / ''
+                    is_windows_os = letter == 'C:'
                     is_linux_os   = mp == '/'
-                    if not is_windows_os and not is_linux_os:
-                        continue
+
+                    # ── DriveType gate (2.9.22+ agents) ───────────────────────
+                    # drive_type from Win32_LogicalDisk: 2=removable, 3=fixed,
+                    # 4=network, 5=optical/mounted-ISO. Alert on FIXED drives only
+                    # (drive_type==3) regardless of letter, so a real D:/E: data
+                    # volume filling up DOES alert; SKIP removable/network/optical-
+                    # or-mounted-image — that suppresses the ISO/optical false-
+                    # positive class on ANY letter.
+                    #
+                    # GRACEFUL FALLBACK: older agents don't report drive_type. When
+                    # it's absent, keep the legacy OS-drive-only behavior (C:\ or /)
+                    # so nothing breaks during the canary rollout.
+                    dt = d.get('drive_type')
+                    if dt is not None:
+                        try:
+                            dt = int(dt)
+                        except (TypeError, ValueError):
+                            dt = None
+                    if dt is not None:
+                        if dt != 3:
+                            continue  # not a fixed drive — skip (USB/ISO/optical/net)
+                    else:
+                        # No drive_type → legacy gate: OS drive only.
+                        if not is_windows_os and not is_linux_os:
+                            continue
+
                     pct_free = 100 - (d.get('percent', 100))
                     drive    = d.get('device', '?')
+                    # OS-drive flag drives Part-4 auto-cleanup eligibility: only the
+                    # Windows OS volume (C:) or the Linux root get the safe-cache
+                    # cleanup — NEVER a data/backup volume (a fixed D:/E:).
+                    is_os_drive = is_windows_os or is_linux_os
                     for rtype in ('disk_critical', 'disk_low'):
                         rule = rules_by_type.get(rtype)
                         if rule and rule['enabled'] and pct_free <= rule['threshold_value']:
-                            _fire_alert(con, rule,
+                            tid = _fire_alert(con, rule,
                                         f'{host} drive {drive} free space at '
                                         f'{pct_free:.1f}% (threshold {rule["threshold_value"]:.0f}%).',
                                         agent_id=aid, asset_id=asset_id, hostname=host)
+                            # New ticket just created (cooldown elapsed) → attach a
+                            # read-only diagnostic, and for a FIXED OS drive on a
+                            # disk_critical, kick off the safe auto-cleanup.
+                            if tid:
+                                _dispatch_disk_diagnostic(
+                                    aid, asset_id, host, letter, tid)
+                                if rtype == 'disk_critical' and is_os_drive:
+                                    _dispatch_disk_cleanup(
+                                        aid, asset_id, host, letter, tid)
                             break  # only fire the most severe
             except Exception:
                 pass

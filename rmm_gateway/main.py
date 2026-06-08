@@ -606,16 +606,19 @@ async def enqueue_remediation(agent_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "payload must be an object"}, status_code=400)
     asset_id = body.get("asset_id")
     created_by = body.get("created_by")
+    # Optional: originating ticket. When set, the script_result posts a ticket
+    # note (e.g. the disk-space diagnostic attaches its output to the disk ticket).
+    ticket_id = body.get("ticket_id")
 
     # 1) Persist as queued (durable — survives if the agent is offline).
     try:
         conn = get_conn(); cur = get_cursor(conn)
         cur.execute(
             """INSERT INTO rmm_remediation_queue
-                   (agent_id, asset_id, action_type, payload, status, created_by)
-               VALUES (%s, %s, %s, %s, 'queued', %s)
+                   (agent_id, asset_id, action_type, payload, status, created_by, ticket_id)
+               VALUES (%s, %s, %s, %s, 'queued', %s, %s)
                RETURNING id""",
-            (agent_id, asset_id, action_type, json.dumps(msg_body), created_by),
+            (agent_id, asset_id, action_type, json.dumps(msg_body), created_by, ticket_id),
         )
         rq_id = cur.fetchone()["id"]
         conn.commit(); cur.close(); conn.close()
@@ -1113,13 +1116,47 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     cur.execute(
                         "UPDATE rmm_remediation_queue "
                         "SET status=%s, result_json=%s, completed_at=NOW(), updated_at=NOW() "
-                        "WHERE id=%s AND status='deploying'",
+                        "WHERE id=%s AND status='deploying' "
+                        "RETURNING ticket_id, action_type",
                         (rq_status, json.dumps(payload), rq_id),
                     )
+                    _rrow = cur.fetchone()
                     n = cur.rowcount
                     conn.commit(); cur.close(); conn.close()
                     if n:
                         print(f"[gw] remediation result id={rq_id} status={rq_status} exit={exit_code}", flush=True)
+                    # If this remediation was tied to a ticket (e.g. the disk
+                    # diagnostic), attach the script output as a ticket note. Only
+                    # the row we actually transitioned (n==1) posts — idempotent.
+                    if n and _rrow and _rrow.get("ticket_id"):
+                        try:
+                            _stdout = (payload.get("stdout") or "").strip()
+                            _stderr = (payload.get("stderr") or "").strip()
+                            _body = _stdout or "(no output)"
+                            if _stderr:
+                                _body += f"\n\n[stderr]\n{_stderr}"
+                            # Bound the note so a runaway script can't bloat the ticket.
+                            if len(_body) > 12000:
+                                _body = _body[:12000] + "\n…(truncated)"
+                            _label = "Disk diagnostic" if _rrow.get("action_type") == "run_script" else "Remediation"
+                            _note = (
+                                f"[Auto] {_label} result (exit {exit_code}, "
+                                f"remediation #{rq_id}):\n\n{_body}"
+                            )
+                            conn = get_conn(); cur = get_cursor(conn)
+                            cur.execute(
+                                "INSERT INTO ticket_note (ticket_id, user_id, content, created_at) "
+                                "VALUES (%s, NULL, %s, NOW())",
+                                (_rrow["ticket_id"], _note),
+                            )
+                            cur.execute(
+                                "UPDATE support_ticket SET updated_at=NOW() WHERE id=%s",
+                                (_rrow["ticket_id"],),
+                            )
+                            conn.commit(); cur.close(); conn.close()
+                            print(f"[gw] attached diagnostic note to ticket #{_rrow['ticket_id']} (rq {rq_id})", flush=True)
+                        except Exception as _ne:
+                            print(f"[gw] ticket-note attach error rq={rq_id}: {_ne}", flush=True)
                 except Exception as e:
                     print(f"[gw] remediation result DB error id={rq_id}: {e}", flush=True)
                 continue

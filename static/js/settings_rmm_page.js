@@ -29,8 +29,8 @@ function regenerateSiteToken() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    var tok  = "window.SETTINGSRMMCFG.rmm_site_token";
-    var base = "window.SETTINGSRMMCFG.host_url".replace(/\/+$/, "");
+    var tok  = window.SETTINGSRMMCFG.rmm_site_token;
+    var base = window.SETTINGSRMMCFG.host_url.replace(/\/+$/, "");
     var installUrl = base + "/download/site-install.ps1?t=" + tok;
     var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
     var sslBypass = "[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.22"
+AGENT_VERSION = "2.9.23"
 
 import asyncio
 import base64
@@ -55,6 +55,19 @@ def get_env(name: str) -> str:
     if not v:
         raise RuntimeError(f"Missing env var: {name}")
     return v
+
+
+def _patch_install_timeout() -> int:
+    """Hard wall-clock budget (seconds) for one WUA install pass, after which the
+    child process is killed and the job reported as failed/timeout. Default 35 min;
+    override with the CIRQUE_PATCH_INSTALL_TIMEOUT env var (seconds, min 60)."""
+    try:
+        v = int(os.environ.get("CIRQUE_PATCH_INSTALL_TIMEOUT", "") or 0)
+        if v >= 60:
+            return v
+    except Exception:
+        pass
+    return 35 * 60
 
 
 def _ssl_ctx():
@@ -177,6 +190,103 @@ def _ps_json(script: str, timeout: int = 15):
     except Exception:
         pass
     return None
+
+
+# Sentinel returned by _ps_json_proc when the child process exceeds its hard
+# deadline and is killed. Distinguished from None (no/garbage output) so callers
+# can report a structured "timeout" failure rather than a generic error.
+_PS_TIMEOUT = object()
+
+
+def _kill_proc_tree(proc) -> None:
+    """Kill *proc* and every descendant. WUA's Install() runs the actual work in
+    out-of-process workers (TrustedInstaller / wuauserv-spawned helpers) that a
+    plain proc.kill() on powershell.exe would orphan, so we walk the tree via
+    psutil. Best-effort: any failure is swallowed — the goal is only to free the
+    executor thread, not to guarantee the WU worker dies."""
+    try:
+        parent = psutil.Process(proc.pid)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
+    procs = []
+    try:
+        procs = parent.children(recursive=True)
+    except Exception:
+        pass
+    procs.append(parent)
+    for p in procs:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    try:
+        psutil.wait_procs(procs, timeout=5)
+    except Exception:
+        pass
+
+
+def _ps_json_proc(script: str, timeout: int = 15):
+    """Run a PowerShell script in a CHILD PROCESS with a HARD wall-clock deadline.
+
+    Unlike _ps_json (which relies on subprocess.run's own timeout), this launches
+    the process with Popen and polls a deadline we own, then KILLS THE WHOLE PROCESS
+    TREE on expiry. This matters for the Windows Update COM Install() path: that call
+    can block effectively forever on a broken/large WU backlog, and subprocess.run's
+    timeout-kill does not reliably reap the out-of-process WU workers, so the calling
+    (executor) thread can stay wedged far longer than the nominal timeout. Killing the
+    tree here guarantees this thread returns within ~timeout seconds no matter what
+    Windows Update is doing, which is what frees the agent's command executor.
+
+    Returns:
+      * parsed JSON dict on success,
+      * _PS_TIMEOUT if the deadline was hit (child killed),
+      * None on any other failure / unparseable output.
+    """
+    import time as _time
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+    except Exception as e:
+        print(f"[ps_proc] launch failed: {e}", flush=True)
+        return None
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"[ps_proc] hard timeout after {timeout}s -- killing process tree "
+                  f"(pid={proc.pid})", flush=True)
+            _kill_proc_tree(proc)
+            # Drain pipes so the killed child's handles are released and this
+            # thread does not block on a half-read pipe.
+            try:
+                proc.communicate(timeout=10)
+            except Exception:
+                pass
+            return _PS_TIMEOUT
+        out = (out or "").strip()
+        if proc.returncode != 0 and not out:
+            e = (err or "").strip()
+            if e:
+                print(f"[ps_proc] stderr: {e[:300]}", flush=True)
+        if out and out != "null":
+            try:
+                return json.loads(out)
+            except Exception:
+                return None
+        return None
+    finally:
+        # Guarantee no lingering handle on the executor thread.
+        if proc is not None and proc.poll() is None:
+            _kill_proc_tree(proc)
 
 
 # Internal LAN hostnames -- only resolvable via corporate internal DNS.
@@ -2462,7 +2572,22 @@ try {{
     @{{installed=0;reboot_required=$false;still_pending=0;error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
-    result = _ps_json(script, timeout=30 * 60)  # up to 30 min for large patches
+    # Run the (potentially-forever-blocking) WUA download+Install() pass in a child
+    # process with a HARD deadline. A stuck Install() can no longer wedge the agent's
+    # command executor: on timeout we kill the process tree and return a structured
+    # failed/timeout result so the gateway records a real failure (not silent
+    # stuck-deploying), and the executor thread is freed for queued commands.
+    tmo = _patch_install_timeout()
+    result = _ps_json_proc(script, timeout=tmo)
+    if result is _PS_TIMEOUT:
+        return {
+            "installed": 0,
+            "reboot_required": False,
+            "result_code": None,
+            "still_pending": 0,
+            "timed_out": True,
+            "error": f"Windows Update install timed out after {tmo}s (process killed)",
+        }
     if result is None:
         return {"installed": 0, "reboot_required": False, "error": "No output from installer"}
     return {
@@ -2819,8 +2944,16 @@ try {{
        error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
-    result = _ps_json(script, timeout=30 * 60)
-    if result is None:
+    # Same hard-deadline child-process guard as _install_patches_wua: this WUA
+    # Install() path can also block forever and would otherwise wedge the agent's
+    # command executor. On timeout we kill the tree and surface a timeout error.
+    tmo = _patch_install_timeout()
+    result = _ps_json_proc(script, timeout=tmo)
+    if result is _PS_TIMEOUT:
+        wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
+                      "titles": [], "kb_ids": [], "timed_out": True,
+                      "error": f"Windows Update install timed out after {tmo}s (process killed)"}
+    elif result is None:
         wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
                       "titles": [], "kb_ids": [], "error": "No output from WUA"}
     else:

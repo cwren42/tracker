@@ -1206,9 +1206,13 @@ def _eagle_report_scheduler(app):
         try:
             _time.sleep(900)  # check every 15 minutes
             with app.app_context():
+                # NOTE: rmm_eagle_report_schedule.enabled is a bigint (1/0), unlike the
+                # boolean `enabled` on sibling rmm_* tables — a SQLite→PG migration
+                # artifact. Compare against 1, not `true`, or PG raises
+                # "operator does not exist: bigint = boolean".
                 schedules = db.session.execute(text("""
                     SELECT id, agent_id, frequency, day_of_week, send_time, email_to, last_sent_at
-                    FROM rmm_eagle_report_schedule WHERE enabled = true
+                    FROM rmm_eagle_report_schedule WHERE enabled = 1
                 """)).mappings().fetchall()
 
                 for sch in schedules:

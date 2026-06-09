@@ -33,9 +33,15 @@ function setStatus(state, label) {
 }
 
 async function issueToken() {
+    // Attach the CSRF token explicitly. This page auto-connects on script load
+    // (see connect('powershell') at the bottom), which runs BEFORE base.html's
+    // deferred fetch() CSRF monkey-patch installs — so we cannot rely on that
+    // patch to inject X-CSRFToken here, or the POST gets a 400 "CSRF token is
+    // missing" and the shell shows "Failed to get session token".
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const resp = await fetch('/api/rmm/issue-token', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
         body: JSON.stringify({agent_id: AGENT_ID}),
     });
     if (!resp.ok) throw new Error('Failed to get session token');

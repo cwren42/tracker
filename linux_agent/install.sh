@@ -39,12 +39,12 @@ echo "Installing dependencies..."
 
 if [ "$OS" = "rhel" ] || [ "$OS" = "centos" ] || [ "$OS" = "rocky" ]; then
     # RedHat/CentOS
-    yum install -y python3 python3-pip python3-psutil python3-requests
+    yum install -y python3 python3-pip python3-psutil python3-requests python3-websockets
 elif [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
     # Debian/Ubuntu — install psutil/requests as OS packages (modern Ubuntu/Debian
     # is PEP 668 "externally-managed" and blocks system-wide pip).
     apt-get update
-    apt-get install -y python3 python3-pip python3-psutil python3-requests
+    apt-get install -y python3 python3-pip python3-psutil python3-requests python3-websockets
 else
     echo "Warning: Unsupported OS, attempting to continue..."
 fi
@@ -53,9 +53,9 @@ fi
 # if the imports still aren't satisfied, using --break-system-packages for PEP 668.
 echo ""
 echo "Installing Python packages..."
-if ! python3 -c "import psutil, requests" 2>/dev/null; then
-    pip3 install psutil requests 2>/dev/null \
-      || pip3 install --break-system-packages psutil requests
+if ! python3 -c "import psutil, requests, websockets" 2>/dev/null; then
+    pip3 install psutil requests websockets 2>/dev/null \
+      || pip3 install --break-system-packages psutil requests websockets
 fi
 
 # Download agent

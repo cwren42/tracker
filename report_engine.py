@@ -10,7 +10,10 @@ from typing import Dict, List, Optional
 from pg_db import pg_connect
 
 log = logging.getLogger("report_engine")
-REPORT_DIR = "/var/www/tracker/static/reports"
+# Repo-relative by default so it works wherever the code is checked out (prod runs
+# from /var/www/tracker, so this resolves to the same path there). Overridable via env.
+REPORT_DIR = os.environ.get("REPORT_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "static", "reports")
 
 
 def _db():
@@ -21,7 +24,11 @@ def _now():
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
-os.makedirs(REPORT_DIR, exist_ok=True)
+try:
+    os.makedirs(REPORT_DIR, exist_ok=True)
+except OSError as e:
+    # Never let a read-only/absent path break import (e.g. CI, restricted envs).
+    log.warning("could not create REPORT_DIR %s: %s", REPORT_DIR, e)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

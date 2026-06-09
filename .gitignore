@@ -56,3 +56,8 @@ Thumbs.db
 # Agent update signing private key — never commit
 .agent_signing/
 .claude/scheduled_tasks.lock
+
+# Built RMM installer artifacts — bake the live site enrollment token (a secret),
+# so they must NOT live in VCS. Rebuilt on-server from the DB via rmm_agent/build_msi.py.
+rmm_agent/CirqueRMM.msi
+rmm_agent/CirqueRMM.exe

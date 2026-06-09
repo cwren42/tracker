@@ -1,8 +1,24 @@
+function _flashCopied(btn) {
+    if (!btn) return;
+    btn.innerHTML = '<i class="bi bi-check text-success"></i>';
+    setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+}
+
 function copyById(id, btn) {
-    navigator.clipboard.writeText(document.getElementById(id).value).then(function() {
-        btn.innerHTML = '<i class="bi bi-check text-success"></i>';
-        setTimeout(function() { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
-    }).catch(function(){});
+    var el = document.getElementById(id);
+    if (!el) return;
+    // Select the field text first — works even on non-secure (self-signed cert) origins.
+    el.focus();
+    el.select();
+    try { el.setSelectionRange(0, 99999); } catch (e) {}
+    // Primary: legacy execCommand (no secure-context requirement).
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (ok) { _flashCopied(btn); return; }
+    // Fallback: async clipboard API (only works in a secure context).
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(el.value).then(function () { _flashCopied(btn); }).catch(function(){});
+    }
 }
 
 function toggleSiteToken() {
@@ -13,8 +29,16 @@ function toggleSiteToken() {
 }
 
 function copySiteToken() {
-    navigator.clipboard.writeText(document.getElementById('siteTokenInput').value);
-    console.log('Token copied to clipboard');
+    var el = document.getElementById('siteTokenInput');
+    var wasPwd = el.type === 'password';
+    if (wasPwd) el.type = 'text';
+    el.focus();
+    el.select();
+    try { el.setSelectionRange(0, 99999); } catch (e) {}
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (!ok && navigator.clipboard) { navigator.clipboard.writeText(el.value).catch(function(){}); }
+    if (wasPwd) el.type = 'password';
 }
 
 function regenerateSiteToken() {

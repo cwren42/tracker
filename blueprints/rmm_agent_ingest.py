@@ -193,7 +193,7 @@ def receive_system_info():
                 tok = secrets.token_hex(32)
                 tok_hash = hashlib.sha256(tok.encode()).hexdigest()
                 db.session.execute(
-                    text("INSERT INTO rmm_agent (agent_id, asset_id, agent_token_sha256, enabled, created_at, last_seen_at) VALUES (:aid, :asid, :hash, 1, :now, :now)"),
+                    text("INSERT INTO rmm_agent (agent_id, asset_id, agent_token_sha256, enabled, created_at, last_seen_at) VALUES (:aid, :asid, :hash, true, :now, :now)"),
                     {'aid': agent_id, 'asid': asset.id, 'hash': tok_hash, 'now': datetime.utcnow().isoformat()}
                 )
             else:

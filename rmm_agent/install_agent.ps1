@@ -326,15 +326,24 @@ Write-Host "    Dependencies installed." -ForegroundColor Green
 # - 6. Install NSSM & register service -
 Write-Host "[6/7] Configuring Windows service..." -ForegroundColor Yellow
 
-# Use bundled nssm.exe from InstallDir if present, else fall back to NssmPath or download
+# Prefer the tracker-served nssm.exe (nssm.cc is frequently unreachable/503).
 $bundledNssm = "$InstallDir\nssm.exe"
+if (-not (Test-Path $bundledNssm)) {
+    try {
+        Write-Host "    Downloading nssm.exe from $TrackerUrl ..."
+        Invoke-WebRequest -Uri "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" -OutFile $bundledNssm -UseBasicParsing -TimeoutSec 120
+    } catch {
+        Write-Warning "    Tracker NSSM download failed ($_); will try fallback."
+        if (Test-Path $bundledNssm) { Remove-Item $bundledNssm -Force -ErrorAction SilentlyContinue }
+    }
+}
 if (Test-Path $bundledNssm) {
     $NssmPath = $bundledNssm
-    Write-Host "    Using bundled NSSM: $NssmPath" -ForegroundColor Green
+    Write-Host "    Using NSSM: $NssmPath" -ForegroundColor Green
 }
 
 if (-not (Test-Path $NssmPath)) {
-    Write-Host "    nssm.exe not bundled and not at $NssmPath -- attempting download..."
+    Write-Host "    nssm.exe not available from tracker and not at $NssmPath -- attempting nssm.cc download..."
     $NssmZip     = "$env:TEMP\nssm.zip"
     $NssmExtract = "$env:TEMP\nssm_extract"
     $NssmDir     = Split-Path $NssmPath

@@ -450,6 +450,7 @@ def download_agent_file(filename):
         'agent_client.py', 'agent_launcher.py', 'tray.py',
         'requirements.txt', 'version.txt',
         'cirque_icon_ico.b64', 'cirque_icon_png.b64',
+        'nssm.exe',  # served locally so installs don't depend on nssm.cc (often 503)
     }
     clean = posixpath.basename(filename)
     if clean not in allowed:
@@ -467,7 +468,8 @@ def download_agent_file(filename):
     path = os.path.join(current_app.root_path, 'rmm_agent', clean)
     if not os.path.exists(path):
         return f"{clean} not found on server.", 404
-    return send_file(path, as_attachment=False, mimetype='text/plain')
+    _mime = 'application/octet-stream' if clean.lower().endswith('.exe') else 'text/plain'
+    return send_file(path, as_attachment=False, mimetype=_mime)
 
 
 @bp.route('/api/rmm/agent/<agent_id>/remove', methods=['POST'])

@@ -2,3 +2,7 @@
 #   venv/bin/pip install -r requirements-dev.txt
 -r requirements.txt
 pytest>=8.0
+# Needed to import rmm_agent/canary/agent_client.py under test (tests/test_patch_install_timeout.py).
+# These are RMM-agent runtime deps (see rmm_agent/requirements.txt), not Tracker-server deps.
+psutil>=5.9
+websockets>=12.0

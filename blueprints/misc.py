@@ -198,7 +198,8 @@ def api_ad_group_remove_member():
 @bp.route('/agent/download')
 def agent_download():
     """Serve the Linux agent Python script for download"""
-    agent_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'agent.py')
+    # Files live in the top-level ./linux_agent/ dir (project root), NOT under blueprints/.
+    agent_path = os.path.join(current_app.root_path, 'linux_agent', 'agent.py')
     return send_file(agent_path, as_attachment=True, download_name='cirque-rmm-agent')
 
 
@@ -206,7 +207,7 @@ def agent_download():
 def agent_install_script():
     """Serve the agent installer script with the API key pre-filled"""
     from flask import Response
-    script_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'install.sh')
+    script_path = os.path.join(current_app.root_path, 'linux_agent', 'install.sh')
     with open(script_path, 'r') as f:
         script = f.read()
     # Inject current API key so the installer works without any manual config
@@ -221,7 +222,7 @@ def agent_install_script():
 @bp.route('/agent/service')
 def agent_service_file():
     """Serve the systemd service file"""
-    service_path = os.path.join(os.path.dirname(__file__), 'linux_agent', 'cirque-rmm-agent.service')
+    service_path = os.path.join(current_app.root_path, 'linux_agent', 'cirque-rmm-agent.service')
     return send_file(service_path, mimetype='text/plain')
 
 

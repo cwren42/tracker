@@ -67,7 +67,7 @@ ln -sf /usr/local/lib/cirque-rmm/agent.py /usr/local/bin/cirque-rmm-agent
 
 # Create config directory
 echo ""
-echo "Creating configuration...
+echo "Creating configuration..."
 mkdir -p /etc/cirque-rmm
 chmod 777 /etc/cirque-rmm  # Allow agent to write agent.id file
 

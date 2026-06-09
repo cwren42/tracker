@@ -402,7 +402,10 @@ def rmm_enroll():
         # share one asset_id — without this guard the asset_id arm would disable a live
         # agent. A live agent (recent last_seen_at) is never touched; only the dead
         # old-name row left behind by a rename gets retired.
-        stale_cutoff = now - timedelta(days=7)
+        # `now` is an isoformat string (for the timestamp inserts above); compute the
+        # 7-day cutoff from a real datetime, not the string, then pass it as isoformat
+        # so Postgres compares it against the last_seen_at timestamp column.
+        stale_cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
         stale_rows = db.session.execute(
             text("""SELECT id, agent_id, asset_id FROM rmm_agent
                     WHERE agent_id != :aid

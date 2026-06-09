@@ -20,7 +20,7 @@ import sys
 import time
 import threading
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import websockets
@@ -35,6 +35,12 @@ AGENT_VERSION = "1.0.0"
 CONFIG_FILE = "/etc/cirque-rmm/agent.conf"
 LOG_FILE = "/var/log/cirque-rmm-agent.log"
 STATE_FILE = "/var/run/cirque-rmm-agent.state"
+
+# Public Cloudflare fallback for HTTP reporting when the configured/internal
+# gateway_url is unreachable (LAN-only host name failing to resolve on a cloud VM,
+# etc.). Mirrors the Windows agent's internal->public failover. Overridable via
+# the "tracker_url_public" config key.
+DEFAULT_PUBLIC_TRACKER_URL = "https://tracker.cirquetools.com"
 
 # Setup logging
 logging.basicConfig(
@@ -54,15 +60,25 @@ class LinuxMonitoringAgent:
         self.agent_id = self.get_agent_id()
         self.hostname = socket.gethostname()
         self.fqdn = socket.getfqdn()
+        # Active base URL for HTTP reporting. Starts at the configured/internal
+        # gateway_url; report_to_gateway() fails over to the public URL on a
+        # connection error and sticks with whichever last worked.
+        self.active_url = self.config.get('gateway_url', '').rstrip('/')
+        self.public_url = self.config.get(
+            'tracker_url_public', DEFAULT_PUBLIC_TRACKER_URL).rstrip('/')
     
     def load_config(self, path):
         """Load agent configuration"""
         default_config = {
             'gateway_url': 'https://tracker.corp.cirque.com',
+            'tracker_url_public': DEFAULT_PUBLIC_TRACKER_URL,
             'api_key': '',
             'asset_id': None,
             'check_interval': 300,  # 5 minutes
-            'enabled': True
+            'enabled': True,
+            # Remote-control WebSocket is opt-in. Leave gateway_ws_url unset to
+            # run telemetry-only (no live-control connection attempts).
+            'gateway_ws_url': '',
         }
         
         if os.path.exists(path):
@@ -137,7 +153,7 @@ class LinuxMonitoringAgent:
                 'network': network,
                 'uptime_seconds': uptime,
                 'agent_version': AGENT_VERSION,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
         except Exception as e:
             logger.error(f"Error collecting system info: {e}")
@@ -269,7 +285,7 @@ class LinuxMonitoringAgent:
             
             return {
                 'agent_id': self.agent_id,
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'cpu': {
                     'usage_percent': cpu_percent,
                     'load_1min': load_avg[0],
@@ -448,49 +464,66 @@ class LinuxMonitoringAgent:
             }
     
     def report_to_gateway(self, data, endpoint='/api/rmm/telemetry'):
-        """Send data to the gateway"""
-        try:
-            url = f"{self.config['gateway_url']}{endpoint}"
-            
-            # Add agent_id and hostname to payload
-            payload = {
-                'agent_id': self.agent_id,
-                'hostname': self.hostname,
-                **data
-            }
-            
-            logger.debug(f"Reporting to {url}")
-            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-            
-            response = requests.post(
-                url,
-                json=payload,
-                timeout=10,
-                headers={'Content-Type': 'application/json'},
-                verify=False  # Disable SSL verification for self-signed certs
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('ok'):
-                    logger.info(f"Successfully reported to {endpoint}: {result.get('message', '')}")
-                    return True
-                else:
+        """Send data to the gateway, with internal->public URL failover.
+
+        Tries the currently-active base URL first (initially the configured
+        gateway_url). On a connection/timeout error it transparently retries
+        against the public Cloudflare URL and, if that succeeds, sticks with it
+        for subsequent calls. This mirrors the Windows agent so a Linux box works
+        on the LAN or in the cloud without a manual GATEWAY_URL override.
+        """
+        payload = {
+            'agent_id': self.agent_id,
+            'hostname': self.hostname,
+            **data
+        }
+
+        # Build the candidate base-URL list: active first, then public fallback
+        # (de-duplicated, and only if a public URL is configured).
+        bases = [self.active_url]
+        if self.public_url and self.public_url not in bases:
+            bases.append(self.public_url)
+
+        last_conn_error = None
+        for base in bases:
+            url = f"{base}{endpoint}"
+            try:
+                logger.debug(f"Reporting to {url}")
+                response = requests.post(
+                    url,
+                    json=payload,
+                    timeout=10,
+                    headers={'Content-Type': 'application/json'},
+                    verify=False  # Disable SSL verification for self-signed certs
+                )
+
+                # We reached a server. Remember this base as active even if the
+                # app-level response is an error (it's reachable, just unhappy).
+                if base != self.active_url:
+                    logger.info(f"Failed over HTTP reporting to {base}")
+                    self.active_url = base
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('ok'):
+                        logger.info(f"Successfully reported to {endpoint}: {result.get('message', '')}")
+                        return True
                     logger.warning(f"Gateway returned error: {result.get('error')}")
                     return False
-            else:
                 logger.warning(f"Gateway returned status {response.status_code}: {response.text}")
                 return False
-                
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout connecting to {url}")
-            return False
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error to {url}")
-            return False
-        except Exception as e:
-            logger.error(f"Error reporting to gateway: {e}")
-            return False
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                # Connection-level failure: try the next base URL.
+                last_conn_error = e
+                logger.warning(f"Connection problem reaching {url}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Error reporting to gateway ({url}): {e}")
+                return False
+
+        logger.error(f"All gateway URLs unreachable (last error: {last_conn_error})")
+        return False
     
     def run_once(self):
         """Run a single monitoring cycle"""
@@ -507,17 +540,31 @@ class LinuxMonitoringAgent:
         logger.info("Monitoring cycle complete")
     
     def run_daemon(self):
-        """Run as a daemon — HTTP telemetry loop + WebSocket gateway connection."""
+        """Run as a daemon — HTTP telemetry loop + (optional) WebSocket gateway.
+
+        The live-control WebSocket is OPT-IN: it is only attempted when a
+        dedicated `gateway_ws_url` is set in the config. There is no Linux
+        remote-control gateway today (the real gateway is Windows-only), so by
+        default we run telemetry-only and never attempt a WS connection — this
+        avoids an endless 404 retry storm against the HTTP tracker, which does
+        not serve /ws/agent/<id>.
+        """
         logger.info(f"Starting Cirque RMM Agent {AGENT_VERSION}")
         logger.info(f"Agent ID: {self.agent_id}")
         logger.info(f"Hostname: {self.hostname}")
 
-        # Start HTTP telemetry in a background thread
+        ws_base = self.config.get('gateway_ws_url', '').strip()
+        if not ws_base:
+            # Telemetry-only: just run the HTTP loop in the foreground. Log once.
+            logger.info("remote-control gateway not configured (gateway_ws_url unset); "
+                        "running telemetry-only")
+            self._http_loop()
+            return
+
+        # Remote-control configured: HTTP loop in a thread, WS in the main thread.
         t = threading.Thread(target=self._http_loop, daemon=True)
         t.start()
-
-        # Run async WebSocket loop in the main thread
-        asyncio.run(self._ws_loop())
+        asyncio.run(self._ws_loop(ws_base))
 
     def _http_loop(self):
         """Periodically POST telemetry/system-info over HTTP."""
@@ -528,13 +575,16 @@ class LinuxMonitoringAgent:
                 logger.error(f"HTTP loop error: {e}")
             time.sleep(self.config.get('check_interval', 60))
 
-    async def _ws_loop(self):
-        """Maintain a persistent WebSocket connection to the gateway."""
+    async def _ws_loop(self, ws_base):
+        """Maintain a persistent WebSocket connection to the configured gateway.
+
+        Only called when `gateway_ws_url` is explicitly configured (see
+        run_daemon). The WS base is taken from config and NOT derived from the
+        HTTP tracker URL, so we never point live-control at a server that can't
+        serve it.
+        """
         token = self.config.get('agent_token', '')
-        ws_base = self.config.get('gateway_ws_url', '')
-        if not ws_base:
-            # Derive from gateway_url:  https://host → wss://host
-            ws_base = self.config.get('gateway_url', '').replace('https://', 'wss://').replace('http://', 'ws://')
+        ws_base = ws_base.rstrip('/')
         url = f"{ws_base}/ws/agent/{self.agent_id}?token={token}"
 
         backoff = 5

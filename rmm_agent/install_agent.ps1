@@ -326,37 +326,41 @@ Write-Host "    Dependencies installed." -ForegroundColor Green
 # - 6. Install NSSM & register service -
 Write-Host "[6/7] Configuring Windows service..." -ForegroundColor Yellow
 
-# Prefer the tracker-served nssm.exe (nssm.cc is frequently unreachable/503).
-$bundledNssm = "$InstallDir\nssm.exe"
-if (-not (Test-Path $bundledNssm)) {
-    try {
-        Write-Host "    Downloading nssm.exe from $TrackerUrl ..."
-        Invoke-WebRequest -Uri "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" -OutFile $bundledNssm -UseBasicParsing -TimeoutSec 120
-    } catch {
-        Write-Warning "    Tracker NSSM download failed ($_); will try fallback."
-        if (Test-Path $bundledNssm) { Remove-Item $bundledNssm -Force -ErrorAction SilentlyContinue }
-    }
-}
-if (Test-Path $bundledNssm) {
-    $NssmPath = $bundledNssm
-    Write-Host "    Using NSSM: $NssmPath" -ForegroundColor Green
-}
-
+# NSSM must run from an SRP/AppLocker-ALLOWED path. Hardened boxes (domain
+# controllers, STIG/CIS baselines) only permit .exe execution from C:\Windows and
+# C:\Program Files -- running nssm.exe from the user-writable install dir
+# (C:\CirqueRMM) triggers "This program is blocked by group policy". So always
+# place + run NSSM from $NssmPath (default C:\Program Files\NSSM\nssm.exe).
+$NssmDir = Split-Path $NssmPath
+New-Item -ItemType Directory -Force -Path $NssmDir | Out-Null
 if (-not (Test-Path $NssmPath)) {
-    Write-Host "    nssm.exe not available from tracker and not at $NssmPath -- attempting nssm.cc download..."
-    $NssmZip     = "$env:TEMP\nssm.zip"
-    $NssmExtract = "$env:TEMP\nssm_extract"
-    $NssmDir     = Split-Path $NssmPath
-    New-Item -ItemType Directory -Force -Path $NssmDir | Out-Null
-    Invoke-WebRequest -Uri "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" -OutFile $NssmZip -UseBasicParsing -TimeoutSec 120
-    Expand-Archive -Path $NssmZip -DestinationPath $NssmExtract -Force
-    if ([Environment]::Is64BitOperatingSystem) { $arch = "win64" } else { $arch = "win32" }
-    $extracted = Get-ChildItem $NssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match $arch } | Select-Object -First 1
-    if (-not $extracted) { Write-Error "Could not find nssm.exe in downloaded archive."; exit 1 }
-    Copy-Item $extracted.FullName $NssmPath -Force
-    Remove-Item $NssmZip, $NssmExtract -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "    NSSM installed." -ForegroundColor Green
+    $srcNssm = "$InstallDir\nssm.exe"
+    if (Test-Path $srcNssm) {
+        Write-Host "    Relocating nssm.exe to allowed path: $NssmPath" -ForegroundColor Green
+        Copy-Item $srcNssm $NssmPath -Force
+    } else {
+        try {
+            Write-Host "    Downloading nssm.exe from $TrackerUrl -> $NssmPath ..."
+            Invoke-WebRequest -Uri "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" -OutFile $NssmPath -UseBasicParsing -TimeoutSec 120
+        } catch {
+            Write-Warning "    Tracker NSSM download failed ($_); trying nssm.cc ..."
+            $NssmZip     = "$env:TEMP\nssm.zip"
+            $NssmExtract = "$env:TEMP\nssm_extract"
+            Invoke-WebRequest -Uri "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" -OutFile $NssmZip -UseBasicParsing -TimeoutSec 120
+            Expand-Archive -Path $NssmZip -DestinationPath $NssmExtract -Force
+            if ([Environment]::Is64BitOperatingSystem) { $arch = "win64" } else { $arch = "win32" }
+            $extracted = Get-ChildItem $NssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match $arch } | Select-Object -First 1
+            if (-not $extracted) { Write-Error "Could not find nssm.exe in downloaded archive."; exit 1 }
+            Copy-Item $extracted.FullName $NssmPath -Force
+            Remove-Item $NssmZip, $NssmExtract -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host "    NSSM ready: $NssmPath" -ForegroundColor Green
+} else {
+    Write-Host "    Using existing NSSM: $NssmPath" -ForegroundColor Green
 }
+# Remove any nssm.exe a prior run dropped in the blocked install dir.
+if (Test-Path "$InstallDir\nssm.exe") { Remove-Item "$InstallDir\nssm.exe" -Force -ErrorAction SilentlyContinue }
 
 # Remove old service if present (ignore errors -- service may not exist on first install)
 try { & $NssmPath stop $ServiceName 2>$null | Out-Null } catch {}

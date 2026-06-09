@@ -560,6 +560,52 @@ def run_ad_employee_sync():
     return result
 
 
+def reconcile_employee_m365_flags():
+    """Reconcile the cached employee.m365_account_enabled / m365_validated_at flags from the
+    authoritative M365User table (already synced from Graph, carrying account_enabled +
+    employee_id + is_current).
+
+    This is the lightweight, robust half of the daily M365 refresh: it does NOT call Graph,
+    so it works regardless of request context / Graph availability, and — crucially — it
+    refreshes employees that are NO LONGER in AD (e.g. offboarded users like Jon Li, whom the
+    AD-driven loop never touches because they aren't returned by AD's get_all_users()).
+
+    Matches M365User -> Employee on the resolved employee_id FK (is_current rows only). Never
+    raises. Requires an app context. Returns {scanned, changed, error}.
+    """
+    result = {'scanned': 0, 'changed': 0, 'error': None}
+    try:
+        from soc2_models import M365User
+        now = datetime.utcnow()
+        # is_current M365 rows linked to an employee. If multiple current rows somehow point at
+        # the same employee, the latest sync_date wins (ORDER BY ... so the last assignment sticks).
+        rows = (M365User.query
+                .filter(M365User.is_current.is_(True), M365User.employee_id.isnot(None))
+                .order_by(M365User.sync_date.asc().nullsfirst())
+                .all())
+        emp_ids = {r.employee_id for r in rows}
+        emps = {e.id: e for e in Employee.query.filter(Employee.id.in_(emp_ids)).all()} if emp_ids else {}
+        for r in rows:
+            emp = emps.get(r.employee_id)
+            if emp is None:
+                continue
+            result['scanned'] += 1
+            enabled = bool(r.account_enabled)
+            validated = r.sync_date or now
+            if (emp.m365_account_enabled is not enabled
+                    or emp.m365_validated_at != validated):
+                emp.m365_account_enabled = enabled
+                emp.m365_validated_at = validated
+                if r.m365_id and not emp.m365_id:
+                    emp.m365_id = r.m365_id
+                result['changed'] += 1
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        result['error'] = str(e)
+    return result
+
+
 @bp.route('/employees/sync/ad', methods=['POST'])
 @login_required
 @manager_required

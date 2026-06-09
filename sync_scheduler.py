@@ -50,6 +50,14 @@ AD_EMPLOYEE_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_EMPLOYEE_SYNC_LOCK_PATH'
 AD_EMPLOYEE_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_EMPLOYEE_SYNC_INTERVAL_HOURS', '24'))
 DISABLE_AD_EMPLOYEE_SYNC = os.environ.get('DISABLE_AD_EMPLOYEE_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# Daily M365 employee status reconcile — refresh the authoritative M365User table from Graph,
+# link new rows, then reconcile employee.m365_account_enabled / m365_validated_at off it. This
+# is what keeps the employee page's M365 status from going stale org-wide (incl. offboarded
+# users who are no longer in AD, whom the AD-driven sync never touches).
+M365_EMPLOYEE_RECONCILE_LOCK_PATH = os.environ.get('TRACKER_M365_EMPLOYEE_RECONCILE_LOCK_PATH', '/tmp/tracker_m365_employee_reconcile.lock')
+M365_EMPLOYEE_RECONCILE_INTERVAL_HOURS = int(os.environ.get('M365_EMPLOYEE_RECONCILE_INTERVAL_HOURS', '24'))
+DISABLE_M365_EMPLOYEE_RECONCILE = os.environ.get('DISABLE_M365_EMPLOYEE_RECONCILE', '').strip() in ('1', 'true', 'yes', 'on')
+
 DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tmp/tracker_defender_vuln_sync.lock')
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -177,6 +185,19 @@ def start_sync_scheduler(flask_app):
             hours=max(AD_EMPLOYEE_SYNC_INTERVAL_HOURS, 1),
             id='ad_employee_sync',
             name='Daily AD/M365 employee sync (+park newly-disabled offboards)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+
+    if not DISABLE_M365_EMPLOYEE_RECONCILE:
+        _scheduler.add_job(
+            func=lambda: run_m365_employee_reconcile_job(flask_app),
+            trigger='interval',
+            hours=max(M365_EMPLOYEE_RECONCILE_INTERVAL_HOURS, 1),
+            id='m365_employee_reconcile',
+            name='Daily M365 employee status reconcile (refresh m365_account_enabled/validated_at)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -564,6 +585,59 @@ def run_ad_employee_sync_job(flask_app_instance):
                     logger.info('AD sync offboard parking (verified): %s', pres)
             except Exception:
                 logger.exception('AD employee sync job crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_m365_employee_reconcile_job(flask_app_instance):
+    """Daily: keep the employee page's M365 status honest.
+
+    1. Refresh the authoritative M365User table from Graph (SOC2SyncService.sync_m365_users) —
+       this table is otherwise only refreshed by a manual SOC2 sync, so it drifts.
+    2. Resolve identity links so freshly-synced M365User rows get their employee_id FK.
+    3. Reconcile employee.m365_account_enabled / m365_validated_at from the M365User table.
+
+    Step 3 still runs even if step 1 (Graph) fails, so a Graph outage degrades to "reconcile
+    off the last-known M365 data" rather than freezing the flags. Own file-lock + DISABLE flag,
+    consistent with the other scheduler jobs. Does not touch AD sync behavior."""
+    with _file_lock(M365_EMPLOYEE_RECONCILE_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('M365 employee reconcile already running in another worker — skipping')
+            return
+        with flask_app_instance.app_context():
+            try:
+                from extensions import db
+                # 1. Refresh the authoritative M365User table from Graph (best-effort).
+                try:
+                    from soc2_sync_service import SOC2SyncService
+                    from m365_config import m365_configured
+                    if m365_configured():
+                        ures = SOC2SyncService(flask_app_instance, db).sync_m365_users()
+                        logger.info('M365 reconcile: M365User Graph sync: %s', ures)
+                    else:
+                        logger.info('M365 reconcile: M365 credentials not configured — '
+                                    'reconciling off existing M365User data only')
+                except Exception:
+                    logger.exception('M365 reconcile: M365User Graph sync failed — '
+                                     'continuing with existing M365User data')
+
+                # 2. Link any newly-synced M365User rows to their employee.
+                try:
+                    from identity_graph import resolve_identity_links
+                    lres = resolve_identity_links(commit=True)
+                    logger.info('M365 reconcile: identity links: %s', lres)
+                except Exception:
+                    logger.exception('M365 reconcile: identity link resolution failed')
+
+                # 3. Reconcile the cached employee flags from the M365User table.
+                from blueprints.employees import reconcile_employee_m365_flags
+                rres = reconcile_employee_m365_flags()
+                logger.info('M365 reconcile: employee flag reconcile: %s', rres)
+            except Exception:
+                logger.exception('M365 employee reconcile job crashed')
             finally:
                 try:
                     db.session.remove()

@@ -299,8 +299,10 @@ def get_dashboard_data():
     if low_storage_sync_times:
         low_storage_last_updated = _format_dt_utc(max(low_storage_sync_times))
     
-    # NEW: Non-compliant devices
-    noncompliant_assets = Asset.query.filter_by(online_state='noncompliant').all()
+    # NEW: Non-compliant devices.
+    # Compliance lives in intune_compliance_state, NOT online_state
+    # (online_state is live connectivity: Online/Offline).
+    noncompliant_assets = Asset.query.filter_by(intune_compliance_state='noncompliant').all()
 
     # Last updated for non-compliant is based on latest Intune sync among the matching assets
     noncompliant_last_updated = None

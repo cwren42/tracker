@@ -427,7 +427,12 @@ def perform_intune_asset_sync():
                             asset.intune_last_sync = last_sync_dt
                             asset.last_seen = last_sync_dt
 
-                        asset.online_state = device.get('complianceState', 'unknown')
+                        # NOTE: online_state is LIVE CONNECTIVITY (Online/Offline),
+                        # owned by live signals (RMM agent gateway/telemetry, UniFi).
+                        # Intune compliance is NOT connectivity — it lives in
+                        # intune_compliance_state (set above). Do NOT write compliance
+                        # here or we falsely show "compliant" as an online status for
+                        # devices that are actually offline (e.g. SALUTE-ASUS).
                         asset.hardware_cpu = cpu_arch
                         if ram_gb is not None:
                             asset.hardware_ram_gb = ram_gb
@@ -494,7 +499,12 @@ def perform_intune_asset_sync():
                         status=status,
                         os_version=os_full,
                         intune_os_version=os_ver,
-                        online_state=compliance,
+                        # online_state is LIVE CONNECTIVITY, not Intune compliance.
+                        # A freshly-discovered Intune-only device has no live signal
+                        # (no RMM agent / UniFi presence) yet, so it is Offline until
+                        # a live signal proves otherwise. Compliance is stored in
+                        # intune_compliance_state below.
+                        online_state='Offline',
                         employee_id=employee.id if employee else None,
                         purchase_date=enrollment_date,
                         intune_device_id=device.get('id'),

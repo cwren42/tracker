@@ -315,7 +315,9 @@ def assets():
     if quick_filter:
         today = datetime.utcnow().date()
         if quick_filter == 'noncompliant':
-            all_assets = [asset for asset in all_assets if asset.online_state == 'noncompliant']
+            # Compliance lives in intune_compliance_state, NOT online_state
+            # (online_state is live connectivity: Online/Offline).
+            all_assets = [asset for asset in all_assets if asset.intune_compliance_state == 'noncompliant']
         elif quick_filter == 'low_storage':
             all_assets = [asset for asset in all_assets 
                          if asset.hardware_storage_total_gb and asset.hardware_storage_free_gb

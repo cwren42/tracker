@@ -233,7 +233,7 @@ def _ps_json_proc(script: str, timeout: int = 15):
     """Run a PowerShell script in a CHILD PROCESS with a HARD wall-clock deadline.
 
     Unlike _ps_json (which relies on subprocess.run's own timeout), this launches
-    the process with Popen and polls a deadline we own, then KILLS THE WHOLE PROCESS
+    the process with Popen + communicate(timeout=) and KILLS THE WHOLE PROCESS
     TREE on expiry. This matters for the Windows Update COM Install() path: that call
     can block effectively forever on a broken/large WU backlog, and subprocess.run's
     timeout-kill does not reliably reap the out-of-process WU workers, so the calling
@@ -246,7 +246,6 @@ def _ps_json_proc(script: str, timeout: int = 15):
       * _PS_TIMEOUT if the deadline was hit (child killed),
       * None on any other failure / unparseable output.
     """
-    import time as _time
     proc = None
     try:
         proc = subprocess.Popen(
@@ -2950,9 +2949,13 @@ try {{
     tmo = _patch_install_timeout()
     result = _ps_json_proc(script, timeout=tmo)
     if result is _PS_TIMEOUT:
-        wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
-                      "titles": [], "kb_ids": [], "timed_out": True,
-                      "error": f"Windows Update install timed out after {tmo}s (process killed)"}
+        # Return BEFORE the winget fallback: that path has no timeout guard and
+        # could re-wedge the executor, or report success and let a CVE auto-close
+        # on a box whose Windows Update actually hung. Mirror the OS-path timeout
+        # return (_install_patches_wua) so the gateway sees timed_out/"timed out".
+        return {"installed": 0, "reboot_required": False, "updates_found": 0,
+                "titles": [], "kb_ids": [], "timed_out": True,
+                "error": f"Windows Update install timed out after {tmo}s (process killed)"}
     elif result is None:
         wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
                       "titles": [], "kb_ids": [], "error": "No output from WUA"}

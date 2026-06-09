@@ -59,6 +59,31 @@ def test_install_patches_success_passthrough():
     assert res["error"] == ""
 
 
+def test_cve_install_timeout_does_not_fall_through_to_winget():
+    """CVE path: on WUA timeout the function must return a timed_out result and
+    must NOT reach the winget fallback. The fallback has no timeout guard and a
+    winget 'Already up to date' there would let a CVE auto-close on a box whose
+    Windows Update actually hung."""
+    m = _load_agent()
+    # Force the child-process WUA call to behave as if it hit the hard deadline.
+    m._ps_json_proc = lambda script, timeout=15: m._PS_TIMEOUT
+    # Trip-wire: if the timed-out path ever reaches winget, this records it.
+    calls = {"n": 0}
+
+    def _spy(winget_id):
+        calls["n"] += 1
+        return {"installed": 1, "reboot_required": False, "error": "Already up to date"}
+
+    m._install_via_winget = _spy
+    # 'chrome' is a non-OS, winget-mapped product, so the fallback would fire if
+    # the timeout return were missing.
+    res = m._find_and_install_cve_patches(["CVE-2024-0001"], product_name="chrome")
+    assert res["installed"] == 0
+    assert res.get("timed_out") is True
+    assert "timed out" in res["error"].lower()
+    assert calls["n"] == 0, "winget fallback must NOT run after a WUA timeout"
+
+
 def test_patch_install_timeout_default_and_override(monkeypatch):
     m = _load_agent()
     monkeypatch.delenv("CIRQUE_PATCH_INSTALL_TIMEOUT", raising=False)

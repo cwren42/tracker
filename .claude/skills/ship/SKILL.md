@@ -41,7 +41,23 @@ Healthy = `active`, a 2xx/3xx code, no traceback/error lines. `SIGTERM` lines ar
   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 - `git push origin main`. PAT is in `~/.git-credentials` (fine-grained: Contents+Workflows+Actions RW, Secrets read). Sanitize any token out of echoed URLs: `sed -E 's#https://[^@ ]*@#https://#g'`.
 
+## 4. Verify CI is green (REQUIRED — local-green ≠ CI-green)
+A push is NOT done until the CI run for it passes. Local `py_compile`/`pytest` passing does **not** mean CI passes: CI (`ci.yml`) runs `pytest -ra` on a clean ubuntu / Py3.12 after `pip install -r requirements-dev.txt`, so it catches what your box hides — **hardcoded absolute paths** (e.g. a module doing `os.makedirs("/var/www/tracker/...")` at import → `PermissionError` on the runner where that path isn't writable), missing deps, and import-time side effects. (CI was red a full day this way while local pytest was green — the path was writable here, not on the runner.) After pushing, **watch the run to completion**:
+```
+TOK=$(sed -nE 's#https://[^:]*:?([A-Za-z0-9_]+)@github.com.*#\1#p' ~/.git-credentials | head -1)
+H=$(git rev-parse HEAD)
+for i in $(seq 1 30); do
+  S=$(curl -s -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/cwren42/tracker/actions/workflows/ci.yml/runs?head_sha=$H&per_page=1" \
+      | venv/bin/python -c "import sys,json;r=json.load(sys.stdin).get('workflow_runs',[]);print((r[0]['status']+' '+str(r[0]['conclusion'])) if r else 'no-run-yet')")
+  echo "$S"; echo "$S" | grep -q completed && break; sleep 20
+done
+```
+Must end **`completed success`**. If `completed failure`, pull the failing step's log and fix before moving on:
+`runs/<run_id>/jobs` → the failed job id → `curl -sL -H "Authorization: Bearer $TOK" ".../actions/jobs/<job_id>/logs" | grep -iE "error|PermissionError|ModuleNotFound|^E |assert"`.
+
 ## Gotchas that bite here
+- **Hardcoded absolute paths at import time** (`/var/www/tracker/...` in a module-level `os.makedirs`/`open`) pass locally but break CI and any other checkout. Derive from `os.path.dirname(os.path.abspath(__file__))` or an env var, and wrap import-time `os.makedirs` in try/except.
 - **`.secrets.env`** (gitignored) is loaded by systemd `EnvironmentFile` — env config only takes effect after a restart, and all 5 workers read it identically. Runtime config written to the DB at request time does NOT persist across restarts or propagate to other workers.
 - **Cache-busting**: static CSS/JS must use `?v={{ asset_version }}` (git short SHA). A hardcoded `?v=N` or a missing version string caches forever in the browser — fix it.
 - App is **created at import** (threads start at import) — not a true factory. Importing `app` has side effects.

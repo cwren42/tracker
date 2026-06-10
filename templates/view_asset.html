@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block styles %}
-<link rel="stylesheet" href="/static/css/view_asset.css?v=20260609c">
+<link rel="stylesheet" href="/static/css/view_asset.css?v=20260609d">
 {% endblock %}
 
 {% block title %}{{ asset.name }} – Asset Details{% endblock %}
@@ -109,7 +109,9 @@ function rmmShowTab(ev, hash) {
         // File Transfer: initialise the file browser the first time the tab is opened
         // (rmmFsTabClick lists drives if nothing is loaded yet).
         '#tab-rmm-transfer': () => window.rmmFsTabClick       && window.rmmFsTabClick(),
-        // Events stays manual (user picks filters, clicks Query → rmmLoadEvents).
+        // Auto-run an Events query on open (default filters: System/Error/100) so the
+        // tab shows data instead of an empty "click Query" prompt.
+        '#tab-rmm-events':   () => window.rmmLoadEvents       && window.rmmLoadEvents(),
         // Power has no data to load — its buttons dispatch on click.
     };
     // Bootstrap fires shown.bs.tab on the *trigger* element. The RMM tabs are
@@ -120,7 +122,7 @@ function rmmShowTab(ev, hash) {
                 const once = (sel === '#tab-rmm-transfer'); // transfer must not re-list on every reopen
                 if (once && ranOnce[sel]) return;
                 ranOnce[sel] = true;
-                try { fn(); } catch (_) {}
+                try { fn(); } catch (e) { console.error('[RMM] lazy-load failed for ' + sel, e); }
             });
         });
     });
@@ -130,7 +132,9 @@ function rmmShowTab(ev, hash) {
 // .dropdown-item (its active-state walk doesn't span the dropdown), producing a giant
 // blank gap where the old (tall) Overview pane still occupies layout. Enforce exactly
 // one .active.show pane on every tab show.
-document.getElementById('assetMainTabs')?.addEventListener('shown.bs.tab', function(ev) {
+document.addEventListener('shown.bs.tab', function(ev) {
+    // Only act on the asset's main tab set (guards against other tab widgets on the page).
+    if (!ev.target.closest || !ev.target.closest('#assetMainTabs')) return;
     const targetSel = ev.target && ev.target.getAttribute('data-bs-target');
     if (!targetSel) return;
     document.querySelectorAll('#assetMainContent > .tab-pane').forEach(pane => {

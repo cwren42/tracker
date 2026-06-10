@@ -50,6 +50,8 @@
     gap: .25rem;
     flex-wrap: wrap; /* wrap on narrow screens instead of scroll-clipping (overflow-x:auto clipped the RMM dropdown menu) */
     padding-bottom: 1px;
+    position: relative; /* establish a stacking context so the RMM dropdown menu renders above the sticky status bar below it */
+    z-index: 1030;
 }
 /* Top-level tab links + the RMM dropdown toggle. Scoped with :not(.dropdown-item)
    so these underline-tab rules never bleed into the dropdown-menu items below. */
@@ -83,6 +85,7 @@
     border: 1px solid var(--border-color);
     border-radius: .5rem;
     box-shadow: 0 .5rem 1.25rem rgba(0,0,0,.18);
+    z-index: 2000; /* float above the RMM status bar / sticky table headers that were painting over the open menu */
 }
 .nav-tabs-main .dropdown-menu .dropdown-item {
     display: flex;

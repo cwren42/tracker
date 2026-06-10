@@ -1007,7 +1007,10 @@ def rmm_terminal(agent_id):
         # for off-network clients. Public stays as a fallback for LAN clients that also
         # have internet; LAN-only clients (no Cloudflare route) correctly get the LAN URL.
         gateway_url=_gateway_url_for_request(),
-        gateway_url_fallback=RMM_GATEWAY_PUBLIC,
+        # No cross-network fallback: LAN-only clients can't reach the public Cloudflare
+        # URL, so failing over to it just HANGS ("stuck on connecting"). Each client uses
+        # the single correct URL for its network; a failure now surfaces immediately.
+        gateway_url_fallback='',
     ))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return resp

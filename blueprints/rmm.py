@@ -1001,6 +1001,9 @@ def rmm_terminal(agent_id):
         asset_name=asset_name,
         asset_id=asset_id,
         gateway_url=_gateway_url_for_request(),
+        # Fallback so the browser terminal fails over LAN->public like the agents do
+        # (the LAN gateway host may not serve /ws/tech; the Cloudflare public URL does).
+        gateway_url_fallback=RMM_GATEWAY_PUBLIC,
     ))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return resp

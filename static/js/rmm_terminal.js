@@ -1,5 +1,10 @@
-const AGENT_ID    = window.RMMTERMINAL_CFG.agent_id;
-const GATEWAY_URL = window.RMMTERMINAL_CFG.gateway_url;
+const AGENT_ID     = window.RMMTERMINAL_CFG.agent_id;
+// Ordered list of gateway URLs to try: LAN-preferred first, public fallback second.
+// The browser terminal fails over LAN->public the same way the agents do, so a dead
+// LAN gateway host (which doesn't serve /ws/tech) doesn't break the shell.
+const GATEWAY_URLS = [...new Set(
+    [window.RMMTERMINAL_CFG.gateway_url, window.RMMTERMINAL_CFG.gateway_url_fallback].filter(Boolean)
+)];
 
 const term = new Terminal({
     cursorBlink: true,
@@ -48,11 +53,12 @@ async function issueToken() {
     return await resp.json();
 }
 
-async function connect(shellType) {
+async function connect(shellType, urlIdx) {
+    urlIdx = urlIdx || 0;
     shellType = shellType || 'powershell';
     currentShell = shellType;
     setStatus('connecting', 'Connecting…');
-    term.write('\r\n\x1b[33m[Tracker RMM] Connecting to ' + AGENT_ID + '…\x1b[0m\r\n');
+    if (urlIdx === 0) term.write('\r\n\x1b[33m[Tracker RMM] Connecting to ' + AGENT_ID + '…\x1b[0m\r\n');
 
     let tokenData;
     try {
@@ -63,8 +69,11 @@ async function connect(shellType) {
         return;
     }
 
-    const wsUrl = GATEWAY_URL.replace(/^wss/, 'wss') + '/ws/tech/' + AGENT_ID + '?session_token=' + tokenData.token;
+    const base = GATEWAY_URLS[urlIdx];
+    const hasFallback = (urlIdx + 1) < GATEWAY_URLS.length;
+    const wsUrl = base + '/ws/tech/' + AGENT_ID + '?session_token=' + tokenData.token;
     ws = new WebSocket(wsUrl);
+    let established = false;   // true once the gateway sends the 'session' message
 
     ws.onopen = () => {
         setStatus('connecting', 'Authenticating…');
@@ -75,6 +84,7 @@ async function connect(shellType) {
         try { msg = JSON.parse(evt.data); } catch { return; }
 
         if (msg.type === 'session') {
+            established = true;
             sessionId = msg.session_id;
             setStatus('online', 'Connected (session #' + sessionId + ')');
             term.write('\x1b[32m[Tracker RMM] Session established. Starting ' + shellType + '…\x1b[0m\r\n\r\n');
@@ -108,12 +118,23 @@ async function connect(shellType) {
 
     ws.onclose = (e) => {
         shellActive = false;
+        ws = null;
+        // Never established a session AND another gateway URL is available -> fail over.
+        if (!established && hasFallback) {
+            term.write('\x1b[33m[Tracker RMM] ' + base + ' unreachable — trying fallback gateway…\x1b[0m\r\n');
+            sessionId = null;
+            connect(shellType, urlIdx + 1);
+            return;
+        }
         setStatus('offline', 'Disconnected');
         term.write('\r\n\x1b[31m[Tracker RMM] Disconnected (code ' + e.code + ')\x1b[0m\r\n');
-        ws = null; sessionId = null;
+        sessionId = null;
     };
 
     ws.onerror = () => {
+        // A failed connection fires onerror then onclose; let onclose own failover/
+        // reporting so we don't double-message or report before trying the fallback.
+        if (!established && hasFallback) return;
         setStatus('offline', 'Connection error');
         term.write('\r\n\x1b[31m[ERROR] WebSocket connection failed\x1b[0m\r\n');
     };

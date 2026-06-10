@@ -34,7 +34,7 @@ from models import (
 from soc2_models import SOC2Control, EvidenceSnapshot
 import logging
 from utils import (
-    admin_required, manager_required, eagle_eyes_required,
+    admin_required, manager_required,
     ticket_access_required, license_required,
     send_email, send_admin_notification, send_asset_assignment_email,
     send_warranty_expiry_alert, send_lifecycle_alert,
@@ -564,16 +564,9 @@ def view_asset(asset_id):
         ).fetchone()
         if rmm_row:
             rmm_agent_id = rmm_row[0]
-            # Gate the RMM area: admins always; eagle_eyes only on non-excluded
-            # (non-server, not-manually-excluded) agents; everyone else never.
-            try:
-                from blueprints.rmm_eagle import _ee_denied
-                if current_user.role == 'admin':
-                    rmm_visible = True
-                elif current_user.role == 'eagle_eyes':
-                    rmm_visible = not _ee_denied(rmm_agent_id)
-            except Exception:
-                rmm_visible = (current_user.role == 'admin')
+            # Gate the RMM area: STRICTLY admin-only. Fail-closed for everyone
+            # else (managers, eagle_eyes) — no tabs, toolbar, JS engine or cards.
+            rmm_visible = (current_user.role == 'admin')
             # Fetch latest telemetry for server-side rendering (Device Identity card, etc.)
             tele_row = db.session.execute(
                 text("SELECT * FROM rmm_telemetry WHERE agent_id = :aid"),
@@ -631,7 +624,7 @@ def view_asset(asset_id):
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')
 @login_required
-@eagle_eyes_required
+@admin_required
 def rmm_section(asset_id, section):
     """Legacy standalone RMM console — now retired.
 

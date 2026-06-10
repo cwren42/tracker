@@ -100,7 +100,7 @@
                     <li><a class="dropdown-item" href="#tab-overview" onclick="return rmmShowTab(event,'#tab-overview')">
                         <i class="bi bi-cpu me-2"></i>Hardware Info
                     </a></li>
-                    {% if current_user.is_admin %}
+                    {% if current_user.role == 'admin' %}
                     <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item text-danger" href="#" data-bs-toggle="modal" data-bs-target="#rmmRemoveAgentModal">
                         <i class="bi bi-trash3 me-2"></i>Remove Agent
@@ -144,7 +144,7 @@
     </div>
 </div>
 
-{% if rmm_agent_id and current_user.is_admin %}
+{% if rmm_agent_id and current_user.role == 'admin' %}
 <!-- Remove Agent Confirmation Modal -->
 <div class="modal fade" id="rmmRemoveAgentModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">

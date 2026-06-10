@@ -351,7 +351,7 @@ def api_rmm_cmd_result(agent_id, session_id):
 
 @bp.route('/api/rmm/deploy-rustdesk/<agent_id>', methods=['POST'])
 @login_required
-@manager_required
+@admin_required
 def api_rmm_deploy_rustdesk(agent_id):
     """Send a PowerShell script to the agent to install RustDesk via winget
     and configure it to use the internal relay server."""

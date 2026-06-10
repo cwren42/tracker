@@ -3298,6 +3298,12 @@ def capture_screenshot() -> Optional[dict]:
 # Shell session — ConPTY (Windows 10 1903+) with raw-pipe fallback
 # ---------------------------------------------------------------------------
 
+# pywinpty availability — defaults for non-win32 (and pywinpty-absent); the win32
+# block below overrides these. Kept at module scope so importing this file on Linux
+# (e.g. CI loading it for tests) never touches the win32-only ctypes structs.
+_PYWINPTY_AVAILABLE = False
+_PtyProcess = None
+
 if sys.platform == "win32":
     import ctypes
     import ctypes.wintypes as _wt
@@ -3318,9 +3324,6 @@ if sys.platform == "win32":
     except Exception:
         _PtyProcess = None
         _PYWINPTY_AVAILABLE = False
-else:
-    _PYWINPTY_AVAILABLE = False
-    _PtyProcess = None
 
     class _COORD(ctypes.Structure):
         _fields_ = [("X", _wt.SHORT), ("Y", _wt.SHORT)]

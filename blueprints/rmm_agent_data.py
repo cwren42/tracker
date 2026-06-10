@@ -365,8 +365,11 @@ def api_rmm_deploy_rustdesk(agent_id):
     if not row:
         return jsonify({'ok': False, 'error': 'agent not found'}), 404
 
-    server   = 'rust.corp.cirque.com'
-    key      = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo='
+    # RustDesk internal relay — moved out of source into .secrets.env (EnvironmentFile).
+    server   = os.environ.get('RUSTDESK_RELAY_SERVER', '')
+    key      = os.environ.get('RUSTDESK_RELAY_KEY', '')
+    if not server or not key:
+        return jsonify({'ok': False, 'error': 'RustDesk relay not configured (set RUSTDESK_RELAY_SERVER/RUSTDESK_RELAY_KEY)'}), 500
 
     # PowerShell: install RustDesk silently, then write server config
     ps = r"""

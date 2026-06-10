@@ -1,38 +1,8 @@
 <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
 
-{% if rmm_agent_id and rmm_visible %}
-<!-- RMM Live Summary Bar (managed devices only) -->
-<div class="card mb-3" style="background:var(--accent-secondary,rgba(0,0,0,.15));border:1px solid rgba(128,128,128,.2);">
-    <div class="card-body py-2 px-3">
-        <div class="d-flex align-items-center gap-3 flex-wrap">
-            <span id="ov-rmm-badge" class="badge bg-secondary" style="font-size:.8rem;">
-                <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
-            </span>
-            <span class="text-muted" style="font-size:.78rem;"><i class="bi bi-robot me-1"></i><code>{{ asset.name }}</code></span>
-            <small class="text-muted" style="font-size:.75rem;" id="ov-rmm-time"></small>
-            <div class="ms-auto d-flex gap-4 align-items-center flex-wrap" style="font-size:.78rem;">
-                <div style="min-width:100px;">
-                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">CPU</span><span id="ov-cpu-label">—</span></div>
-                    <div class="progress" style="height:4px;"><div id="ov-cpu-bar" class="progress-bar bg-info" style="width:0%"></div></div>
-                </div>
-                <div style="min-width:100px;">
-                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">RAM</span><span id="ov-ram-label">—</span></div>
-                    <div class="progress" style="height:4px;"><div id="ov-ram-bar" class="progress-bar bg-warning" style="width:0%"></div></div>
-                </div>
-                <div style="min-width:100px;">
-                    <div class="d-flex justify-content-between mb-1"><span class="text-muted">Disk</span><span id="ov-disk-label">—</span></div>
-                    <div class="progress" style="height:4px;"><div id="ov-disk-bar" class="progress-bar bg-success" style="width:0%"></div></div>
-                </div>
-                <a href="#tab-rmm-avail" onclick="return rmmShowTab(event,'#tab-rmm-avail')"
-                   class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:.75rem;">
-                    <i class="bi bi-robot me-1"></i>RMM Details
-                </a>
-            </div>
-        </div>
-    </div>
-</div>
-
-{% endif %}
+{# The Overview "RMM Live Summary Bar" was merged into the persistent dark RMM status
+   bar in _stat_cards.html (online badge + version + last-seen + CPU/RAM/Disk + actions),
+   so it's no longer duplicated here. #}
 
     <div class="row g-4">
         <!-- LEFT COLUMN -->

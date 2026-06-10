@@ -86,6 +86,23 @@
             <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
         </span>
         <span class="text-muted small" style="font-size:.75rem;">Agent <span id="rmm-agent-version-badge">—</span></span>
+        <small class="text-muted" style="font-size:.72rem;" id="ov-rmm-time"></small>
+        {# Live telemetry gauges — merged in from the old Overview "RMM Live Summary Bar".
+           IDs kept identical (ov-cpu/ram/disk-*) so rmm_agent.js populates them unchanged. #}
+        <div class="d-flex gap-3 align-items-center flex-wrap" style="font-size:.72rem;">
+            <div style="min-width:92px;">
+                <div class="d-flex justify-content-between"><span class="text-muted">CPU</span><span id="ov-cpu-label">—</span></div>
+                <div class="progress" style="height:4px;"><div id="ov-cpu-bar" class="progress-bar bg-info" style="width:0%"></div></div>
+            </div>
+            <div style="min-width:92px;">
+                <div class="d-flex justify-content-between"><span class="text-muted">RAM</span><span id="ov-ram-label">—</span></div>
+                <div class="progress" style="height:4px;"><div id="ov-ram-bar" class="progress-bar bg-warning" style="width:0%"></div></div>
+            </div>
+            <div style="min-width:92px;">
+                <div class="d-flex justify-content-between"><span class="text-muted">Disk</span><span id="ov-disk-label">—</span></div>
+                <div class="progress" style="height:4px;"><div id="ov-disk-bar" class="progress-bar bg-success" style="width:0%"></div></div>
+            </div>
+        </div>
         <div class="ms-auto d-flex gap-2 flex-wrap">
             <a href="{{ url_for('rmm.rmm_terminal', agent_id=rmm_agent_id) }}" id="rmm-shell-btn" target="_blank"
                class="btn btn-sm btn-success disabled"><i class="bi bi-terminal-fill"></i> Open Shell</a>

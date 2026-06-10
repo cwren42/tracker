@@ -1068,10 +1068,10 @@ $out -join "\`n" `;
                     function rmmFilterServices(){ rmmRenderServices(); }
                     async function rmmServiceAction(name,action){
                         el('rmm-svc-status').textContent=`${action} ${name}…`;
-                        const r=await rmmSend({type:'service_action',action,service_name:name});
+                        const r=await rmmSend({type:'service_action',action,name});
                         if(!r.ok){ el('rmm-svc-status').textContent='Error: '+(r.error||'failed'); return; }
                         const data=await rmmPoll(r.session_id,'service_action_result',15000);
-                        el('rmm-svc-status').textContent=data?(data.data.message||'Done'):'Timed out';
+                        el('rmm-svc-status').textContent=data?(data.data&&data.data.success?`${action} ${name}: done`:('Failed: '+((data.data&&data.data.error)||'unknown'))):'Timed out';
                         setTimeout(rmmLoadServices,1500);
                     }
 

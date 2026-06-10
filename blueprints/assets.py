@@ -556,6 +556,7 @@ def view_asset(asset_id):
     # Look up RMM agent for this asset
     rmm_agent_id = None
     rmm_tele = None
+    rmm_visible = False  # whether the current user may see the RMM area for THIS asset
     try:
         rmm_row = db.session.execute(
             text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
@@ -563,6 +564,16 @@ def view_asset(asset_id):
         ).fetchone()
         if rmm_row:
             rmm_agent_id = rmm_row[0]
+            # Gate the RMM area: admins always; eagle_eyes only on non-excluded
+            # (non-server, not-manually-excluded) agents; everyone else never.
+            try:
+                from blueprints.rmm_eagle import _ee_denied
+                if current_user.role == 'admin':
+                    rmm_visible = True
+                elif current_user.role == 'eagle_eyes':
+                    rmm_visible = not _ee_denied(rmm_agent_id)
+            except Exception:
+                rmm_visible = (current_user.role == 'admin')
             # Fetch latest telemetry for server-side rendering (Device Identity card, etc.)
             tele_row = db.session.execute(
                 text("SELECT * FROM rmm_telemetry WHERE agent_id = :aid"),
@@ -613,46 +624,41 @@ def view_asset(asset_id):
     return render_template('view_asset.html', asset=asset, history=history, employees=employees,
                          now=datetime.utcnow,
                          active_loan=active_loan, loan_history=loan_history,
-                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele,
+                         rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele, rmm_visible=rmm_visible,
                          monitoring_profile=monitoring_profile, all_profiles=all_profiles,
                          vuln_count=vuln_count, transfer_targets=transfer_targets)
 
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')
 @login_required
-@admin_required
+@eagle_eyes_required
 def rmm_section(asset_id, section):
-    """Full-page view for an individual RMM management section."""
+    """Legacy standalone RMM console — now retired.
+
+    The RMM console has been merged into the asset detail page as in-page tabs.
+    Redirect existing bookmarks/links to the matching in-page tab via URL hash.
+    The four deduped sections (metrics/patches/software/scripts) live under their
+    original tab IDs; the rest are the new in-page RMM tabs (#tab-rmm-<section>).
+    """
     ALLOWED = {'hw', 'sec', 'sysinfo', 'metrics', 'avail', 'patches',
                'software', 'scripts', 'services', 'events', 'transfer', 'power'}
     if section not in ALLOWED:
         abort(404)
 
-    asset = Asset.query.get_or_404(asset_id)
-
-    rmm_agent_id = None
-    try:
-        row = db.session.execute(
-            text("SELECT agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
-            {'aid': asset_id}
-        ).fetchone()
-        if row:
-            rmm_agent_id = row[0]
-    except Exception:
-        pass
-
-    SECTION_LABELS = {
-        'hw': 'Hardware', 'sec': 'Security', 'sysinfo': 'System',
-        'metrics': 'Metrics', 'avail': 'Activity', 'patches': 'Patch Management',
-        'software': 'Software', 'scripts': 'Scripts', 'services': 'Services',
-        'events': 'Events', 'transfer': 'File Transfer', 'power': 'Power',
+    # Map each legacy section to its in-page tab hash:
+    #  - metrics/patches/software/scripts keep their pre-existing pane IDs
+    #  - hw/sec/sysinfo now live in full on the Overview tab (no separate panes)
+    #  - the rest are the new in-page RMM panes (#tab-rmm-<section>)
+    FRAG = {
+        'metrics': 'tab-metrics', 'patches': 'tab-patches',
+        'software': 'tab-software', 'scripts': 'tab-scripts',
+        'hw': 'tab-overview', 'sec': 'tab-overview', 'sysinfo': 'tab-overview',
+        'avail': 'tab-rmm-avail', 'services': 'tab-rmm-services',
+        'events': 'tab-rmm-events', 'transfer': 'tab-rmm-transfer',
+        'power': 'tab-rmm-power',
     }
-
-    return render_template('rmm_section.html',
-                           asset=asset,
-                           rmm_agent_id=rmm_agent_id,
-                           section=section,
-                           section_label=SECTION_LABELS.get(section, section.title()))
+    frag = FRAG.get(section, 'tab-overview')
+    return redirect(url_for('assets.view_asset', asset_id=asset_id) + '#' + frag, code=302)
 
 
 @bp.route('/assets/<int:asset_id>/edit', methods=['GET', 'POST'])

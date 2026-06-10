@@ -27,13 +27,18 @@
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-unifi" type="button"><i class="bi bi-router me-1"></i>UniFi</button></li>
     {% endif %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-vulns" type="button" onclick="loadAssetVulns()"><i class="bi bi-shield-exclamation me-1 text-danger"></i>Vulnerabilities{% if vuln_count %} <span class="badge bg-danger ms-1">{{ vuln_count }}</span>{% endif %}</button></li>
-    {% if rmm_agent_id %}
+    {% if rmm_agent_id and rmm_visible %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button"><i class="bi bi-graph-up me-1 text-info"></i>Metrics</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm-avail" type="button"><i class="bi bi-clock-history me-1"></i>Activity</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-patches" type="button"><i class="bi bi-patch-check me-1 text-warning"></i>Patches</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-software" type="button"><i class="bi bi-box-seam me-1"></i>Software</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm-services" type="button"><i class="bi bi-gear me-1"></i>Services</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-scripts" type="button"><i class="bi bi-terminal me-1"></i>Run Script</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm-events" type="button"><i class="bi bi-list-ul me-1"></i>Events</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm-transfer" type="button"><i class="bi bi-folder-symlink me-1"></i>File Transfer</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-rmm-power" type="button"><i class="bi bi-power me-1"></i>Power</button></li>
     {% endif %}
-    {% if rmm_agent_id %}
+    {% if rmm_agent_id and rmm_visible %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-backup" type="button"><i class="bi bi-hdd-network me-1"></i>Backup</button></li>
     {% endif %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" type="button"><i class="bi bi-clock-history me-1"></i>History</button></li>
@@ -55,6 +60,7 @@
 {% include "partials/view_asset/_tab_checkout.html" %}
 {% include "partials/view_asset/_tab_unifi.html" %}
 {% include "partials/view_asset/_tab_rmm.html" %}
+{% include "partials/view_asset/_tab_rmm_sections.html" %}
 {% include "partials/view_asset/_tab_backup.html" %}
 
 {% include "partials/view_asset/_modals.html" %}
@@ -67,7 +73,35 @@ window.ASSET_CFG = { assetId: {{ asset.id }} };
 </script>
 <script src="/static/js/view_asset.js"></script>
 <script>
-// Activate tab from URL hash (e.g. /assets/1#tab-patches)
+// Activate an in-page tab by its hash target (used by hero RMM-tools dropdown links).
+function rmmShowTab(ev, hash) {
+    if (ev) ev.preventDefault();
+    const target = document.querySelector(`[data-bs-target="${hash}"]`);
+    if (target && window.bootstrap) {
+        bootstrap.Tab.getOrCreateInstance(target).show();
+        target.scrollIntoView({block: 'nearest'});
+    }
+    return false;
+}
+
+// Lazy-load RMM section data on tab show (mirrors the retired console's loaders).
+// rmm_agent.js exports these onto window and self-wires #tab-software/#tab-scripts/#tab-history.
+(function() {
+    const lazy = {
+        '#tab-rmm-services': () => window.rmmLoadServices && window.rmmLoadServices(),
+        '#tab-rmm-avail':    () => window.rmmLoadAvailability && window.rmmLoadAvailability(),
+        '#tab-metrics':      () => window.rmmLoadMetrics && window.rmmLoadMetrics(),
+        // events stays manual (user picks filters then clicks Query); transfer/power/hw/sec/sysinfo
+        // populate from the initial rmmLoad() telemetry pass.
+    };
+    Object.entries(lazy).forEach(([sel, fn]) => {
+        document.querySelectorAll(`[data-bs-target="${sel}"]`).forEach(btn => {
+            btn.addEventListener('shown.bs.tab', () => { try { fn(); } catch (_) {} });
+        });
+    });
+})();
+
+// Activate tab from URL hash (e.g. /assets/1#tab-patches, /assets/1#tab-rmm-services)
 (function() {
     const hash = window.location.hash;
     if (hash) {

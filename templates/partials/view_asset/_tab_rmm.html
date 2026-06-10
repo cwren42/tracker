@@ -1,8 +1,5 @@
 <!-- ══ RMM AGENT TAB ═════════════════════════════════════════ -->
-{% if rmm_agent_id %}
-{% endif %}
-
-{% if rmm_agent_id %}
+{% if rmm_agent_id and rmm_visible %}
 <!-- Screenshot modal (used by status bar) -->
 <div class="modal fade" id="rmmScreenshotModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered">
@@ -29,5 +26,5 @@
         </div>
     </div>
 </div>
-<script src="{{ url_for('static', filename='js/rmm_agent.js') }}?v=20260609a"></script>
+<script src="{{ url_for('static', filename='js/rmm_agent.js') }}?v=20260609b"></script>
 {% endif %}

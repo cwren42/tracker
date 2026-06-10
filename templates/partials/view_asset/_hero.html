@@ -67,10 +67,10 @@
                     <li><a class="dropdown-item text-success" href="{{ url_for('assets.download_asset_installer', asset_id=asset.id) }}">
                         <i class="bi bi-box-arrow-down me-2"></i>Generate Installer (.ps1)
                     </a></li>
-                    {% if rmm_agent_id %}
+                    {% if rmm_agent_id and rmm_visible %}
                     <li><hr class="dropdown-divider"></li>
                     <li class="dropdown-header small text-muted px-3 py-1"><i class="bi bi-robot me-1"></i>RMM Tools</li>
-                    <li><a class="dropdown-item" href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='services') }}">
+                    <li><a class="dropdown-item" href="#tab-rmm-services" onclick="return rmmShowTab(event,'#tab-rmm-services')">
                         <i class="bi bi-gear me-2"></i>Service Manager
                     </a></li>
                     <li>
@@ -91,19 +91,21 @@
                             </div>
                         </div>
                     </li>
-                    <li><a class="dropdown-item" href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='avail') }}">
+                    <li><a class="dropdown-item" href="#tab-rmm-avail" onclick="return rmmShowTab(event,'#tab-rmm-avail')">
                         <i class="bi bi-clock-history me-2"></i>Activity Log
                     </a></li>
-                    <li><a class="dropdown-item" href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='events') }}">
+                    <li><a class="dropdown-item" href="#tab-rmm-events" onclick="return rmmShowTab(event,'#tab-rmm-events')">
                         <i class="bi bi-list-ul me-2"></i>Event Log
                     </a></li>
-                    <li><a class="dropdown-item" href="{{ url_for('assets.rmm_section', asset_id=asset.id, section='hw') }}">
+                    <li><a class="dropdown-item" href="#tab-overview" onclick="return rmmShowTab(event,'#tab-overview')">
                         <i class="bi bi-cpu me-2"></i>Hardware Info
                     </a></li>
+                    {% if current_user.is_admin %}
                     <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item text-danger" href="#" data-bs-toggle="modal" data-bs-target="#rmmRemoveAgentModal">
                         <i class="bi bi-trash3 me-2"></i>Remove Agent
                     </a></li>
+                    {% endif %}
                     {% endif %}
                     {% if current_user.is_admin %}
                     <li><hr class="dropdown-divider"></li>
@@ -114,7 +116,7 @@
                 </ul>
             </div>
             {% endif %}
-            {% if rmm_agent_id %}
+            {% if rmm_agent_id and rmm_visible %}
             <div class="d-flex align-items-center gap-1 border border-warning rounded px-2 py-1" style="font-size:.75rem;">
                 <i class="bi bi-eye text-warning me-1"></i>
                 <span class="text-warning" style="font-size:.72rem;">Eagle Eyes</span>

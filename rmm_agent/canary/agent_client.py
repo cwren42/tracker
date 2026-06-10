@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.24"
+AGENT_VERSION = "2.9.25"
 
 import asyncio
 import base64
@@ -3523,16 +3523,35 @@ class ShellSession:
         self._loop     = None
 
     def _reader_fn(self):
-        """Background thread: drain ConPTY output into asyncio queue."""
-        while self._alive:
-            chunk = _pipe_read_sync(self._hOut)
-            if chunk is None:
-                self._alive = False
+        """Background thread: drain ConPTY output into asyncio queue.
+
+        Hardened: any exception here used to kill the thread silently while
+        self._alive stayed True, so shell_output_loop spun forever on an empty
+        queue and the web shell showed ZERO output (2.9.24 regression — ConPTY
+        was finally enabled, so this read path ran for the first time). We now
+        catch + log, signal EOF, and clear _alive so the output loop exits.
+        """
+        try:
+            while self._alive:
+                chunk = _pipe_read_sync(self._hOut)
+                if chunk is None:
+                    break
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._q.put(chunk.decode("utf-8", errors="replace")),
+                        self._loop,
+                    )
+                except Exception as e:
+                    print(f"[shell] reader enqueue error: {e}", flush=True)
+                    break
+        except Exception as e:
+            print(f"[shell] reader thread crashed: {e}", flush=True)
+        finally:
+            self._alive = False
+            try:
                 asyncio.run_coroutine_threadsafe(self._q.put(None), self._loop)
-                break
-            asyncio.run_coroutine_threadsafe(
-                self._q.put(chunk.decode("utf-8", errors="replace")), self._loop
-            )
+            except Exception:
+                pass
 
     async def start(self) -> bool:
         self._loop = asyncio.get_event_loop()

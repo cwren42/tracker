@@ -1000,13 +1000,14 @@ def rmm_terminal(agent_id):
         agent_id=agent_id,
         asset_name=asset_name,
         asset_id=asset_id,
-        # Public Cloudflare gateway FIRST — it's the only endpoint that actually serves
-        # /ws/tech (verified: handshake + session + live shell). The LAN host
-        # (rmm.corp.cirque.com) resolves to the Tracker box but does NOT proxy the
-        # gateway, so it can't be the primary. Keep it as a fallback in case public is
-        # ever unavailable and the LAN proxy gets set up later.
-        gateway_url=RMM_GATEWAY_PUBLIC,
-        gateway_url_fallback=RMM_GATEWAY_LAN,
+        # LAN-first: most of the fleet is LAN-only (Cloudflare is for REMOTE users).
+        # _gateway_url_for_request() returns the LAN URL (rmm.corp.cirque.com, nginx :443
+        # -> gateway :8765, Corp-CA cert trusted by domain-joined browsers — verified the
+        # full /ws/tech proxy path works) for LAN clients, and the public Cloudflare URL
+        # for off-network clients. Public stays as a fallback for LAN clients that also
+        # have internet; LAN-only clients (no Cloudflare route) correctly get the LAN URL.
+        gateway_url=_gateway_url_for_request(),
+        gateway_url_fallback=RMM_GATEWAY_PUBLIC,
     ))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return resp

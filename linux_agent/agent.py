@@ -42,14 +42,18 @@ STATE_FILE = "/var/run/cirque-rmm-agent.state"
 # the "tracker_url_public" config key.
 DEFAULT_PUBLIC_TRACKER_URL = "https://tracker.cirquetools.com"
 
-# Setup logging
+# Setup logging — always log to stderr; add the file handler only if it can be
+# opened. Importing on a host without write access to /var/log (CI, dev) must not
+# crash at import (no file I/O side-effects at import time).
+_log_handlers = [logging.StreamHandler()]
+try:
+    _log_handlers.insert(0, logging.FileHandler(LOG_FILE))
+except OSError:
+    pass  # /var/log not writable here — stderr-only is fine
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.27"
+AGENT_VERSION = "2.9.28"
 
 import asyncio
 import base64
@@ -433,8 +433,55 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
         print(f"[rustdesk] sync skipped: {e}", flush=True)
 
 
-_RUSTDESK_SERVER = 'rust.corp.cirque.com'
-_RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo='
+# RustDesk relay server + key are NOT hardcoded in the agent. They live only in
+# server env (.secrets.env) and are fetched at runtime over the authenticated
+# agent endpoint, cached once per process here.
+_RUSTDESK_RELAY_CACHE = None   # None = not yet fetched; (server, key) once resolved
+
+
+def _get_rustdesk_relay(tracker_url: str, agent_id: str, token: str):
+    """Fetch the RustDesk relay (server, key) from the tracker, authenticated by
+    agent_id + token. Cached per-process so we only hit the server once.
+
+    URL failover: tries the resolved tracker_url first (LAN primary), then the
+    public Cloudflare fallback. Returns (server, key) on success, or (None, None)
+    on any failure / empty config so callers can skip RustDesk configuration."""
+    global _RUSTDESK_RELAY_CACHE
+    if _RUSTDESK_RELAY_CACHE is not None:
+        return _RUSTDESK_RELAY_CACHE
+
+    import urllib.request as _ur
+    # Candidate base URLs: resolved primary, then public fallback (dedup, keep order).
+    fallback = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
+    bases = []
+    for b in (tracker_url, fallback):
+        b = (b or "").rstrip("/")
+        if b and b not in bases:
+            bases.append(b)
+
+    for base in bases:
+        try:
+            url = f"{base}/api/rmm/rustdesk-config/{agent_id}?token={token}"
+            req = _ur.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
+                body = json.loads(resp.read())
+            server = (body.get("server") or "").strip()
+            key = (body.get("key") or "").strip()
+            if server and key:
+                _RUSTDESK_RELAY_CACHE = (server, key)
+                print(f"[rustdesk] relay config fetched from {base} (server={server})", flush=True)
+                return _RUSTDESK_RELAY_CACHE
+            # Reachable but env unset server-side -- don't keep retrying other bases.
+            print("[rustdesk] relay config unavailable -- skipping", flush=True)
+            _RUSTDESK_RELAY_CACHE = (None, None)
+            return _RUSTDESK_RELAY_CACHE
+        except Exception as e:
+            print(f"[rustdesk] relay config fetch failed from {base}: {e}", flush=True)
+            continue
+
+    # All bases failed -- don't cache (transient network); retry next cycle.
+    return (None, None)
+
 
 # File on disk where we persist the plaintext password so it survives restarts.
 _RUSTDESK_PASS_FILE    = r'C:\CirqueRMM\rustdesk_pass.txt'
@@ -789,11 +836,17 @@ _RUSTDESK_IDENTITY_PATHS = [
 ]
 
 
-def _fix_rustdesk_identity() -> bool:
+def _fix_rustdesk_identity(rd_server: str) -> bool:
     """If RustDesk registered with the public server instead of ours,
     delete the identity file and restart the service so it re-registers
-    with our private server.  Returns True if a reset was performed."""
+    with our private server.  Returns True if a reset was performed.
+
+    rd_server is the fetched relay host; if empty/None we cannot tell which
+    server is "ours", so we skip the identity check entirely."""
     import re as _re, subprocess as _sp, time as _time
+    if not rd_server:
+        print('[rustdesk] relay config unavailable -- skipping identity check', flush=True)
+        return False
     for path in _RUSTDESK_IDENTITY_PATHS:
         if not os.path.isfile(path):
             continue
@@ -807,8 +860,8 @@ def _fix_rustdesk_identity() -> bool:
                     # Empty = service just started, hasn't confirmed any server yet
                     # Don't delete -- just wait for it to confirm
                     return False
-                # Has our server confirmed? First segment of rust.corp.cirque.com = 'rust'
-                our_name = _RUSTDESK_SERVER.split('.')[0].lower()
+                # Has our server confirmed? First segment of the relay host (e.g. 'rust').
+                our_name = rd_server.split('.')[0].lower()
                 if our_name in confirmed.lower():
                     return False  # already confirmed against our server
                 # Has a FOREIGN server (e.g. rs-ny from public RustDesk)
@@ -853,14 +906,19 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
     global _rustdesk_setup_done
     import subprocess as _sp, time as _time
     try:
+        # Fetch the relay server/key from the tracker (cached per-process). If
+        # unavailable (env unset server-side, or network), the config-write and
+        # identity-check below skip gracefully without crashing the flow.
+        rd_server, rd_key = _get_rustdesk_relay(tracker_url, agent_id, token)
+
         if _rustdesk_exe():
             if _rustdesk_setup_done:
                 # Already fully set up -- only sync ID (fast, idempotent)
                 sync_rustdesk_id(tracker_url, agent_id, token)
                 return
             # First run: do full config check
-            _write_rustdesk_config()
-            _fix_rustdesk_identity()
+            _write_rustdesk_config(rd_server, rd_key)
+            _fix_rustdesk_identity(rd_server)
             _ensure_rustdesk_password()
             sync_rustdesk_id(tracker_url, agent_id, token)
             _rustdesk_setup_done = True
@@ -876,7 +934,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
         if not _rustdesk_exe():
             _rustdesk_direct_install()
 
-        _write_rustdesk_config()
+        _write_rustdesk_config(rd_server, rd_key)
 
         # Start briefly to trigger peer-ID generation
         exe = _rustdesk_exe()
@@ -965,13 +1023,18 @@ def _rustdesk_direct_install() -> None:
         print(f'[rustdesk] direct install failed: {e}', flush=True)
 
 
-def _write_rustdesk_config() -> None:
-    """Write RustDesk2.toml server config to all relevant paths."""
+def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
+    """Write RustDesk2.toml server config to all relevant paths using the
+    relay server/key fetched from the tracker. If either is empty/None, skip
+    (the agent must not write a config without a valid relay)."""
+    if not rd_server or not rd_key:
+        print('[rustdesk] relay config unavailable -- skipping config write', flush=True)
+        return
     cfg = (
-        f"rendezvous_server = '{_RUSTDESK_SERVER}'\n"
+        f"rendezvous_server = '{rd_server}'\n"
         f"nat_type = 1\nserial = 0\n\n[options]\n"
-        f"custom-rendezvous-server = '{_RUSTDESK_SERVER}'\n"
-        f"key = '{_RUSTDESK_KEY}'\n"
+        f"custom-rendezvous-server = '{rd_server}'\n"
+        f"key = '{rd_key}'\n"
         f"relay-server = ''\napi-server = ''\n"
     )
     appdata  = os.environ.get('APPDATA', '')

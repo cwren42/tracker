@@ -588,3 +588,20 @@ def api_rmm_agent_info(agent_id):
     return jsonify({'ok': True, 'asset_id': row[0], 'asset_tag': row[1] or '', 'hostname': row[2] or ''})
 
 
+@bp.route('/api/rmm/rustdesk-config/<agent_id>')
+def api_rmm_rustdesk_config(agent_id):
+    """Return the RustDesk relay server + key for the agent to write into
+    RustDesk2.toml at runtime. Authenticated by agent_id + token (same as the
+    other agent endpoints) so the key never lives in agent source/MSI/git.
+
+    Values come from server env (RUSTDESK_RELAY_SERVER / RUSTDESK_RELAY_KEY via
+    .secrets.env EnvironmentFile). If either is unset, returns empty strings so
+    the agent skips RustDesk configuration gracefully (no crash)."""
+    token = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+    server = os.environ.get('RUSTDESK_RELAY_SERVER', '')
+    key = os.environ.get('RUSTDESK_RELAY_KEY', '')
+    return jsonify({'server': server, 'key': key})
+
+

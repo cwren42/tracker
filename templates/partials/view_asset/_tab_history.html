@@ -37,30 +37,8 @@
     {% endif %}
     </div>
   </div>
-
-  {% if rmm_agent_id %}
-  <div class="card section-card mt-3">
-      <div class="card-header"><i class="bi bi-wifi me-2 text-info"></i>Agent Availability</div>
-      <div class="card-body p-2">
-          <div id="rmm-avail-content" style="max-height:160px;overflow-y:auto;">
-              <span class="text-muted small">Loading…</span>
-          </div>
-      </div>
-  </div>
-  <div class="card section-card mt-3">
-      <div class="card-header d-flex align-items-center justify-content-between">
-          <span><i class="bi bi-person-lines-fill me-2 text-info"></i>Session Activity</span>
-          <select class="form-select form-select-sm" style="width:auto;font-size:.75rem;" id="rmm-sev-days" onchange="rmmLoadSessionEvents(true)">
-              <option value="1">Last 24 h</option>
-              <option value="7" selected>Last 7 days</option>
-              <option value="30">Last 30 days</option>
-          </select>
-      </div>
-      <div class="card-body p-2">
-          <div id="rmm-sev-content" style="max-height:220px;overflow-y:auto;">
-              <span class="text-muted small">Loading…</span>
-          </div>
-      </div>
-  </div>
-  {% endif %}
+  {# RMM agent availability + session activity moved to the dedicated RMM ▸ Activity
+     tab (#tab-rmm-avail). They used to be duplicated here, which created duplicate
+     element IDs (rmm-avail-content / rmm-sev-content / rmm-sev-days) — getElementById
+     then returned this hidden copy, so the Activity tab hung on "Loading…" forever. #}
 </div>

@@ -565,7 +565,16 @@ $out -join "\`n" `;
                     async function rmmLoadMetrics(){
                         const data = await fetch(`/api/rmm/metrics-history/${agentId}?hours=24`).then(x=>x.json()).catch(()=>({ok:false}));
                         if(!data.ok||!data.data||!data.data.length){
-                            document.querySelector('#rmm-tab-metrics').innerHTML='<p class="text-muted">No metrics history yet.</p>';
+                            // Empty-state lives in the metrics tab-pane body, not a (nonexistent) #rmm-tab-metrics.
+                            const mc=el('rmm-metrics-chart');
+                            const body=mc&&mc.closest?mc.closest('.card-body'):null;
+                            if(body) body.innerHTML='<p class="text-muted mb-0">No metrics history yet.</p>';
+                            return;
+                        }
+                        if(typeof Chart==='undefined'){
+                            const mc=el('rmm-metrics-chart');
+                            const body=mc&&mc.closest?mc.closest('.card-body'):null;
+                            if(body) body.innerHTML='<p class="text-danger mb-0">Chart library failed to load.</p>';
                             return;
                         }
                         const rows=data.data,
@@ -667,9 +676,10 @@ $out -join "\`n" `;
                         const ssTog = el('rmm-eagle-screenshots-toggle');
                         if(ssTog) ssTog.checked = enabled;
                     }
-                    document.querySelectorAll('[data-bs-target="#tab-history"]').forEach(btn=>{
-                        btn.addEventListener('shown.bs.tab', ()=>rmmLoadAvailability());
-                    });
+                    // NOTE: availability/session-events now live on the RMM ▸ Activity tab
+                    // (#tab-rmm-avail), wired from view_asset.html. The old #tab-history
+                    // wiring was removed — its duplicate IDs made getElementById grab the
+                    // wrong (hidden) node and the Activity tab hung on "Loading…".
                     document.querySelectorAll('[data-bs-target="#tab-software"]').forEach(btn=>{
                         btn.addEventListener('shown.bs.tab', ()=>rmmLoadSoftware());
                     });
@@ -1086,14 +1096,21 @@ $out -join "\`n" `;
                         const data=await rmmPoll(r.session_id,'event_log_result',30000);
                         const evts=(data&&data.data&&data.data.events)||[];
                         el('rmm-ev-status').textContent=evts.length?`${evts.length} events`:'No results';
-                        const lvlBadge={1:'bg-danger',2:'bg-danger',3:'bg-warning',4:'bg-secondary'};
-                        const lvlName={1:'Critical',2:'Error',3:'Warning',4:'Info'};
+                        // The agent sends level as a name string ("Error"/"Warning"/…) and the id
+                        // as event_id. Older payloads used numeric level + id — normalise both.
+                        const lvlNumByName={critical:1,error:2,warning:3,information:4,info:4,verbose:5};
+                        const lvlBadge={1:'bg-danger',2:'bg-danger',3:'bg-warning',4:'bg-secondary',5:'bg-secondary'};
+                        const lvlName={1:'Critical',2:'Error',3:'Warning',4:'Info',5:'Verbose'};
                         el('rmm-ev-content').innerHTML=evts.length
                             ?'<table class="table table-sm table-hover mb-0" style="font-size:.73rem;"><thead class="table-light sticky-top"><tr><th>Time</th><th>ID</th><th>Level</th><th>Source</th><th>Message</th></tr></thead><tbody>'
-                              +evts.map(e=>`<tr><td class="text-nowrap">${fmtLocal(e.time||e.ts||'')}</td>`
-                                +`<td>${e.id||''}</td><td><span class="badge ${lvlBadge[e.level]||'bg-secondary'}">${lvlName[e.level]||e.level}</span></td>`
-                                +`<td>${e.source||''}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.message||''}</td></tr>`
-                              ).join('')+'</tbody></table>'
+                              +evts.map(e=>{
+                                const id=(e.event_id!=null?e.event_id:e.id)||'';
+                                const lvNum=(typeof e.level==='number')?e.level:(lvlNumByName[String(e.level||'').toLowerCase()]||0);
+                                const lvLabel=lvlName[lvNum]||e.level||'';
+                                return `<tr><td class="text-nowrap">${fmtLocal(e.time||e.ts||'')}</td>`
+                                +`<td>${id}</td><td><span class="badge ${lvlBadge[lvNum]||'bg-secondary'}">${lvLabel}</span></td>`
+                                +`<td>${e.source||''}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.message||''}</td></tr>`;
+                              }).join('')+'</tbody></table>'
                             :'<span class="text-muted">No events found.</span>';
                     }
 

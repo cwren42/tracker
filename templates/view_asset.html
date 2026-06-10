@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block styles %}
-<link rel="stylesheet" href="/static/css/view_asset.css?v=20260609a">
+<link rel="stylesheet" href="/static/css/view_asset.css?v=20260609c">
 {% endblock %}
 
 {% block title %}{{ asset.name }} – Asset Details{% endblock %}
@@ -74,6 +74,12 @@
 {% endblock %}
 
 {% block scripts %}
+{% if rmm_agent_id and rmm_visible %}
+{# Chart.js powers the RMM ▸ Metrics CPU/RAM chart. It was dropped in the console→tab
+   merge (the old console loaded it itself), so rmmLoadMetrics' `new Chart()` threw and
+   the chart never rendered. #}
+<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+{% endif %}
 <script>
 window.ASSET_CFG = { assetId: {{ asset.id }} };
 </script>
@@ -90,22 +96,54 @@ function rmmShowTab(ev, hash) {
     return false;
 }
 
-// Lazy-load RMM section data on tab show (mirrors the retired console's loaders).
-// rmm_agent.js exports these onto window and self-wires #tab-software/#tab-scripts/#tab-history.
+// Lazy-load RMM section data on tab show (mirrors the retired console's per-section
+// loaders). rmm_agent.js exports these onto window and self-wires #tab-software/#tab-scripts.
+// Each loader runs at most once per pane unless it manages its own refresh (services/events
+// have explicit Load/Query buttons; metrics/availability are cheap to re-run).
 (function() {
+    const ranOnce = {};
     const lazy = {
-        '#tab-rmm-services': () => window.rmmLoadServices && window.rmmLoadServices(),
+        '#tab-metrics':      () => window.rmmLoadMetrics      && window.rmmLoadMetrics(),
         '#tab-rmm-avail':    () => window.rmmLoadAvailability && window.rmmLoadAvailability(),
-        '#tab-metrics':      () => window.rmmLoadMetrics && window.rmmLoadMetrics(),
-        // events stays manual (user picks filters then clicks Query); transfer/power/hw/sec/sysinfo
-        // populate from the initial rmmLoad() telemetry pass.
+        '#tab-rmm-services': () => window.rmmLoadServices     && window.rmmLoadServices(),
+        // File Transfer: initialise the file browser the first time the tab is opened
+        // (rmmFsTabClick lists drives if nothing is loaded yet).
+        '#tab-rmm-transfer': () => window.rmmFsTabClick       && window.rmmFsTabClick(),
+        // Events stays manual (user picks filters, clicks Query → rmmLoadEvents).
+        // Power has no data to load — its buttons dispatch on click.
     };
+    // Bootstrap fires shown.bs.tab on the *trigger* element. The RMM tabs are
+    // dropdown-items (same data-bs-target as the panes), so bind by selector.
     Object.entries(lazy).forEach(([sel, fn]) => {
-        document.querySelectorAll(`[data-bs-target="${sel}"]`).forEach(btn => {
-            btn.addEventListener('shown.bs.tab', () => { try { fn(); } catch (_) {} });
+        document.querySelectorAll(`[data-bs-target="${sel}"]`).forEach(trigger => {
+            trigger.addEventListener('shown.bs.tab', () => {
+                const once = (sel === '#tab-rmm-transfer'); // transfer must not re-list on every reopen
+                if (once && ranOnce[sel]) return;
+                ranOnce[sel] = true;
+                try { fn(); } catch (_) {}
+            });
         });
     });
 })();
+
+// Bootstrap 5 leaves the previously-active pane shown when a tab is triggered from a
+// .dropdown-item (its active-state walk doesn't span the dropdown), producing a giant
+// blank gap where the old (tall) Overview pane still occupies layout. Enforce exactly
+// one .active.show pane on every tab show.
+document.getElementById('assetMainTabs')?.addEventListener('shown.bs.tab', function(ev) {
+    const targetSel = ev.target && ev.target.getAttribute('data-bs-target');
+    if (!targetSel) return;
+    document.querySelectorAll('#assetMainContent > .tab-pane').forEach(pane => {
+        if ('#' + pane.id === targetSel) return;
+        pane.classList.remove('show', 'active');
+    });
+    // Mirror active styling onto the RMM dropdown toggle when an RMM tab is active.
+    const dd = document.querySelector('#assetMainTabs .nav-item.dropdown > .dropdown-toggle');
+    if (dd) {
+        const inDropdown = !!ev.target.closest('.dropdown-menu');
+        dd.classList.toggle('active', inDropdown);
+    }
+});
 
 // Activate tab from URL hash (e.g. /assets/1#tab-patches, /assets/1#tab-rmm-services)
 (function() {

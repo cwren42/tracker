@@ -97,5 +97,6 @@
 </div>
 </div><!-- /#tab-unifi -->
 {% endif %}
-
-</div><!-- /.tab-content -->
+{# NOTE: #assetMainContent / .tab-content is closed by view_asset.html after the LAST
+   tab-pane include — NOT here. A stray </div> here used to close it early, pushing the
+   RMM section panes + Backup outside .tab-content so Bootstrap couldn't hide them. #}

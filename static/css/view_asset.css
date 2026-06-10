@@ -48,13 +48,9 @@
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 1.5rem;
     gap: .25rem;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding-bottom: 1px; /* keep active border-bottom visible under scroll crop */
+    flex-wrap: wrap; /* wrap on narrow screens instead of scroll-clipping (overflow-x:auto clipped the RMM dropdown menu) */
+    padding-bottom: 1px;
 }
-.nav-tabs-main::-webkit-scrollbar { display: none; }
 .nav-tabs-main .nav-link {
     color: var(--text-secondary);
     font-weight: 500;

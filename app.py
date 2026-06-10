@@ -141,7 +141,10 @@ def add_security_headers(response):
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; "
         "img-src 'self' data:; "
-        "connect-src 'self'; "
+        # Allow the xterm.js terminal's WebSocket to reach the RMM gateway origins
+        # (LAN + public Cloudflare). Without these, CSP connect-src 'self' blocks the
+        # shell WS ("violates connect-src 'self'") since the gateway is a different origin.
+        f"connect-src 'self' {os.environ.get('RMM_GATEWAY_URL', 'wss://rmm.cirquetools.com')} {os.environ.get('RMM_GATEWAY_URL_LAN', 'wss://rmm.corp.cirque.com')}; "
         "object-src 'none'; "
         "base-uri 'self'; "
         "frame-ancestors 'self'; "

@@ -94,12 +94,14 @@ async function connect(shellType, urlIdx) {
 
         if (msg.type === 'shell_started') {
             shellActive = true;
-            // ConPTY/PSReadLine shows the prompt automatically — no need to send \n.
-            // For raw-pipe fallback the user presses Enter once to get the first prompt.
-            // Re-fit + resize once the shell is live: the very first ConPTY frame can
-            // render before the viewport size is fully synced, leaving the prompt stuck
-            // at the top until a manual `clear`. A resize forces ConPTY to repaint the
-            // buffer at the exact current dimensions — fixes the first-render layout.
+            // Clear the connection banner so the pseudoconsole owns row 0. PSReadLine/
+            // ConPTY position the input line with ABSOLUTE cursor coordinates assuming the
+            // prompt starts at the top of the screen; leftover banner lines above it
+            // desync that origin, so typed text lands at the top until a manual `clear`.
+            // reset() aligns xterm's origin with ConPTY's before the prompt renders.
+            term.reset();
+            // Re-fit + resize once the shell is live so ConPTY repaints at the exact
+            // viewport dimensions (also guards the first-frame size sync).
             setTimeout(() => {
                 try {
                     fitAddon.fit();

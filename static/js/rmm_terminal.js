@@ -174,10 +174,11 @@ function disconnectAndClose() {
 }
 
 // Send keystrokes to shell.
-// xterm.js sends DEL (0x7f) for Backspace; Windows console/ConPTY expects BS (0x08).
+// Forward keystrokes RAW. xterm.js sends DEL (0x7f) for Backspace, which ConPTY +
+// PSReadLine handle as "erase previous char" (standard VT). Do NOT convert to BS (0x08):
+// PSReadLine treats 0x08 as cursor-left, so backspace moved the cursor without deleting.
 term.onData(data => {
     if (ws && ws.readyState === WebSocket.OPEN && sessionId && shellActive) {
-        data = data.replace(/\x7f/g, '\x08');
         ws.send(JSON.stringify({type: 'shell_input', session_id: sessionId, data: data}));
     }
 });

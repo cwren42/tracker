@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.25"
+AGENT_VERSION = "2.9.27"
 
 import asyncio
 import base64
@@ -3305,6 +3305,23 @@ if sys.platform == "win32":
 
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
+    # pywinpty is the PREFERRED Windows interactive-shell backend. The
+    # hand-rolled ctypes ConPTY below works by inspection but, in the
+    # SYSTEM-service / session-0 context, the child's output pipe never
+    # gets written to (ReadFile blocks forever) — confirmed unfixable-by-
+    # inspection live on ITWORKBENCH (agent 2.9.25/2.9.26). pywinpty wraps
+    # ConPTY correctly (it's what real solutions use), so when its prebuilt
+    # wheel is present we use it and skip the broken hand-rolled path.
+    try:
+        from winpty import PtyProcess as _PtyProcess
+        _PYWINPTY_AVAILABLE = True
+    except Exception:
+        _PtyProcess = None
+        _PYWINPTY_AVAILABLE = False
+else:
+    _PYWINPTY_AVAILABLE = False
+    _PtyProcess = None
+
     class _COORD(ctypes.Structure):
         _fields_ = [("X", _wt.SHORT), ("Y", _wt.SHORT)]
 
@@ -3499,7 +3516,22 @@ if sys.platform == "win32":
 
 
 class ShellSession:
-    """ConPTY-backed shell on Windows; raw-pipe fallback elsewhere."""
+    """Interactive shell.
+
+    Windows backend priority:
+      1. pywinpty (PtyProcess) — PREFERRED. Wraps ConPTY correctly even under
+         the SYSTEM service / session-0 context where the hand-rolled ctypes
+         ConPTY relayed zero output (child never wrote its output pipe;
+         ReadFile blocked forever — proven live on ITWORKBENCH 2.9.25/26).
+      2. raw asyncio pipes — FALLBACK for fleet boxes that don't yet have the
+         pywinpty wheel. No PSReadLine niceties, but functional; keeps those
+         agents working until pywinpty is rolled out.
+
+    The hand-rolled ctypes ConPTY path is retired (never relays output under
+    the service); pywinpty is the Windows interactive path now.
+
+    Non-Windows uses the raw-pipe fallback.
+    """
 
     def __init__(self, session_id: int, shell: str = "powershell",
                  cols: int = 220, rows: int = 50):
@@ -3507,40 +3539,48 @@ class ShellSession:
         self.shell      = shell
         self.cols       = cols
         self.rows       = rows
-        # ConPTY handles
-        self._hpc      = None
-        self._hProc    = None
-        self._hThread  = None
-        self._hIn      = None
-        self._hOut     = None
-        # Fallback
+        # pywinpty backend
+        self._pty      = None
+        # Raw-pipe fallback
         self.proc: Optional[asyncio.subprocess.Process] = None
-        # Output queue fed by background reader thread
+        # Output queue fed by background reader thread (pywinpty path)
         self._q: Optional[asyncio.Queue] = None
         self._reader: Optional["_threading.Thread"] = None
         self._alive    = False
-        self._use_conpty = False
+        self._use_pty  = False
         self._loop     = None
 
     def _reader_fn(self):
-        """Background thread: drain ConPTY output into asyncio queue.
+        """Background thread: drain pywinpty output into the asyncio queue.
 
-        Hardened: any exception here used to kill the thread silently while
-        self._alive stayed True, so shell_output_loop spun forever on an empty
-        queue and the web shell showed ZERO output (2.9.24 regression — ConPTY
-        was finally enabled, so this read path ran for the first time). We now
-        catch + log, signal EOF, and clear _alive so the output loop exits.
+        pywinpty's read() is blocking with an internal pump, so it runs in a
+        dedicated daemon thread and hands chunks to the event loop via the
+        queue. Hardened: any exception here is caught + logged, then we signal
+        EOF (None) and clear _alive so shell_output_loop exits instead of
+        spinning forever on an empty queue.
         """
         try:
             while self._alive:
-                chunk = _pipe_read_sync(self._hOut)
-                if chunk is None:
-                    break
                 try:
-                    asyncio.run_coroutine_threadsafe(
-                        self._q.put(chunk.decode("utf-8", errors="replace")),
-                        self._loop,
-                    )
+                    chunk = self._pty.read(4096)
+                except EOFError:
+                    break
+                except Exception as e:
+                    print(f"[shell] pty read error: {e}", flush=True)
+                    break
+                if chunk is None or chunk == "":
+                    # isalive() == False after the child exits; read() returns
+                    # "" at EOF. Stop if the process is gone.
+                    try:
+                        if not self._pty.isalive():
+                            break
+                    except Exception:
+                        break
+                    continue
+                # pywinpty.read() returns str (already UTF-8 decoded)
+                text = chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
+                try:
+                    asyncio.run_coroutine_threadsafe(self._q.put(text), self._loop)
                 except Exception as e:
                     print(f"[shell] reader enqueue error: {e}", flush=True)
                     break
@@ -3555,28 +3595,30 @@ class ShellSession:
 
     async def start(self) -> bool:
         self._loop = asyncio.get_event_loop()
-        # Try ConPTY on Windows
-        if sys.platform == "win32" and _CONPTY_AVAILABLE:
+        # Preferred Windows path: pywinpty
+        if sys.platform == "win32" and _PYWINPTY_AVAILABLE:
             try:
-                hpc, hIn, hOut, hProc, hThread = await self._loop.run_in_executor(
-                    None, _conpty_create, self.shell, self.cols, self.rows
+                spawn_cmd = "cmd.exe" if self.shell == "cmd" else "powershell.exe -NoLogo -NoProfile"
+                self._pty = await self._loop.run_in_executor(
+                    None, _PtyProcess.spawn, spawn_cmd
                 )
-                self._hpc     = hpc
-                self._hIn     = hIn
-                self._hOut    = hOut
-                self._hProc   = hProc
-                self._hThread = hThread
-                self._alive   = True
-                self._use_conpty = True
+                try:
+                    # pywinpty setwinsize signature is (rows, cols)
+                    self._pty.setwinsize(self.rows, self.cols)
+                except Exception as e:
+                    print(f"[shell] setwinsize warning: {e}", flush=True)
+                self._alive  = True
+                self._use_pty = True
                 self._q = asyncio.Queue()
                 self._reader = _threading.Thread(target=self._reader_fn, daemon=True)
                 self._reader.start()
-                print(f"[shell] ConPTY session {self.session_id} started ({self.shell})", flush=True)
+                print(f"[shell] pywinpty session {self.session_id} started ({self.shell})", flush=True)
                 return True
             except Exception as e:
-                print(f"[shell] ConPTY unavailable, falling back to raw pipes: {e}", flush=True)
+                print(f"[shell] pywinpty unavailable, falling back to raw pipes: {e}", flush=True)
 
-        # Fallback: raw pipes (no PSReadLine, but functional)
+        # Fallback: raw pipes (no PSReadLine, but functional). Used on fleet
+        # boxes without the pywinpty wheel and on non-Windows.
         cmd = ["cmd.exe"] if self.shell == "cmd" else ["powershell.exe", "-NoLogo", "-NoProfile"]
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -3595,9 +3637,10 @@ class ShellSession:
     async def send_input(self, text: str):
         if not self._alive:
             return
-        if self._use_conpty:
-            data = text.encode("utf-8", errors="replace")
-            await self._loop.run_in_executor(None, _pipe_write_sync, self._hIn, data)
+        if self._use_pty:
+            # Raw write — pywinpty/ConPTY translates \x7f (Backspace) into a
+            # proper VT erase, so no raw 0x7f reaches the terminal.
+            await self._loop.run_in_executor(None, self._pty.write, text)
         elif self.proc and self.proc.stdin:
             self.proc.stdin.write(text.encode("utf-8", errors="replace"))
             await self.proc.stdin.drain()
@@ -3605,7 +3648,7 @@ class ShellSession:
     async def read_output(self) -> Optional[str]:
         if not self._alive:
             return None
-        if self._use_conpty:
+        if self._use_pty:
             try:
                 return await asyncio.wait_for(self._q.get(), timeout=0.1)
             except asyncio.TimeoutError:
@@ -3622,19 +3665,22 @@ class ShellSession:
     async def resize(self, cols: int, rows: int):
         self.cols = cols
         self.rows = rows
-        if self._use_conpty and self._hpc:
+        if self._use_pty and self._pty:
             try:
-                _ResizePseudoConsole(self._hpc, _COORD(X=cols, Y=rows))
+                # pywinpty setwinsize signature is (rows, cols)
+                await self._loop.run_in_executor(None, self._pty.setwinsize, rows, cols)
             except Exception as e:
                 print(f"[shell] resize error: {e}", flush=True)
 
     def is_alive(self) -> bool:
         if not self._alive:
             return False
-        if self._use_conpty and self._hProc:
-            ec = _wt.DWORD(0)
-            _k32.GetExitCodeProcess(self._hProc, ctypes.byref(ec))
-            if ec.value != _STILL_ACTIVE:
+        if self._use_pty and self._pty:
+            try:
+                if not self._pty.isalive():
+                    self._alive = False
+                    return False
+            except Exception:
                 self._alive = False
                 return False
         elif self.proc is not None:
@@ -3643,15 +3689,13 @@ class ShellSession:
 
     async def stop(self):
         self._alive = False
-        if self._use_conpty:
-            if self._hProc:
-                _k32.TerminateProcess(self._hProc, 1)
-                _win32_close(self._hProc);  self._hProc  = None
-                _win32_close(self._hThread); self._hThread = None
-            _win32_close(self._hIn);  self._hIn  = None
-            _win32_close(self._hOut); self._hOut = None
-            if self._hpc:
-                _ClosePseudoConsole(self._hpc); self._hpc = None
+        if self._use_pty:
+            if self._pty:
+                try:
+                    self._pty.terminate(force=True)
+                except Exception:
+                    pass
+                self._pty = None
         elif self.proc:
             try:
                 self.proc.kill()

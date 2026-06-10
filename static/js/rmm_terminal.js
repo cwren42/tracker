@@ -96,6 +96,19 @@ async function connect(shellType, urlIdx) {
             shellActive = true;
             // ConPTY/PSReadLine shows the prompt automatically — no need to send \n.
             // For raw-pipe fallback the user presses Enter once to get the first prompt.
+            // Re-fit + resize once the shell is live: the very first ConPTY frame can
+            // render before the viewport size is fully synced, leaving the prompt stuck
+            // at the top until a manual `clear`. A resize forces ConPTY to repaint the
+            // buffer at the exact current dimensions — fixes the first-render layout.
+            setTimeout(() => {
+                try {
+                    fitAddon.fit();
+                    const d = fitAddon.proposeDimensions();
+                    if (d && ws && sessionId) {
+                        ws.send(JSON.stringify({type: 'shell_resize', session_id: sessionId, cols: d.cols, rows: d.rows}));
+                    }
+                } catch (_) {}
+            }, 150);
             return;
         }
 

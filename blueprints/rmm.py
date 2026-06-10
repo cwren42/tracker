@@ -1000,10 +1000,13 @@ def rmm_terminal(agent_id):
         agent_id=agent_id,
         asset_name=asset_name,
         asset_id=asset_id,
-        gateway_url=_gateway_url_for_request(),
-        # Fallback so the browser terminal fails over LAN->public like the agents do
-        # (the LAN gateway host may not serve /ws/tech; the Cloudflare public URL does).
-        gateway_url_fallback=RMM_GATEWAY_PUBLIC,
+        # Public Cloudflare gateway FIRST — it's the only endpoint that actually serves
+        # /ws/tech (verified: handshake + session + live shell). The LAN host
+        # (rmm.corp.cirque.com) resolves to the Tracker box but does NOT proxy the
+        # gateway, so it can't be the primary. Keep it as a fallback in case public is
+        # ever unavailable and the LAN proxy gets set up later.
+        gateway_url=RMM_GATEWAY_PUBLIC,
+        gateway_url_fallback=RMM_GATEWAY_LAN,
     ))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return resp

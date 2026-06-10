@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.23"
+AGENT_VERSION = "2.9.24"
 
 import asyncio
 import base64
@@ -3350,16 +3350,24 @@ if sys.platform == "win32":
     _INVALID_HANDLE_VALUE                = _wt.HANDLE(-1).value
     _STILL_ACTIVE                        = 259
 
+    # HRESULT is a signed 32-bit LONG. NOTE: ctypes.wintypes has NO `HRESULT`
+    # attribute (it lives at top-level ctypes.HRESULT on Windows only). Using
+    # `_wt.HRESULT` here raised AttributeError at import, which the except below
+    # swallowed and set _CONPTY_AVAILABLE=False — silently disabling ConPTY on
+    # EVERY Windows box and dropping every web shell into the raw-pipe fallback
+    # (no PSReadLine, raw \x7f echoed, no backspace). Use c_long and check the
+    # HRESULT ourselves so we control success (S_OK==0) vs failure cleanup.
+    _HRESULT = ctypes.c_long
     # Resolve CreatePseudoConsole — only present on Win10 1903+
     try:
         _CreatePseudoConsole = _k32.CreatePseudoConsole
-        _CreatePseudoConsole.restype  = _wt.HRESULT
+        _CreatePseudoConsole.restype  = _HRESULT
         _CreatePseudoConsole.argtypes = [
             _COORD, _wt.HANDLE, _wt.HANDLE, _wt.DWORD,
             ctypes.POINTER(_wt.HANDLE),
         ]
         _ResizePseudoConsole = _k32.ResizePseudoConsole
-        _ResizePseudoConsole.restype  = _wt.HRESULT
+        _ResizePseudoConsole.restype  = _HRESULT
         _ResizePseudoConsole.argtypes = [_wt.HANDLE, _COORD]
 
         _ClosePseudoConsole = _k32.ClosePseudoConsole
@@ -3368,6 +3376,7 @@ if sys.platform == "win32":
 
         _CONPTY_AVAILABLE = True
     except AttributeError:
+        # CreatePseudoConsole genuinely absent (pre-1903) — fall back to raw pipes.
         _CONPTY_AVAILABLE = False
 
     _k32.InitializeProcThreadAttributeList.restype  = _wt.BOOL
@@ -3436,7 +3445,7 @@ if sys.platform == "win32":
         _win32_close(hPTYin_r); _win32_close(hPTYout_w)
         if hr != 0:
             _win32_close(hPTYin_w); _win32_close(hPTYout_r)
-            raise OSError(f"CreatePseudoConsole failed: HRESULT={hr:#010x}")
+            raise OSError(f"CreatePseudoConsole failed: HRESULT={hr & 0xFFFFFFFF:#010x}")
 
         # Build STARTUPINFOEX with the pseudo console attribute
         attr_sz = ctypes.c_size_t(0)

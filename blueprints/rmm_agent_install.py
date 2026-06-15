@@ -338,21 +338,29 @@ def rmm_enroll():
     try:
         now = datetime.utcnow().isoformat()
 
+        # Real hardware serial reported by the installer (Win32_BIOS). Optional.
+        serial = (data.get('serial') or '').strip()
+
         # Find or create an asset for this device.
-        # Match by hostname FIRST — serials like "TobefilledbyO.E.M." are identical
-        # across many machines and cannot be used as a reliable unique key.
+        # Match by hostname FIRST, then by a REAL hardware serial. The serial fallback is
+        # what de-dups the repurpose flow: a device renamed BEFORE the agent is installed
+        # enrolls under a new hostname, so the name won't match its existing procurement
+        # record — but the serial will, linking it instead of spawning a duplicate.
+        # Garbage OEM serials ("TobefilledbyO.E.M." etc.) repeat across machines, never match.
         _GARBAGE_SERIALS = {
             'tobefilled', 'tobefilledbyoem', 'tobefillbyoem',
             'default string', 'system serial number',
             'not specified', 'none', 'n/a', 'na', 'o.e.m.', '',
         }
         def _is_garbage_serial(s: str) -> bool:
-            return s.lower().replace(' ', '').replace('.', '').replace('-', '') in _GARBAGE_SERIALS
+            return (s or '').lower().replace(' ', '').replace('.', '').replace('-', '') in _GARBAGE_SERIALS
+
+        real_serial = serial if (serial and not _is_garbage_serial(serial)) else None
 
         asset = Asset.query.filter(Asset.name.ilike(hostname)).first()
-        if not asset and not _is_garbage_serial(agent_id):
-            # Only fall back to serial match when the serial is a real unique value
-            asset = Asset.query.filter(Asset.serial_number == agent_id).first()
+        if not asset and real_serial:
+            # Renamed-before-enroll: match the existing procurement record by serial.
+            asset = Asset.query.filter(Asset.serial_number == real_serial).first()
         if not asset:
             asset = Asset(
                 asset_tag=f'RMM-{agent_id[:8].upper()}',
@@ -360,9 +368,13 @@ def rmm_enroll():
                 category='Workstation',
                 device_type='Windows Workstation',
                 status='In Use',
+                serial_number=real_serial,
             )
             db.session.add(asset)
             db.session.flush()  # get asset.id
+        elif real_serial and not (asset.serial_number or '').strip():
+            # Enrich a matched record lacking a serial so future re-enrolls match by it.
+            asset.serial_number = real_serial
 
         # Generate a fresh per-device token
         raw_token = 'agent_' + _sec.token_hex(32)

@@ -122,10 +122,16 @@ if (-not $Token) {
             $enrollUrls += $TrackerUrlFallback
         }
         $enrolled = $false
+        # Real hardware serial — lets the server match this device to its existing
+        # procurement asset even when it was renamed before the agent was installed
+        # (repurpose flow), instead of creating a duplicate asset.
+        $DeviceSerial = ''
+        try { $DeviceSerial = (Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue).SerialNumber } catch {}
+        $DeviceSerial = ("$DeviceSerial").Trim()
         foreach ($tryUrl in $enrollUrls) {
             Write-Host "[0/7] Auto-enrolling via $tryUrl ..." -ForegroundColor Yellow
             try {
-                $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId } | ConvertTo-Json
+                $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId; serial = $DeviceSerial } | ConvertTo-Json
                 $resp = Invoke-RestMethod -Uri "$tryUrl/api/rmm/enroll" `
                            -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
                 if (-not $resp.ok) { throw "Server returned error: $($resp.error)" }
@@ -420,8 +426,14 @@ Write-Host "    Startup VBS written: $VbsPath" -ForegroundColor Green
 $wmiUser = (Get-WmiObject Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
 if (-not $wmiUser) {
     $qw = & qwinsta 2>$null
-    $line = ($qw | Select-String 'Active' | Select-Object -First 1).ToString()
-    $wmiUser = (($line -replace '>','').Trim() -split '\s+')[1]
+    $activeMatch = $qw | Select-String '\s+Active\s+' | Select-Object -First 1
+    if ($activeMatch) {
+        $line = $activeMatch.ToString()
+        $parts = (($line -replace '>','').Trim() -split '\s+')
+        if ($parts.Count -ge 2) {
+            $wmiUser = $parts[1]
+        }
+    }
 }
 $targetUser = ($wmiUser -replace '.*\\', '')
 if ($targetUser) {

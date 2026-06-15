@@ -39,6 +39,13 @@
 
                     <h6 class="mb-2"><i class="bi bi-2-circle-fill text-success me-1"></i> Silent mass deployment — users see nothing</h6>
                     <p class="small text-muted mb-3">The silent deploy script creates a hidden Windows Scheduled Task running as <strong>SYSTEM</strong>. No console window, no UAC prompt, no user dialog.</p>
+                    <div class="alert alert-warning py-2 px-3 small mb-3">
+                        <i class="bi bi-shield-exclamation me-1"></i>
+                        These options run a PowerShell download (<code>irm … | iex</code>) as SYSTEM. If
+                        <strong>Defender ASR</strong> blocks script-based installs in your environment,
+                        deploy the <strong>EXE</strong> (below) instead — and always pilot on one device before
+                        rolling out fleet-wide.
+                    </div>
 
                     <div class="border rounded p-3 mb-3 bg-dark bg-opacity-25">
                         <div class="d-flex align-items-center mb-2">
@@ -85,6 +92,12 @@
                             <span class="badge bg-secondary me-2">Option C</span>
                             <strong class="small">PowerShell Remoting — ad-hoc, any number of machines</strong>
                         </div>
+                        <p class="small text-warning mb-2">
+                            <i class="bi bi-exclamation-triangle me-1"></i>
+                            Requires <strong>WinRM enabled</strong> on the target (TCP 5985). It's off by default
+                            on workstations — and disabled fleet-wide here — so this usually fails with a WinRM
+                            error. Prefer <strong>Option A (GPO)</strong> or <strong>B (Intune)</strong>, which need no remote access.
+                        </p>
                         <p class="small text-muted mb-2">Run from your admin workstation. Replace <code>PC-NAME</code> with the target hostname:</p>
                         <div class="input-group">
                             <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
@@ -96,7 +109,8 @@
                         </div>
                     </div>
 
-                    <h6 class="mb-2 mt-3"><i class="bi bi-3-circle-fill text-primary me-1"></i> Or download the EXE installer</h6>
+                    <h6 class="mb-2 mt-3"><i class="bi bi-3-circle-fill text-primary me-1"></i> EXE installer — most reliable single box</h6>
+                    <p class="small text-muted mb-2">Silent, self-elevating NSIS installer (no MSI custom-action engine, so no "error 87"). Token baked in — copy to the box and run.</p>
                     <div class="mb-4">
                         <a href="{{ url_for('misc.download_agent_installer') }}" class="btn btn-success btn-sm">
                             <i class="bi bi-download me-1"></i> Download CirqueRMM.exe
@@ -112,7 +126,7 @@
                     <h6 class="mb-0"><i class="bi bi-key-fill text-warning me-1"></i> Site Enrollment Token</h6>
                 </div>
                 <div class="card-body">
-                    <p class="small text-muted mb-2">Baked into the MSI at build time. All devices use it to auto-register. Keep it secret.</p>
+                    <p class="small text-muted mb-2">Baked into the EXE installer at build time; the install scripts (Options A–C) fetch it live. All devices use it to auto-register. Keep it secret.</p>
                     <div class="input-group mb-2">
                         <input type="password" id="siteTokenInput" class="form-control form-control-sm font-monospace"
                                value="{{ rmm_site_token }}" readonly>
@@ -130,7 +144,9 @@
                     </button>
                     <p class="small text-danger mt-2 mb-0">
                         <i class="bi bi-exclamation-triangle me-1"></i>
-                        Invalidates the current MSI — rebuild after regenerating.
+                        Regenerating invalidates the prebuilt EXE — rebuild it
+                        (<code>rmm_agent/build_exe.py</code>) after. The Option A–C scripts pick up
+                        the new token automatically.
                     </p>
                 </div>
             </div>

@@ -1049,6 +1049,45 @@ def approvals():
                            ad_ous=ad_ous, ad_groups=ad_groups)
 
 
+def _ou_hierarchy(ous, base_dn):
+    """Turn list_ous's flat [{'name','dn'}] into a tree-ordered list with each OU's
+    'depth' and 'path' (relative to the CirqueUsers base), so the picker can indent
+    children under their parent (CirqueUS → Engineering/Production/…; CirqueTaiwan →
+    China/…). Parent OUs sort before their children; siblings sort alphabetically.
+
+    The base (CirqueUsers itself) is dropped — it's the implied root, not a choice.
+    Falls back to the raw list (alphabetical) if base_dn is unknown."""
+    if not base_dn:
+        return ous
+    b = base_dn.strip().lower()
+
+    def rel_names(dn):
+        # OU RDN values ABOVE the base, top-most first. e.g. for
+        # OU=Engineering,OU=CirqueUS,OU=CirqueUsers,... → ['CirqueUS','Engineering'].
+        d = dn.strip()
+        if not d.lower().endswith(b):
+            rdns = [p for p in d.split(',') if p.strip().lower().startswith('ou=')]
+            return [p.split('=', 1)[1] for p in rdns][::-1]
+        prefix = d[:len(d) - len(base_dn)].rstrip(',')
+        if not prefix:
+            return []  # the base OU itself
+        rdns = [p for p in prefix.split(',') if p.strip().lower().startswith('ou=')]
+        return [p.split('=', 1)[1] for p in rdns][::-1]
+
+    enriched = []
+    for o in ous:
+        rel = rel_names(o.get('dn') or '')
+        if not rel:
+            continue  # drop the CirqueUsers root — it's the implied base
+        enriched.append({**o, 'name': rel[-1], 'depth': len(rel) - 1,
+                         'path': ' / '.join(rel),
+                         '_sort': [r.lower() for r in rel]})
+    enriched.sort(key=lambda o: o['_sort'])
+    for o in enriched:
+        o.pop('_sort', None)
+    return enriched
+
+
 def _onboard_directory_options():
     """Read-only OU + group lists for the onboarding approval card. list_ous resolves
     its base from config.user_ou_dn (Setting ad_user_ou_dn) or derives
@@ -1062,6 +1101,13 @@ def _onboard_directory_options():
             return [], []
         svc = LDAPService(cfg)
         ous = svc.list_ous()
+        # The picker base is always CirqueUsers (under CirqueCompany). list_ous returns a
+        # FLAT subtree dump; compute each OU's path + depth relative to that base so the
+        # approval card can render the real hierarchy (CirqueUS / CirqueTaiwan and the
+        # folders inside each) instead of one alphabetical list.
+        base_row = Setting.query.filter_by(key='ad_user_ou_dn').first()
+        base_dn = (base_row.value if base_row and base_row.value else '').strip()
+        ous = _ou_hierarchy(ous, base_dn)
         groups_base = Setting.query.filter_by(key='ad_groups_ou_dn').first()
         groups = svc.list_groups(groups_base.value if groups_base and groups_base.value else None)
         # Tag each group by its sub-OU so the approval card can segregate Privileged

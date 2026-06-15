@@ -137,8 +137,12 @@ function detailBlock(it){
     if(o.notes) hr+='<div class="mt-1 pt-1 text-muted" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i>'+esc(o.notes)+'</div>';
     hr+='</div>';
     // IT-supplied provisioning inputs
-    var ouOpts='<option value="">— select target OU —</option>';
-    (S.adOus||[]).forEach(function(ou){ ouOpts+='<option value="'+esc(ou.dn)+'">'+esc(ou.name)+'</option>'; });
+    var ouOpts='<option value="">— select target OU (under CirqueUsers) —</option>';
+    (S.adOus||[]).forEach(function(ou){
+      var indent=new Array((ou.depth||0)+1).join('    ');
+      var arrow=(ou.depth||0)>0?'└─ ':'';
+      ouOpts+='<option value="'+esc(ou.dn)+'" title="'+esc(ou.path||ou.name)+'">'+indent+arrow+esc(ou.name)+'</option>';
+    });
     var grpOpts='';
     ['Standard','Privileged','Other'].forEach(function(cat){
       var inCat=(S.adGroups||[]).filter(function(g){ return (g.category||'Other')===cat; });

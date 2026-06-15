@@ -1361,7 +1361,10 @@ def park_onboard(employee_id, requested_by="hr", payload=None):
                                  "action_type": "onboard_employee",
                                  "config": {"employee_id": employee_id, "requested_by": requested_by,
                                             "first_name": payload.get("first_name") or "",
-                                            "last_name": payload.get("last_name") or ""},
+                                            "last_name": payload.get("last_name") or "",
+                                            # cloud-first: canonical 365 object to hard-match
+                                            # (omitted/empty for greenfield onboards)
+                                            "m365_id": payload.get("m365_id") or ""},
                                  "ctx": {"employee_id": employee_id, "employee_name": name},
                                  "visited": [], "queue": []},
                       "onboard": payload,
@@ -1373,10 +1376,125 @@ def park_onboard(employee_id, requested_by="hr", payload=None):
     return led
 
 
+def _hardmatch_cloud_object(emp, ad_guid, m365_id=None):
+    """Hard-match a cloud-first user to the on-prem AD object we just created.
+
+    If the employee already has an Entra/365 object (created cloud-first), stamp that
+    object's OnPremisesImmutableId = Base64(objectGUID, little-endian) so the next
+    AD-Connect delta sync JOINS the new on-prem account to the EXISTING cloud object
+    (preserving its mailbox + licenses) instead of provisioning a duplicate. This is
+    the only reliable path in this tenant for users that already exist in 365 — SMTP
+    soft-match is not relied upon. (sourceAnchor here = objectGUID; the Tracker stores
+    ad_guid as the dashed UUID, so .bytes_le reproduces AD's raw GUID byte order.)
+
+    No-op for greenfield onboards (no 365 object). Never raises into the caller; the
+    AD user is already created, so a hard-match failure is surfaced as a partial, not a
+    rollback. Returns a status dict: skipped | matched | already_synced | error."""
+    cloud_id = (m365_id or getattr(emp, "m365_id", None) or "")
+    cloud_id = cloud_id.strip() if isinstance(cloud_id, str) else cloud_id
+    if not cloud_id:
+        return {"status": "skipped", "reason": "no 365 object (greenfield onboard)"}
+    if not ad_guid:
+        return {"status": "error", "reason": "no objectGUID read back from AD create"}
+    try:
+        import base64, uuid as _uuid
+        immutable_id = base64.b64encode(_uuid.UUID(str(ad_guid)).bytes_le).decode("ascii")
+    except Exception as e:
+        return {"status": "error", "reason": f"could not compute immutableId from {ad_guid}: {e}"}
+    try:
+        from m365_config import get_m365_credentials
+        from m365_service import M365Service
+        tid, cid, sec = get_m365_credentials()
+        if not (tid and cid and sec):
+            return {"status": "error", "reason": "M365 credentials not configured", "immutable_id": immutable_id}
+        svc = M365Service(tid, cid, sec)
+        # Guard: only hard-match a CLOUD-ONLY object. If it's already synced from
+        # on-prem, stamping immutableId is wrong (sourceAnchor changes are blocked) —
+        # this is the duplicate-cloud-object case from the runbook; surface it, don't force.
+        ident = svc.get_user_identity(cloud_id)
+        if ident is None:
+            return {"status": "error", "reason": f"cloud object {cloud_id} not found", "immutable_id": immutable_id}
+        if ident.get("onPremisesSyncEnabled"):
+            return {"status": "already_synced", "cloud_id": cloud_id,
+                    "upn": ident.get("userPrincipalName"), "immutable_id": immutable_id,
+                    "reason": "cloud object already sync-managed — remove the duplicate from the "
+                              "sync relationship first (runbook), do not re-stamp immutableId"}
+        svc.set_onprem_immutable_id(cloud_id, immutable_id)
+        return {"status": "matched", "cloud_id": cloud_id,
+                "upn": ident.get("userPrincipalName"), "immutable_id": immutable_id}
+    except Exception as e:
+        # A 403 here usually means the app lacks User.ReadWrite.All consent — log it so
+        # it's diagnosable beyond the ledger detail line. The AD user is already created.
+        log.warning("hard-match of cloud object %s failed: %s", cloud_id, e)
+        return {"status": "error", "reason": str(e), "immutable_id": immutable_id}
+
+
+def detect_cloud_first(query, upn=None):
+    """READ-ONLY detection for a cloud-first reconcile. Finds the cloud object(s) for a
+    user, flags duplicates / already-synced / recycle-bin twins, and reports the
+    immutable-ID state so an operator can decide BEFORE provisioning. Makes NO changes
+    (only Graph GETs). Returns a verdict dict.
+
+    query: a name/email fragment to search; upn: exact UPN to resolve as the primary.
+    verdict ∈ {no_cloud_object, clean_hardmatch, duplicate_needs_decision,
+               already_synced, error}."""
+    out = {"query": query, "upn": upn, "objects": [], "duplicates": False,
+           "deleted_matches": [], "verdict": "error"}
+    try:
+        from m365_config import get_m365_credentials
+        from m365_service import M365Service
+        tid, cid, sec = get_m365_credentials()
+        if not (tid and cid and sec):
+            out["error"] = "M365 credentials not configured"
+            return out
+        svc = M365Service(tid, cid, sec)
+        seen = {}
+        if upn:
+            o = svc.get_user_identity(upn)
+            if o:
+                seen[o["id"]] = o
+        try:
+            for o in svc.find_cloud_objects(query or upn or ""):
+                seen[o["id"]] = o
+        except Exception as e:
+            out["search_error"] = str(e)
+        objs = list(seen.values())
+        out["objects"] = objs
+        synced = [o for o in objs if o.get("onPremisesSyncEnabled")]
+        out["duplicates"] = len(objs) > 1
+        # Recycle-bin twins (30-day soft-deleted) that would collide on a new create.
+        try:
+            ql = (query or "").lower()
+            for d in svc.get_deleted_users():
+                hay = " ".join(str(d.get(k) or "") for k in
+                               ("displayName", "userPrincipalName", "mail")).lower()
+                if ql and ql in hay:
+                    out["deleted_matches"].append(d)
+        except Exception as e:
+            out["deleted_error"] = str(e)
+        if not objs:
+            out["verdict"] = "no_cloud_object"
+        elif synced:
+            out["verdict"] = "already_synced"
+        elif len(objs) > 1:
+            out["verdict"] = "duplicate_needs_decision"
+        else:
+            out["verdict"] = "clean_hardmatch"
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+
 def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
     """Provision a new-hire in Active Directory — invoked when IT approves a parked
     onboard request and supplies the OU + groups (threaded into config as
     ou_dn + group_dns by resolve_onboard).
+
+    Cloud-aware: if the employee already exists in 365 (cloud-first — emp.m365_id set,
+    or an explicit canonical m365_id in config), the new AD object is hard-matched to
+    that existing cloud object (OnPremisesImmutableId stamp) BEFORE the AD-Connect sync,
+    so the cloud account is adopted rather than duplicated. Greenfield onboards skip it.
 
     Steps: validate OU + groups -> create_user (sam, first/last, temp password from
     the onboard_temp_password Setting, ou=ou_dn; this auto-fires the NABOO/AAD-Connect
@@ -1470,6 +1588,13 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
                 else:
                     group_errors.append(f"{cn}: {r.get('error')}")
 
+            # Cloud-first hard-match: if this user already exists in 365, stamp the
+            # existing cloud object's OnPremisesImmutableId = Base64(objectGUID) BEFORE
+            # the sync, so AD-Connect adopts that object instead of duplicating it.
+            # No-op (status=skipped) for greenfield onboards with no 365 object.
+            hard_match = _hardmatch_cloud_object(
+                emp, create.get("ad_guid"), m365_id=config.get("m365_id"))
+
             # New AD account → kick the Entra (AAD Connect) delta sync on NABOO so it
             # propagates to M365. create_user does NOT auto-sync (the LDAPService path),
             # so trigger it here explicitly. Best-effort; never fails provisioning.
@@ -1502,6 +1627,7 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
                 "employee": emp.name, "employee_id": emp_id, "sam": sam,
                 "ad_dn": new_dn, "ou_dn": ou_dn, "groups": granted, "created": True,
                 "enabled": account_enabled, "entra_sync": entra,
+                "hard_match": hard_match,
             }
             if group_errors:
                 result["group_errors"] = group_errors
@@ -1516,6 +1642,14 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
             # (1) Created but not enabled (password not set over LDAPS) → partial; warn.
             if not account_enabled:
                 result["warning"] = "account created but not enabled (password not set)"
+                return False, result
+            # (3) Cloud-first user but the hard-match didn't complete → partial. The AD
+            # user exists, but the existing 365 object was NOT adopted, so flag it for
+            # manual follow-up (e.g. duplicate-cloud-object runbook or missing write scope).
+            hm_status = (hard_match or {}).get("status")
+            if hm_status in ("error", "already_synced"):
+                result["warning"] = (f"AD user created, but 365 hard-match {hm_status}: "
+                                     f"{hard_match.get('reason')}")
                 return False, result
             return True, result
     except Exception as e:
@@ -1584,10 +1718,15 @@ def resolve_onboard(row_id, approver, ou_dn, group_dns):
         groups_txt = ",".join(out.get("groups") or
                               [g.split(",")[0].split("=")[-1] for g in group_dns])
         detail = f"approved by {approver}; OU={ou_cn}; groups={groups_txt}"
+        hm = (out.get("hard_match") or {})
+        if hm.get("status") == "matched":
+            detail += f"; 365 hard-match=ok ({hm.get('upn') or hm.get('cloud_id')})"
+        elif hm.get("status") in ("error", "already_synced"):
+            detail += f"; 365 hard-match {hm['status']}: {hm.get('reason')}"
         if not success and out.get("error"):
             detail += f"; FAILED: {out['error']}"
         elif not success and out.get("warning"):
-            # Partial: account created but not enabled (no group failures).
+            # Partial: account created but not enabled / hard-match incomplete.
             detail += f"; PARTIAL: {out['warning']}"
         _ledger_result(row_id, "succeeded" if success else "failed",
                        after_state=out, verification_status=_verify_status(success, out),

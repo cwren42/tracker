@@ -265,6 +265,119 @@ class M365Service:
         except Exception as e:
             logger.error(f"Failed to get licenses for user {user_id}: {e}")
             return []
+
+    # ========== IDENTITY RECONCILE (cloud-first → on-prem AD hard-match) ==========
+    # The Tracker links AD↔M365 only by email/UPN/object-id; these add the immutable-ID
+    # (sourceAnchor) reads + the one write needed to hard-match a cloud-first user to a
+    # freshly-created on-prem AD account. See workflow_engine onboard hard-match step.
+
+    # Fields that describe an object's on-prem sync linkage. Selecting them is read-only.
+    IDENTITY_SELECT = (
+        "id,userPrincipalName,displayName,mail,proxyAddresses,accountEnabled,"
+        "onPremisesImmutableId,onPremisesSyncEnabled,onPremisesSamAccountName,"
+        "onPremisesDistinguishedName,createdDateTime,assignedLicenses"
+    )
+
+    def get_user_identity(self, user_ref):
+        """Read the identity/sync-linkage fields for one cloud user (read-only).
+
+        user_ref may be an object id or a UPN. Returns the user dict, or None if the
+        object doesn't exist (404)."""
+        if not user_ref:
+            return None
+        token = self.get_access_token()
+        encoded = quote(str(user_ref), safe='')
+        url = f"{self.base_url}/users/{encoded}?$select={self.IDENTITY_SELECT}"
+        headers = {'Authorization': f'Bearer {token}'}
+        try:
+            r = requests.get(url, headers=headers)
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.RequestException as e:
+            logger.error("get_user_identity failed for %s: %s", user_ref, e)
+            raise
+
+    def find_cloud_objects(self, query):
+        """Find cloud user objects matching a free-text query across displayName,
+        mail, userPrincipalName and proxyAddresses (read-only). Used to surface
+        DUPLICATE cloud objects for the same person before a hard-match.
+
+        Uses $search, which requires the ConsistencyLevel:eventual header. Returns a
+        list of user dicts (identity fields)."""
+        if not query:
+            return []
+        token = self.get_access_token()
+        # $search terms must be quoted. Only $search-able properties are allowed —
+        # proxyAddresses is NOT (Graph 400s on it, failing the whole OR'd query), so it's
+        # excluded here (still returned in $select for display). Alias overlap is caught
+        # at display time, not search.
+        terms = " OR ".join(
+            f'"{f}:{query}"' for f in
+            ("displayName", "mail", "userPrincipalName", "givenName", "surname")
+        )
+        url = (f"{self.base_url}/users?$search={quote(terms, safe='')}"
+               f"&$select={self.IDENTITY_SELECT}&$count=true&$top=50")
+        headers = {'Authorization': f'Bearer {token}', 'ConsistencyLevel': 'eventual'}
+        try:
+            r = requests.get(url, headers=headers)
+            r.raise_for_status()
+            return r.json().get('value', [])
+        except requests.exceptions.RequestException as e:
+            logger.error("find_cloud_objects failed for %r: %s", query, e)
+            raise
+
+    def get_deleted_users(self):
+        """List soft-deleted users in the Entra recycle bin (30-day retention).
+
+        READ-ONLY — lists what is already soft-deleted; does NOT delete anything.
+        Used to catch a recycle-bin twin that would collide on a new on-prem create."""
+        token = self.get_access_token()
+        # deletedItems with $count needs the advanced-query header.
+        headers = {'Authorization': f'Bearer {token}', 'ConsistencyLevel': 'eventual'}
+        url = (f"{self.base_url}/directory/deletedItems/microsoft.graph.user"
+               f"?$select={self.IDENTITY_SELECT}&$count=true&$top=100")
+        results = []
+        try:
+            while url:
+                r = requests.get(url, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                results.extend(data.get('value', []))
+                url = data.get('@odata.nextLink')
+            return results
+        except requests.exceptions.RequestException as e:
+            logger.error("get_deleted_users failed: %s", e)
+            raise
+
+    def set_onprem_immutable_id(self, user_id, immutable_id_b64):
+        """WRITE: set onPremisesImmutableId (sourceAnchor) on a cloud-only user so a
+        new on-prem AD object hard-matches it on the next AD-Connect sync cycle.
+
+        Requires Graph application permission User.ReadWrite.All (admin-consented).
+        Only valid on a cloud-only object (onPremisesSyncEnabled false/null); Graph
+        rejects the write on an already-synced object. Returns True on success
+        (HTTP 204). Raises with the Graph error body on failure so the caller can
+        record exactly why (e.g. missing scope, already-synced)."""
+        if not user_id:
+            raise ValueError("user_id is required")
+        if not immutable_id_b64:
+            raise ValueError("immutable_id_b64 is required")
+        token = self.get_access_token()
+        encoded = quote(str(user_id), safe='')
+        url = f"{self.base_url}/users/{encoded}"
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        try:
+            r = requests.patch(url, headers=headers,
+                               json={'onPremisesImmutableId': immutable_id_b64})
+            r.raise_for_status()
+            logger.info("Set onPremisesImmutableId on %s", user_id)
+            return True
+        except requests.exceptions.RequestException as e:
+            body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
+            logger.error("set_onprem_immutable_id failed for %s: %s %s", user_id, e, body)
+            raise Exception(f"Graph PATCH onPremisesImmutableId failed: {e}; {body}")
     
     def get_admin_roles(self):
         """Get all directory roles (admin roles)"""

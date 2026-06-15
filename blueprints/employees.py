@@ -811,6 +811,99 @@ def onboard_request():
                            managers=_active_managers(), form={})
 
 
+def _slim_cloud_obj(o):
+    """Trim a Graph user object to the identity fields the reconcile UI/JSON needs."""
+    return {k: o.get(k) for k in (
+        'id', 'userPrincipalName', 'displayName', 'mail', 'accountEnabled',
+        'onPremisesSyncEnabled', 'onPremisesImmutableId', 'createdDateTime',
+        'proxyAddresses')}
+
+
+@bp.route('/employees/<int:emp_id>/reconcile-detect', methods=['GET'])
+@login_required
+@admin_required
+@license_required
+def reconcile_detect(emp_id):
+    """READ-ONLY: detect whether a cloud-first employee can be cleanly hard-matched to a
+    new on-prem AD account, or has duplicate / already-synced cloud objects (the runbook
+    case). Returns JSON. Makes NO changes — only Microsoft Graph GETs."""
+    emp = Employee.query.get_or_404(emp_id)
+    import workflow_engine
+    surname = (emp.name or '').split(' ')[-1] if emp.name else ''
+    verdict = workflow_engine.detect_cloud_first(surname or (emp.email or ''), upn=emp.email)
+    return jsonify({
+        'employee': {'id': emp.id, 'name': emp.name, 'email': emp.email,
+                     'm365_id': emp.m365_id, 'ad_guid': emp.ad_guid,
+                     'sam_account_name': emp.sam_account_name,
+                     'onboard_status': emp.onboard_status},
+        'verdict': verdict.get('verdict'),
+        'duplicates': verdict.get('duplicates'),
+        'objects': [_slim_cloud_obj(o) for o in verdict.get('objects', [])],
+        'deleted_matches': [_slim_cloud_obj(o) for o in verdict.get('deleted_matches', [])],
+        'error': verdict.get('error'),
+        'search_error': verdict.get('search_error'),
+        'deleted_error': verdict.get('deleted_error'),
+    })
+
+
+@bp.route('/employees/<int:emp_id>/reconcile', methods=['POST'])
+@login_required
+@admin_required
+@license_required
+def reconcile_cloud_first(emp_id):
+    """Queue a gated on-prem provisioning + 365 hard-match for a CLOUD-FIRST employee
+    (already exists in 365, no on-prem AD account). Derives sam if missing, records the
+    canonical 365 object to hard-match (explicit m365_id form value wins for the
+    duplicate-decision case, else emp.m365_id), and parks the standard onboard approval.
+    IT approves at /approvals with the OU + groups, which runs create_user → stamp the
+    cloud object's OnPremisesImmutableId → NABOO sync. The 365 write needs the app's
+    User.ReadWrite.All scope (admin-consented)."""
+    emp = Employee.query.get_or_404(emp_id)
+    if emp.ad_guid:
+        flash(f'{emp.name} already has an on-prem AD account (objectGUID on file).', 'warning')
+        return redirect(request.referrer or url_for('employees.employees'))
+    m365_id = (request.form.get('m365_id') or emp.m365_id or '').strip()
+    if not m365_id:
+        flash('No 365 object on file for this user — nothing to hard-match. '
+              'Run detection or sync from M365 first.', 'danger')
+        return redirect(request.referrer or url_for('employees.employees'))
+
+    first = (emp.name or '').split(' ')[0] if emp.name else ''
+    last  = (emp.name or '').split(' ')[-1] if emp.name and ' ' in emp.name else ''
+    if not (emp.sam_account_name or '').strip():
+        _, sam = _onboard_derive(first, last)
+        emp.sam_account_name = sam or None
+    if emp.onboard_status not in ('provisioned', 'provisioned_partial'):
+        emp.onboard_status = 'requested'
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('reconcile: sam/status commit failed for employee %s', emp.id)
+        flash('Could not save the derived account name (possible name collision). '
+              'Resolve and retry — nothing was parked.', 'danger')
+        return redirect(request.referrer or url_for('employees.employees'))
+
+    payload = {
+        'name': emp.name, 'email': emp.email or '', 'sam': emp.sam_account_name or '',
+        'first_name': first, 'last_name': last, 'm365_id': m365_id, 'reconcile': True,
+    }
+    requested_by = current_user.username or current_user.email or f'user#{current_user.id}'
+    led_id = None
+    try:
+        import workflow_engine
+        led_id = workflow_engine.park_onboard(emp.id, requested_by=requested_by, payload=payload)
+    except Exception:
+        current_app.logger.exception('park_onboard (reconcile) failed for employee %s', emp.id)
+
+    if led_id:
+        flash(f'Cloud-first reconcile for {emp.name} parked — IT approves at /approvals '
+              f'(supply OU + groups) to provision + hard-match.', 'success')
+    else:
+        flash('An approval may already be parked for this user.', 'warning')
+    return redirect(request.referrer or url_for('employees.employees'))
+
+
 def _active_managers():
     """Active, visible employees for the manager dropdown (free text also allowed)."""
     return [e.name for e in Employee.query.filter(Employee.is_visible == True)

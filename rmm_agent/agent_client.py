@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.22"
+AGENT_VERSION = "2.9.28"
 
 import asyncio
 import base64
@@ -55,6 +55,19 @@ def get_env(name: str) -> str:
     if not v:
         raise RuntimeError(f"Missing env var: {name}")
     return v
+
+
+def _patch_install_timeout() -> int:
+    """Hard wall-clock budget (seconds) for one WUA install pass, after which the
+    child process is killed and the job reported as failed/timeout. Default 35 min;
+    override with the CIRQUE_PATCH_INSTALL_TIMEOUT env var (seconds, min 60)."""
+    try:
+        v = int(os.environ.get("CIRQUE_PATCH_INSTALL_TIMEOUT", "") or 0)
+        if v >= 60:
+            return v
+    except Exception:
+        pass
+    return 35 * 60
 
 
 def _ssl_ctx():
@@ -177,6 +190,102 @@ def _ps_json(script: str, timeout: int = 15):
     except Exception:
         pass
     return None
+
+
+# Sentinel returned by _ps_json_proc when the child process exceeds its hard
+# deadline and is killed. Distinguished from None (no/garbage output) so callers
+# can report a structured "timeout" failure rather than a generic error.
+_PS_TIMEOUT = object()
+
+
+def _kill_proc_tree(proc) -> None:
+    """Kill *proc* and every descendant. WUA's Install() runs the actual work in
+    out-of-process workers (TrustedInstaller / wuauserv-spawned helpers) that a
+    plain proc.kill() on powershell.exe would orphan, so we walk the tree via
+    psutil. Best-effort: any failure is swallowed — the goal is only to free the
+    executor thread, not to guarantee the WU worker dies."""
+    try:
+        parent = psutil.Process(proc.pid)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
+    procs = []
+    try:
+        procs = parent.children(recursive=True)
+    except Exception:
+        pass
+    procs.append(parent)
+    for p in procs:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    try:
+        psutil.wait_procs(procs, timeout=5)
+    except Exception:
+        pass
+
+
+def _ps_json_proc(script: str, timeout: int = 15):
+    """Run a PowerShell script in a CHILD PROCESS with a HARD wall-clock deadline.
+
+    Unlike _ps_json (which relies on subprocess.run's own timeout), this launches
+    the process with Popen + communicate(timeout=) and KILLS THE WHOLE PROCESS
+    TREE on expiry. This matters for the Windows Update COM Install() path: that call
+    can block effectively forever on a broken/large WU backlog, and subprocess.run's
+    timeout-kill does not reliably reap the out-of-process WU workers, so the calling
+    (executor) thread can stay wedged far longer than the nominal timeout. Killing the
+    tree here guarantees this thread returns within ~timeout seconds no matter what
+    Windows Update is doing, which is what frees the agent's command executor.
+
+    Returns:
+      * parsed JSON dict on success,
+      * _PS_TIMEOUT if the deadline was hit (child killed),
+      * None on any other failure / unparseable output.
+    """
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+    except Exception as e:
+        print(f"[ps_proc] launch failed: {e}", flush=True)
+        return None
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"[ps_proc] hard timeout after {timeout}s -- killing process tree "
+                  f"(pid={proc.pid})", flush=True)
+            _kill_proc_tree(proc)
+            # Drain pipes so the killed child's handles are released and this
+            # thread does not block on a half-read pipe.
+            try:
+                proc.communicate(timeout=10)
+            except Exception:
+                pass
+            return _PS_TIMEOUT
+        out = (out or "").strip()
+        if proc.returncode != 0 and not out:
+            e = (err or "").strip()
+            if e:
+                print(f"[ps_proc] stderr: {e[:300]}", flush=True)
+        if out and out != "null":
+            try:
+                return json.loads(out)
+            except Exception:
+                return None
+        return None
+    finally:
+        # Guarantee no lingering handle on the executor thread.
+        if proc is not None and proc.poll() is None:
+            _kill_proc_tree(proc)
 
 
 # Internal LAN hostnames -- only resolvable via corporate internal DNS.
@@ -324,8 +433,55 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
         print(f"[rustdesk] sync skipped: {e}", flush=True)
 
 
-_RUSTDESK_SERVER = 'rust.corp.cirque.com'
-_RUSTDESK_KEY    = 'u2i12pLeK9MQJH8h3S4FeKtPVRt75gXyR6Rbj20LKOo='
+# RustDesk relay server + key are NOT hardcoded in the agent. They live only in
+# server env (.secrets.env) and are fetched at runtime over the authenticated
+# agent endpoint, cached once per process here.
+_RUSTDESK_RELAY_CACHE = None   # None = not yet fetched; (server, key) once resolved
+
+
+def _get_rustdesk_relay(tracker_url: str, agent_id: str, token: str):
+    """Fetch the RustDesk relay (server, key) from the tracker, authenticated by
+    agent_id + token. Cached per-process so we only hit the server once.
+
+    URL failover: tries the resolved tracker_url first (LAN primary), then the
+    public Cloudflare fallback. Returns (server, key) on success, or (None, None)
+    on any failure / empty config so callers can skip RustDesk configuration."""
+    global _RUSTDESK_RELAY_CACHE
+    if _RUSTDESK_RELAY_CACHE is not None:
+        return _RUSTDESK_RELAY_CACHE
+
+    import urllib.request as _ur
+    # Candidate base URLs: resolved primary, then public fallback (dedup, keep order).
+    fallback = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
+    bases = []
+    for b in (tracker_url, fallback):
+        b = (b or "").rstrip("/")
+        if b and b not in bases:
+            bases.append(b)
+
+    for base in bases:
+        try:
+            url = f"{base}/api/rmm/rustdesk-config/{agent_id}?token={token}"
+            req = _ur.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
+                body = json.loads(resp.read())
+            server = (body.get("server") or "").strip()
+            key = (body.get("key") or "").strip()
+            if server and key:
+                _RUSTDESK_RELAY_CACHE = (server, key)
+                print(f"[rustdesk] relay config fetched from {base} (server={server})", flush=True)
+                return _RUSTDESK_RELAY_CACHE
+            # Reachable but env unset server-side -- don't keep retrying other bases.
+            print("[rustdesk] relay config unavailable -- skipping", flush=True)
+            _RUSTDESK_RELAY_CACHE = (None, None)
+            return _RUSTDESK_RELAY_CACHE
+        except Exception as e:
+            print(f"[rustdesk] relay config fetch failed from {base}: {e}", flush=True)
+            continue
+
+    # All bases failed -- don't cache (transient network); retry next cycle.
+    return (None, None)
+
 
 # File on disk where we persist the plaintext password so it survives restarts.
 _RUSTDESK_PASS_FILE    = r'C:\CirqueRMM\rustdesk_pass.txt'
@@ -680,11 +836,17 @@ _RUSTDESK_IDENTITY_PATHS = [
 ]
 
 
-def _fix_rustdesk_identity() -> bool:
+def _fix_rustdesk_identity(rd_server: str) -> bool:
     """If RustDesk registered with the public server instead of ours,
     delete the identity file and restart the service so it re-registers
-    with our private server.  Returns True if a reset was performed."""
+    with our private server.  Returns True if a reset was performed.
+
+    rd_server is the fetched relay host; if empty/None we cannot tell which
+    server is "ours", so we skip the identity check entirely."""
     import re as _re, subprocess as _sp, time as _time
+    if not rd_server:
+        print('[rustdesk] relay config unavailable -- skipping identity check', flush=True)
+        return False
     for path in _RUSTDESK_IDENTITY_PATHS:
         if not os.path.isfile(path):
             continue
@@ -698,8 +860,8 @@ def _fix_rustdesk_identity() -> bool:
                     # Empty = service just started, hasn't confirmed any server yet
                     # Don't delete -- just wait for it to confirm
                     return False
-                # Has our server confirmed? First segment of rust.corp.cirque.com = 'rust'
-                our_name = _RUSTDESK_SERVER.split('.')[0].lower()
+                # Has our server confirmed? First segment of the relay host (e.g. 'rust').
+                our_name = rd_server.split('.')[0].lower()
                 if our_name in confirmed.lower():
                     return False  # already confirmed against our server
                 # Has a FOREIGN server (e.g. rs-ny from public RustDesk)
@@ -744,14 +906,19 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
     global _rustdesk_setup_done
     import subprocess as _sp, time as _time
     try:
+        # Fetch the relay server/key from the tracker (cached per-process). If
+        # unavailable (env unset server-side, or network), the config-write and
+        # identity-check below skip gracefully without crashing the flow.
+        rd_server, rd_key = _get_rustdesk_relay(tracker_url, agent_id, token)
+
         if _rustdesk_exe():
             if _rustdesk_setup_done:
                 # Already fully set up -- only sync ID (fast, idempotent)
                 sync_rustdesk_id(tracker_url, agent_id, token)
                 return
             # First run: do full config check
-            _write_rustdesk_config()
-            _fix_rustdesk_identity()
+            _write_rustdesk_config(rd_server, rd_key)
+            _fix_rustdesk_identity(rd_server)
             _ensure_rustdesk_password()
             sync_rustdesk_id(tracker_url, agent_id, token)
             _rustdesk_setup_done = True
@@ -767,7 +934,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
         if not _rustdesk_exe():
             _rustdesk_direct_install()
 
-        _write_rustdesk_config()
+        _write_rustdesk_config(rd_server, rd_key)
 
         # Start briefly to trigger peer-ID generation
         exe = _rustdesk_exe()
@@ -856,13 +1023,18 @@ def _rustdesk_direct_install() -> None:
         print(f'[rustdesk] direct install failed: {e}', flush=True)
 
 
-def _write_rustdesk_config() -> None:
-    """Write RustDesk2.toml server config to all relevant paths."""
+def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
+    """Write RustDesk2.toml server config to all relevant paths using the
+    relay server/key fetched from the tracker. If either is empty/None, skip
+    (the agent must not write a config without a valid relay)."""
+    if not rd_server or not rd_key:
+        print('[rustdesk] relay config unavailable -- skipping config write', flush=True)
+        return
     cfg = (
-        f"rendezvous_server = '{_RUSTDESK_SERVER}'\n"
+        f"rendezvous_server = '{rd_server}'\n"
         f"nat_type = 1\nserial = 0\n\n[options]\n"
-        f"custom-rendezvous-server = '{_RUSTDESK_SERVER}'\n"
-        f"key = '{_RUSTDESK_KEY}'\n"
+        f"custom-rendezvous-server = '{rd_server}'\n"
+        f"key = '{rd_key}'\n"
         f"relay-server = ''\napi-server = ''\n"
     )
     appdata  = os.environ.get('APPDATA', '')
@@ -2462,7 +2634,22 @@ try {{
     @{{installed=0;reboot_required=$false;still_pending=0;error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
-    result = _ps_json(script, timeout=30 * 60)  # up to 30 min for large patches
+    # Run the (potentially-forever-blocking) WUA download+Install() pass in a child
+    # process with a HARD deadline. A stuck Install() can no longer wedge the agent's
+    # command executor: on timeout we kill the process tree and return a structured
+    # failed/timeout result so the gateway records a real failure (not silent
+    # stuck-deploying), and the executor thread is freed for queued commands.
+    tmo = _patch_install_timeout()
+    result = _ps_json_proc(script, timeout=tmo)
+    if result is _PS_TIMEOUT:
+        return {
+            "installed": 0,
+            "reboot_required": False,
+            "result_code": None,
+            "still_pending": 0,
+            "timed_out": True,
+            "error": f"Windows Update install timed out after {tmo}s (process killed)",
+        }
     if result is None:
         return {"installed": 0, "reboot_required": False, "error": "No output from installer"}
     return {
@@ -2819,8 +3006,20 @@ try {{
        error=$_.Exception.Message}} | ConvertTo-Json -Compress
 }}
 """.strip()
-    result = _ps_json(script, timeout=30 * 60)
-    if result is None:
+    # Same hard-deadline child-process guard as _install_patches_wua: this WUA
+    # Install() path can also block forever and would otherwise wedge the agent's
+    # command executor. On timeout we kill the tree and surface a timeout error.
+    tmo = _patch_install_timeout()
+    result = _ps_json_proc(script, timeout=tmo)
+    if result is _PS_TIMEOUT:
+        # Return BEFORE the winget fallback: that path has no timeout guard and
+        # could re-wedge the executor, or report success and let a CVE auto-close
+        # on a box whose Windows Update actually hung. Mirror the OS-path timeout
+        # return (_install_patches_wua) so the gateway sees timed_out/"timed out".
+        return {"installed": 0, "reboot_required": False, "updates_found": 0,
+                "titles": [], "kb_ids": [], "timed_out": True,
+                "error": f"Windows Update install timed out after {tmo}s (process killed)"}
+    elif result is None:
         wua_result = {"installed": 0, "reboot_required": False, "updates_found": 0,
                       "titles": [], "kb_ids": [], "error": "No output from WUA"}
     else:
@@ -3162,12 +3361,32 @@ def capture_screenshot() -> Optional[dict]:
 # Shell session — ConPTY (Windows 10 1903+) with raw-pipe fallback
 # ---------------------------------------------------------------------------
 
+# pywinpty availability — defaults for non-win32 (and pywinpty-absent); the win32
+# block below overrides these. Kept at module scope so importing this file on Linux
+# (e.g. CI loading it for tests) never touches the win32-only ctypes structs.
+_PYWINPTY_AVAILABLE = False
+_PtyProcess = None
+
 if sys.platform == "win32":
     import ctypes
     import ctypes.wintypes as _wt
     import threading as _threading
 
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    # pywinpty is the PREFERRED Windows interactive-shell backend. The
+    # hand-rolled ctypes ConPTY below works by inspection but, in the
+    # SYSTEM-service / session-0 context, the child's output pipe never
+    # gets written to (ReadFile blocks forever) — confirmed unfixable-by-
+    # inspection live on ITWORKBENCH (agent 2.9.25/2.9.26). pywinpty wraps
+    # ConPTY correctly (it's what real solutions use), so when its prebuilt
+    # wheel is present we use it and skip the broken hand-rolled path.
+    try:
+        from winpty import PtyProcess as _PtyProcess
+        _PYWINPTY_AVAILABLE = True
+    except Exception:
+        _PtyProcess = None
+        _PYWINPTY_AVAILABLE = False
 
     class _COORD(ctypes.Structure):
         _fields_ = [("X", _wt.SHORT), ("Y", _wt.SHORT)]
@@ -3214,16 +3433,24 @@ if sys.platform == "win32":
     _INVALID_HANDLE_VALUE                = _wt.HANDLE(-1).value
     _STILL_ACTIVE                        = 259
 
+    # HRESULT is a signed 32-bit LONG. NOTE: ctypes.wintypes has NO `HRESULT`
+    # attribute (it lives at top-level ctypes.HRESULT on Windows only). Using
+    # `_wt.HRESULT` here raised AttributeError at import, which the except below
+    # swallowed and set _CONPTY_AVAILABLE=False — silently disabling ConPTY on
+    # EVERY Windows box and dropping every web shell into the raw-pipe fallback
+    # (no PSReadLine, raw \x7f echoed, no backspace). Use c_long and check the
+    # HRESULT ourselves so we control success (S_OK==0) vs failure cleanup.
+    _HRESULT = ctypes.c_long
     # Resolve CreatePseudoConsole — only present on Win10 1903+
     try:
         _CreatePseudoConsole = _k32.CreatePseudoConsole
-        _CreatePseudoConsole.restype  = _wt.HRESULT
+        _CreatePseudoConsole.restype  = _HRESULT
         _CreatePseudoConsole.argtypes = [
             _COORD, _wt.HANDLE, _wt.HANDLE, _wt.DWORD,
             ctypes.POINTER(_wt.HANDLE),
         ]
         _ResizePseudoConsole = _k32.ResizePseudoConsole
-        _ResizePseudoConsole.restype  = _wt.HRESULT
+        _ResizePseudoConsole.restype  = _HRESULT
         _ResizePseudoConsole.argtypes = [_wt.HANDLE, _COORD]
 
         _ClosePseudoConsole = _k32.ClosePseudoConsole
@@ -3232,6 +3459,7 @@ if sys.platform == "win32":
 
         _CONPTY_AVAILABLE = True
     except AttributeError:
+        # CreatePseudoConsole genuinely absent (pre-1903) — fall back to raw pipes.
         _CONPTY_AVAILABLE = False
 
     _k32.InitializeProcThreadAttributeList.restype  = _wt.BOOL
@@ -3300,7 +3528,7 @@ if sys.platform == "win32":
         _win32_close(hPTYin_r); _win32_close(hPTYout_w)
         if hr != 0:
             _win32_close(hPTYin_w); _win32_close(hPTYout_r)
-            raise OSError(f"CreatePseudoConsole failed: HRESULT={hr:#010x}")
+            raise OSError(f"CreatePseudoConsole failed: HRESULT={hr & 0xFFFFFFFF:#010x}")
 
         # Build STARTUPINFOEX with the pseudo console attribute
         attr_sz = ctypes.c_size_t(0)
@@ -3354,7 +3582,22 @@ if sys.platform == "win32":
 
 
 class ShellSession:
-    """ConPTY-backed shell on Windows; raw-pipe fallback elsewhere."""
+    """Interactive shell.
+
+    Windows backend priority:
+      1. pywinpty (PtyProcess) — PREFERRED. Wraps ConPTY correctly even under
+         the SYSTEM service / session-0 context where the hand-rolled ctypes
+         ConPTY relayed zero output (child never wrote its output pipe;
+         ReadFile blocked forever — proven live on ITWORKBENCH 2.9.25/26).
+      2. raw asyncio pipes — FALLBACK for fleet boxes that don't yet have the
+         pywinpty wheel. No PSReadLine niceties, but functional; keeps those
+         agents working until pywinpty is rolled out.
+
+    The hand-rolled ctypes ConPTY path is retired (never relays output under
+    the service); pywinpty is the Windows interactive path now.
+
+    Non-Windows uses the raw-pipe fallback.
+    """
 
     def __init__(self, session_id: int, shell: str = "powershell",
                  cols: int = 220, rows: int = 50):
@@ -3362,57 +3605,86 @@ class ShellSession:
         self.shell      = shell
         self.cols       = cols
         self.rows       = rows
-        # ConPTY handles
-        self._hpc      = None
-        self._hProc    = None
-        self._hThread  = None
-        self._hIn      = None
-        self._hOut     = None
-        # Fallback
+        # pywinpty backend
+        self._pty      = None
+        # Raw-pipe fallback
         self.proc: Optional[asyncio.subprocess.Process] = None
-        # Output queue fed by background reader thread
+        # Output queue fed by background reader thread (pywinpty path)
         self._q: Optional[asyncio.Queue] = None
         self._reader: Optional["_threading.Thread"] = None
         self._alive    = False
-        self._use_conpty = False
+        self._use_pty  = False
         self._loop     = None
 
     def _reader_fn(self):
-        """Background thread: drain ConPTY output into asyncio queue."""
-        while self._alive:
-            chunk = _pipe_read_sync(self._hOut)
-            if chunk is None:
-                self._alive = False
+        """Background thread: drain pywinpty output into the asyncio queue.
+
+        pywinpty's read() is blocking with an internal pump, so it runs in a
+        dedicated daemon thread and hands chunks to the event loop via the
+        queue. Hardened: any exception here is caught + logged, then we signal
+        EOF (None) and clear _alive so shell_output_loop exits instead of
+        spinning forever on an empty queue.
+        """
+        try:
+            while self._alive:
+                try:
+                    chunk = self._pty.read(4096)
+                except EOFError:
+                    break
+                except Exception as e:
+                    print(f"[shell] pty read error: {e}", flush=True)
+                    break
+                if chunk is None or chunk == "":
+                    # isalive() == False after the child exits; read() returns
+                    # "" at EOF. Stop if the process is gone.
+                    try:
+                        if not self._pty.isalive():
+                            break
+                    except Exception:
+                        break
+                    continue
+                # pywinpty.read() returns str (already UTF-8 decoded)
+                text = chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
+                try:
+                    asyncio.run_coroutine_threadsafe(self._q.put(text), self._loop)
+                except Exception as e:
+                    print(f"[shell] reader enqueue error: {e}", flush=True)
+                    break
+        except Exception as e:
+            print(f"[shell] reader thread crashed: {e}", flush=True)
+        finally:
+            self._alive = False
+            try:
                 asyncio.run_coroutine_threadsafe(self._q.put(None), self._loop)
-                break
-            asyncio.run_coroutine_threadsafe(
-                self._q.put(chunk.decode("utf-8", errors="replace")), self._loop
-            )
+            except Exception:
+                pass
 
     async def start(self) -> bool:
         self._loop = asyncio.get_event_loop()
-        # Try ConPTY on Windows
-        if sys.platform == "win32" and _CONPTY_AVAILABLE:
+        # Preferred Windows path: pywinpty
+        if sys.platform == "win32" and _PYWINPTY_AVAILABLE:
             try:
-                hpc, hIn, hOut, hProc, hThread = await self._loop.run_in_executor(
-                    None, _conpty_create, self.shell, self.cols, self.rows
+                spawn_cmd = "cmd.exe" if self.shell == "cmd" else "powershell.exe -NoLogo -NoProfile"
+                self._pty = await self._loop.run_in_executor(
+                    None, _PtyProcess.spawn, spawn_cmd
                 )
-                self._hpc     = hpc
-                self._hIn     = hIn
-                self._hOut    = hOut
-                self._hProc   = hProc
-                self._hThread = hThread
-                self._alive   = True
-                self._use_conpty = True
+                try:
+                    # pywinpty setwinsize signature is (rows, cols)
+                    self._pty.setwinsize(self.rows, self.cols)
+                except Exception as e:
+                    print(f"[shell] setwinsize warning: {e}", flush=True)
+                self._alive  = True
+                self._use_pty = True
                 self._q = asyncio.Queue()
                 self._reader = _threading.Thread(target=self._reader_fn, daemon=True)
                 self._reader.start()
-                print(f"[shell] ConPTY session {self.session_id} started ({self.shell})", flush=True)
+                print(f"[shell] pywinpty session {self.session_id} started ({self.shell})", flush=True)
                 return True
             except Exception as e:
-                print(f"[shell] ConPTY unavailable, falling back to raw pipes: {e}", flush=True)
+                print(f"[shell] pywinpty unavailable, falling back to raw pipes: {e}", flush=True)
 
-        # Fallback: raw pipes (no PSReadLine, but functional)
+        # Fallback: raw pipes (no PSReadLine, but functional). Used on fleet
+        # boxes without the pywinpty wheel and on non-Windows.
         cmd = ["cmd.exe"] if self.shell == "cmd" else ["powershell.exe", "-NoLogo", "-NoProfile"]
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -3431,9 +3703,10 @@ class ShellSession:
     async def send_input(self, text: str):
         if not self._alive:
             return
-        if self._use_conpty:
-            data = text.encode("utf-8", errors="replace")
-            await self._loop.run_in_executor(None, _pipe_write_sync, self._hIn, data)
+        if self._use_pty:
+            # Raw write — pywinpty/ConPTY translates \x7f (Backspace) into a
+            # proper VT erase, so no raw 0x7f reaches the terminal.
+            await self._loop.run_in_executor(None, self._pty.write, text)
         elif self.proc and self.proc.stdin:
             self.proc.stdin.write(text.encode("utf-8", errors="replace"))
             await self.proc.stdin.drain()
@@ -3441,7 +3714,7 @@ class ShellSession:
     async def read_output(self) -> Optional[str]:
         if not self._alive:
             return None
-        if self._use_conpty:
+        if self._use_pty:
             try:
                 return await asyncio.wait_for(self._q.get(), timeout=0.1)
             except asyncio.TimeoutError:
@@ -3458,19 +3731,22 @@ class ShellSession:
     async def resize(self, cols: int, rows: int):
         self.cols = cols
         self.rows = rows
-        if self._use_conpty and self._hpc:
+        if self._use_pty and self._pty:
             try:
-                _ResizePseudoConsole(self._hpc, _COORD(X=cols, Y=rows))
+                # pywinpty setwinsize signature is (rows, cols)
+                await self._loop.run_in_executor(None, self._pty.setwinsize, rows, cols)
             except Exception as e:
                 print(f"[shell] resize error: {e}", flush=True)
 
     def is_alive(self) -> bool:
         if not self._alive:
             return False
-        if self._use_conpty and self._hProc:
-            ec = _wt.DWORD(0)
-            _k32.GetExitCodeProcess(self._hProc, ctypes.byref(ec))
-            if ec.value != _STILL_ACTIVE:
+        if self._use_pty and self._pty:
+            try:
+                if not self._pty.isalive():
+                    self._alive = False
+                    return False
+            except Exception:
                 self._alive = False
                 return False
         elif self.proc is not None:
@@ -3479,15 +3755,13 @@ class ShellSession:
 
     async def stop(self):
         self._alive = False
-        if self._use_conpty:
-            if self._hProc:
-                _k32.TerminateProcess(self._hProc, 1)
-                _win32_close(self._hProc);  self._hProc  = None
-                _win32_close(self._hThread); self._hThread = None
-            _win32_close(self._hIn);  self._hIn  = None
-            _win32_close(self._hOut); self._hOut = None
-            if self._hpc:
-                _ClosePseudoConsole(self._hpc); self._hpc = None
+        if self._use_pty:
+            if self._pty:
+                try:
+                    self._pty.terminate(force=True)
+                except Exception:
+                    pass
+                self._pty = None
         elif self.proc:
             try:
                 self.proc.kill()

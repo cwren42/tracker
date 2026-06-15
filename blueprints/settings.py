@@ -257,15 +257,52 @@ def settings_directory():
     return render_template('settings_directory.html', ad_config=ad_config)
 
 
+def _rmm_agent_status():
+    """Stable vs canary agent versions, the canary roster, and the live version spread
+    (from rmm_telemetry) for the /settings/rmm visibility panel. Fail-soft to defaults."""
+    base = os.path.join(current_app.root_path, 'rmm_agent')
+
+    def _ver(*parts):
+        try:
+            with open(os.path.join(base, *parts)) as f:
+                return f.read().strip()
+        except Exception:
+            return '?'
+
+    roster, spread = [], []
+    try:
+        row = db.session.execute(
+            text("SELECT value FROM setting WHERE key='rmm_agent_canary'")).fetchone()
+        if row and row[0]:
+            roster = [p.strip() for p in re.split(r'[,\s]+', row[0]) if p.strip()]
+    except Exception:
+        pass
+    try:
+        rows = db.session.execute(text("""
+            SELECT COALESCE(NULLIF(agent_version,''),'(unknown)') AS v, COUNT(*) AS n
+            FROM rmm_telemetry GROUP BY 1 ORDER BY n DESC, v DESC""")).fetchall()
+        spread = [{'version': r[0], 'count': r[1]} for r in rows]
+    except Exception:
+        pass
+
+    return {
+        'stable_version': _ver('version.txt'),
+        'canary_version': _ver('canary', 'version.txt'),
+        'canary_roster': roster,
+        'version_spread': spread,
+    }
+
+
 @bp.route('/settings/rmm', methods=['GET', 'POST'])
 @login_required
 @admin_required
 def settings_rmm():
     if request.method == 'POST':
         return settings('rmm')
-    
+
     rmm_site_token = _get_or_create_site_enrollment_token()
-    return render_template('settings_rmm.html', rmm_site_token=rmm_site_token)
+    return render_template('settings_rmm.html', rmm_site_token=rmm_site_token,
+                           agent_status=_rmm_agent_status())
 
 
 @bp.route('/settings/scripts', methods=['GET', 'POST'])

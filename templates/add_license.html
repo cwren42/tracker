@@ -22,13 +22,15 @@
                         
                         <div class="mb-3">
                             <label class="form-label"><strong>Software Name</strong> <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" name="software_name" required>
+                            <input type="text" class="form-control" name="software_name" required
+                                   value="{{ request.args.get('software_name', '') }}">
                         </div>
 
                         <div class="mb-3">
                             <label class="form-label">Vendor</label>
-                            <input type="text" class="form-control" name="vendor" 
-                                   placeholder="e.g., Microsoft, Adobe, Oracle">
+                            <input type="text" class="form-control" name="vendor"
+                                   placeholder="e.g., Microsoft, Adobe, Oracle"
+                                   value="{{ request.args.get('vendor', '') }}">
                         </div>
 
                         <div class="mb-3">
@@ -45,8 +47,8 @@
 
                         <div class="mb-3">
                             <label class="form-label">Total Licenses</label>
-                            <input type="number" class="form-control" name="total_licenses" 
-                                   value="1" min="1" required>
+                            <input type="number" class="form-control" name="total_licenses"
+                                   value="{{ request.args.get('total_licenses', '1') }}" min="1" required>
                             <small class="form-text text-muted">Number of licenses purchased</small>
                         </div>
 

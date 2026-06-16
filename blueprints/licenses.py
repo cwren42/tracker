@@ -69,14 +69,55 @@ def licenses():
     # Total cost calculations
     total_purchase_cost = db.session.query(db.func.sum(License.purchase_cost)).filter(License.purchase_cost.isnot(None)).scalar() or 0
     total_annual_cost = db.session.query(db.func.sum(License.annual_cost)).filter(License.annual_cost.isnot(None)).scalar() or 0
-    
+
+    # --- Software Asset Management: reconcile owned vs actually INSTALLED -------
+    # The "Used" column above counts manual LicenseAssignment rows. The real
+    # picture comes from rmm_software (agent inventory). reconcile_map[license_id]
+    # gives owned/used/flag/devices; untracked = installed big-ticket software
+    # with no catalog record. Never let a reconciliation hiccup break the page.
+    reconcile_map, untracked, recon_error = {}, [], None
+    try:
+        import license_reconcile
+        raw = db.engine.raw_connection()
+        try:
+            cur = raw.cursor()
+            rec = license_reconcile.reconcile(cur)
+            cur.close()
+        finally:
+            raw.close()
+        reconcile_map = {t['license_id']: t for t in rec['tracked']}
+        untracked = rec['untracked']
+    except Exception as e:
+        recon_error = str(e)
+        current_app.logger.warning("license reconciliation failed: %s", e)
+
+    # --- Windows OS licensing (OEM keys / editions / activation) ---------------
+    # Populated by the RMM agent (OA3xOriginalProductKey + edition + activation).
+    win_assets = (Asset.query
+                  .filter(Asset.windows_edition.isnot(None))
+                  .filter(or_(Asset.status.is_(None), Asset.status != 'Retired'))
+                  .order_by(Asset.name).all())
+    win_editions, win_act_issues = {}, []
+    for a in win_assets:
+        ed = (a.windows_edition or 'Unknown').replace('Microsoft ', '')
+        win_editions[ed] = win_editions.get(ed, 0) + 1
+        if a.windows_activation and a.windows_activation != 'Licensed':
+            win_act_issues.append(a)
+    win_editions = sorted(win_editions.items(), key=lambda x: -x[1])
+
     return render_template('licenses.html',
                          licenses=licenses,
                          total_licenses=total_licenses,
                          active_licenses=active_licenses,
                          expiring_soon=expiring_soon,
                          total_purchase_cost=total_purchase_cost,
-                         total_annual_cost=total_annual_cost)
+                         total_annual_cost=total_annual_cost,
+                         reconcile_map=reconcile_map,
+                         untracked=untracked,
+                         recon_error=recon_error,
+                         win_assets=win_assets,
+                         win_editions=win_editions,
+                         win_act_issues=win_act_issues)
 
 
 @bp.route('/licenses/add', methods=['GET', 'POST'])

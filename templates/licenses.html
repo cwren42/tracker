@@ -125,7 +125,8 @@
                             <th>Software</th>
                             <th>Vendor</th>
                             <th>Type</th>
-                            <th>Total/Used</th>
+                            <th title="Seats manually assigned in the Tracker">Assigned</th>
+                            <th title="Owned seats vs devices the RMM agent actually found it installed on">Owned / Installed</th>
                             <th>Status</th>
                             <th>Expiry Date</th>
                             <th class="mobile-hide">Purchase Cost</th>
@@ -141,10 +142,29 @@
                             <td><span class="badge bg-secondary">{{ license.license_type or 'N/A' }}</span></td>
                             <td>
                                 {% set used = license.total_licenses - license.get_available_licenses() %}
-                                <span class="badge {% if used >= license.total_licenses %}bg-danger{% elif used > license.total_licenses * 0.8 %}bg-warning{% else %}bg-success{% endif %}" 
+                                <span class="badge {% if used >= license.total_licenses %}bg-danger{% elif used > license.total_licenses * 0.8 %}bg-warning{% else %}bg-success{% endif %}"
                                       data-bs-toggle="tooltip" title="{{ used }} users assigned, {{ license.get_available_licenses() }} seats available">
                                     {{ used }}/{{ license.total_licenses }} users
                                 </span>
+                            </td>
+                            <td>
+                                {% set rec = reconcile_map.get(license.id) %}
+                                {% if rec %}
+                                    {% set fmap = {'over':'bg-danger','unused':'bg-secondary','under':'bg-success','ok':'bg-success','subscription':'bg-info','unmatched':'bg-light text-dark border'} %}
+                                    {% set flabel = {'over':'OVER-DEPLOYED','unused':'UNUSED','under':'OK','ok':'OK','subscription':'SUBSCRIPTION','unmatched':'not auto-counted'} %}
+                                    <span class="badge {{ fmap.get(rec.flag,'bg-secondary') }}"
+                                          data-bs-toggle="tooltip"
+                                          title="{{ rec.devices|map(attribute='asset_name')|join(', ') if rec.devices else 'no installs detected' }}">
+                                        {{ rec.owned }} owned / {{ rec.used }} installed
+                                    </span>
+                                    {% if rec.flag in ('over','unused') %}
+                                        <div class="small {% if rec.flag=='over' %}text-danger{% else %}text-muted{% endif %}">
+                                            {% if rec.flag=='over' %}+{{ rec.used - rec.owned }} over seats{% else %}paying, 0 installed{% endif %}
+                                        </div>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-muted small">—</span>
+                                {% endif %}
                             </td>
                             <td>
                                 {% if license.status == 'Active' %}
@@ -196,6 +216,93 @@
             </div>
         </div>
     </div>
+
+    {% if recon_error %}
+    <div class="alert alert-warning small"><i class="bi bi-exclamation-triangle"></i>
+        Reconciliation unavailable: {{ recon_error }}</div>
+    {% endif %}
+
+    {# ---- Untracked big-ticket software (installed, no license record) ---- #}
+    {% if untracked %}
+    <div class="card shadow-sm mb-4 border-warning">
+        <div class="card-header bg-warning-subtle">
+            <strong><i class="bi bi-search"></i> Untracked software — installed but no license record</strong>
+            <span class="text-muted small">Discovered from agent inventory. Add a license entry (with owned seats) to track these.</span>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover" style="font-size:.8rem;">
+                    <thead class="table-light"><tr>
+                        <th>Software</th><th>Vendor</th><th>Installed on</th><th>Devices</th><th>Action</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for u in untracked %}
+                        <tr>
+                            <td><strong>{{ u.label }}</strong></td>
+                            <td>{{ u.vendor }}</td>
+                            <td><span class="badge bg-warning text-dark">{{ u.used }} device{{ 's' if u.used != 1 }}</span></td>
+                            <td class="small text-muted" style="max-width:420px;">
+                                {{ u.devices|map(attribute='asset_name')|join(', ') }}
+                            </td>
+                            <td>
+                                <a class="btn btn-sm btn-outline-primary"
+                                   href="{{ url_for('licenses.add_license') }}?software_name={{ u.label|urlencode }}&vendor={{ u.vendor|urlencode }}&total_licenses={{ u.used }}">
+                                    <i class="bi bi-plus-lg"></i> Add license
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Windows OS licensing (OEM keys / editions / activation) ---- #}
+    {% if win_assets %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong><i class="bi bi-windows"></i> Windows OS licensing &middot; {{ win_assets|length }} devices</strong>
+            <span>
+                {% for ed, n in win_editions %}<span class="badge bg-light text-dark border me-1">{{ ed }}: {{ n }}</span>{% endfor %}
+            </span>
+        </div>
+        <div class="card-body">
+            {% if win_act_issues %}
+            <div class="alert alert-danger py-2 small mb-3">
+                <i class="bi bi-exclamation-octagon"></i>
+                <strong>{{ win_act_issues|length }}</strong> device(s) not fully activated:
+                {% for a in win_act_issues %}<span class="badge bg-danger">{{ a.name }} ({{ a.windows_activation }})</span> {% endfor %}
+            </div>
+            {% endif %}
+            <div class="table-responsive" style="max-height:420px;overflow:auto;">
+                <table class="table table-sm table-hover" style="font-size:.78rem;">
+                    <thead class="table-light" style="position:sticky;top:0;"><tr>
+                        <th>Device</th><th>Edition</th><th>Activation</th><th>OEM Product Key</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for a in win_assets %}
+                        <tr>
+                            <td><a href="{{ url_for('assets.view_asset', asset_id=a.id) }}">{{ a.name }}</a></td>
+                            <td>{{ (a.windows_edition or '').replace('Microsoft ','') }}</td>
+                            <td>
+                                {% if a.windows_activation == 'Licensed' %}<span class="badge bg-success">Licensed</span>
+                                {% elif a.windows_activation %}<span class="badge bg-danger">{{ a.windows_activation }}</span>
+                                {% else %}<span class="text-muted">—</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if a.windows_product_key %}<code class="small">{{ a.windows_product_key }}</code>
+                                {% else %}<span class="text-muted small">volume / no OEM key</span>{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <script src="/static/js/licenses.js"></script>

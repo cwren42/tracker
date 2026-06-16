@@ -48,11 +48,13 @@ function renderInstallSnippets(tok) {
     var base = window.SETTINGSRMMCFG.host_url.replace(/\/+$/, "");
     var installUrl = base + "/download/site-install.ps1?t=" + tok;
     var deployUrl  = base + "/download/deploy-silent.ps1?t=" + tok;
-    var sslBypass = "[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";
+    // Force TLS 1.2 (Windows PowerShell 5.1 defaults to TLS 1.0/1.1 → "unexpected error
+    // on a send") AND trust the internal cert chain. Both are required or the irm fails.
+    var sslBypass = "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; [Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";
     document.getElementById("ps1OneLiner").value  = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
     document.getElementById("gpoOneLiner").value  = sslBypass + "irm '" + deployUrl  + "' -UseBasicParsing | iex";
     document.getElementById("intuneScriptUrl").value = deployUrl;
-    document.getElementById("psremoteCmd").value  = "Invoke-Command -ComputerName PC-NAME -ScriptBlock { irm '" + deployUrl + "' | iex }";
+    document.getElementById("psremoteCmd").value  = "Invoke-Command -ComputerName PC-NAME -ScriptBlock { " + sslBypass + "irm '" + deployUrl + "' | iex }";
     document.getElementById("intuneDownloadLink").href = deployUrl;
 }
 

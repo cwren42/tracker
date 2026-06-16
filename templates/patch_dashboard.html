@@ -25,7 +25,7 @@
   <!-- Summary cards -->
   <div class="row g-2 mb-3" id="summaryCards">
     <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
-      <div class="fs-3 fw-bold" id="sumTotal">—</div><div class="text-muted small">Pending Updates</div>
+      <div class="fs-3 fw-bold" id="sumSecurity">—</div><div class="text-muted small">Security Updates <span id="sumTotalNote" class="text-muted" style="font-size:.7rem;"></span></div>
     </div></div>
     <div class="col-6 col-md-3"><div class="card border-0 text-center py-2">
       <div class="fs-3 fw-bold text-danger" id="sumCritical">—</div><div class="text-muted small">Critical</div>
@@ -60,6 +60,9 @@
       <select id="updateCatFilter" class="form-select form-select-sm" style="max-width:180px" onchange="filterUpdates()">
         <option value="">All Categories</option>
       </select>
+      <label class="text-muted small ms-1 d-flex align-items-center gap-1">
+        <input type="checkbox" id="secOnlyFilter" checked onchange="filterUpdates()"> Security only <span class="text-muted" title="Hide drivers, Defender definitions, and EU-browser-choice updates — they inflate the count but aren't security patches.">(hide drivers/defs)</span>
+      </label>
       <label class="text-muted small ms-1 d-flex align-items-center gap-1">
         <input type="checkbox" id="rebootFilter" onchange="filterUpdates()"> Reboot required only
       </label>
@@ -111,7 +114,7 @@
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="checkAllDev" onchange="checkAllDevices(this.checked)"></th>
           <th>Device</th>
-          <th style="width:80px">Pending</th>
+          <th style="width:90px" title="security-relevant / total pending">Sec / Total</th>
           <th style="width:80px">Critical</th>
           <th style="width:80px">Important</th>
           <th style="width:90px">Reboot</th>
@@ -261,9 +264,13 @@ async function loadUpdates() {
   catSel.innerHTML = '<option value="">All Categories</option>' +
     cats.map(c => `<option ${c===prev?'selected':''}>${c}</option>`).join('');
 
-  // Summary cards
+  // Summary cards — lead with real security updates, not the driver-inflated total
   const devSet = new Set(allUpdates.flatMap(u => u.agents));
-  document.getElementById('sumTotal').textContent    = allUpdates.length;
+  const sum = resp.summary || {security: allUpdates.filter(u=>u.is_security).length,
+                               total: allUpdates.length,
+                               other: allUpdates.filter(u=>!u.is_security).length};
+  document.getElementById('sumSecurity').textContent = sum.security;
+  document.getElementById('sumTotalNote').textContent = `of ${sum.total} pending (${sum.other} driver/def)`;
   document.getElementById('sumCritical').textContent = allUpdates.filter(u=>u.severity==='Critical').length;
   document.getElementById('sumImportant').textContent= allUpdates.filter(u=>u.severity==='Important').length;
   document.getElementById('sumDevices').textContent  = devSet.size;
@@ -281,8 +288,10 @@ function filterUpdates() {
   const sev = document.getElementById('updateSevFilter').value;
   const cat = document.getElementById('updateCatFilter').value;
   const rb  = document.getElementById('rebootFilter').checked;
+  const secOnly = document.getElementById('secOnlyFilter').checked;
 
   const visible = allUpdates.filter(u => {
+    if (secOnly && !u.is_security) return false;
     if (q && !u.title.toLowerCase().includes(q)) return false;
     if (sev && u.severity !== sev) return false;
     if (cat && u.category !== cat) return false;
@@ -362,10 +371,13 @@ function renderDevices(devices) {
     const assetLink = d.asset_id
       ? `<a href="/assets/${d.asset_id}" class="text-info">${escHtml(d.asset_name)}</a>`
       : escHtml(d.asset_name);
+    const staleBadge = d.scan_stale
+      ? ` · <span class="badge bg-secondary" title="Last WUA scan ${d.last_scan?escHtml(relTime(d.last_scan)):'unknown'} — pending list may be out of date">stale scan</span>`
+      : '';
     return `<tr>
       <td><input type="checkbox" class="dev-check" value="${d.agent_id}" onchange="updateDevSelCount()"></td>
-      <td>${assetLink}<div class="text-muted" style="font-size:.72rem;">${escHtml(d.agent_id)}</div></td>
-      <td><span class="badge bg-secondary">${d.pending_count}</span></td>
+      <td>${assetLink}<div class="text-muted" style="font-size:.72rem;">${escHtml(d.agent_id)}${staleBadge}</div></td>
+      <td><span class="badge bg-secondary" title="security-relevant pending updates">${d.security_count}</span> <span class="text-muted" style="font-size:.7rem;" title="total pending incl. drivers/defs">/ ${d.pending_count}</span></td>
       <td>${d.critical?`<span class="badge bg-danger">${d.critical}</span>`:'—'}</td>
       <td>${d.important?`<span class="badge bg-warning text-dark">${d.important}</span>`:'—'}</td>
       <td>${d.reboot_count?`<span class="badge bg-warning text-dark"><i class="bi bi-arrow-clockwise"></i> ${d.reboot_count}</span>`:'—'}</td>

@@ -30,13 +30,33 @@ def patch_dashboard():
 
 
 # ─────────────────────────────────────────────────────────────
+#  Update classification — separate real security patches from the
+#  driver / Defender-definition / EU-browser noise that otherwise inflates
+#  the "pending" count ~12x and makes the dashboard look wrong.
+# ─────────────────────────────────────────────────────────────
+def _is_security_update(severity, category):
+    sev = (severity or '').strip()
+    cat = (category or '').strip().lower()
+    if any(x in cat for x in ('driver', 'definition', 'browser choice', 'feature pack', 'language')):
+        return False
+    if sev in ('Critical', 'Important'):
+        return True
+    return any(x in cat for x in ('security', 'critical', '.net', 'operating system',
+                                  'cumulative', 'servicing stack'))
+
+
+# ─────────────────────────────────────────────────────────────
 #  API: fleet pending updates summary
 # ─────────────────────────────────────────────────────────────
 @bp.route('/api/patches/pending')
 @login_required
 @admin_required
 def api_patches_pending():
-    """Return all pending updates grouped by update_id with affected agents."""
+    """Return all pending updates grouped by update_id with affected agents.
+
+    Only counts pending rows tied to a LIVE enabled agent (inner join) so retired/
+    ghost boxes don't inflate the list, and tags each update is_security so the UI can
+    default to real patches and hide driver/definition/EU-browser noise."""
     try:
         rows = db.session.execute(text("""
             SELECT
@@ -51,7 +71,7 @@ def api_patches_pending():
                 ARRAY_AGG(DISTINCT pu.agent_id)          AS agents,
                 ARRAY_AGG(DISTINCT COALESCE(a.name, pu.agent_id)) AS asset_names
             FROM rmm_pending_update pu
-            LEFT JOIN rmm_agent ra ON ra.agent_id = pu.agent_id AND ra.enabled = true
+            JOIN rmm_agent ra ON ra.agent_id = pu.agent_id AND ra.enabled = true
             LEFT JOIN asset a       ON a.id = ra.asset_id
             GROUP BY pu.update_id, pu.title, pu.severity, pu.category, pu.size_mb
             ORDER BY
@@ -91,8 +111,14 @@ def api_patches_pending():
                 'agents':          agents,
                 'asset_names':     names,
                 'job_counts':      job_counts,
+                'is_security':     _is_security_update(r[2], r[3]),
             })
-        return jsonify({'ok': True, 'updates': updates})
+        summary = {
+            'total':    len(updates),
+            'security': sum(1 for u in updates if u['is_security']),
+            'other':    sum(1 for u in updates if not u['is_security']),
+        }
+        return jsonify({'ok': True, 'updates': updates, 'summary': summary})
     except Exception as exc:
         logger.exception('api_patches_pending error')
         db.session.rollback()
@@ -117,13 +143,22 @@ def api_patches_by_device():
                 SUM(CASE WHEN pu.reboot_required THEN 1 ELSE 0 END) AS reboot_count,
                 SUM(CASE WHEN pu.severity='Critical'  THEN 1 ELSE 0 END) AS critical,
                 SUM(CASE WHEN pu.severity='Important' THEN 1 ELSE 0 END) AS important,
+                SUM(CASE
+                      WHEN lower(coalesce(pu.category,'')) ~ 'driver|definition|browser choice|feature pack|language' THEN 0
+                      WHEN coalesce(pu.severity,'') IN ('Critical','Important') THEN 1
+                      WHEN lower(coalesce(pu.category,'')) ~ 'security|critical|[.]net|operating system|cumulative|servicing stack' THEN 1
+                      ELSE 0 END)                AS security_count,
+                MAX(pu.recorded_at)              AS last_scan,
                 ra.last_seen_at
             FROM rmm_pending_update pu
             JOIN rmm_agent ra ON ra.agent_id = pu.agent_id AND ra.enabled = true
             LEFT JOIN asset a ON a.id = ra.asset_id
             GROUP BY pu.agent_id, a.name, a.id, ra.last_seen_at
-            ORDER BY (SUM(CASE WHEN pu.severity='Critical' THEN 1 ELSE 0 END) +
-                      SUM(CASE WHEN pu.severity='Important' THEN 1 ELSE 0 END)) DESC, a.name
+            ORDER BY (SUM(CASE
+                      WHEN lower(coalesce(pu.category,'')) ~ 'driver|definition|browser choice|feature pack|language' THEN 0
+                      WHEN coalesce(pu.severity,'') IN ('Critical','Important') THEN 1
+                      WHEN lower(coalesce(pu.category,'')) ~ 'security|critical|[.]net|operating system|cumulative|servicing stack' THEN 1
+                      ELSE 0 END)) DESC, a.name
         """)).fetchall()
 
         # Re-use job status map
@@ -135,19 +170,25 @@ def api_patches_by_device():
         agent_last_job = {r[0]: {'status': r[1], 'updated_at': r[2].isoformat() if r[2] else None}
                           for r in job_rows2}
 
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        stale_cutoff = _dt.now(_tz.utc) - _td(days=7)
         devices = []
         for r in rows:
             aj = agent_last_job.get(r[0])
+            last_scan = r[8]
             devices.append({
-                'agent_id':     r[0],
-                'asset_name':   r[1],
-                'asset_id':     r[2],
-                'pending_count':r[3],
-                'reboot_count': int(r[4]) if r[4] else 0,
-                'critical':     int(r[5]) if r[5] else 0,
-                'important':    int(r[6]) if r[6] else 0,
-                'last_seen':    r[7].isoformat() if r[7] else None,
-                'last_job':     aj,
+                'agent_id':      r[0],
+                'asset_name':    r[1],
+                'asset_id':      r[2],
+                'pending_count': r[3],
+                'reboot_count':  int(r[4]) if r[4] else 0,
+                'critical':      int(r[5]) if r[5] else 0,
+                'important':     int(r[6]) if r[6] else 0,
+                'security_count':int(r[7]) if r[7] else 0,
+                'last_scan':     last_scan.isoformat() if last_scan else None,
+                'scan_stale':    bool(last_scan and last_scan < stale_cutoff),
+                'last_seen':     r[9].isoformat() if r[9] else None,
+                'last_job':      aj,
             })
         return jsonify({'ok': True, 'devices': devices})
     except Exception as exc:

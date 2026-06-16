@@ -105,6 +105,30 @@ def ensure_schema():
                 else:
                     print(f"✓ asset.{col} exists")
 
+            # Partial-unique indexes on the Intune/Azure device identifiers. These are
+            # the DB-level backstop against the duplicate-asset bug: if the Intune sync
+            # ever tries to create/keep a second asset carrying an intune_device_id or
+            # azure_ad_device_id that already exists, the insert/update throws
+            # IntegrityError (caught by the sync's per-device rollback) instead of
+            # silently spawning a phantom (the #984 ITWORKBENCH case). NULL and the
+            # all-zero GUID are excluded so unmanaged assets aren't constrained.
+            _ZERO = '00000000-0000-0000-0000-000000000000'
+            asset_uniq_idx = [
+                ("uq_asset_intune_device_id", "intune_device_id"),
+                ("uq_asset_azure_ad_device_id", "azure_ad_device_id"),
+            ]
+            for idx_name, col in asset_uniq_idx:
+                try:
+                    db.session.execute(text(
+                        f"CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON asset ({col}) "
+                        f"WHERE {col} IS NOT NULL AND {col} <> '{_ZERO}'"
+                    ))
+                    db.session.commit()
+                    print(f"✓ unique index {idx_name} verified")
+                except Exception as _ie:
+                    db.session.rollback()
+                    print(f"⚠ could not create {idx_name} (likely existing duplicates): {_ie}")
+
             # Create asset_loan, installed_app tables
             db.create_all()
             print("✓ asset_loan / installed_app tables verified")

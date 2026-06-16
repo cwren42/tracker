@@ -304,7 +304,17 @@ def perform_intune_asset_sync():
             value = str(value).strip()
             if not value:
                 return None
-            if value.lower() in ['unknown', 'n/a', 'none']:
+            low = value.lower()
+            if low in ['unknown', 'n/a', 'none', 'default string',
+                       'system serial number', '0123456789', 'to be filled by o.e.m.']:
+                return None
+            # BIOS placeholder serials ("TobefilledbyO.E.M.", "To be filled by O.E.M.")
+            # repeat across machines and must never be treated as a real identifier
+            # (they let a phantom asset look like it has a unique serial — the #984 bug).
+            # Match the placeholder phrase, not the bare "o.e.m" fragment, so a real
+            # serial that merely contains those chars is not wrongly nulled.
+            collapsed = low.replace(' ', '')
+            if 'tobefilled' in collapsed:
                 return None
             return value
 
@@ -357,6 +367,21 @@ def perform_intune_asset_sync():
                     asset = assets_by_intune_id[intune_id]
                 if not asset:
                     asset = assets_by_name_lower.get(device_name_norm.lower())
+
+                # Hard pre-create guard (DB-level, not just the in-memory maps):
+                # never create a row whose Intune or Azure identity already exists
+                # on ANY asset. Catches edge cases the seeded maps can miss — a row
+                # whose identity column was contaminated/changed, or an identifier
+                # that arrived in a different form. Routes to the existing owner
+                # instead of spawning a phantom (the #984 bug). The partial-unique
+                # indexes on these columns are the final DB backstop beneath this.
+                if not asset and (intune_id or azure_id):
+                    _conds = []
+                    if intune_id:
+                        _conds.append(Asset.intune_device_id == intune_id)
+                    if azure_id:
+                        _conds.append(Asset.azure_ad_device_id == azure_id)
+                    asset = Asset.query.filter(or_(*_conds)).first()
 
                 upn = (device.get('userPrincipalName') or '').strip().lower()
                 employee = employees_by_email_lower.get(upn) if upn else None

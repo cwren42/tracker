@@ -106,6 +106,33 @@ try {
     [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
 } catch { }
 
+# - HTTP via curl.exe ---------------------------------------------------------
+# TeamViewer 15.76+ injects tv_x64.dll into every process, which breaks .NET's
+# System.Net HTTP stack (Invoke-WebRequest/Invoke-RestMethod fail with "underlying
+# connection was closed: an unexpected error occurred on a send") while native
+# curl.exe (libcurl, built into Win10 1803+/Win11) is unaffected. So prefer curl;
+# fall back to .NET only when curl.exe is absent. -k trusts the internal cert.
+$script:CurlExe  = "$env:SystemRoot\System32\curl.exe"
+$script:HaveCurl = Test-Path $script:CurlExe
+function Get-HttpFile([string]$Url, [string]$OutFile, [int]$TimeoutSec = 300) {
+    if ($script:HaveCurl) {
+        & $script:CurlExe -fsSL -k --retry 3 --retry-delay 2 --connect-timeout 30 --max-time $TimeoutSec -o $OutFile $Url
+        if ($LASTEXITCODE -ne 0) { throw "curl download failed (exit $LASTEXITCODE): $Url" }
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSec
+    }
+}
+function Invoke-HttpPost([string]$Url, [string]$BodyJson, [int]$TimeoutSec = 20) {
+    if ($script:HaveCurl) {
+        $out = & $script:CurlExe -fsS -k --retry 2 --connect-timeout 30 --max-time $TimeoutSec `
+                  -X POST -H "Content-Type: application/json" --data-raw $BodyJson $Url
+        if ($LASTEXITCODE -ne 0) { throw "curl POST failed (exit $LASTEXITCODE): $Url" }
+        return ($out | ConvertFrom-Json)
+    } else {
+        return Invoke-RestMethod -Uri $Url -Method POST -Body $BodyJson -ContentType "application/json" -UseBasicParsing -TimeoutSec $TimeoutSec
+    }
+}
+
 Write-Host ""
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host "  Cirque RMM Agent Installer" -ForegroundColor Cyan
@@ -132,8 +159,7 @@ if (-not $Token) {
             Write-Host "[0/7] Auto-enrolling via $tryUrl ..." -ForegroundColor Yellow
             try {
                 $body = @{ site_token = $SiteToken; hostname = $env:COMPUTERNAME; agent_id = $AgentId; serial = $DeviceSerial } | ConvertTo-Json
-                $resp = Invoke-RestMethod -Uri "$tryUrl/api/rmm/enroll" `
-                           -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
+                $resp = Invoke-HttpPost "$tryUrl/api/rmm/enroll" $body 20
                 if (-not $resp.ok) { throw "Server returned error: $($resp.error)" }
                 $Token      = $resp.token
                 $AgentId    = $resp.agent_id
@@ -218,7 +244,7 @@ if (-not $PythonExe) {
     $PythonInstaller = "$env:TEMP\python_installer.exe"
     $PythonUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe"
     Write-Host "    Downloading from $PythonUrl ..."
-    Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonInstaller -UseBasicParsing -TimeoutSec 300
+    Get-HttpFile $PythonUrl $PythonInstaller 300
 
     # Kill any leftover installer processes from a previous failed attempt.
     # The Python stub spawns msiexec.exe as a child; if that child is still running it
@@ -290,7 +316,7 @@ if ($SkipDownload) {
         $dest = "$InstallDir\$file"
         Write-Host "    GET $file ..."
         try {
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 60
+            Get-HttpFile $url $dest 60
         } catch {
             Write-Warning "    Failed to download $file`: $_"
         }
@@ -301,7 +327,7 @@ if ($SkipDownload) {
         $url  = "$TrackerUrl/download/agent-file/${iconFile}?t=$SiteToken"
         $dest = "$InstallDir\$iconFile"
         try {
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 60
+            Get-HttpFile $url $dest 60
         } catch { }
     }
 }
@@ -347,12 +373,12 @@ if (-not (Test-Path $NssmPath)) {
     } else {
         try {
             Write-Host "    Downloading nssm.exe from $TrackerUrl -> $NssmPath ..."
-            Invoke-WebRequest -Uri "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" -OutFile $NssmPath -UseBasicParsing -TimeoutSec 120
+            Get-HttpFile "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" $NssmPath 120
         } catch {
             Write-Warning "    Tracker NSSM download failed ($_); trying nssm.cc ..."
             $NssmZip     = "$env:TEMP\nssm.zip"
             $NssmExtract = "$env:TEMP\nssm_extract"
-            Invoke-WebRequest -Uri "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" -OutFile $NssmZip -UseBasicParsing -TimeoutSec 120
+            Get-HttpFile "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" $NssmZip 120
             Expand-Archive -Path $NssmZip -DestinationPath $NssmExtract -Force
             if ([Environment]::Is64BitOperatingSystem) { $arch = "win64" } else { $arch = "win32" }
             $extracted = Get-ChildItem $NssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match $arch } | Select-Object -First 1

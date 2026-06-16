@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.32"
+AGENT_VERSION = "2.9.33"
 
 import asyncio
 import base64
@@ -5022,6 +5022,17 @@ async def main() -> None:
 
                 loop = asyncio.get_event_loop()
 
+                # Bounded collect: a single on-connect collection that hangs (e.g.
+                # _collect_session_events on a box with a massive Security log)
+                # previously blocked the WHOLE connect coroutine, so the periodic
+                # tasks created below (telemetry, software inventory) were NEVER
+                # started -- the box reported patches+pending then nothing, and
+                # software inventory never sent (BRIAN-MSI). wait_for guarantees the
+                # coroutine always reaches the task-creation lines.
+                async def _collect(fn, *a, timeout=120):
+                    return await asyncio.wait_for(
+                        loop.run_in_executor(None, fn, *a), timeout=timeout)
+
                 # Ensure RustDesk is installed -- runs in background after connect
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
@@ -5029,19 +5040,23 @@ async def main() -> None:
                     loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
 
                 # Collect extended info (hardware/OS/security) once on connect
-                extended = await loop.run_in_executor(None, _collect_extended)
+                try:
+                    extended = await _collect(_collect_extended, timeout=120)
+                except Exception as e:
+                    extended = {}
+                    print(f"[agent] Extended collect failed/timed out: {e}", flush=True)
 
                 # Initial telemetry on connect
                 telemetry = collect_telemetry(agent_id)
                 # Merge extended -- WMI values override the simpler ctypes ones
-                for k, v in extended.items():
+                for k, v in (extended or {}).items():
                     if v:
                         telemetry[k] = v
                 await ws.send(json.dumps({**telemetry, "type": "agent_info"}))
 
                 # Send patch report (can be slow -- run in executor)
                 try:
-                    patches = await loop.run_in_executor(None, _collect_patches)
+                    patches = await _collect(_collect_patches, timeout=120)
                     await ws.send(json.dumps({"type": "patch_report", "patches": patches}))
                     print(f"[agent] Sent {len(patches)} patches", flush=True)
                 except Exception as e:
@@ -5049,7 +5064,7 @@ async def main() -> None:
 
                 # Send available/pending Windows Updates
                 try:
-                    pending = await loop.run_in_executor(None, _collect_pending_updates)
+                    pending = await _collect(_collect_pending_updates, timeout=120)
                     await ws.send(json.dumps({"type": "pending_updates", "updates": pending}))
                     print(f"[agent] Sent {len(pending)} pending update(s)", flush=True)
                 except Exception as e:
@@ -5057,17 +5072,16 @@ async def main() -> None:
 
                 # Send session events (logon/logoff/lock/unlock/sleep/wake -- last 7 days)
                 try:
-                    sev = await loop.run_in_executor(None, _collect_session_events)
+                    sev = await _collect(_collect_session_events, timeout=90)
                     await ws.send(json.dumps({"type": "session_events", "events": sev}))
                     print(f"[agent] Sent {len(sev)} session event(s)", flush=True)
                 except Exception as e:
-                    print(f"[agent] Session events failed: {e}", flush=True)
+                    print(f"[agent] Session events failed/timed out: {e}", flush=True)
 
                 # Software inventory is NOT sent here in the sequential connect burst.
-                # On big-inventory boxes a slow ~80KB collection at the end of the
-                # burst could starve the send entirely (the box reported patches +
-                # pending but never software). It now rides its own task over the WS
-                # (software_inventory_loop below), so a slow collection can't block it.
+                # It rides its own task over the WS (software_inventory_loop below),
+                # which -- thanks to the bounded _collect() above -- is now guaranteed
+                # to actually get created even if a burst collection times out.
 
                 # Periodic telemetry task
                 async def telemetry_loop():

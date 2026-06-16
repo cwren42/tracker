@@ -133,6 +133,9 @@ class Asset(db.Model):
     device_type = db.Column(db.String(50))  # Windows PC, Mac, Linux Server, Virtual Machine, etc.
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'))
     os_version = db.Column(db.String(100))  # Operating system version
+    windows_product_key = db.Column(db.String(40))   # OEM/embedded Windows key (OA3xOriginalProductKey)
+    windows_edition = db.Column(db.String(80))       # e.g. Windows 11 Pro
+    windows_activation = db.Column(db.String(40))    # Licensed / Notification / Unlicensed
     online_state = db.Column(db.String(20))  # Online, Offline, Busy
     rustdesk_id = db.Column(db.String(100))  # RustDesk device ID
     rustdesk_password = db.Column(db.String(255))  # Optional (prefer OTP / user-confirmed)

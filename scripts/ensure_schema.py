@@ -90,6 +90,21 @@ def ensure_schema():
                 else:
                     print(f"✓ support_ticket.{col} exists")
 
+            # New asset columns — Windows licensing (OEM product key, edition, activation)
+            new_asset_cols = [
+                ('windows_product_key', 'VARCHAR(40)'),
+                ('windows_edition',     'VARCHAR(80)'),
+                ('windows_activation',  'VARCHAR(40)'),
+            ]
+            for col, typedef in new_asset_cols:
+                if not _col_exists("asset", col):
+                    print(f"Adding asset.{col}...")
+                    db.session.execute(text(f"ALTER TABLE asset ADD COLUMN {col} {typedef}"))
+                    db.session.commit()
+                    print(f"✓ Added asset.{col}")
+                else:
+                    print(f"✓ asset.{col} exists")
+
             # Create asset_loan, installed_app tables
             db.create_all()
             print("✓ asset_loan / installed_app tables verified")

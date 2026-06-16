@@ -391,6 +391,20 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 "UPDATE asset SET online_state = 'Online', last_seen = %s WHERE id = %s",
                 (now, asset_id),
             )
+            # Windows licensing (OEM key / edition / activation) -> asset. COALESCE so a
+            # report that omits them (or a VL box with a blank key) doesn't wipe a good value.
+            wkey = (data.get("windows_product_key") or "").strip() or None
+            wed  = (data.get("windows_edition") or "").strip() or None
+            wact = (data.get("windows_activation") or "").strip() or None
+            if wkey or wed or wact:
+                cur.execute(
+                    """UPDATE asset SET
+                         windows_product_key = COALESCE(%s, windows_product_key),
+                         windows_edition     = COALESCE(%s, windows_edition),
+                         windows_activation  = COALESCE(%s, windows_activation)
+                       WHERE id = %s""",
+                    (wkey, wed, wact, asset_id),
+                )
             # Sync IP and MAC from network_json back to the asset record so the
             # Overview tab shows them without needing an Intune sync.
             networks = data.get("network") or data.get("network_json") or []

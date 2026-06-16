@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.28"
+AGENT_VERSION = "2.9.29"
 
 import asyncio
 import base64
@@ -1526,6 +1526,26 @@ def _collect_extended() -> dict:
         result["bios_version"]      = bios.get("SMBIOSBIOSVersion") or ""
         result["bios_date"]         = bios.get("ReleaseDate") or ""
         result["serial_number"]     = bios.get("SerialNumber") or ""
+
+    # -- Windows licensing: OEM/embedded product key + edition + activation --
+    # OA3xOriginalProductKey is the BIOS-embedded OEM key (blank on pure VL/MAK).
+    lic = _ps_json(
+        "$s=Get-CimInstance SoftwareLicensingService -EA SilentlyContinue;"
+        "$o=Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue;"
+        "$p=Get-CimInstance SoftwareLicensingProduct "
+        "-Filter \"ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL\" "
+        "-EA SilentlyContinue|Select-Object -First 1;"
+        "@{key=$s.OA3xOriginalProductKey;edition=$o.Caption;status=[int]$p.LicenseStatus}|ConvertTo-Json -Compress"
+    )
+    if lic:
+        result["windows_product_key"] = lic.get("key") or ""
+        result["windows_edition"]     = lic.get("edition") or ""
+        _smap = {0: "Unlicensed", 1: "Licensed", 2: "OOB Grace", 3: "OOT Grace",
+                 4: "Non-Genuine", 5: "Notification", 6: "Extended Grace"}
+        try:
+            result["windows_activation"] = _smap.get(int(lic.get("status")), "")
+        except Exception:
+            result["windows_activation"] = ""
 
     # -- Motherboard --------------------------------------------------------
     mb = _ps_json(

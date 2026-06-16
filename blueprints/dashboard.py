@@ -134,9 +134,11 @@ def _action_center_groups():
         return [r[0] for r in db.session.execute(text(sql)).fetchall() if r[0]]
 
     defs = [
-        ('offline', 'Devices offline 7+ days', 'warning', 'bi-wifi-off', '/assets',
-         "FROM asset WHERE intune_last_sync IS NOT NULL AND intune_last_sync < now() - interval '7 days'",
-         "SELECT name FROM asset WHERE intune_last_sync IS NOT NULL AND intune_last_sync < now() - interval '7 days' AND name IS NOT NULL ORDER BY intune_last_sync LIMIT 5"),
+        ('offline', 'Agents offline 7+ days', 'warning', 'bi-wifi-off', '/assets',
+         # Real connectivity: an enabled RMM agent silent 7+ days. NOT intune_last_sync,
+         # which is Intune sync-lag (flags live boxes as "offline"). See online_state-vs-compliance.
+         "FROM rmm_agent ra WHERE ra.enabled AND (ra.last_seen_at IS NULL OR ra.last_seen_at < now() - interval '7 days')",
+         "SELECT a.name FROM rmm_agent ra JOIN asset a ON a.id = ra.asset_id WHERE ra.enabled AND (ra.last_seen_at IS NULL OR ra.last_seen_at < now() - interval '7 days') AND a.name IS NOT NULL ORDER BY ra.last_seen_at NULLS FIRST LIMIT 5"),
         ('low_storage', 'Low storage (<20% free)', 'warning', 'bi-hdd', '/assets',
          "FROM asset WHERE hardware_storage_total_gb > 0 AND hardware_storage_free_gb::float / hardware_storage_total_gb < 0.20",
          "SELECT name FROM asset WHERE hardware_storage_total_gb > 0 AND hardware_storage_free_gb::float / hardware_storage_total_gb < 0.20 AND name IS NOT NULL ORDER BY hardware_storage_free_gb::float / hardware_storage_total_gb LIMIT 5"),
@@ -158,9 +160,6 @@ def _action_center_groups():
         ('licenses', 'Licenses expiring (30 days)', 'info', 'bi-key', '/licenses',
          "FROM license WHERE status='Active' AND expiry_date IS NOT NULL AND expiry_date <= (now() + interval '30 days')::date",
          "SELECT software_name FROM license WHERE status='Active' AND expiry_date IS NOT NULL AND expiry_date <= (now() + interval '30 days')::date ORDER BY expiry_date LIMIT 5"),
-        ('vulns', 'Open critical/high vulnerabilities', 'danger', 'bi-bug', '/vulnerabilities',
-         "FROM device_vulnerability WHERE status='Open' AND severity IN ('Critical','High')",
-         None),
         ('dupes', 'Duplicate-name assets', 'info', 'bi-files', '/assets/find-duplicates',
          "FROM (SELECT name FROM asset GROUP BY name HAVING count(*)>1) d",
          None),
@@ -181,6 +180,28 @@ def _action_center_groups():
                 sample = []
         groups.append({'key': key, 'title': title, 'severity': sev, 'icon': icon,
                        'count': int(cnt), 'link': link, 'sample': sample})
+
+    # Open critical/high CVEs — count DISTINCT CVEs (device_vulnerability rows are
+    # device-CVE PAIRS, which over-count ~10x), on non-retired assets, so the headline
+    # is the real vulnerability count, not an alarmist pair total.
+    try:
+        vcnt = scalar("""SELECT count(DISTINCT dv.cve_id) FROM device_vulnerability dv
+                         JOIN asset a ON a.id = dv.asset_id
+                         WHERE dv.status='Open' AND dv.severity IN ('Critical','High')
+                           AND a.status <> 'Retired'""")
+        if vcnt > 0:
+            vsample = names("""SELECT a.name FROM asset a
+                               WHERE a.status <> 'Retired' AND a.name IS NOT NULL
+                                 AND EXISTS (SELECT 1 FROM device_vulnerability v
+                                     WHERE v.asset_id=a.id AND v.status='Open' AND v.severity IN ('Critical','High'))
+                               ORDER BY (SELECT count(*) FROM device_vulnerability v
+                                     WHERE v.asset_id=a.id AND v.status='Open' AND v.severity IN ('Critical','High')) DESC
+                               LIMIT 5""")
+            groups.append({'key': 'vulns', 'title': 'Open critical/high CVEs', 'severity': 'danger',
+                           'icon': 'bi-bug', 'count': int(vcnt), 'link': '/vulnerabilities', 'sample': vsample})
+    except Exception:
+        pass
+
     # Composite "at-risk" — devices with 2+ simultaneous risk factors (proactive:
     # catches compounding problems before any single one trips a hard alert).
     try:

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.33"
+AGENT_VERSION = "2.9.34"
 
 import asyncio
 import base64
@@ -2269,18 +2269,25 @@ def _collect_software() -> list:
         "|ConvertTo-Json -Compress",
         timeout=60,
     )
+    # Coerce every field to str before .strip(): registry DisplayVersion/InstallDate
+    # are frequently REG_DWORD numbers, which ConvertTo-Json emits as JSON ints, so
+    # `(int or "").strip()` raised AttributeError and made the WHOLE collection throw
+    # -> the agent reported 0 software. A box only needed ONE such program to lose its
+    # entire inventory (hit big boxes like BRIAN-MSI, 616 apps, the hardest).
+    def _s(v):
+        return str(v).strip() if v is not None else ""
     seen: set = set()
     results = []
     for item in _normalise_ps_list(raw):
-        name = (item.get("DisplayName") or "").strip()
+        name = _s(item.get("DisplayName"))
         if not name or name in seen:
             continue
         seen.add(name)
         results.append({
             "name":         name,
-            "version":      (item.get("DisplayVersion") or "").strip(),
-            "publisher":    (item.get("Publisher")      or "").strip(),
-            "install_date": (item.get("InstallDate")    or "").strip(),
+            "version":      _s(item.get("DisplayVersion")),
+            "publisher":    _s(item.get("Publisher")),
+            "install_date": _s(item.get("InstallDate")),
         })
     return results
 

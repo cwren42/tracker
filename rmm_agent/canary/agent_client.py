@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.30"
+AGENT_VERSION = "2.9.31"
 
 import asyncio
 import base64
@@ -174,13 +174,21 @@ def _fetch_update_sig(sig_url: str, ctx=None, timeout: int = 15) -> str:
 def _ps_json(script: str, timeout: int = 15):
     """Run a PowerShell one-liner and return parsed JSON, or None on failure."""
     try:
+        # Force UTF-8 end-to-end and decode with errors='replace'. PowerShell 5.1
+        # otherwise writes stdout in the console OEM/cp1252 codepage; Python's
+        # text=True then decodes with the locale codepage and a single byte that's
+        # undefined there (common in a large software-inventory dump with an odd
+        # publisher/name char) raised UnicodeDecodeError -> this returned None ->
+        # the caller saw EMPTY. That silently dropped software inventory on
+        # big-inventory boxes (BRIAN-MSI, 616 apps). UTF-8 + replace never throws.
+        script = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;" + script
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command", script],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
             creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
-        out = r.stdout.strip()
+        out = (r.stdout or "").strip()
         if r.returncode != 0 and not out:
             err = r.stderr.strip()
             if err:
@@ -2258,7 +2266,7 @@ def _collect_software() -> list:
         "|Select-Object DisplayName,DisplayVersion,Publisher,InstallDate"
         "|Sort-Object DisplayName"
         "|ConvertTo-Json -Compress",
-        timeout=30,
+        timeout=60,
     )
     seen: set = set()
     results = []

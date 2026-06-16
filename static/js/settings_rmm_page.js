@@ -51,7 +51,11 @@ function renderInstallSnippets(tok) {
     // Force TLS 1.2 (Windows PowerShell 5.1 defaults to TLS 1.0/1.1 → "unexpected error
     // on a send") AND trust the internal cert chain. Both are required or the irm fails.
     var sslBypass = "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; [Net.ServicePointManager]::ServerCertificateValidationCallback={$true}; ";
-    document.getElementById("ps1OneLiner").value  = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
+    // Off-LAN / remote: hit the public Cloudflare host + public=1 so the served script
+    // uses public URLs throughout (enroll, agent files, gateway) — no VPN needed.
+    var remoteUrl = "https://tracker.cirquetools.com/download/site-install.ps1?t=" + tok + "&public=1";
+    document.getElementById("ps1OneLiner").value    = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
+    document.getElementById("remoteOneLiner").value = sslBypass + "irm '" + remoteUrl  + "' -UseBasicParsing | iex";
     document.getElementById("gpoOneLiner").value  = sslBypass + "irm '" + deployUrl  + "' -UseBasicParsing | iex";
     document.getElementById("intuneScriptUrl").value = deployUrl;
     document.getElementById("psremoteCmd").value  = "Invoke-Command -ComputerName PC-NAME -ScriptBlock { " + sslBypass + "irm '" + deployUrl + "' | iex }";

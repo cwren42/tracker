@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.31"
+AGENT_VERSION = "2.9.32"
 
 import asyncio
 import base64
@@ -174,18 +174,19 @@ def _fetch_update_sig(sig_url: str, ctx=None, timeout: int = 15) -> str:
 def _ps_json(script: str, timeout: int = 15):
     """Run a PowerShell one-liner and return parsed JSON, or None on failure."""
     try:
-        # Force UTF-8 end-to-end and decode with errors='replace'. PowerShell 5.1
-        # otherwise writes stdout in the console OEM/cp1252 codepage; Python's
-        # text=True then decodes with the locale codepage and a single byte that's
-        # undefined there (common in a large software-inventory dump with an odd
-        # publisher/name char) raised UnicodeDecodeError -> this returned None ->
-        # the caller saw EMPTY. That silently dropped software inventory on
-        # big-inventory boxes (BRIAN-MSI, 616 apps). UTF-8 + replace never throws.
-        script = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;" + script
+        # Decode with errors='replace' so a single byte that's undefined in the
+        # locale codepage doesn't raise UnicodeDecodeError -> None -> the caller
+        # seeing EMPTY. That silently dropped software inventory on big boxes
+        # (BRIAN-MSI, 616 apps: a ~90KB dump is far likelier to contain an odd
+        # publisher/name byte). NOTE: do NOT set [Console]::OutputEncoding here --
+        # the agent launches powershell with CREATE_NO_WINDOW (no console), so the
+        # setter throws "handle is invalid" and kills the whole script. Plain
+        # text=True + errors='replace' decodes with the locale codepage and never
+        # raises, which is what we want.
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command", script],
-            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
+            capture_output=True, text=True, errors="replace", timeout=timeout,
             creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
         out = (r.stdout or "").strip()

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.29"
+AGENT_VERSION = "2.9.30"
 
 import asyncio
 import base64
@@ -5054,13 +5054,11 @@ async def main() -> None:
                 except Exception as e:
                     print(f"[agent] Session events failed: {e}", flush=True)
 
-                # Send software inventory
-                try:
-                    sw = await loop.run_in_executor(None, _collect_software)
-                    await ws.send(json.dumps({"type": "software_inventory", "software": sw}))
-                    print(f"[agent] Sent {len(sw)} software entries", flush=True)
-                except Exception as e:
-                    print(f"[agent] Software inventory failed: {e}", flush=True)
+                # Software inventory is NOT sent here in the sequential connect burst.
+                # On big-inventory boxes a slow ~80KB collection at the end of the
+                # burst could starve the send entirely (the box reported patches +
+                # pending but never software). It now rides its own task over the WS
+                # (software_inventory_loop below), so a slow collection can't block it.
 
                 # Periodic telemetry task
                 async def telemetry_loop():
@@ -5089,23 +5087,24 @@ async def main() -> None:
 
                 rustdesk_task = asyncio.create_task(rustdesk_watchdog())
 
-                # Software inventory -- post on connect then refresh every 24h
+                # Software inventory -- its OWN task, sent over the WebSocket (the
+                # gateway stores it, NUL-sanitized). Runs immediately on connect then
+                # every 24h. Previously this POSTed over a separate direct HTTPS call
+                # (post_software_inventory) which failed silently on some boxes (TLS /
+                # TeamViewer tv_x64.dll HTTP breakage / NUL inserts) -> 0 rows. Riding
+                # the already-established WS channel makes delivery reliable. An empty
+                # collection is skipped so a transient failure never wipes good data.
                 async def software_inventory_loop():
-                    # Run immediately on first connect
-                    try:
-                        await loop.run_in_executor(
-                            None, post_software_inventory, tracker_url, agent_id, token
-                        )
-                    except Exception:
-                        pass
                     while True:
-                        await asyncio.sleep(86400)  # re-collect every 24h
                         try:
-                            await loop.run_in_executor(
-                                None, post_software_inventory, tracker_url, agent_id, token
-                            )
-                        except Exception:
-                            pass
+                            sw = await loop.run_in_executor(None, _collect_software)
+                            if sw:
+                                await ws.send(json.dumps(
+                                    {"type": "software_inventory", "software": sw}))
+                                print(f"[agent] Sent {len(sw)} software entries (WS)", flush=True)
+                        except Exception as e:
+                            print(f"[agent] software_inventory_loop error: {e}", flush=True)
+                        await asyncio.sleep(86400)  # re-collect every 24h
 
                 asyncio.create_task(software_inventory_loop())
 

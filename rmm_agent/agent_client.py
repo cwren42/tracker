@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.29"
+AGENT_VERSION = "2.9.34"
 
 import asyncio
 import base64
@@ -174,13 +174,22 @@ def _fetch_update_sig(sig_url: str, ctx=None, timeout: int = 15) -> str:
 def _ps_json(script: str, timeout: int = 15):
     """Run a PowerShell one-liner and return parsed JSON, or None on failure."""
     try:
+        # Decode with errors='replace' so a single byte that's undefined in the
+        # locale codepage doesn't raise UnicodeDecodeError -> None -> the caller
+        # seeing EMPTY. That silently dropped software inventory on big boxes
+        # (BRIAN-MSI, 616 apps: a ~90KB dump is far likelier to contain an odd
+        # publisher/name byte). NOTE: do NOT set [Console]::OutputEncoding here --
+        # the agent launches powershell with CREATE_NO_WINDOW (no console), so the
+        # setter throws "handle is invalid" and kills the whole script. Plain
+        # text=True + errors='replace' decodes with the locale codepage and never
+        # raises, which is what we want.
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command", script],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, errors="replace", timeout=timeout,
             creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
-        out = r.stdout.strip()
+        out = (r.stdout or "").strip()
         if r.returncode != 0 and not out:
             err = r.stderr.strip()
             if err:
@@ -2258,20 +2267,27 @@ def _collect_software() -> list:
         "|Select-Object DisplayName,DisplayVersion,Publisher,InstallDate"
         "|Sort-Object DisplayName"
         "|ConvertTo-Json -Compress",
-        timeout=30,
+        timeout=60,
     )
+    # Coerce every field to str before .strip(): registry DisplayVersion/InstallDate
+    # are frequently REG_DWORD numbers, which ConvertTo-Json emits as JSON ints, so
+    # `(int or "").strip()` raised AttributeError and made the WHOLE collection throw
+    # -> the agent reported 0 software. A box only needed ONE such program to lose its
+    # entire inventory (hit big boxes like BRIAN-MSI, 616 apps, the hardest).
+    def _s(v):
+        return str(v).strip() if v is not None else ""
     seen: set = set()
     results = []
     for item in _normalise_ps_list(raw):
-        name = (item.get("DisplayName") or "").strip()
+        name = _s(item.get("DisplayName"))
         if not name or name in seen:
             continue
         seen.add(name)
         results.append({
             "name":         name,
-            "version":      (item.get("DisplayVersion") or "").strip(),
-            "publisher":    (item.get("Publisher")      or "").strip(),
-            "install_date": (item.get("InstallDate")    or "").strip(),
+            "version":      _s(item.get("DisplayVersion")),
+            "publisher":    _s(item.get("Publisher")),
+            "install_date": _s(item.get("InstallDate")),
         })
     return results
 
@@ -5013,6 +5029,17 @@ async def main() -> None:
 
                 loop = asyncio.get_event_loop()
 
+                # Bounded collect: a single on-connect collection that hangs (e.g.
+                # _collect_session_events on a box with a massive Security log)
+                # previously blocked the WHOLE connect coroutine, so the periodic
+                # tasks created below (telemetry, software inventory) were NEVER
+                # started -- the box reported patches+pending then nothing, and
+                # software inventory never sent (BRIAN-MSI). wait_for guarantees the
+                # coroutine always reaches the task-creation lines.
+                async def _collect(fn, *a, timeout=120):
+                    return await asyncio.wait_for(
+                        loop.run_in_executor(None, fn, *a), timeout=timeout)
+
                 # Ensure RustDesk is installed -- runs in background after connect
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
@@ -5020,19 +5047,23 @@ async def main() -> None:
                     loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
 
                 # Collect extended info (hardware/OS/security) once on connect
-                extended = await loop.run_in_executor(None, _collect_extended)
+                try:
+                    extended = await _collect(_collect_extended, timeout=120)
+                except Exception as e:
+                    extended = {}
+                    print(f"[agent] Extended collect failed/timed out: {e}", flush=True)
 
                 # Initial telemetry on connect
                 telemetry = collect_telemetry(agent_id)
                 # Merge extended -- WMI values override the simpler ctypes ones
-                for k, v in extended.items():
+                for k, v in (extended or {}).items():
                     if v:
                         telemetry[k] = v
                 await ws.send(json.dumps({**telemetry, "type": "agent_info"}))
 
                 # Send patch report (can be slow -- run in executor)
                 try:
-                    patches = await loop.run_in_executor(None, _collect_patches)
+                    patches = await _collect(_collect_patches, timeout=120)
                     await ws.send(json.dumps({"type": "patch_report", "patches": patches}))
                     print(f"[agent] Sent {len(patches)} patches", flush=True)
                 except Exception as e:
@@ -5040,7 +5071,7 @@ async def main() -> None:
 
                 # Send available/pending Windows Updates
                 try:
-                    pending = await loop.run_in_executor(None, _collect_pending_updates)
+                    pending = await _collect(_collect_pending_updates, timeout=120)
                     await ws.send(json.dumps({"type": "pending_updates", "updates": pending}))
                     print(f"[agent] Sent {len(pending)} pending update(s)", flush=True)
                 except Exception as e:
@@ -5048,19 +5079,16 @@ async def main() -> None:
 
                 # Send session events (logon/logoff/lock/unlock/sleep/wake -- last 7 days)
                 try:
-                    sev = await loop.run_in_executor(None, _collect_session_events)
+                    sev = await _collect(_collect_session_events, timeout=90)
                     await ws.send(json.dumps({"type": "session_events", "events": sev}))
                     print(f"[agent] Sent {len(sev)} session event(s)", flush=True)
                 except Exception as e:
-                    print(f"[agent] Session events failed: {e}", flush=True)
+                    print(f"[agent] Session events failed/timed out: {e}", flush=True)
 
-                # Send software inventory
-                try:
-                    sw = await loop.run_in_executor(None, _collect_software)
-                    await ws.send(json.dumps({"type": "software_inventory", "software": sw}))
-                    print(f"[agent] Sent {len(sw)} software entries", flush=True)
-                except Exception as e:
-                    print(f"[agent] Software inventory failed: {e}", flush=True)
+                # Software inventory is NOT sent here in the sequential connect burst.
+                # It rides its own task over the WS (software_inventory_loop below),
+                # which -- thanks to the bounded _collect() above -- is now guaranteed
+                # to actually get created even if a burst collection times out.
 
                 # Periodic telemetry task
                 async def telemetry_loop():
@@ -5089,23 +5117,24 @@ async def main() -> None:
 
                 rustdesk_task = asyncio.create_task(rustdesk_watchdog())
 
-                # Software inventory -- post on connect then refresh every 24h
+                # Software inventory -- its OWN task, sent over the WebSocket (the
+                # gateway stores it, NUL-sanitized). Runs immediately on connect then
+                # every 24h. Previously this POSTed over a separate direct HTTPS call
+                # (post_software_inventory) which failed silently on some boxes (TLS /
+                # TeamViewer tv_x64.dll HTTP breakage / NUL inserts) -> 0 rows. Riding
+                # the already-established WS channel makes delivery reliable. An empty
+                # collection is skipped so a transient failure never wipes good data.
                 async def software_inventory_loop():
-                    # Run immediately on first connect
-                    try:
-                        await loop.run_in_executor(
-                            None, post_software_inventory, tracker_url, agent_id, token
-                        )
-                    except Exception:
-                        pass
                     while True:
-                        await asyncio.sleep(86400)  # re-collect every 24h
                         try:
-                            await loop.run_in_executor(
-                                None, post_software_inventory, tracker_url, agent_id, token
-                            )
-                        except Exception:
-                            pass
+                            sw = await loop.run_in_executor(None, _collect_software)
+                            if sw:
+                                await ws.send(json.dumps(
+                                    {"type": "software_inventory", "software": sw}))
+                                print(f"[agent] Sent {len(sw)} software entries (WS)", flush=True)
+                        except Exception as e:
+                            print(f"[agent] software_inventory_loop error: {e}", flush=True)
+                        await asyncio.sleep(86400)  # re-collect every 24h
 
                 asyncio.create_task(software_inventory_loop())
 

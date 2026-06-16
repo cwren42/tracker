@@ -116,7 +116,8 @@ $script:CurlExe  = "$env:SystemRoot\System32\curl.exe"
 $script:HaveCurl = Test-Path $script:CurlExe
 function Get-HttpFile([string]$Url, [string]$OutFile, [int]$TimeoutSec = 300) {
     if ($script:HaveCurl) {
-        & $script:CurlExe -fsSL -k --retry 3 --retry-delay 2 --connect-timeout 30 --max-time $TimeoutSec -o $OutFile $Url
+        # -g/--globoff so {}/[]/ in URLs (or tokens) aren't treated as curl globs.
+        & $script:CurlExe -fsSL -k -g --retry 3 --retry-delay 2 --connect-timeout 30 --max-time $TimeoutSec -o $OutFile $Url
         if ($LASTEXITCODE -ne 0) { throw "curl download failed (exit $LASTEXITCODE): $Url" }
     } else {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSec
@@ -124,10 +125,17 @@ function Get-HttpFile([string]$Url, [string]$OutFile, [int]$TimeoutSec = 300) {
 }
 function Invoke-HttpPost([string]$Url, [string]$BodyJson, [int]$TimeoutSec = 20) {
     if ($script:HaveCurl) {
-        $out = & $script:CurlExe -fsS -k --retry 2 --connect-timeout 30 --max-time $TimeoutSec `
-                  -X POST -H "Content-Type: application/json" --data-raw $BodyJson $Url
-        if ($LASTEXITCODE -ne 0) { throw "curl POST failed (exit $LASTEXITCODE): $Url" }
-        return ($out | ConvertFrom-Json)
+        # Write the JSON to a temp file and let curl read it (--data-binary @file).
+        # Passing multi-line JSON as a native-exe arg is mangled by PowerShell 5.1
+        # (quotes stripped) and the {} trip curl's URL globbing — a file avoids both.
+        $tmp = [System.IO.Path]::GetTempFileName()
+        try {
+            [System.IO.File]::WriteAllText($tmp, $BodyJson, (New-Object System.Text.UTF8Encoding($false)))
+            $out = & $script:CurlExe -fsS -k -g --retry 2 --connect-timeout 30 --max-time $TimeoutSec `
+                      -X POST -H "Content-Type: application/json" --data-binary "@$tmp" $Url
+            if ($LASTEXITCODE -ne 0) { throw "curl POST failed (exit $LASTEXITCODE): $Url" }
+            return ($out | ConvertFrom-Json)
+        } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     } else {
         return Invoke-RestMethod -Uri $Url -Method POST -Body $BodyJson -ContentType "application/json" -UseBasicParsing -TimeoutSec $TimeoutSec
     }

@@ -56,6 +56,11 @@ function renderInstallSnippets(tok) {
     var remoteUrl = "https://tracker.cirquetools.com/download/site-install.ps1?t=" + tok + "&public=1";
     document.getElementById("ps1OneLiner").value    = sslBypass + "irm '" + installUrl + "' -UseBasicParsing | iex";
     document.getElementById("remoteOneLiner").value = sslBypass + "irm '" + remoteUrl  + "' -UseBasicParsing | iex";
+    // TeamViewer 15.76+ / hardened: TV injects tv_x64.dll which breaks .NET HTTP, so the
+    // irm bootstrap fails ("unexpected error on a send"). Fetch + run the script via
+    // curl.exe (native libcurl, unaffected); the script itself also uses curl. -k = internal cert.
+    document.getElementById("curlOneLiner").value =
+        'curl.exe -sSk "' + installUrl + '" -o "$env:TEMP\\cqrmm.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\cqrmm.ps1"';
     document.getElementById("gpoOneLiner").value  = sslBypass + "irm '" + deployUrl  + "' -UseBasicParsing | iex";
     document.getElementById("intuneScriptUrl").value = deployUrl;
     document.getElementById("psremoteCmd").value  = "Invoke-Command -ComputerName PC-NAME -ScriptBlock { " + sslBypass + "irm '" + deployUrl + "' | iex }";

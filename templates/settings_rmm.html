@@ -37,13 +37,25 @@
                     </div>
                     <p class="small text-muted mb-2">Logs saved to <code>C:\CirqueRMM\logs\setup.log</code></p>
 
-                    <div class="border rounded p-2 mb-4 bg-dark bg-opacity-25">
+                    <div class="border rounded p-2 mb-2 bg-dark bg-opacity-25">
                         <div class="small mb-1"><i class="bi bi-globe2 me-1"></i><strong>Off-LAN / remote device</strong> — no VPN, routes via Cloudflare. Use when the box can't reach <code>tracker.corp.cirque.com</code>:</div>
                         <div class="input-group">
                             <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
                                      id="remoteOneLiner" readonly style="font-size:.72rem;">
                             <button class="btn btn-outline-secondary btn-sm" type="button"
                                     onclick="copyById('remoteOneLiner',this)" title="Copy">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="border rounded p-2 mb-4 bg-dark bg-opacity-25">
+                        <div class="small mb-1"><i class="bi bi-shield-lock me-1"></i><strong>TeamViewer 15.76+ / hardened box</strong> — if the command above fails with an SSL error or <em>"unexpected error occurred on a send"</em>, TeamViewer's hook is breaking .NET HTTP. Bootstrap via <code>curl.exe</code> instead (run as Admin):</div>
+                        <div class="input-group">
+                            <input type="text" class="form-control font-monospace bg-dark text-light border-secondary"
+                                     id="curlOneLiner" readonly style="font-size:.72rem;">
+                            <button class="btn btn-outline-secondary btn-sm" type="button"
+                                    onclick="copyById('curlOneLiner',this)" title="Copy">
                                 <i class="bi bi-clipboard"></i>
                             </button>
                         </div>

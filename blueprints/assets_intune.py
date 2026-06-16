@@ -381,6 +381,16 @@ def perform_intune_asset_sync():
                         _conds.append(Asset.intune_device_id == intune_id)
                     if azure_id:
                         _conds.append(Asset.azure_ad_device_id == azure_id)
+                        # Auto-named Intune ghosts ("gao.yang_Windows_<date>") carry NO
+                        # serial and a fresh intune id, and link to the real machine ONLY
+                        # via azureADDeviceId == the canonical's ad_device_guid (the AD
+                        # sync stores the device GUID there). Empirically these columns
+                        # hold the same GUID space in this tenant, so as a LAST-RESORT
+                        # guard (only to avoid spawning a phantom — never as a primary
+                        # identity overwrite) match azure_id against ad_device_guid too.
+                        # The partial-unique indexes are the backstop against a true
+                        # cross-machine GUID collision.
+                        _conds.append(Asset.ad_device_guid == azure_id)
                     asset = Asset.query.filter(or_(*_conds)).first()
 
                 upn = (device.get('userPrincipalName') or '').strip().lower()
@@ -418,6 +428,23 @@ def perform_intune_asset_sync():
                 tpm_ver = hw_info.get('tpmVersion') or device.get('tpmVersion')
                 wifi_mac = hw_info.get('wifiMac') or device.get('wiFiMacAddress')
                 eth_mac = device.get('ethernetMacAddress')
+
+                if asset and (asset.status or '').strip().lower() == 'retired':
+                    # The matched asset was deliberately RETIRED by an operator (e.g.
+                    # a decommissioned box repurposed/renamed — CHRISTIAN-MSI, the old
+                    # K2102 DAVID_ORR_MSI). A stale Intune record for that machine must
+                    # NOT resurrect/rename it. Keep the match (so no phantom is created
+                    # for this device) but leave every field — name, identity, employee
+                    # — exactly as the operator left it.
+                    if intune_id:
+                        assets_by_intune_id.setdefault(intune_id, asset)
+                    if azure_id:
+                        assets_by_azure_id.setdefault(azure_id, asset)
+                    if serial_number:
+                        assets_by_serial.setdefault(serial_number, asset)
+                    skipped_count += 1
+                    db.session.commit()
+                    continue
 
                 if asset:
                     # If another device in THIS run already wrote authoritative

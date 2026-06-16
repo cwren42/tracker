@@ -22,6 +22,7 @@ from .db import (
     store_patches,
     store_pending_updates,
     store_screenshot,
+    store_software,
     store_telemetry,
     validate_agent,
     validate_api_key,
@@ -1175,6 +1176,20 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                     print(f"[gw] stored {len(updates)} pending updates for {agent_id}", flush=True)
                 except Exception as e:
                     print(f"[gw] store_pending_updates error: {e}", flush=True)
+                continue
+
+            # --- Store installed-software inventory ---
+            # The agent also POSTs this over direct HTTPS, but that fails on some
+            # boxes (TeamViewer tv_x64.dll HTTP breakage / payload-timeout) leaving
+            # them with 0 rows. Handling it here, over the WS channel that already
+            # works, closes that gap (and keeps /licenses install counts accurate).
+            if msg_type == "software_inventory":
+                software = payload.get("software") or []
+                try:
+                    n = store_software(agent_id, software)
+                    print(f"[gw] stored {n} software entries for {agent_id}", flush=True)
+                except Exception as e:
+                    print(f"[gw] store_software error: {e}", flush=True)
                 continue
 
             # --- Store screenshot and relay ---

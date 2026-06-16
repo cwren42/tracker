@@ -659,6 +659,65 @@ def store_pending_updates(agent_id: str, updates: list) -> None:
         conn.close()
 
 
+def store_software(agent_id: str, apps: list) -> int:
+    """Replace the installed-software inventory for an agent. Mirrors the Flask
+    /api/rmm/<agent_id>/software endpoint, but reached over the gateway WebSocket
+    so boxes whose direct HTTPS POST fails (e.g. the TeamViewer tv_x64.dll HTTP
+    breakage, or a payload/timeout) still report inventory — their WS channel
+    already works. Returns rows inserted.
+
+    GUARD: an empty/missing list is ignored (never wipes a good inventory with a
+    transient empty collection)."""
+    if not apps:
+        return 0
+
+    def _clean(v):
+        # Some registry DisplayName/Publisher values contain NUL (0x00) or other
+        # C0 control bytes (garbage from certain MSI/Uninstall entries). Postgres
+        # rejects NUL in text ("A string literal cannot contain NUL (0x00)
+        # characters."), which aborted the whole insert and left the box with 0
+        # rows on BOTH the WS and HTTP paths. Strip NUL + control chars (keep
+        # tab/newline-free single-line values).
+        s = (v or "").strip()
+        if not s:
+            return None
+        s = s.replace("\x00", "")
+        s = "".join(ch for ch in s if ch >= " " or ch in "\t")
+        s = s.strip()
+        return s or None
+
+    conn = get_conn()
+    cur = get_cursor(conn)
+    try:
+        cur.execute("DELETE FROM rmm_software WHERE agent_id = %s", (agent_id,))
+        now = now_iso()
+        inserted = 0
+        seen = set()
+        for a in apps:
+            name = _clean(a.get("name"))
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cur.execute(
+                """INSERT INTO rmm_software
+                       (agent_id, name, version, publisher, install_date, captured_at)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (
+                    agent_id,
+                    name,
+                    _clean(a.get("version")),
+                    _clean(a.get("publisher")),
+                    _clean(a.get("install_date")),
+                    now,
+                ),
+            )
+            inserted += 1
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
 def log_rmm_event(session_id: int, actor_type: str, event_type: str, data: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = get_cursor(conn)

@@ -309,12 +309,24 @@ def rmm_update_software(agent_id):
         return jsonify({'error': 'No asset linked to this agent'}), 404
     asset_id = row[0]
     apps = request.get_json(silent=True) or []
+
+    def _clean(v):
+        # Strip NUL (0x00) + C0 control bytes — some registry DisplayName/Publisher
+        # values contain them, and Postgres rejects NUL in text, which previously
+        # aborted the whole insert and left the box with 0 software rows.
+        s = (v or '').strip()
+        if not s:
+            return None
+        s = s.replace('\x00', '')
+        s = ''.join(ch for ch in s if ch >= ' ' or ch == '\t').strip()
+        return s or None
+
     # Delete existing software inventory for this agent and re-insert
     db.session.execute(text("DELETE FROM rmm_software WHERE agent_id = :aid"), {'aid': agent_id})
     now = now_mst()
     inserted = 0
     for a in apps:
-        name = (a.get('name') or '').strip()
+        name = _clean(a.get('name'))
         if not name:
             continue
         db.session.execute(
@@ -323,9 +335,9 @@ def rmm_update_software(agent_id):
             {
                 'aid': agent_id,
                 'name': name,
-                'ver': (a.get('version') or '').strip() or None,
-                'pub': (a.get('publisher') or '').strip() or None,
-                'idate': (a.get('install_date') or '').strip() or None,
+                'ver': _clean(a.get('version')),
+                'pub': _clean(a.get('publisher')),
+                'idate': _clean(a.get('install_date')),
                 'now': now,
             }
         )

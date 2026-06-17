@@ -119,7 +119,18 @@ def receive_system_info():
         
         agent_id = data['agent_id']
         hostname = data.get('hostname', 'Unknown')
-        
+
+        # A disabled/retired agent must not be able to resurrect its asset. Linux
+        # agents are telemetry-only (no remote stop channel), so ignoring telemetry
+        # from an agent we've explicitly disabled is the only way to make a
+        # server-side removal stick. Unknown agents (no row) still self-register.
+        _g = db.session.execute(
+            text("SELECT enabled FROM rmm_agent WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        ).fetchone()
+        if _g is not None and not _g[0]:
+            return jsonify({'ok': True, 'ignored': 'agent disabled'}), 200
+
         # Find asset by agent_id (stored in serial_number) or by hostname
         asset = Asset.query.filter(
             (Asset.serial_number == agent_id) | 
@@ -231,6 +242,15 @@ def receive_telemetry():
 
         agent_id = data['agent_id']
         now = datetime.utcnow()
+
+        # Ignore telemetry from a disabled/retired agent (see system-info) so a
+        # removed agent can't keep flapping its asset "Online".
+        _g = db.session.execute(
+            text("SELECT enabled FROM rmm_agent WHERE agent_id = :aid"),
+            {'aid': agent_id}
+        ).fetchone()
+        if _g is not None and not _g[0]:
+            return jsonify({'ok': True, 'ignored': 'agent disabled'}), 200
 
         # Update asset last_seen / online_state
         asset = Asset.query.filter_by(serial_number=agent_id).first()

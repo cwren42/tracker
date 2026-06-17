@@ -583,8 +583,13 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                                         a.resolved_at = now
                                     if open_alerts:
                                         logger.info('UniFi alert resolved: %s back online', asset.name)
+                        # IP + firmware update SILENTLY (no history row, no updated_at
+                        # bump). Gateways report both WAN and LAN addresses and the API
+                        # returns a different one each poll, so logging IP changes spammed
+                        # ~570 flip rows/day on the UDM (#336) -- the bulk of the entire
+                        # asset-history table. Only real online/offline transitions
+                        # (appended to `changes` above) are worth recording.
                         if asset.ip_address != ip and ip:
-                            changes.append(f'ip: {asset.ip_address} → {ip}')
                             asset.ip_address = ip
                         if asset.os_version != firmware and firmware:
                             asset.os_version = firmware
@@ -592,8 +597,10 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                             asset.unifi_device_id = unifi_id
                         asset.unifi_last_seen = now
                         asset.unifi_uptime_secs = uptime_secs
-                        asset.updated_at = now
+                        # Only stamp updated_at + log history on a MEANINGFUL change
+                        # (online/offline transition), not on every heartbeat poll.
                         if changes:
+                            asset.updated_at = now
                             history = AssetHistory(
                                 asset_id=asset.id,
                                 action='unifi_sync',

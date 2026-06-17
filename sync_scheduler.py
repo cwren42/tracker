@@ -27,7 +27,7 @@ M365_PHOTO_REFRESH_INTERVAL_HOURS = int(os.environ.get('M365_EMPLOYEE_PHOTO_REFR
 DISABLE_M365_EMPLOYEE_PHOTO_REFRESH = os.environ.get('DISABLE_M365_EMPLOYEE_PHOTO_REFRESH', '').strip() in ('1', 'true', 'yes', 'on')
 
 UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/tracker_unifi_sync.lock')
-UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '5'))
+UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
 # On-prem AD computer sync (AD = source of truth for assets). Daily.

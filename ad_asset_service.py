@@ -122,6 +122,14 @@ def sync_ad_computers(app, db, Asset, Setting, AssetHistory=None):
                 asset.os_version = _fmt_os_version(c)
                 asset.last_seen = c.get('last_logon')
                 db.session.add(asset)
+            elif (asset.status or '').strip().lower() == 'retired':
+                # Retired assets are deliberately archived. Don't rewrite their AD
+                # identity / updated_at on every daily run -- that churned retired
+                # records (e.g. #125 SHAMPTON-THINK) for no reason. Keep them indexed
+                # for dedup, but make no writes.
+                by_guid[c['ad_guid']] = asset
+                by_name[host.strip().upper()] = asset
+                continue
             elif matched_by_guid and (asset.name or '').strip().upper() != host.strip().upper():
                 # A known machine (stable GUID) was genuinely renamed in AD -> adopt it.
                 # Name-matched assets are skipped so we don't churn 60+ case-only diffs.

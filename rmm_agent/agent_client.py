@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.34"
+AGENT_VERSION = "2.9.35"
 
 import asyncio
 import base64
@@ -500,6 +500,7 @@ _RUSTDESK_PEER_ID_FILE = r'C:\CirqueRMM\rustdesk_peer_id.txt'  # cached so --get
 _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
 _tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
+_periodic_update_started = False  # only spawn the 4h self-update task once per process
 
 # Per-agent behaviour flags pushed by server on connect via agent_config message.
 # Servers set these to True so neither RustDesk nor the systray are installed.
@@ -4989,8 +4990,51 @@ async def _backup_task(ws, tracker_url: str, agent_id: str, token: str,
         _BACKUP_RUNNING = False
 
 
+def _setup_agent_logging() -> None:
+    """Tee stdout/stderr to a rotating C:\\CirqueRMM\\agent.log. The agent runs as a
+    service (NSSM or native) whose stdout is discarded, so every print(..., flush=True)
+    diagnostic was lost -- which made incidents undiagnosable without live probes.
+    Mirror all output to a capped rotating file. Fully best-effort: any failure leaves
+    stdout untouched."""
+    try:
+        import logging, logging.handlers
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent.log')
+        h = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8')
+        h.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        lg = logging.getLogger('cirquermm'); lg.setLevel(logging.INFO)
+        lg.handlers = [h]; lg.propagate = False
+
+        class _Tee:
+            def __init__(self, orig): self._orig = orig
+            def write(self, s):
+                try:
+                    if self._orig:
+                        self._orig.write(s)
+                except Exception:
+                    pass
+                try:
+                    line = s.rstrip('\r\n')
+                    if line:
+                        lg.info(line)
+                except Exception:
+                    pass
+            def flush(self):
+                try:
+                    if self._orig:
+                        self._orig.flush()
+                except Exception:
+                    pass
+        sys.stdout = _Tee(sys.stdout)
+        sys.stderr = _Tee(sys.stderr)
+        print(f"[agent] logging to {log_path} (rotating 10MB x5)", flush=True)
+    except Exception:
+        pass
+
+
 async def main() -> None:
     global _disable_rustdesk, _disable_tray
+    _setup_agent_logging()
     # Cloudflare fallback endpoints -- used when LAN (rmm.corp.cirque.com) is unreachable
     fallback_gateway = os.environ.get("RMM_GATEWAY_URL_PUBLIC", "wss://rmm.cirquetools.com").rstrip("/")
     fallback_tracker = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
@@ -5156,20 +5200,34 @@ async def main() -> None:
 
                     asyncio.create_task(tray_watchdog())
 
-                # Periodic self-update check -- every 4 hours while running
-                async def periodic_update_check():
-                    while True:
-                        await asyncio.sleep(4 * 3600)
-                        try:
-                            updated = await loop.run_in_executor(
-                                None, check_for_update, tracker_url, agent_id, token
-                            )
-                            if updated:
-                                sys.exit(7)
-                        except Exception:
-                            pass
+                # Periodic self-update check -- every 4 hours while running.
+                # CRITICAL: use os._exit(7), NOT sys.exit(7). sys.exit raises
+                # SystemExit, which inside a create_task'd coroutine is captured by
+                # the task and does NOT terminate the process -- so the autonomous
+                # self-update was dead: agents downloaded + wrote the new code to disk
+                # but kept running the OLD in-memory code forever (fleet froze on old
+                # versions). os._exit terminates immediately from any context, so the
+                # service supervisor restarts into the new code. Guarded to spawn ONCE
+                # per process (it's inside the WS reconnect loop -- without the guard
+                # every reconnect leaked another 4h timer).
+                global _periodic_update_started
+                if not _periodic_update_started:
+                    _periodic_update_started = True
 
-                asyncio.create_task(periodic_update_check())
+                    async def periodic_update_check():
+                        while True:
+                            await asyncio.sleep(4 * 3600)
+                            try:
+                                updated = await loop.run_in_executor(
+                                    None, check_for_update, tracker_url, agent_id, token
+                                )
+                                if updated:
+                                    print("[update] periodic update applied -- restarting", flush=True)
+                                    os._exit(7)
+                            except Exception:
+                                pass
+
+                    asyncio.create_task(periodic_update_check())
 
                 # Eagle Eyes monitoring task (started on demand via eagle_eyes_config)
                 eagle_task: Optional[asyncio.Task] = None

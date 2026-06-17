@@ -14,8 +14,15 @@ Signature mirrors unifi_service.sync_unifi_assets so the scheduler + manual butt
 can call it the same way. Returns {synced, created, updated, errors, error}.
 """
 import logging
+import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# Don't materialize a NEW asset for an AD computer object that hasn't logged on in
+# this many days — these are typically decommissioned/repurposed machines whose AD
+# object lingers and would otherwise spawn a phantom device on the dashboard every
+# sync (e.g. CHRISTIAN-MSI). Tunable via env. Existing assets are still updated.
+AD_STALE_CREATE_DAYS = int(os.environ.get('AD_STALE_CREATE_DAYS', '90'))
 import asset_field_ownership as afo  # field-ownership / lock-in model
 
 logger = logging.getLogger(__name__)
@@ -117,6 +124,19 @@ def sync_ad_computers(app, db, Asset, Setting, AssetHistory=None):
                 asset = by_name.get(host.strip().upper())
             created = asset is None
             if created:
+                # Skip creating a phantom for a long-dormant AD object (decommissioned/
+                # repurposed machine whose object lingers). A still-live machine logs on
+                # and gets created when it next does; existing assets are unaffected
+                # (this guards CREATE only). last_logon may be tz-aware or naive.
+                _ll = c.get('last_logon')
+                if _ll is not None:
+                    try:
+                        _lln = _ll.replace(tzinfo=None) if getattr(_ll, 'tzinfo', None) else _ll
+                        if _lln < (now - timedelta(days=AD_STALE_CREATE_DAYS)):
+                            result['skipped_stale'] = result.get('skipped_stale', 0) + 1
+                            continue
+                    except Exception:
+                        pass
                 cat, dt = _classify(c.get('operating_system'))
                 asset = Asset(name=host, category=cat, status='In Use', created_at=now,
                               auto_discovered=True)  # created by a sync, not procurement

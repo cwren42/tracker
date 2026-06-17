@@ -327,11 +327,16 @@ def settings_eagleeye():
         exclusions = db.session.execute(text(
             "SELECT agent_id, hostname FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
         )).mappings().fetchall()
+        # Display the linked ASSET's current name, not the raw agent_id. agent_id is
+        # the hostname pinned at enrollment and does NOT follow a rename (BRENDA-DELL2
+        # -> shellee-dell), so it reads stale; the asset carries the current name.
+        # Join asset (1:1), NOT rmm_telemetry (many-per-agent -> duplicate rows).
         all_agents = db.session.execute(text(
-            """SELECT ra.agent_id, COALESCE(t.hostname, ra.agent_id) AS hostname
+            """SELECT ra.agent_id, COALESCE(a.name, ra.agent_id) AS hostname
                FROM rmm_agent ra
-               LEFT JOIN rmm_telemetry t ON t.agent_id = ra.agent_id
-               ORDER BY COALESCE(t.hostname, ra.agent_id)"""
+               LEFT JOIN asset a ON a.id = ra.asset_id
+               WHERE ra.enabled = true
+               ORDER BY COALESCE(a.name, ra.agent_id)"""
         )).mappings().fetchall()
         exclusions_list = [dict(r) for r in exclusions]
         all_agents_list = [dict(r) for r in all_agents]
@@ -785,11 +790,16 @@ def api_eagle_exclusions_list():
         exclusions = db.session.execute(text(
             "SELECT agent_id, hostname, notes, added_by, added_at FROM eagle_eyes_exclusions ORDER BY COALESCE(hostname, agent_id)"
         )).mappings().fetchall()
+        # Display the linked ASSET's current name, not the raw agent_id. agent_id is
+        # the hostname pinned at enrollment and does NOT follow a rename (BRENDA-DELL2
+        # -> shellee-dell), so it reads stale; the asset carries the current name.
+        # Join asset (1:1), NOT rmm_telemetry (many-per-agent -> duplicate rows).
         all_agents = db.session.execute(text(
-            """SELECT ra.agent_id, COALESCE(t.hostname, ra.agent_id) AS hostname
+            """SELECT ra.agent_id, COALESCE(a.name, ra.agent_id) AS hostname
                FROM rmm_agent ra
-               LEFT JOIN rmm_telemetry t ON t.agent_id = ra.agent_id
-               ORDER BY COALESCE(t.hostname, ra.agent_id)"""
+               LEFT JOIN asset a ON a.id = ra.asset_id
+               WHERE ra.enabled = true
+               ORDER BY COALESCE(a.name, ra.agent_id)"""
         )).mappings().fetchall()
         excluded_ids = {r['agent_id'] for r in exclusions}
         return jsonify(

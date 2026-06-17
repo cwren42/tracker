@@ -21,6 +21,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify,
                    url_for)
 from flask_login import current_user, login_required
 from sqlalchemy import func, or_, text
+from sqlalchemy.exc import IntegrityError
 
 from extensions import db, limiter
 from models import (
@@ -732,8 +733,16 @@ def edit_asset(asset_id):
         afo.lock_fields(asset, *_locks)
         asset.updated_at = datetime.utcnow()
 
-        db.session.commit()
-        
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # asset_tag and serial_number are UNIQUE — a collision used to 500.
+            # Roll back and show a clear message instead.
+            db.session.rollback()
+            flash('That asset tag or serial number is already used by another asset. '
+                  'Pick a unique value.', 'danger')
+            return redirect(url_for('assets.edit_asset', asset_id=asset_id))
+
         # Add history entry
         if old_status != asset.status:
             history = AssetHistory(

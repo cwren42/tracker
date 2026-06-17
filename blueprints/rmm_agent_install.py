@@ -362,8 +362,14 @@ def rmm_enroll():
             # Renamed-before-enroll: match the existing procurement record by serial.
             asset = Asset.query.filter(Asset.serial_number == real_serial).first()
         if not asset:
+            # Asset tags are the operator's to assign (the physical/procurement tag),
+            # NOT the system's. Do NOT derive the tag from the hostname: a hostname is
+            # mutable (e.g. BRENDA-DELL2 -> shellee-dell), so a hostname-baked tag like
+            # "RMM-BRENDA-D" goes stale/misleading the moment the box is renamed. Mint a
+            # neutral, obviously-placeholder tag the operator replaces with the real one;
+            # the asset is identified by its NAME until then.
             asset = Asset(
-                asset_tag=f'RMM-{agent_id[:8].upper()}',
+                asset_tag=f'UNTAGGED-{secrets.token_hex(4).upper()}',
                 name=hostname,
                 category='Workstation',
                 device_type='Windows Workstation',

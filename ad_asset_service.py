@@ -16,6 +16,7 @@ can call it the same way. Returns {synced, created, updated, errors, error}.
 import logging
 import re
 from datetime import datetime
+import asset_field_ownership as afo  # field-ownership / lock-in model
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,8 @@ def sync_ad_computers(app, db, Asset, Setting, AssetHistory=None):
             created = asset is None
             if created:
                 cat, dt = _classify(c.get('operating_system'))
-                asset = Asset(name=host, category=cat, status='In Use', created_at=now)
+                asset = Asset(name=host, category=cat, status='In Use', created_at=now,
+                              auto_discovered=True)  # created by a sync, not procurement
                 asset.device_type = dt
                 asset.os_version = _fmt_os_version(c)
                 asset.last_seen = c.get('last_logon')
@@ -131,9 +133,12 @@ def sync_ad_computers(app, db, Asset, Setting, AssetHistory=None):
                 by_name[host.strip().upper()] = asset
                 continue
             elif matched_by_guid and (asset.name or '').strip().upper() != host.strip().upper():
-                # A known machine (stable GUID) was genuinely renamed in AD -> adopt it.
-                # Name-matched assets are skipped so we don't churn 60+ case-only diffs.
-                asset.name = host
+                # A known machine (stable GUID) was genuinely renamed in AD -> adopt it,
+                # UNLESS the operator has locked the name (ownership model). AD is the
+                # name authority, so it may overwrite a sync-set name, but not an
+                # operator override. Name-matched (non-GUID) assets are skipped above to
+                # avoid churning case-only diffs.
+                afo.apply_sync_update(asset, afo.AD, {'name': host})
 
             # AD = source of truth for identity
             asset.ad_device_guid = c['ad_guid']

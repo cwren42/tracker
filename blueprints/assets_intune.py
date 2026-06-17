@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
+import asset_field_ownership as afo  # field-ownership / lock-in model
 try:
     import qrcode
 except ImportError:
@@ -463,9 +464,15 @@ def perform_intune_asset_sync():
                     )
 
                     if not is_stale:
-                        asset.name = device_name_norm or asset.name
-                        asset.manufacturer = device.get('manufacturer') or asset.manufacturer
-                        asset.model = device.get('model') or asset.model
+                        # Identity/hardware facts via the ownership model: AD/operator
+                        # own `name` (Intune only seeds an empty one, never reverts a
+                        # rename); model/manufacturer are fill-only; any operator-locked
+                        # field is never clobbered.
+                        afo.apply_sync_update(asset, afo.INTUNE, {
+                            'name': device_name_norm,
+                            'manufacturer': device.get('manufacturer'),
+                            'model': device.get('model'),
+                        })
                         if os_name:
                             asset.os_version = f"{os_name} {os_ver}".strip()
                         asset.intune_os_version = os_ver
@@ -503,12 +510,13 @@ def perform_intune_asset_sync():
                         # auto-assigned back to them — that previously reverted a manual
                         # reassignment and then swept the device into the prior owner's
                         # offboard (e.g. bao-msi reverting from Bao back to a departed Jax).
+                        # Assignment: Intune may SEED employee only when unassigned
+                        # (fill-only) + the employee is active. It must NOT revert an
+                        # operator reassignment (the old elif did). The helper enforces
+                        # fill-only + operator locks.
                         if employee and getattr(employee, 'is_visible', True) and employee.ad_enabled is not False:
-                            if not asset.employee_id:
-                                asset.employee_id = employee.id
+                            if afo.apply_sync_update(asset, afo.INTUNE, {'employee_id': employee.id}):
                                 asset.status = 'In Use'
-                            elif asset.employee_id != employee.id:
-                                asset.employee_id = employee.id
 
                         # Record this device as the freshest writer of this asset.
                         # A device with no lastSyncDateTime cannot beat one that has
@@ -574,6 +582,7 @@ def perform_intune_asset_sync():
                         hardware_tpm_version=tpm_ver,
                         azure_ad_device_id=device.get('azureADDeviceId'),
                         last_seen=last_sync_dt,
+                        auto_discovered=True,  # created by a sync, not procurement
                         notes=f"Synced from Microsoft Intune on {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
                     )
                     db.session.add(new_asset)

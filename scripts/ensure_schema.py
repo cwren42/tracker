@@ -95,6 +95,9 @@ def ensure_schema():
                 ('windows_product_key', 'VARCHAR(40)'),
                 ('windows_edition',     'VARCHAR(80)'),
                 ('windows_activation',  'VARCHAR(40)'),
+                # Phase 2 lock-in: provenance + operator field locks
+                ('auto_discovered',     'BOOLEAN DEFAULT FALSE'),
+                ('locked_fields',       'TEXT'),
             ]
             for col, typedef in new_asset_cols:
                 if not _col_exists("asset", col):

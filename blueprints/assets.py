@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
+import asset_field_ownership as afo  # field-ownership / lock-in model
 try:
     import qrcode
 except ImportError:
@@ -199,6 +200,20 @@ def assets():
     # Status filter
     if status:
         query = query.filter_by(status=status)
+
+    # Triage: sync-discovered assets that need an operator pass (placeholder/auto tag
+    # or no serial), excluding network gear which legitimately has neither. Drives the
+    # "Needs attention" lock-in view.
+    if request.args.get('needs_attention'):
+        query = query.filter(
+            Asset.auto_discovered.is_(True),
+            db.func.coalesce(Asset.category, '') != 'Network Device',
+            (Asset.asset_tag.ilike('UNTAGGED-%') |
+             Asset.asset_tag.ilike('RMM-%') |
+             Asset.asset_tag.ilike('LINUX-%') |
+             Asset.asset_tag.ilike('TEMP-%') |
+             Asset.serial_number.is_(None))
+        )
 
     # Location filter
     if location_filter:
@@ -706,8 +721,17 @@ def edit_asset(asset_id):
         asset.replacement_date = datetime.strptime(request.form.get('replacement_date'), '%Y-%m-%d').date() if request.form.get('replacement_date') else None
         asset.condition = request.form.get('condition', 'Good')
         asset.device_type = request.form.get('device_type')
+        # Operator just set these by hand -> lock them so syncs enrich-only and never
+        # clobber them (the Phase 2 lock-in guarantee). asset_tag is operator-only
+        # regardless; name/serial are the fields syncs would otherwise overwrite.
+        _locks = ['asset_tag']
+        if (asset.name or '').strip():
+            _locks.append('name')
+        if asset.serial_number:
+            _locks.append('serial_number')
+        afo.lock_fields(asset, *_locks)
         asset.updated_at = datetime.utcnow()
-        
+
         db.session.commit()
         
         # Add history entry
@@ -816,8 +840,10 @@ def assign_asset(asset_id):
         
         asset.employee_id = employee_id
         asset.status = 'In Use'
+        # Operator assignment is authoritative -> lock so Intune can't revert it.
+        afo.lock_fields(asset, 'employee_id')
         db.session.commit()
-        
+
         # Add history entry
         history = AssetHistory(
             asset_id=asset.id,

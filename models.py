@@ -164,6 +164,9 @@ class Asset(db.Model):
     ad_dn = db.Column(db.String(400))           # AD distinguishedName
     ad_enabled = db.Column(db.Boolean)          # AD account enabled (UAC bit)
     ad_last_logon = db.Column(db.DateTime)      # AD lastLogonTimestamp
+    # Asset provenance / field-ownership ("lock-in", Phase 2):
+    auto_discovered = db.Column(db.Boolean, default=False)  # True if a sync (Intune/AD/UniFi/RMM) created this row vs operator/procurement
+    locked_fields = db.Column(db.Text)  # JSON list of operator-set fields; syncs must not clobber these (name/asset_tag/employee_id/...)
     last_seen = db.Column(db.DateTime)  # Last seen timestamp (RMM / TeamViewer / UniFi)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -624,6 +624,7 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                             name=name,
                             category=category,
                             device_type=device_type,
+                            auto_discovered=True,  # created by a sync, not procurement
                             manufacturer='Ubiquiti',
                             model=model,
                             ip_address=ip,

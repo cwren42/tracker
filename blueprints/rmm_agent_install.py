@@ -375,6 +375,7 @@ def rmm_enroll():
                 device_type='Windows Workstation',
                 status='In Use',
                 serial_number=real_serial,
+                auto_discovered=True,  # created by enrollment, not procurement
             )
             db.session.add(asset)
             db.session.flush()  # get asset.id

@@ -133,7 +133,8 @@ def receive_system_info():
                 name=hostname,
                 category='Server' if 'server' in hostname.lower() else 'Workstation',
                 device_type='Virtual Machine' if data.get('virtualization', {}).get('is_virtual') else 'Linux Workstation',
-                status='In Use'
+                status='In Use',
+                auto_discovered=True,  # created by a sync, not procurement
             )
             db.session.add(asset)
         

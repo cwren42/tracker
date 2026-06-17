@@ -612,16 +612,22 @@ def api_vuln_deploy(cve_id):
 # no-op if the package is already current, so re-queueing is harmless; the browser
 # CVE clears on the next Defender re-scan once the box reports the updated version.
 
-# Map our device_vulnerability.product_name families to a winget package id. We do
-# NOT use the agent's dedicated `winget_install` handler here: that path only does
-# `install` and emits `install_done`, which the remediation result-correlator does
-# not understand. The run_script path emits a proper `script_result` (exit_code),
-# which is what the engine flips on. Windows-only (winget); a chrome_for_mac asset
-# cannot be serviced this way and is excluded by the selection query.
-_BROWSER_WINGET = {
-    'chrome':  'Google.Chrome',
-    'edge':    'Microsoft.Edge',
-    'firefox': 'Mozilla.Firefox',
+# Direct vendor-installer remediation (NOT winget). winget upgrade fails when the
+# agent runs as SYSTEM (session 0): its source-index download errors (0x8A150011),
+# the same class of HTTP breakage that the TeamViewer tv_x64.dll causes for .NET/
+# WinHTTP. So we fetch the vendor's always-latest installer with curl.exe (which is
+# unaffected) and install it silently — the proven pattern from the agent installer
+# + RustDesk fixes. Always-latest URLs so this is self-currenting; reinstalling the
+# current version is a harmless no-op that preserves user profiles. Windows-only;
+# a chrome_for_mac asset is excluded by the selection query.
+#   kind: 'msi' -> msiexec /i /qn ;  'exe' -> run with `silent` args ;
+#   'edge_update' -> trigger Edge's own updater (Edge is OS/auto-managed; no MSI).
+_BROWSER_INSTALLER = {
+    'chrome':  {'kind': 'msi',
+                'url': 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi'},
+    'firefox': {'kind': 'exe', 'silent': '/S',
+                'url': 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'},
+    'edge':    {'kind': 'edge_update'},
 }
 
 # Least-disruptive: stages the update, no --force / no force-close, no reboot.
@@ -646,46 +652,47 @@ def _browser_from_product(product_name: str):
     return None
 
 
-def _winget_upgrade_code(pkg: str) -> str:
-    r"""PowerShell that runs `winget upgrade` for one package id.
+def _browser_install_code(browser: str) -> str:
+    r"""PowerShell that updates one browser via its VENDOR installer (no winget).
+    Downloads the always-latest installer with curl.exe (unaffected by the SYSTEM
+    session-0 / tv_x64.dll HTTP breakage that kills winget's source download) and
+    installs it silently. The leading marker comment lets the enqueue dedup match a
+    pending job for the same browser."""
+    spec = _BROWSER_INSTALLER[browser]
+    marker = f"# rmm-remediate:{browser}\n"
+    if spec['kind'] == 'edge_update':
+        # Edge has no standalone MSU here; trigger its own updater (always present).
+        return marker + (
+            "$u=\"${env:ProgramFiles(x86)}\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe\"; "
+            "if(-not (Test-Path $u)){Write-Error 'EdgeUpdate not found'; exit 9}; "
+            "& $u /silent /ua; exit $LASTEXITCODE"
+        )
+    url = spec['url']
+    if spec['kind'] == 'msi':
+        return marker + (
+            "$ErrorActionPreference='Stop'; $f=\"$env:TEMP\\rmm_%s.msi\"; "
+            "& curl.exe -L -s -o $f --max-time 200 \"%s\"; "
+            "if(-not (Test-Path $f) -or (Get-Item $f).Length -lt 1000000){Write-Error 'download failed'; exit 9}; "
+            "$p=Start-Process msiexec.exe -ArgumentList \"/i `\"$f`\" /qn /norestart\" -Wait -PassThru; "
+            "Remove-Item $f -EA SilentlyContinue; exit $p.ExitCode"
+        ) % (browser, url)
+    # exe installer
+    return marker + (
+        "$ErrorActionPreference='Stop'; $f=\"$env:TEMP\\rmm_%s.exe\"; "
+        "& curl.exe -L -s -o $f --max-time 200 \"%s\"; "
+        "if(-not (Test-Path $f) -or (Get-Item $f).Length -lt 1000000){Write-Error 'download failed'; exit 9}; "
+        "$p=Start-Process $f -ArgumentList \"%s\" -Wait -PassThru; "
+        "Remove-Item $f -EA SilentlyContinue; exit $p.ExitCode"
+    ) % (browser, url, spec.get('silent', '/S'))
 
-    The agent runs as SYSTEM (NSSM service), and a bare `winget` is NOT on
-    SYSTEM's PATH — the App Installer lives per-user under
-    %LOCALAPPDATA%\Microsoft\WindowsApps and (machine-wide) under
-    C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*. So we resolve
-    winget.exe explicitly (mirroring the agent's own _find_winget glob order) and
-    invoke the full path, the same way the agent's dedicated winget handler does.
-    Idempotent: winget upgrade no-ops (exits 0) if the package is already current.
-    """
-    return (
-        "$ErrorActionPreference='Stop'; "
-        "$wg=(Get-Command winget -ErrorAction SilentlyContinue).Source; "
-        "if(-not $wg){"
-        "$c=Get-ChildItem 'C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_*\\winget.exe' "
-        "-ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -Last 1; "
-        "if($c){$wg=$c.FullName}}; "
-        "if(-not $wg){"
-        "$u=Get-ChildItem 'C:\\Users\\*\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe' "
-        "-ErrorAction SilentlyContinue | Select-Object -First 1; "
-        "if($u){$wg=$u.FullName}}; "
-        "if(-not $wg){Write-Error 'winget.exe not found'; exit 9}; "
-        f"& $wg upgrade --id {pkg} --silent "
-        "--accept-source-agreements --accept-package-agreements; "
-        "$rc=$LASTEXITCODE; "
-        # winget exits 0x8A15002B (-1978335189) == 'No applicable upgrade found'
-        # i.e. already current -> treat as success (idempotent no-op).
-        "if($rc -eq -1978335189){Write-Output 'Already up to date (no applicable upgrade).'; exit 0}; "
-        "exit $rc"
-    )
 
-
-def _winget_upgrade_payload(browser: str) -> dict:
-    """Build the run_script message body that updates one browser via winget."""
-    pkg = _BROWSER_WINGET[browser]
+def _browser_remediation_payload(browser: str) -> dict:
+    """Build the run_script message body that updates one browser via its vendor
+    installer."""
     return {
         'type':    'run_script',
         'shell':   'powershell',
-        'code':    _winget_upgrade_code(pkg),
+        'code':    _browser_install_code(browser),
         'timeout': _BROWSER_REMEDIATION_TIMEOUT,
     }
 
@@ -696,12 +703,12 @@ def _enqueue_browser_remediation(agent_id, asset_id, browser, created_by):
     Idempotent: if a queued/deploying remediation row already targets the same
     winget package for this agent, skip rather than double-queue. Returns a dict
     describing the outcome (status one of: skipped, queued, deploying, error)."""
-    pkg = _BROWSER_WINGET.get(browser)
-    if not pkg:
+    if browser not in _BROWSER_INSTALLER:
         return {'agent_id': agent_id, 'browser': browser, 'status': 'error',
                 'error': f'unknown browser {browser!r}'}
 
-    # Dedup: a pending (not-yet-terminal) row whose payload mentions this package.
+    # Dedup: a pending (not-yet-terminal) row whose payload targets this browser
+    # (matched on the `# rmm-remediate:<browser>` marker the install code emits).
     con = _alert_svc._get_db()
     try:
         existing = con.execute(
@@ -711,16 +718,16 @@ def _enqueue_browser_remediation(agent_id, asset_id, browser, created_by):
                  AND status IN ('queued', 'deploying')
                  AND payload LIKE %s
                ORDER BY id DESC LIMIT 1""",
-            (agent_id, f'%--id {pkg} %')
+            (agent_id, f'%rmm-remediate:{browser}%')
         ).fetchone()
     finally:
         con.close()
     if existing:
-        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+        return {'agent_id': agent_id, 'browser': browser,
                 'status': 'skipped', 'reason': 'already pending',
                 'existing_id': existing['id'], 'existing_status': existing['status']}
 
-    body = _winget_upgrade_payload(browser)
+    body = _browser_remediation_payload(browser)
     enqueue = {
         'action_type': 'run_script',
         'payload':     body,
@@ -737,14 +744,14 @@ def _enqueue_browser_remediation(agent_id, asset_id, browser, created_by):
         with _req.urlopen(req, timeout=10) as resp:
             gw = json.loads(resp.read())
     except Exception as e:
-        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+        return {'agent_id': agent_id, 'browser': browser,
                 'status': 'error', 'error': str(e)}
     if not gw.get('ok'):
-        return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+        return {'agent_id': agent_id, 'browser': browser,
                 'status': 'error', 'error': gw.get('error', 'gateway error')}
     # gw['status'] is 'deploying' (dispatched to a live WS now) or 'queued'
     # (offline -> waits for the reconnect flush). gw['delivered'] reflects that.
-    return {'agent_id': agent_id, 'browser': browser, 'pkg': pkg,
+    return {'agent_id': agent_id, 'browser': browser,
             'status': gw.get('status', 'queued'),
             'delivered': gw.get('delivered', False),
             'row_id': gw.get('id')}
@@ -787,7 +794,7 @@ def api_browser_remediate():
                 con.close()
             asset_id = r['asset_id'] if r else None
         results = [_enqueue_browser_remediation(agent_id, asset_id, b, created_by)
-                   for b in browsers if b in _BROWSER_WINGET]
+                   for b in browsers if b in _BROWSER_INSTALLER]
         return jsonify(ok=True, mode='explicit', agent_id=agent_id, results=results,
                        enqueued=sum(1 for x in results if x['status'] in ('queued', 'deploying')))
 

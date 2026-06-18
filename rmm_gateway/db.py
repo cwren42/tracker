@@ -309,6 +309,17 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
         security_j   = _js("security")
         sysinfo_j    = _js("sysinfo")
 
+        # Hardware Info refresh (2.9.36): wifi adapter, battery model/health,
+        # timezone every cycle. Strings via _s (None when blank so COALESCE
+        # below preserves a prior value); numerics passed through directly.
+        wifi_adapter = _s("wifi_adapter")
+        batt_model   = _s("battery_model")
+        batt_serial  = _s("battery_serial")
+        batt_chem    = _s("battery_chemistry")
+        batt_health  = data.get("battery_health_pct")
+        batt_cycles  = data.get("battery_cycles")
+        tz_str       = _s("timezone")
+
         cur.execute(
             """
             INSERT INTO rmm_telemetry (
@@ -320,9 +331,12 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 screen_resolution, domain, agent_version, captured_at,
                 vendor, model_name, serial_number, motherboard,
                 bios_manufacturer, bios_version, bios_date,
-                gpu_json, sound_card, os_edition, security_json, sysinfo_json
+                gpu_json, sound_card, os_edition, security_json, sysinfo_json,
+                wifi_adapter, battery_model, battery_serial, battery_health_pct,
+                battery_cycles, battery_chemistry, timezone
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                      %s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -348,7 +362,14 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 sound_card=COALESCE(EXCLUDED.sound_card, rmm_telemetry.sound_card),
                 os_edition=COALESCE(EXCLUDED.os_edition, rmm_telemetry.os_edition),
                 security_json=COALESCE(EXCLUDED.security_json, rmm_telemetry.security_json),
-                sysinfo_json=COALESCE(EXCLUDED.sysinfo_json, rmm_telemetry.sysinfo_json)
+                sysinfo_json=COALESCE(EXCLUDED.sysinfo_json, rmm_telemetry.sysinfo_json),
+                wifi_adapter=COALESCE(EXCLUDED.wifi_adapter, rmm_telemetry.wifi_adapter),
+                battery_model=COALESCE(EXCLUDED.battery_model, rmm_telemetry.battery_model),
+                battery_serial=COALESCE(EXCLUDED.battery_serial, rmm_telemetry.battery_serial),
+                battery_health_pct=COALESCE(EXCLUDED.battery_health_pct, rmm_telemetry.battery_health_pct),
+                battery_cycles=COALESCE(EXCLUDED.battery_cycles, rmm_telemetry.battery_cycles),
+                battery_chemistry=COALESCE(EXCLUDED.battery_chemistry, rmm_telemetry.battery_chemistry),
+                timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone)
             """,
             (
                 agent_id, asset_id,
@@ -378,6 +399,8 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 vendor, model_name, serial_num, motherboard,
                 bios_mfr, bios_ver, bios_date,
                 gpu_json, sound_card, os_edition, security_j, sysinfo_j,
+                wifi_adapter, batt_model, batt_serial, batt_health,
+                batt_cycles, batt_chem, tz_str,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

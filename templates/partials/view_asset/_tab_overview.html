@@ -128,6 +128,15 @@
                         {% if rmm_tele.public_ip %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">Public IP</div><div class="field-value"><code>{{ rmm_tele.public_ip }}</code></div></div>
                         {% endif %}
+                        {% if rmm_tele.timezone %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Timezone</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.timezone }}</div></div>
+                        {% endif %}
+                        {% if rmm_tele.wifi_adapter %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">WiFi</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.wifi_adapter }}</div></div>
+                        {% endif %}
+                        {% if rmm_tele.battery_model %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Battery</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.battery_model }}{% if rmm_tele.battery_health_pct %} — {{ rmm_tele.battery_health_pct }}% health{% endif %}</div></div>
+                        {% endif %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">Motherboard</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-mb">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">BIOS</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-bios">—</div></div>
                         <div class="col-12"><div class="field-label">GPU</div><div class="field-value" style="font-size:.8rem;white-space:pre-line;" id="rmm-hw-gpu">—</div></div>
@@ -161,6 +170,17 @@
                         <div class="col-12"><div class="field-label">Printers</div><div class="field-value" id="rmm-si-printers">—</div></div>
                         <div class="col-12"><div class="field-label">USB / Devices</div><div class="field-value" id="rmm-si-usb">—</div></div>
                         <div class="col-12"><div class="field-label">Listening Ports</div><div class="field-value d-flex flex-wrap gap-1" id="rmm-si-ports">—</div></div>
+                    </div>
+
+                    <!-- Per-disk Storage card (JS-populated from disk_health + disk_json + bitlocker) -->
+                    <div id="rmm-storage-section" style="display:none;">
+                        <hr>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <i class="bi bi-hdd-stack text-primary"></i>
+                            <span class="fw-semibold" style="font-size:.82rem;">Storage</span>
+                            <span class="badge bg-secondary" style="font-size:.65rem;">RMM — Live</span>
+                        </div>
+                        <div id="rmm-storage-cards" class="row g-2"></div>
                     </div>
                     {% endif %}
 

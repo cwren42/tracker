@@ -132,6 +132,27 @@ def ensure_schema():
                     db.session.rollback()
                     print(f"⚠ could not create {idx_name} (likely existing duplicates): {_ie}")
 
+            # New rmm_telemetry columns — Hardware Info refresh (additive, nullable).
+            # wifi_adapter = wireless NIC product name; battery_* = model/health/wear
+            # for replacement planning (timezone already exists; disk serial rides
+            # inside disk_json/sysinfo_json, no column needed).
+            new_telemetry_cols = [
+                ('wifi_adapter',       'TEXT'),
+                ('battery_model',      'TEXT'),
+                ('battery_serial',     'TEXT'),
+                ('battery_health_pct', 'REAL'),
+                ('battery_cycles',     'INTEGER'),
+                ('battery_chemistry',  'TEXT'),
+            ]
+            for col, typedef in new_telemetry_cols:
+                if not _col_exists("rmm_telemetry", col):
+                    print(f"Adding rmm_telemetry.{col}...")
+                    db.session.execute(text(f"ALTER TABLE rmm_telemetry ADD COLUMN {col} {typedef}"))
+                    db.session.commit()
+                    print(f"✓ Added rmm_telemetry.{col}")
+                else:
+                    print(f"✓ rmm_telemetry.{col} exists")
+
             # Create asset_loan, installed_app tables
             db.create_all()
             print("✓ asset_loan / installed_app tables verified")

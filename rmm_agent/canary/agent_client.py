@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.35"
+AGENT_VERSION = "2.9.36"
 
 import asyncio
 import base64
@@ -728,17 +728,37 @@ def _create_startup_shortcut_task():
     _py_escaped = pythonw_path.replace("'", "''")
     ps_launch = (
         "$ErrorActionPreference = 'SilentlyContinue'\n"
-        # Resolve logged-in user via WMI (returns domain\\user)
-        "$wmiUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
-        "if (-not $wmiUser) {\n"
-        "    # Fallback: parse qwinsta output\n"
-        "    $qw = & qwinsta 2>$null\n"
-        "    $line = ($qw | Select-String 'Active' | Select-Object -First 1).ToString()\n"
-        "    $cols = ($line -replace '>','').Trim() -split '\\s+'\n"
-        "    $wmiUser = $cols[1]\n"
+        # 1) Console interactive user via WMI (returns domain\\user, but is NULL
+        #    over RDP -- it only reflects the physical console session).
+        "$username = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
+        # 2) RDP-aware fallback: parse `query user` (a.k.a. quser). We accept a
+        #    session in state 'Active' OR 'Disc' (Disconnected) that has a real
+        #    username, so installing over RDP -- including a disconnected /
+        #    reconnecting RDP session -- still targets the right user instead of
+        #    logging 'No interactive user found'. quser columns are fixed-width;
+        #    the leading '>' marks the current session and USERNAME is col 1.
+        "if (-not $username) {\n"
+        "    $qu = & query user 2>$null\n"
+        "    if (-not $qu) { $qu = & quser 2>$null }\n"
+        "    $cand = $null\n"
+        "    foreach ($ln in ($qu | Select-Object -Skip 1)) {\n"
+        "        $row = ($ln -replace '^>','').Trim()\n"
+        "        if (-not $row) { continue }\n"
+        "        $cols = $row -split '\\s+'\n"
+        "        $u = $cols[0]\n"
+        "        if (-not $u -or $u -eq 'USERNAME') { continue }\n"
+        "        # State is 'Active'/'Disc'; it shifts column when SESSIONNAME is\n"
+        "        # blank (disconnected). Match the state token anywhere in the row.\n"
+        "        if ($row -match '\\bActive\\b') { $cand = $u; break }\n"
+        "        if (-not $cand -and $row -match '\\bDisc\\b') { $cand = $u }\n"
+        "    }\n"
+        "    if ($cand) {\n"
+        "        # quser shows the bare SAM name; resolve to domain\\user so the\n"
+        "        # task principal works on a domain box. Fall back to bare name.\n"
+        "        $dom = $env:USERDOMAIN\n"
+        "        if ($dom) { $username = \"$dom\\$cand\" } else { $username = $cand }\n"
+        "    }\n"
         "}\n"
-        # Keep domain\\user for task principal (works on domain + local; strip only for display)
-        "$username = $wmiUser\n"
         "if (-not $username) { Write-Host 'No interactive user found'; exit 1 }\n"
         "Write-Host \"Targeting user: $username\"\n"
         "$action   = New-ScheduledTaskAction -Execute '" + _py_escaped + "' "
@@ -1973,7 +1993,7 @@ def _collect_extended() -> dict:
     try:
         smart_ps = _ps_json(
             "Get-PhysicalDisk -EA SilentlyContinue "
-            "| Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus,"
+            "| Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus,SerialNumber,"
             "@{N='SizeGB';E={[math]::Round($_.Size/1GB,0)}} "
             "| ConvertTo-Json -Compress",
             timeout=15,
@@ -1986,6 +2006,7 @@ def _collect_extended() -> dict:
                 "health": d.get("HealthStatus") or "",
                 "status": d.get("OperationalStatus") or "",
                 "size_gb": d.get("SizeGB"),
+                "serial": (d.get("SerialNumber") or "").strip(),
             })
         if smart_list:
             result["disk_health"] = smart_list
@@ -2335,6 +2356,98 @@ def _collect_patches() -> list:
 # Core telemetry collection
 # ---------------------------------------------------------------------------
 
+def _collect_battery_info() -> dict:
+    """Battery model + health/wear + cycle count via `powercfg /batteryreport`.
+
+    Returns {} on desktops / any failure. Keys (all optional):
+      model, serial, chemistry, health_pct (float), cycles (int),
+      design_capacity, full_charge_capacity.
+
+    Uses powercfg (works in the SYSTEM/agent context) rather than
+    root\\wmi BatteryStaticData/FullChargedCapacity, which throws
+    "Generic failure" under SYSTEM. The XML report's
+    BatteryReport.Batteries.Battery node carries Manufacturer, Id (model),
+    SerialNumber, Chemistry, DesignCapacity, FullChargeCapacity, CycleCount.
+    """
+    import tempfile, xml.etree.ElementTree as _ET
+    tmp_path = ""
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".xml", prefix="cirque_batt_")
+        os.close(fd)
+        # powercfg writes the XML report to tmp_path. -duration 1 keeps the run
+        # short (we only need the static battery node, not usage history).
+        proc = subprocess.run(
+            ["powercfg", "/batteryreport", "/output", tmp_path, "/xml"],
+            capture_output=True, text=True, errors="replace", timeout=60,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        if not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) == 0:
+            return {}
+        with open(tmp_path, "r", encoding="utf-8", errors="replace") as fh:
+            xml_text = fh.read()
+        if not xml_text.strip():
+            return {}
+        root = _ET.fromstring(xml_text)
+        # The report namespaces everything; strip the namespace by matching on
+        # the local tag name so we don't have to hardcode the (versioned) ns URI.
+        def _local(tag):
+            return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+        def _find_first(node, name):
+            for el in node.iter():
+                if _local(el.tag) == name:
+                    return el
+            return None
+
+        batt = _find_first(root, "Battery")
+        if batt is None:
+            return {}
+
+        vals = {}
+        for child in batt:
+            vals[_local(child.tag)] = (child.text or "").strip()
+
+        def _num(name):
+            try:
+                return int(float(vals.get(name) or ""))
+            except Exception:
+                return None
+
+        design = _num("DesignCapacity")
+        full   = _num("FullChargeCapacity")
+        health = None
+        if design and full and design > 0:
+            health = round(full / design * 100.0, 1)
+
+        mfr   = vals.get("Manufacturer") or ""
+        model = vals.get("Id") or ""
+        # Id is the model designation (e.g. "DELL 4M1JN21"); prefix the
+        # manufacturer only if it's not already part of the Id string.
+        if mfr and model and mfr.lower() not in model.lower():
+            model = f"{mfr} {model}"
+        elif not model:
+            model = mfr
+
+        return {
+            "model":                model or "",
+            "serial":               vals.get("SerialNumber") or "",
+            "chemistry":            vals.get("Chemistry") or "",
+            "design_capacity":      design,
+            "full_charge_capacity": full,
+            "health_pct":           health,
+            "cycles":               _num("CycleCount"),
+        }
+    except Exception as e:
+        print(f"[battery] collect failed: {e}", flush=True)
+        return {}
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 def collect_telemetry(agent_id: str) -> dict:
     """Collect real-time telemetry and return a telemetry_update message dict."""
     cpu_pct  = psutil.cpu_percent(interval=1)
@@ -2387,6 +2500,37 @@ def collect_telemetry(agent_id: str) -> dict:
 
     uptime = int(datetime.now().timestamp() - psutil.boot_time())
 
+    # Timezone EVERY cycle (Get-TimeZone is also collected in the extended
+    # on-connect sysinfo path, but that only lands on ~1 row out of every
+    # periodic batch; collecting it here keeps `timezone` populated on every
+    # telemetry row -- valuable for the TW/China/US distributed fleet).
+    _tz_str = ""
+    try:
+        _tz = _ps_json("Get-TimeZone | Select-Object Id,DisplayName | ConvertTo-Json -Compress")
+        if _tz:
+            _tz_str = _tz.get("DisplayName") or _tz.get("Id") or ""
+    except Exception:
+        pass
+
+    # WiFi adapter product name (e.g. "Intel(R) Wi-Fi 6E AX211 160MHz"). The
+    # network_json carries only the interface alias ("Wi-Fi") + MAC + SSID, not
+    # the hardware model -- operators want the card type on Hardware Info.
+    # Empty string when there's no 802.11 adapter (desktops / Ethernet-only).
+    _wifi_adapter = ""
+    try:
+        _wa = _ps_json(
+            "Get-NetAdapter | Where-Object { $_.PhysicalMediaType -match '802.11' } "
+            "| Select-Object -First 1 -ExpandProperty InterfaceDescription"
+        )
+        if isinstance(_wa, str):
+            _wifi_adapter = _wa.strip()
+    except Exception:
+        pass
+
+    # Battery model + health (replacement-planning). Collected here so it rides
+    # the periodic telemetry. Null/empty on desktops (no battery).
+    _batt_info = _collect_battery_info() if batt is not None else {}
+
     return {
         "type":               "telemetry_update",
         "agent_id":           agent_id,
@@ -2406,6 +2550,13 @@ def collect_telemetry(agent_id: str) -> dict:
             if batt and not batt.power_plugged and batt.secsleft > 0
             else None
         ),
+        "battery_model":      _batt_info.get("model") or None,
+        "battery_serial":     _batt_info.get("serial") or None,
+        "battery_health_pct": _batt_info.get("health_pct"),
+        "battery_cycles":     _batt_info.get("cycles"),
+        "battery_chemistry":  _batt_info.get("chemistry") or None,
+        "wifi_adapter":       _wifi_adapter,
+        "timezone":           _tz_str,
         "disk_json":          disks,
         "network_json":       networks,
         "logged_in_user":     _get_windows_username(),

@@ -195,6 +195,9 @@
                         // System info tab
                         rmmFillSysInfo(d);
 
+                        // Per-disk Storage card
+                        rmmFillStorage(d);
+
                         // Saved tested scripts list (scripts tab)
                         if (document.getElementById('rmm-saved-script-select')) {
                             rmmLoadSavedScripts();
@@ -536,6 +539,93 @@ $out -join "\`n" `;
                                 return '<span class="badge bg-secondary font-monospace fw-normal">'+p.port+badge+known+'</span>';
                             }).join(''));
                         }
+                    }
+
+                    /* ── per-disk storage card ────────────────── */
+                    function rmmFillStorage(d){
+                        const section = document.getElementById('rmm-storage-section');
+                        const wrap = document.getElementById('rmm-storage-cards');
+                        if(!wrap){ return; }
+                        const si = d.sysinfo || {};
+                        const phys = (si.disk_health || []);        // physical disks (model/type/health/serial/size_gb)
+                        const vols = (d.disk_json || []);           // volumes (mountpoint/total_gb/free_gb/percent)
+                        const bl   = (si.bitlocker || []);          // per-drive bitlocker {drive, status, protected}
+
+                        if(!phys.length && !vols.length){ if(section) section.style.display='none'; return; }
+                        if(section) section.style.display='';
+
+                        const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+                        const fmtGB = n => (n==null?'—':(+n).toFixed(n<10?1:0)+' GB');
+
+                        // BitLocker lookup by drive letter (normalise "C:" / "C:\\" → "C")
+                        function blFor(letter){
+                            if(!letter) return null;
+                            const L = letter.replace(/[:\\\/]/g,'').toUpperCase();
+                            return bl.find(b => (b.drive||'').replace(/[:\\\/]/g,'').toUpperCase()===L) || null;
+                        }
+                        function blBadge(letter){
+                            const b = blFor(letter);
+                            if(!b) return '';
+                            const on = (b.status==='FullyEncrypted' && b.protected);
+                            return on
+                                ? ' <span class="badge bg-success" style="font-size:.6rem;"><i class="bi bi-lock-fill me-1"></i>BitLocker</span>'
+                                : ' <span class="badge bg-secondary" style="font-size:.6rem;"><i class="bi bi-unlock me-1"></i>No BitLocker</span>';
+                        }
+                        function healthBadge(h){
+                            const ok = (h||'').toLowerCase()==='healthy';
+                            return ok
+                                ? '<span class="badge bg-success" style="font-size:.62rem;">Healthy</span>'
+                                : '<span class="badge bg-danger" style="font-size:.62rem;">'+esc(h||'Unknown')+'</span>';
+                        }
+                        function volBlock(v){
+                            const letter = v.mountpoint||v.device||'';
+                            const total = v.total_gb||0, free = v.free_gb||0, used = total-free;
+                            const pct = Math.round(v.percent|| (total?used/total*100:0));
+                            const barColor = pct>90?'bg-danger':pct>75?'bg-warning':'bg-success';
+                            return '<div class="mt-2" style="font-size:.78rem;">'
+                                +'<div class="d-flex justify-content-between align-items-center">'
+                                +'<span><strong>'+esc(letter)+'</strong>'+blBadge(letter)+'</span>'
+                                +'<span class="text-muted">'+fmtGB(used)+' / '+fmtGB(total)+' ('+fmtGB(free)+' free)</span>'
+                                +'</div>'
+                                +'<div class="progress mt-1" style="height:6px;"><div class="progress-bar '+barColor+'" style="width:'+pct+'%;"></div></div>'
+                                +'</div>';
+                        }
+
+                        let html = '';
+                        if(phys.length){
+                            // Common case: 1 physical disk ↔ its volumes. We can't reliably map
+                            // which volume sits on which physical disk from this data, so when
+                            // there's a single physical disk we attach ALL volumes to it; with
+                            // multiple physical disks we list the disks, then show all volumes
+                            // in a shared sub-section (adjacent rows) rather than forcing a join.
+                            const singleDisk = phys.length===1;
+                            phys.forEach((p,i)=>{
+                                const typeBadge = p.type ? '<span class="badge bg-info text-dark" style="font-size:.6rem;">'+esc(p.type)+'</span>' : '';
+                                let body = '<div class="d-flex align-items-center gap-2 flex-wrap mb-1">'
+                                    +'<strong style="font-size:.82rem;">Disk '+i+'</strong>'
+                                    +typeBadge+' '+healthBadge(p.health)
+                                    +(p.size_gb?'<span class="text-muted" style="font-size:.76rem;">'+fmtGB(p.size_gb)+'</span>':'')
+                                    +'</div>';
+                                body += '<div style="font-size:.76rem;">'+esc(p.name||'Unknown model')+'</div>';
+                                if(p.serial){ body += '<div class="text-muted" style="font-size:.72rem;">S/N: <code>'+esc(p.serial)+'</code></div>'; }
+                                if(singleDisk){ vols.forEach(v=>{ body += volBlock(v); }); }
+                                html += '<div class="col-12 col-md-6"><div class="p-2 rounded" style="border:1px solid rgba(128,128,128,.2);">'+body+'</div></div>';
+                            });
+                            if(!singleDisk && vols.length){
+                                let volHtml = '<div class="p-2 rounded" style="border:1px solid rgba(128,128,128,.2);">'
+                                    +'<div class="field-label mb-1">Volumes</div>';
+                                vols.forEach(v=>{ volHtml += volBlock(v); });
+                                volHtml += '</div>';
+                                html += '<div class="col-12">'+volHtml+'</div>';
+                            }
+                        } else {
+                            // No physical-disk data (older agent / non-Windows) — show volumes only.
+                            let volHtml = '<div class="p-2 rounded" style="border:1px solid rgba(128,128,128,.2);">';
+                            vols.forEach(v=>{ volHtml += volBlock(v); });
+                            volHtml += '</div>';
+                            html += '<div class="col-12">'+volHtml+'</div>';
+                        }
+                        wrap.innerHTML = html;
                     }
 
                     /* ── AV scan ──────────────────────────────── */

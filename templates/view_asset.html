@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block styles %}
-<link rel="stylesheet" href="/static/css/view_asset.css?v=20260609d">
+<link rel="stylesheet" href="/static/css/view_asset.css?v=20260619b">
 {% endblock %}
 
 {% block title %}{{ asset.name }} – Asset Details{% endblock %}
@@ -13,8 +13,13 @@
 
 {% include "partials/view_asset/_stat_cards.html" %}
 
-<!-- ── MAIN TABS ──────────────────────────────────────────────── -->
-<ul class="nav nav-tabs-main d-flex" id="assetMainTabs" role="tablist">
+<!-- ── MAIN (tab card) + PERSISTENT RIGHT SIDEBAR (outside the tab card) ── -->
+<div class="row g-4">
+<div class="col-lg-8">
+<!-- ── MAIN TABS (nav lives in the card header) ───────────────── -->
+<div class="card section-card asset-tab-card mb-4">
+<div class="card-header asset-tab-header p-0">
+<ul class="nav nav-tabs-main d-flex mb-0" id="assetMainTabs" role="tablist">
     <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-overview" type="button"><i class="bi bi-info-circle me-1"></i>Overview</button></li>
     {% if asset.category not in ['Server'] %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-lifecycle" type="button"><i class="bi bi-recycle me-1"></i>Lifecycle</button></li>
@@ -26,16 +31,13 @@
     {% if asset.unifi_device_id %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-unifi" type="button"><i class="bi bi-router me-1"></i>UniFi</button></li>
     {% endif %}
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-vulns" type="button" onclick="loadAssetVulns()"><i class="bi bi-shield-exclamation me-1 text-danger"></i>Vulnerabilities{% if vuln_count %} <span class="badge bg-danger ms-1">{{ vuln_count }}</span>{% endif %}</button></li>
+    {% if rmm_agent_id and rmm_visible %}
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-security" type="button"><i class="bi bi-shield-check me-1 text-success"></i>Security</button></li>
+    {% endif %}
     {% if rmm_agent_id and rmm_visible %}
     <li class="nav-item dropdown">
         <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-expanded="false"><i class="bi bi-pc-display me-1 text-info"></i>RMM</a>
         <ul class="dropdown-menu">
-            <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-metrics" href="#"><i class="bi bi-graph-up me-2 text-info"></i>Metrics</a></li>
-            <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-rmm-avail" href="#"><i class="bi bi-clock-history me-2"></i>Activity</a></li>
-            <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-patches" href="#"><i class="bi bi-patch-check me-2 text-warning"></i>Patches</a></li>
-            <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-software" href="#"><i class="bi bi-box-seam me-2"></i>Software</a></li>
-            <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-rmm-services" href="#"><i class="bi bi-gear me-2"></i>Services</a></li>
             <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-scripts" href="#"><i class="bi bi-terminal me-2"></i>Run Script</a></li>
             <li><a class="dropdown-item" data-bs-toggle="tab" data-bs-target="#tab-rmm-events" href="#"><i class="bi bi-list-ul me-2"></i>Events</a></li>
@@ -44,23 +46,24 @@
         </ul>
     </li>
     {% endif %}
+
     {% if rmm_agent_id and rmm_visible %}
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-backup" type="button"><i class="bi bi-hdd-network me-1"></i>Backup</button></li>
     {% endif %}
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" type="button"><i class="bi bi-clock-history me-1"></i>History</button></li>
 </ul>
-
+</div><!-- /.asset-tab-header -->
+<div class="card-body">
 <div class="tab-content" id="assetMainContent">
 
 
 {% include "partials/view_asset/_tab_overview.html" %}
 {% include "partials/view_asset/_tab_intune.html" %}
 {% include "partials/view_asset/_tab_vulns.html" %}
-{% include "partials/view_asset/_tab_metrics.html" %}
+{% include "partials/view_asset/_tab_alerts.html" %}
+{% include "partials/view_asset/_tab_security.html" %}
 {% include "partials/view_asset/_tab_patches.html" %}
 {% include "partials/view_asset/_tab_software.html" %}
 {% include "partials/view_asset/_tab_scripts.html" %}
-{% include "partials/view_asset/_tab_history.html" %}
 {% include "partials/view_asset/_tab_lifecycle.html" %}
 {% include "partials/view_asset/_tab_assignment.html" %}
 {% include "partials/view_asset/_tab_checkout.html" %}
@@ -68,7 +71,52 @@
 {% include "partials/view_asset/_tab_rmm.html" %}
 {% include "partials/view_asset/_tab_rmm_sections.html" %}
 {% include "partials/view_asset/_tab_backup.html" %}
-</div><!-- /#assetMainContent (.tab-content) — closes the tab pane container after the last pane -->
+</div><!-- /#assetMainContent (.tab-content) -->
+</div><!-- /.card-body -->
+</div><!-- /.asset-tab-card -->
+</div><!-- /.col (main) -->
+
+<!-- Persistent right sidebar — lives OUTSIDE the tab card, stays across all tabs -->
+<aside class="col-lg-4" id="assetSidebar">
+{% if rmm_agent_id and rmm_visible %}
+    {# Rendered sidebar sections (not links): Metrics graph, Activity, History, Monitoring Profile #}
+    <div class="mb-4">{% include "partials/view_asset/_tab_metrics.html" %}</div>
+    <div class="mb-4">{% include "partials/view_asset/_sb_activity.html" %}</div>
+    <div class="mb-4">{% include "partials/view_asset/_tab_history.html" %}</div>
+
+    {% if rmm_agent_id and rmm_visible %}
+    <!-- Monitoring Profile -->
+    <div class="card section-card mb-4">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <span><i class="bi bi-activity me-2 text-info"></i>Monitoring Profile</span>
+            {% if current_user.role in ['admin', 'manager'] %}
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:.75rem;" data-bs-toggle="modal" data-bs-target="#monitoringProfileModal">
+                <i class="bi bi-pencil me-1"></i>{{ 'Change' if monitoring_profile else 'Assign' }}
+            </button>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            {% if monitoring_profile %}
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="badge bg-info text-dark">{{ monitoring_profile.device_type }}</span>
+                <strong>{{ monitoring_profile.name }}</strong>
+            </div>
+            {% if monitoring_profile.description %}<p class="text-muted mb-2" style="font-size:.82rem;">{{ monitoring_profile.description }}</p>{% endif %}
+            <a href="{{ url_for('monitoring.monitoring_profile_detail', profile_id=monitoring_profile.id) }}" class="btn btn-sm btn-outline-info py-0 px-2" style="font-size:.75rem;"><i class="bi bi-eye me-1"></i>View Profile</a>
+            {% if current_user.role in ['admin', 'manager'] %}
+            <form method="POST" action="{{ url_for('monitoring.monitoring_unassign_profile', asset_id=asset.id) }}" class="d-inline ms-2">
+                <button class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.75rem;" onclick="return confirm('Remove monitoring profile from this asset?')"><i class="bi bi-x-circle me-1"></i>Remove</button>
+            </form>
+            {% endif %}
+            {% else %}
+            <p class="text-muted mb-0" style="font-size:.85rem;"><i class="bi bi-dash-circle me-1"></i>No monitoring profile assigned.</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+</aside>
+</div><!-- /.row (main + sidebar) -->
 
 {% include "partials/view_asset/_modals.html" %}
 
@@ -86,14 +134,24 @@ window.ASSET_CFG = { assetId: {{ asset.id }} };
 </script>
 <script src="/static/js/view_asset.js"></script>
 <script>
-// Activate an in-page tab by its hash target (used by hero RMM-tools dropdown links).
+// Activate an in-page tab/pane by its hash target. Used by the hero Manage menu AND
+// the stat cards. Some panes (Patches, Vulnerabilities) no longer have a nav trigger
+// (moved to Manage/cards), so fall back to activating the pane directly.
 function rmmShowTab(ev, hash) {
     if (ev) ev.preventDefault();
-    const target = document.querySelector(`[data-bs-target="${hash}"]`);
-    if (target && window.bootstrap) {
-        bootstrap.Tab.getOrCreateInstance(target).show();
-        target.scrollIntoView({block: 'nearest'});
+    const trigger = document.querySelector(`[data-bs-toggle="tab"][data-bs-target="${hash}"]`);
+    if (trigger && window.bootstrap) {
+        bootstrap.Tab.getOrCreateInstance(trigger).show();        // real nav trigger exists
+    } else {
+        const pane = document.querySelector(hash);                // no trigger → show pane manually
+        if (pane) {
+            document.querySelectorAll('#assetMainContent > .tab-pane').forEach(p => p.classList.remove('show', 'active'));
+            document.querySelectorAll('#assetMainTabs .nav-link.active').forEach(n => n.classList.remove('active'));
+            pane.classList.add('show', 'active');
+        }
     }
+    const tgt = document.querySelector(hash);
+    if (tgt) tgt.scrollIntoView({block: 'nearest'});
     return false;
 }
 
@@ -104,8 +162,6 @@ function rmmShowTab(ev, hash) {
 (function() {
     const ranOnce = {};
     const lazy = {
-        '#tab-metrics':      () => window.rmmLoadMetrics      && window.rmmLoadMetrics(),
-        '#tab-rmm-avail':    () => window.rmmLoadAvailability && window.rmmLoadAvailability(),
         '#tab-rmm-services': () => window.rmmLoadServices     && window.rmmLoadServices(),
         // File Transfer: initialise the file browser the first time the tab is opened
         // (rmmFsTabClick lists drives if nothing is loaded yet).
@@ -128,6 +184,14 @@ function rmmShowTab(ev, hash) {
         });
     });
 })();
+
+// Metrics + Activity now render always-visible in the right sidebar (no longer tabs),
+// so load them once the page (and rmm_agent.js) is fully loaded.
+window.addEventListener('load', function() {
+    try { window.rmmLoadMetrics       && window.rmmLoadMetrics(); }       catch(e){ console.error('[RMM] metrics load', e); }
+    try { window.rmmLoadAvailability  && window.rmmLoadAvailability(); }  catch(e){ console.error('[RMM] availability load', e); }
+    try { window.rmmLoadSessionEvents && window.rmmLoadSessionEvents(); } catch(e){ console.error('[RMM] session-events load', e); }
+});
 
 // Bootstrap 5 leaves the previously-active pane shown when a tab is triggered from a
 // .dropdown-item (its active-state walk doesn't span the dropdown), producing a giant

@@ -1,0 +1,34 @@
+<!-- ══ ALERTS TAB ════════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-alerts" role="tabpanel">
+  <div class="card section-card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-bell me-2 text-warning"></i>Alerts</span>
+        <a href="/monitoring/alerts" target="_blank" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:.75rem;"><i class="bi bi-box-arrow-up-right me-1"></i>All Alerts</a>
+    </div>
+    <div class="card-body p-0">
+    {% if asset_alerts %}
+    <div class="px-3 py-1">
+        {% for a in asset_alerts %}
+        {% set sev = (a.severity or '')|lower %}
+        <div class="d-flex gap-3 py-2" style="border-bottom:1px solid rgba(128,128,128,.1);">
+            <div class="mt-1 flex-shrink-0">
+                <span class="badge bg-{% if sev=='critical' %}danger{% elif sev=='warning' %}warning text-dark{% else %}info{% endif %}">{{ (a.severity or 'info')|title }}</span>
+            </div>
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-1">
+                    <span class="fw-semibold" style="font-size:.88rem;">{{ a.message or 'Alert' }}</span>
+                    <small class="text-muted text-nowrap">{% if a.triggered_at %}{{ a.triggered_at.strftime('%b %d, %Y %H:%M') }}{% endif %}</small>
+                </div>
+                <small class="text-muted" style="font-size:.78rem;">{{ (a.status or 'open')|title }}{% if a.acknowledged_at %} · acknowledged{% endif %}</small>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-check-circle fs-2 d-block mb-2 opacity-50 text-success"></i>No active alerts for this asset.
+    </div>
+    {% endif %}
+    </div>
+  </div>
+</div>

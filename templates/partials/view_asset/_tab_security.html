@@ -1,0 +1,31 @@
+<!-- ══ SECURITY TAB ══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-security" role="tabpanel">
+{% if rmm_agent_id and rmm_visible %}
+    <div class="card section-card mb-4">
+        <div class="card-header"><i class="bi bi-shield-check me-2 text-success"></i>Security</div>
+        <div class="card-body">
+            <table class="table table-sm mb-2">
+                <tbody>
+                    <tr><td class="text-muted" style="width:110px;font-size:.82rem;">OS Edition</td><td id="rmm-sec-os" style="font-size:.82rem;">—</td></tr>
+                    <tr><td class="text-muted" style="font-size:.82rem;">Antivirus</td><td id="rmm-sec-av" style="font-size:.82rem;">—</td></tr>
+                    <tr><td class="text-muted" style="font-size:.82rem;">Firewall</td><td id="rmm-sec-fw" style="font-size:.82rem;">—</td></tr>
+                    <tr><td class="text-muted" style="font-size:.82rem;">Antispyware</td><td id="rmm-sec-as" style="font-size:.82rem;">—</td></tr>
+                    <tr><td class="text-muted" style="font-size:.82rem;">Last Scan</td><td id="rmm-sec-lastscan" style="font-size:.82rem;">—</td></tr>
+                </tbody>
+            </table>
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:.75rem;" onclick="rmmAvScan('quick')">
+                    <i class="bi bi-shield-check me-1"></i>Quick Scan
+                </button>
+                <button class="btn btn-sm btn-outline-warning py-0 px-2" style="font-size:.75rem;" onclick="rmmAvScan('full')">
+                    <i class="bi bi-shield-shaded me-1"></i>Full Scan
+                </button>
+                <span id="rmm-scan-status" class="small text-muted ms-1"></span>
+            </div>
+            <div id="rmm-scan-out-wrap" style="display:none;">
+                <pre id="rmm-scan-out" class="bg-dark text-light rounded p-2 mb-0" style="max-height:140px;overflow-y:auto;font-size:.72rem;white-space:pre-wrap;word-break:break-all;"></pre>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>

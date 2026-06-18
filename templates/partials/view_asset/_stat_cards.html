@@ -1,77 +1,38 @@
-<!-- ── STAT CARDS ─────────────────────────────────────────────── -->
+<!-- ── STAT CARDS (clickable → patches / vulns / alerts) ──────────── -->
 <div class="row g-3 mb-4">
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-cash-coin sc-icon text-success"></i>
+    <div class="col-6 col-md-3">
+        <div class="stat-card d-flex align-items-center gap-3{% if os_patch_count %} border-warning{% endif %}" role="button" style="cursor:pointer;" onclick="return rmmShowTab(event,'#tab-patches')" title="OS patch management">
+            <i class="bi bi-windows sc-icon {% if os_patch_count %}text-warning{% else %}text-success{% endif %}"></i>
             <div>
-                <div class="sc-label">Cost</div>
-                <div class="sc-value">{% if asset.purchase_cost %}${{ '%.0f'|format(asset.purchase_cost) }}{% else %}-{% endif %}</div>
+                <div class="sc-label">OS Patches</div>
+                <div class="sc-value">{{ os_patch_count }} <small class="text-muted" style="font-size:.6rem;">pending</small></div>
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-calendar-check sc-icon text-primary"></i>
+    <div class="col-6 col-md-3">
+        <div class="stat-card d-flex align-items-center gap-3{% if sw_patch_count %} border-warning{% endif %}" role="button" style="cursor:pointer;" onclick="return rmmShowTab(event,'#tab-patches')" title="Pending driver updates (Windows Update)">
+            <i class="bi bi-cpu sc-icon {% if sw_patch_count %}text-warning{% else %}text-success{% endif %}"></i>
             <div>
-                <div class="sc-label">Purchased</div>
-                <div class="sc-value">{% if asset.purchase_date %}{{ asset.purchase_date.strftime('%b %Y') }}{% else %}-{% endif %}</div>
+                <div class="sc-label">Driver Updates</div>
+                <div class="sc-value">{{ sw_patch_count }} <small class="text-muted" style="font-size:.6rem;">pending</small></div>
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}border-danger{% endif %} d-flex align-items-center gap-3">
-            <i class="bi bi-shield-check sc-icon {% if asset.warranty_expiry and asset.warranty_expiry < now().date() %}text-danger{% else %}text-warning{% endif %}"></i>
+    <div class="col-6 col-md-3">
+        <div class="stat-card d-flex align-items-center gap-3{% if vuln_count %} border-danger{% endif %}" role="button" style="cursor:pointer;" onclick="loadAssetVulns(); return rmmShowTab(event,'#tab-vulns')" title="Vulnerabilities">
+            <i class="bi bi-shield-exclamation sc-icon {% if vuln_count %}text-danger{% else %}text-success{% endif %}"></i>
             <div>
-                <div class="sc-label">Warranty</div>
-                <div class="sc-value">
-                    {% if asset.warranty_expiry %}
-                        {{ asset.warranty_expiry.strftime('%b %Y') }}
-                        {% if asset.warranty_expiry < now().date() %}
-                        <span class="badge bg-danger ms-1" style="font-size:.65rem;">Expired</span>
-                        {% endif %}
-                    {% else %}-{% endif %}
-                </div>
+                <div class="sc-label">Vulnerabilities</div>
+                <div class="sc-value">{{ vuln_count }} <small class="text-muted" style="font-size:.6rem;">open</small></div>
             </div>
         </div>
     </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-hourglass-split sc-icon text-info"></i>
+    <div class="col-6 col-md-3">
+        <div class="stat-card d-flex align-items-center gap-3{% if alert_counts.critical %} border-danger{% elif alert_counts.warning %} border-warning{% endif %}" role="button" style="cursor:pointer;" onclick="return rmmShowTab(event,'#tab-alerts')" title="Alerts (Critical / Warning / Info)">
+            <i class="bi bi-bell sc-icon {% if alert_counts.critical %}text-danger{% elif alert_counts.warning %}text-warning{% else %}text-success{% endif %}"></i>
             <div>
-                <div class="sc-label">Age</div>
-                <div class="sc-value">
-                    {% if asset.purchase_date %}
-                        {% set age_days = (now().date() - asset.purchase_date).days %}
-                        {% if age_days >= 365 %}{{ (age_days // 365) }}y {{ ((age_days % 365) // 30) }}m{% else %}{{ age_days }} days{% endif %}
-                    {% else %}-{% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-star sc-icon text-warning"></i>
-            <div>
-                <div class="sc-label">Condition</div>
-                <div class="sc-value">{{ asset.condition or '-' }}</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-cpu sc-icon text-primary"></i>
-            <div>
-                <div class="sc-label">Device Type</div>
-                <div class="sc-value" style="font-size:.85rem;">{{ asset.device_type or '-' }}</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3 col-xl">
-        <div class="stat-card d-flex align-items-center gap-3">
-            <i class="bi bi-geo-alt sc-icon text-secondary"></i>
-            <div>
-                <div class="sc-label">Location</div>
-                <div class="sc-value" style="font-size:.85rem;">{{ asset.location or '-' }}</div>
+                <div class="sc-label">Alerts</div>
+                <div class="sc-value">{{ alert_counts.total }}{% if alert_counts.total %} <small style="font-size:.6rem;">{% if alert_counts.critical %}<span class="text-danger">{{ alert_counts.critical }}C</span> {% endif %}{% if alert_counts.warning %}<span class="text-warning">{{ alert_counts.warning }}W</span> {% endif %}{% if alert_counts.info %}<span class="text-info">{{ alert_counts.info }}I</span>{% endif %}</small>{% endif %}</div>
             </div>
         </div>
     </div>
@@ -79,45 +40,4 @@
 
 {% if rmm_agent_id and rmm_visible %}
 <div id="rmm-js-config" data-agent-id="{{ rmm_agent_id }}"></div>
-<div class="card mb-3 bg-dark text-white border-0" id="rmm-status-bar-widget">
-    <div class="card-header d-flex align-items-center gap-3 flex-wrap py-2">
-        <span><i class="bi bi-robot me-2 text-success"></i>Cirque RMM Agent - <code class="fs-6" style="color:#f8c94e;">{{ asset.name }}</code></span>
-        <span id="rmm-status-badge" class="badge bg-secondary ms-1">
-            <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Checking…
-        </span>
-        <span class="text-muted small" style="font-size:.75rem;">Agent <span id="rmm-agent-version-badge">—</span></span>
-        <small class="text-muted" style="font-size:.72rem;" id="ov-rmm-time"></small>
-        {# Live telemetry gauges — merged in from the old Overview "RMM Live Summary Bar".
-           IDs kept identical (ov-cpu/ram/disk-*) so rmm_agent.js populates them unchanged. #}
-        <div class="d-flex gap-3 align-items-center flex-wrap" style="font-size:.72rem;">
-            <div style="min-width:92px;">
-                <div class="d-flex justify-content-between"><span class="text-muted">CPU</span><span id="ov-cpu-label">—</span></div>
-                <div class="progress" style="height:4px;"><div id="ov-cpu-bar" class="progress-bar bg-info" style="width:0%"></div></div>
-            </div>
-            <div style="min-width:92px;">
-                <div class="d-flex justify-content-between"><span class="text-muted">RAM</span><span id="ov-ram-label">—</span></div>
-                <div class="progress" style="height:4px;"><div id="ov-ram-bar" class="progress-bar bg-warning" style="width:0%"></div></div>
-            </div>
-            <div style="min-width:92px;">
-                <div class="d-flex justify-content-between"><span class="text-muted">Disk</span><span id="ov-disk-label">—</span></div>
-                <div class="progress" style="height:4px;"><div id="ov-disk-bar" class="progress-bar bg-success" style="width:0%"></div></div>
-            </div>
-        </div>
-        <div class="ms-auto d-flex gap-2 flex-wrap">
-            <a href="{{ url_for('rmm.rmm_terminal', agent_id=rmm_agent_id) }}" id="rmm-shell-btn" target="_blank"
-               class="btn btn-sm btn-success disabled"><i class="bi bi-terminal-fill"></i> Open Shell</a>
-            <button id="rmm-screenshot-btn" class="btn btn-sm btn-outline-secondary disabled"
-                    onclick="rmmRequestScreenshot()"><i class="bi bi-camera"></i> Screenshot</button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="rmmRefreshTelemetry()">
-                <i class="bi bi-arrow-repeat"></i> Refresh</button>
-            <button id="rmm-update-agent-btn" class="btn btn-sm btn-outline-info disabled" onclick="rmmUpdateAgent()">
-                <i class="bi bi-cloud-download"></i> Update Agent</button>
-            <button id="rmm-tray-install-btn" class="btn btn-sm btn-outline-secondary" onclick="rmmInstallTray()"><i class="bi bi-display"></i> Install Tray</button>
-            <button id="rmm-restart-agent-btn" class="btn btn-sm btn-outline-warning" onclick="rmmRestartAgent()">
-                <i class="bi bi-bootstrap-reboot"></i> Restart Agent</button>
-            <button id="rmm-logoff-btn" class="btn btn-sm btn-danger" onclick="rmmForceLogoff()" title="Force logoff all active user sessions">
-                <i class="bi bi-door-open-fill"></i> Force Logoff</button>
-        </div>
-    </div>
-</div>
 {% endif %}

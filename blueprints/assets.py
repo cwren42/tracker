@@ -625,6 +625,45 @@ def view_asset(asset_id):
     except Exception:
         pass
 
+    # Stat-card counts: OS vs software pending patches + active alerts by severity
+    os_patch_count = 0
+    sw_patch_count = 0
+    alert_counts = {'critical': 0, 'warning': 0, 'info': 0, 'total': 0}
+    try:
+        if rmm_agent_id:
+            for cat, c in db.session.execute(
+                text("SELECT category, COUNT(*) FROM rmm_pending_update WHERE agent_id=:aid GROUP BY category"),
+                {'aid': rmm_agent_id}).fetchall():
+                cl = (cat or '').lower()
+                if ('security update' in cl or 'critical update' in cl or 'operating system' in cl
+                        or 'update rollup' in cl or 'cumulative' in cl):
+                    os_patch_count += c
+                elif 'driver' in cl:
+                    sw_patch_count += c
+                # (.NET / definitions / EU-choice etc. counted on neither card — interim)
+    except Exception:
+        pass
+    try:
+        for sev, c in db.session.execute(
+            text("SELECT severity, COUNT(*) FROM monitoring_alert WHERE asset_id=:aid AND resolved_at IS NULL GROUP BY severity"),
+            {'aid': asset_id}).fetchall():
+            s = (sev or '').lower()
+            key = 'critical' if s == 'critical' else ('warning' if s == 'warning' else 'info')
+            alert_counts[key] += c
+            alert_counts['total'] += c
+    except Exception:
+        pass
+    asset_alerts = []
+    try:
+        rows = db.session.execute(
+            text("""SELECT severity, message, triggered_at, status, acknowledged_at
+                    FROM monitoring_alert WHERE asset_id=:aid AND resolved_at IS NULL
+                    ORDER BY triggered_at DESC LIMIT 50"""),
+            {'aid': asset_id}).fetchall()
+        asset_alerts = [r._mapping for r in rows]
+    except Exception:
+        pass
+
     # Candidate chassis for an HDD/OS transfer (exclude self).
     transfer_targets = (Asset.query.with_entities(Asset.id, Asset.name, Asset.serial_number)
                         .filter(Asset.id != asset.id)
@@ -635,7 +674,9 @@ def view_asset(asset_id):
                          active_loan=active_loan, loan_history=loan_history,
                          rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele, rmm_visible=rmm_visible,
                          monitoring_profile=monitoring_profile, all_profiles=all_profiles,
-                         vuln_count=vuln_count, transfer_targets=transfer_targets)
+                         vuln_count=vuln_count, transfer_targets=transfer_targets,
+                         os_patch_count=os_patch_count, sw_patch_count=sw_patch_count,
+                         alert_counts=alert_counts, asset_alerts=asset_alerts)
 
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')

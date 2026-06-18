@@ -1,11 +1,11 @@
-<!-- ══ HISTORY TAB ══════════════════════════════════════════ -->
-<div class="tab-pane fade" id="tab-history" role="tabpanel">
+<!-- ══ HISTORY (sidebar section) ════════════════════════════ -->
+<div id="sb-history-section">
   <div class="card section-card">
     <div class="card-header d-flex align-items-center justify-content-between">
-        <span><i class="bi bi-clock-history me-2"></i>Activity Log</span>
+        <span><i class="bi bi-clock-history me-2"></i>History</span>
         <small class="text-muted">{{ history|length }} event{{ 's' if history|length != 1 else '' }}</small>
     </div>
-    <div class="card-body p-0">
+    <div class="card-body p-0" style="max-height:320px;overflow-y:auto;">
     {% if history %}
     <div class="px-3 py-1">
         {% for entry in history %}

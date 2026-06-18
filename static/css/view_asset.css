@@ -107,6 +107,47 @@
 }
 .nav-tabs-main .dropdown-menu .dropdown-divider { margin: .3rem 0; border-top-color: var(--border-color); }
 
+/* Tabs-in-card-header layout (asset detail page): the main tab nav lives inside
+   the card header; the active tab's content fills the card body. overflow:visible
+   so the RMM ▾ dropdown menu isn't clipped by the card. */
+.asset-tab-card { overflow: visible; }
+.asset-tab-header {
+    background: var(--accent-secondary, rgba(0,0,0,.15));
+    border-bottom: 1px solid var(--border-color);
+    border-radius: .75rem .75rem 0 0 !important;
+    overflow: visible;
+    padding: .25rem .75rem 0 .75rem !important;
+}
+.asset-tab-header .nav-tabs-main {
+    margin-bottom: 0;          /* the card-header is the divider now */
+    border-bottom: none;
+    z-index: auto;             /* dropdown sets its own stacking */
+}
+.asset-tab-card > .card-body { background: var(--card-bg); padding: 1.5rem; }
+/* Flatten inner panels: inside the unified tab card, every .section-card loses its
+   own border/background/header-bar so the tab card is the single frame. Headers
+   become plain section labels with a light underline; no header-on-header, no
+   card-in-card. Applies to all tabs' content (Asset Details, Security, Assignment,
+   Intune, etc.). */
+.asset-tab-card > .card-body .section-card {
+    border: none !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    margin-bottom: 1.25rem;
+}
+.asset-tab-card > .card-body .section-card > .card-header {
+    background: transparent !important;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 0 !important;
+    padding: 0 0 .5rem 0 !important;
+    margin-bottom: .9rem;
+}
+.asset-tab-card > .card-body .section-card > .card-body {
+    background: transparent !important;
+    padding: 0 !important;
+}
+
 /* Section cards */
 .section-card {
     border-radius: .75rem;

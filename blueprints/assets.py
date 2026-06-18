@@ -679,6 +679,39 @@ def view_asset(asset_id):
                          alert_counts=alert_counts, asset_alerts=asset_alerts)
 
 
+@bp.route('/assets/<int:asset_id>/ad-groups')
+@login_required
+@admin_required
+def asset_ad_groups(asset_id):
+    """Live AD security-group memberships for this machine's computer object,
+    lazy-loaded by the Hardware/System Info pane. Resolves the hostname from
+    telemetry (matches the AD computer cn) and falls back to the asset name.
+    Fail-soft: returns enabled=false / empty groups rather than erroring."""
+    asset = Asset.query.get_or_404(asset_id)
+    host = ''
+    try:
+        row = db.session.execute(
+            text("""SELECT t.hostname FROM rmm_telemetry t
+                    JOIN rmm_agent a ON a.agent_id = t.agent_id
+                    WHERE a.asset_id = :aid AND a.enabled = true LIMIT 1"""),
+            {'aid': asset_id}).fetchone()
+        if row and row[0]:
+            host = row[0]
+    except Exception:
+        pass
+    if not host:
+        host = asset.name or ''
+    try:
+        from ldap_service import load_ad_config, LDAPService
+        cfg = load_ad_config(Setting)
+        if not cfg.enabled:
+            return jsonify(enabled=False, groups=[])
+        groups = LDAPService(cfg).get_computer_groups(host)
+        return jsonify(enabled=True, host=host, groups=groups)
+    except Exception:
+        return jsonify(enabled=True, host=host, groups=[])
+
+
 @bp.route('/assets/<int:asset_id>/rmm/<section>')
 @login_required
 @admin_required

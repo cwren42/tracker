@@ -755,6 +755,46 @@ class LDAPService:
 
         return results
 
+    def get_computer_groups(self, hostname: str) -> list:
+        """Return the AD security-group CNs this machine's computer object is a
+        DIRECT member of (from the memberOf attribute), sorted case-insensitively.
+
+        Read-only and fail-soft: returns [] on any error or when AD is disabled.
+        Note: memberOf shows direct memberships only — it does NOT include the
+        primary group ('Domain Computers') or expand nested groups."""
+        host = (hostname or '').strip()
+        if not host:
+            return []
+        short = host.split('.')[0]
+        try:
+            self._ensure()
+        except Exception as e:
+            logger.warning('get_computer_groups: AD unavailable (%s)', e)
+            return []
+        search_base = self.config.computer_ou_dn or self.config.base_dn
+        try:
+            self.connection.search(
+                search_base=search_base,
+                search_filter=f"(&(objectClass=computer)(|(cn={short})(name={short})(dNSHostName={host})))",
+                search_scope=SUBTREE,
+                attributes=['memberOf'],
+            )
+            if not self.connection.entries:
+                return []
+            entry = self.connection.entries[0]
+            member_of = list(entry.memberOf.values) if hasattr(entry, 'memberOf') and entry.memberOf else []
+            names = set()
+            for dn in member_of:
+                first = str(dn).split(',', 1)[0]   # 'CN=GroupName'
+                if '=' in first:
+                    names.add(first.split('=', 1)[1])
+            return sorted(names, key=str.lower)
+        except Exception as e:
+            logger.exception('get_computer_groups failed for %s: %s', host, e)
+            return []
+        finally:
+            self.disconnect()
+
     @staticmethod
     def _parse_ou_dept_location(dn: str):
         """Extract (department, location) from a Distinguished Name.

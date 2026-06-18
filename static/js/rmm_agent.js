@@ -435,12 +435,7 @@ $out -join "\`n" `;
                             setH('rmm-si-lastwu', fmtLocal(si.last_wu.date)+title);
                         }
 
-                        // Local Admins
-                        if(si.local_admins && si.local_admins.length){
-                            setH('rmm-si-admins', si.local_admins.map(a=>
-                                '<span class="badge bg-secondary me-1">'+a.name+'</span>'
-                            ).join(''));
-                        }
+                        // (Local Admins removed — replaced by AD Groups, loaded server-side via loadAdGroups())
 
                         // Printers
                         if(si.printers && si.printers.length){
@@ -449,12 +444,7 @@ $out -join "\`n" `;
                             ).join(''));
                         }
 
-                        // Mapped Drives
-                        if(si.mapped_drives && si.mapped_drives.length){
-                            setH('rmm-si-drives', si.mapped_drives.map(m=>
-                                '<div><strong>'+m.letter+'</strong> → '+m.path+'</div>'
-                            ).join(''));
-                        }
+                        // (Mapped Drives removed — those are per-user, not machine-level)
 
                         // USB / Devices — exclude disk drives (shown in the Storage card)
                         if(si.usb_devices && si.usb_devices.length){
@@ -484,8 +474,9 @@ $out -join "\`n" `;
                             setH('rmm-si-dns', si.dns_servers.map(s=>'<span class="badge bg-secondary me-1 font-monospace">'+s+'</span>').join(''));
                         }
 
-                        // GP Last Refresh
+                        // GP Last Refresh — hide the field entirely when there's no data
                         if(si.gp_last_refresh){ setH('rmm-si-gp', fmtLocal(si.gp_last_refresh)); }
+                        else { const w=document.getElementById('rmm-si-gp-wrap'); if(w) w.style.display='none'; }
 
                         // Disk Health (SMART)
                         if(si.disk_health && si.disk_health.length){
@@ -1356,6 +1347,23 @@ $out -join "\`n" `;
                         }
                     }
 
+                    // AD group memberships of this machine's computer object (server-side LDAP).
+                    async function loadAdGroups(){
+                        const tgt = el('rmm-si-adgroups'); if(!tgt) return;
+                        const m = location.pathname.match(/\/assets\/(\d+)/); if(!m) return;
+                        try {
+                            const r = await fetch('/assets/'+m[1]+'/ad-groups', {credentials:'same-origin'});
+                            const d = await r.json();
+                            if(d.enabled === false){ tgt.innerHTML = '<span class="text-muted">AD not configured</span>'; return; }
+                            const g = d.groups || [];
+                            tgt.innerHTML = g.length
+                                ? g.map(n=>'<span class="badge bg-secondary me-1">'+n.replace(/</g,'&lt;')+'</span>').join('')
+                                : '<span class="text-muted">No group memberships</span>';
+                        } catch(e){
+                            tgt.innerHTML = '<span class="text-muted">Unavailable</span>';
+                        }
+                    }
+
                     // Expose to global scope for inline onclick handlers
                     Object.assign(window,{
                         rmmLoad, rmmRefreshTelemetry, rmmAvScan, rmmLoadMetrics,
@@ -1380,4 +1388,5 @@ $out -join "\`n" `;
                     // Pre-load patches and software so data is ready when those tabs are clicked
                     rmmLoadPatches().catch(() => {});
                     rmmLoadSoftware().catch(() => {});
+                    loadAdGroups().catch(() => {});
                 })();

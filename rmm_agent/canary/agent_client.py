@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.37"
+AGENT_VERSION = "2.9.38"
 
 import asyncio
 import base64
@@ -1973,14 +1973,24 @@ def _collect_extended() -> dict:
         pass
 
     # -- Group Policy Last Refresh ------------------------------------------
+    # The core CSE key ({00000000-...}) stores the last machine GP-processing
+    # time as a FILETIME in values named EndTimeHi/EndTimeLo. Earlier code read
+    # EndTime2High/EndTime2Low, which do NOT exist on this key -> always null ->
+    # the field was empty on every domain box. Read the correct names, and fall
+    # back to GroupPolicy/Operational event 8004 (machine policy processing
+    # complete) when the registry values are absent.
     try:
         gp_ps = _ps_json(
             "$k='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{00000000-0000-0000-0000-000000000000}';"
             "$v=Get-ItemProperty $k -EA SilentlyContinue;"
-            "if($v){"
-            "  $dt=[datetime]::FromFileTime((([int64]$v.EndTime2High -shl 32) -bor [uint32]$v.EndTime2Low));"
-            "  @{time=$dt.ToString('yyyy-MM-dd HH:mm:ss')}|ConvertTo-Json -Compress"
-            "}else{'null'}"
+            "$dt=$null;"
+            "if($v -and $v.EndTimeHi -ne $null -and $v.EndTimeLo -ne $null){"
+            "  try{$dt=[datetime]::FromFileTime((([int64]$v.EndTimeHi -shl 32) -bor [uint32]$v.EndTimeLo))}catch{}"
+            "}"
+            "if(-not $dt -or $dt.Year -lt 2000){"
+            "  try{$dt=(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-GroupPolicy/Operational';Id=8004} -MaxEvents 1 -EA SilentlyContinue).TimeCreated}catch{}"
+            "}"
+            "if($dt -and $dt.Year -ge 2000){@{time=$dt.ToString('yyyy-MM-dd HH:mm:ss')}|ConvertTo-Json -Compress}else{'null'}"
         )
         if gp_ps and isinstance(gp_ps, dict) and gp_ps.get("time"):
             t = gp_ps["time"]

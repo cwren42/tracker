@@ -333,10 +333,10 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 bios_manufacturer, bios_version, bios_date,
                 gpu_json, sound_card, os_edition, security_json, sysinfo_json,
                 wifi_adapter, battery_model, battery_serial, battery_health_pct,
-                battery_cycles, battery_chemistry, timezone
+                battery_cycles, battery_chemistry, timezone, public_ip
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s,%s,%s,%s,%s,%s)
+                      %s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -369,7 +369,8 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 battery_health_pct=COALESCE(EXCLUDED.battery_health_pct, rmm_telemetry.battery_health_pct),
                 battery_cycles=COALESCE(EXCLUDED.battery_cycles, rmm_telemetry.battery_cycles),
                 battery_chemistry=COALESCE(EXCLUDED.battery_chemistry, rmm_telemetry.battery_chemistry),
-                timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone)
+                timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone),
+                public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip)
             """,
             (
                 agent_id, asset_id,
@@ -401,6 +402,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 gpu_json, sound_card, os_edition, security_j, sysinfo_j,
                 wifi_adapter, batt_model, batt_serial, batt_health,
                 batt_cycles, batt_chem, tz_str,
+                data.get("public_ip", "") or None,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

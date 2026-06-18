@@ -136,9 +136,15 @@
                         {% endif %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">Motherboard</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-mb">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">BIOS</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-bios">—</div></div>
-                        <div class="col-12"><div class="field-label">GPU</div><div class="field-value" style="font-size:.8rem;white-space:pre-line;" id="rmm-hw-gpu">—</div></div>
-                        <div class="col-12"><div class="field-label">Sound</div><div class="field-value" style="font-size:.8rem;white-space:pre-line;" id="rmm-hw-sound">—</div></div>
-                        <div class="col-12"><div class="field-label">Network MACs</div><div class="field-value" style="font-size:.78rem;white-space:pre-line;" id="rmm-hw-macs">—</div></div>
+                        <!-- bottom of Hardware Info stays a 3-col grid: GPU/Sound/MACs = column 1;
+                             disk cards flow into columns 2,3,… (each card = one col-md-4 cell). -->
+                        <div class="col-md-4">
+                            <div class="field-label">GPU</div><div class="field-value mb-2" style="font-size:.8rem;white-space:pre-line;" id="rmm-hw-gpu">—</div>
+                            <div class="field-label">Sound</div><div class="field-value mb-2" style="font-size:.8rem;white-space:pre-line;" id="rmm-hw-sound">—</div>
+                            <div class="field-label">Network MACs</div><div class="field-value" style="font-size:.78rem;white-space:pre-line;" id="rmm-hw-macs">—</div>
+                        </div>
+                        <!-- disk cards inject here; display:contents makes each col-md-4 card a direct grid cell of the row -->
+                        <div id="rmm-storage-cards" style="display:contents;"></div>
                     </div>
                     <hr>
                     <div class="d-flex align-items-center gap-2 mb-2">
@@ -157,7 +163,6 @@
                         <div class="col-sm-6 col-md-4"><div class="field-label">Default Browser</div><div class="field-value" id="rmm-si-browser">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">Update Channel</div><div class="field-value" id="rmm-si-wuchannel">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">GP Last Refresh</div><div class="field-value" id="rmm-si-gp">—</div></div>
-                        <div class="col-sm-6 col-md-4"><div class="field-label">Disk Health</div><div class="field-value" id="rmm-si-diskhealth">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">Monitors</div><div class="field-value" id="rmm-si-monitors">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">Recent Crashes</div><div class="field-value" id="rmm-si-bsod">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">DNS Servers</div><div class="field-value d-flex flex-wrap gap-1" id="rmm-si-dns">—</div></div>
@@ -165,19 +170,8 @@
                         <div class="col-12"><div class="field-label">Last Win Update</div><div class="field-value" id="rmm-si-lastwu" style="word-break:break-word;">—</div></div>
                         <div class="col-12"><div class="field-label">Local Admins</div><div class="field-value d-flex flex-wrap gap-1" id="rmm-si-admins">—</div></div>
                         <div class="col-12"><div class="field-label">Printers</div><div class="field-value" id="rmm-si-printers">—</div></div>
-                        <div class="col-12"><div class="field-label">USB / Devices</div><div class="field-value" id="rmm-si-usb">—</div></div>
-                        <div class="col-12"><div class="field-label">Listening Ports</div><div class="field-value d-flex flex-wrap gap-1" id="rmm-si-ports">—</div></div>
-                    </div>
-
-                    <!-- Per-disk Storage card (JS-populated from disk_health + disk_json + bitlocker) -->
-                    <div id="rmm-storage-section" style="display:none;">
-                        <hr>
-                        <div class="d-flex align-items-center gap-2 mb-2">
-                            <i class="bi bi-hdd-stack text-primary"></i>
-                            <span class="fw-semibold" style="font-size:.82rem;">Storage</span>
-                            <span class="badge bg-secondary" style="font-size:.65rem;">RMM — Live</span>
-                        </div>
-                        <div id="rmm-storage-cards" class="row g-2"></div>
+                        <div class="col-12"><div class="field-label">USB / Devices</div><div class="field-value" id="rmm-si-usb" style="column-count:2;column-gap:1.5rem;">—</div></div>
+                        <div class="col-12"><div class="field-label">Listening Ports</div><div class="field-value" id="rmm-si-ports">—</div></div>
                     </div>
                     {% endif %}
 

@@ -343,7 +343,7 @@ $out -join "\`n" `;
                         set('rmm-hw-bios',   biosStr||d.bios_version);
                         const gpus = d.gpu||[];
                         set('rmm-hw-gpu', gpus.map(g=>g.name+(g.vram_gb?` (${g.vram_gb} GB)`:'')).join('\n'));
-                        set('rmm-hw-sound', d.sound_card);
+                        set('rmm-hw-sound', (d.sound_card||'').split(/,\s*/).join('\n'));
                         const nets = (d.network_json||[]).filter(n=>n.mac&&n.mac!='00:00:00:00:00:00');
                         set('rmm-hw-macs', nets.map(n=>`${n.interface||''}: ${n.mac}`).join('\n'));
                     }
@@ -456,9 +456,10 @@ $out -join "\`n" `;
                             ).join(''));
                         }
 
-                        // USB / Devices
+                        // USB / Devices — exclude disk drives (shown in the Storage card)
                         if(si.usb_devices && si.usb_devices.length){
-                            setH('rmm-si-usb', si.usb_devices.map(u=>'<div>'+u.name+'</div>').join(''));
+                            const devs = si.usb_devices.filter(u=>(u.class||'')!=='DiskDrive');
+                            setH('rmm-si-usb', devs.length ? devs.map(u=>'<div style="break-inside:avoid;">'+u.name+'</div>').join('') : '<span class="text-muted">—</span>');
                         }
 
                         // Startup Apps
@@ -531,13 +532,26 @@ $out -join "\`n" `;
                         // Listening Ports
                         if(si.open_ports && si.open_ports.length){
                             const _wkPorts = {21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',53:'DNS',80:'HTTP',
-                                110:'POP3',143:'IMAP',443:'HTTPS',445:'SMB',3306:'MySQL',3389:'RDP',
-                                5432:'PostgreSQL',5900:'VNC',8080:'HTTP-alt',8443:'HTTPS-alt'};
-                            setH('rmm-si-ports', si.open_ports.map(p=>{
-                                const known = _wkPorts[p.port] ? ' <small class="text-muted">('+_wkPorts[p.port]+')</small>' : '';
-                                const badge = p.port===3389 ? ' <span class="badge bg-warning text-dark" style="font-size:.65rem;">RDP</span>' : '';
-                                return '<span class="badge bg-secondary font-monospace fw-normal">'+p.port+badge+known+'</span>';
-                            }).join(''));
+                                110:'POP3',135:'RPC',139:'NetBIOS',143:'IMAP',443:'HTTPS',445:'SMB',
+                                3306:'MySQL',3389:'RDP',5432:'PostgreSQL',5900:'VNC',5985:'WinRM',
+                                8080:'HTTP-alt',8443:'HTTPS-alt',47001:'WinRM'};
+                            const rows = si.open_ports.slice().sort((a,b)=>(a.port||0)-(b.port||0)).map(p=>{
+                                const addr = p.addr||'';
+                                const localOnly = (addr==='127.0.0.1' || addr==='::1');  // not externally reachable
+                                const svc = _wkPorts[p.port] || '';
+                                const portCell = '<code>'+p.port+'</code>' + (p.port===3389 ? ' <span class="badge bg-warning text-dark" style="font-size:.58rem;">RDP</span>' : '');
+                                return '<tr'+(localOnly?' class="text-muted"':'')+'>'
+                                    + '<td style="white-space:nowrap;">'+portCell+'</td>'
+                                    + '<td>'+svc+'</td>'
+                                    + '<td>'+(p.process||'')+'</td>'
+                                    + '<td><small>'+addr+(localOnly?' <span title="local-only">🔒</span>':'')+'</small></td></tr>';
+                            }).join('');
+                            setH('rmm-si-ports',
+                                '<div style="max-height:230px;overflow-y:auto;">'
+                                + '<table class="table table-sm table-hover mb-0" style="font-size:.76rem;">'
+                                + '<thead><tr><th>Port</th><th>Service</th><th>Process</th><th>Bind</th></tr></thead>'
+                                + '<tbody>'+rows+'</tbody></table></div>'
+                                + '<small class="text-muted" style="font-size:.68rem;">'+si.open_ports.length+' listening · greyed = localhost-only</small>');
                         }
                     }
 
@@ -551,8 +565,7 @@ $out -join "\`n" `;
                         const vols = (d.disk_json || []);           // volumes (mountpoint/total_gb/free_gb/percent)
                         const bl   = (si.bitlocker || []);          // per-drive bitlocker {drive, status, protected}
 
-                        if(!phys.length && !vols.length){ if(section) section.style.display='none'; return; }
-                        if(section) section.style.display='';
+                        if(!phys.length && !vols.length){ return; }   // container stays empty when no disks
 
                         const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
                         const fmtGB = n => (n==null?'—':(+n).toFixed(n<10?1:0)+' GB');
@@ -609,7 +622,7 @@ $out -join "\`n" `;
                                 body += '<div style="font-size:.76rem;">'+esc(p.name||'Unknown model')+'</div>';
                                 if(p.serial){ body += '<div class="text-muted" style="font-size:.72rem;">S/N: <code>'+esc(p.serial)+'</code></div>'; }
                                 if(singleDisk){ vols.forEach(v=>{ body += volBlock(v); }); }
-                                html += '<div class="col-12 col-md-6"><div class="p-2 rounded" style="border:1px solid rgba(128,128,128,.2);">'+body+'</div></div>';
+                                html += '<div class="col-md-4"><div class="p-2 rounded h-100" style="border:1px solid rgba(128,128,128,.2);">'+body+'</div></div>';
                             });
                             if(!singleDisk && vols.length){
                                 let volHtml = '<div class="p-2 rounded" style="border:1px solid rgba(128,128,128,.2);">'

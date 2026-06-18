@@ -116,6 +116,15 @@
                         {% if rmm_tele.ram_total_gb %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">RAM</div><div class="field-value">{{ '%.0f'|format(rmm_tele.ram_total_gb) }} GB</div></div>
                         {% endif %}
+                        {% if rmm_tele.vendor %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Manufacturer</div><div class="field-value">{{ rmm_tele.vendor }}</div></div>
+                        {% endif %}
+                        {% if rmm_tele.model_name %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Model</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.model_name }}</div></div>
+                        {% endif %}
+                        {% if rmm_tele.serial_number %}
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Serial</div><div class="field-value"><code style="font-size:.8rem;">{{ rmm_tele.serial_number }}</code></div></div>
+                        {% endif %}
                         {% if rmm_tele.public_ip %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">Public IP</div><div class="field-value"><code>{{ rmm_tele.public_ip }}</code></div></div>
                         {% endif %}

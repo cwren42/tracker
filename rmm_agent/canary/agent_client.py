@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.36"
+AGENT_VERSION = "2.9.37"
 
 import asyncio
 import base64
@@ -2520,7 +2520,7 @@ def collect_telemetry(agent_id: str) -> dict:
     try:
         _wa = _ps_json(
             "Get-NetAdapter | Where-Object { $_.PhysicalMediaType -match '802.11' } "
-            "| Select-Object -First 1 -ExpandProperty InterfaceDescription"
+            "| Select-Object -First 1 -ExpandProperty InterfaceDescription | ConvertTo-Json -Compress"
         )
         if isinstance(_wa, str):
             _wifi_adapter = _wa.strip()

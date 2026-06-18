@@ -135,7 +135,7 @@
                         <div class="col-sm-6 col-md-4"><div class="field-label">WiFi</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.wifi_adapter }}</div></div>
                         {% endif %}
                         {% if rmm_tele.battery_model %}
-                        <div class="col-sm-6 col-md-4"><div class="field-label">Battery</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.battery_model }}{% if rmm_tele.battery_health_pct %} — {{ rmm_tele.battery_health_pct }}% health{% endif %}</div></div>
+                        <div class="col-sm-6 col-md-4"><div class="field-label">Battery</div><div class="field-value" style="font-size:.8rem;">{{ rmm_tele.battery_model }}{% if rmm_tele.battery_health_pct is not none %} <span class="badge {% if rmm_tele.battery_health_pct >= 80 %}bg-success{% elif rmm_tele.battery_health_pct >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}" title="Battery health (full-charge vs design capacity)">{{ '%.0f'|format(rmm_tele.battery_health_pct) }}% health</span>{% endif %}{% if rmm_tele.battery_cycles %} <span class="text-muted">· {{ rmm_tele.battery_cycles }} cycles</span>{% endif %}</div></div>
                         {% endif %}
                         <div class="col-sm-6 col-md-4"><div class="field-label">Motherboard</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-mb">—</div></div>
                         <div class="col-sm-6 col-md-4"><div class="field-label">BIOS</div><div class="field-value" style="font-size:.8rem;" id="rmm-hw-bios">—</div></div>

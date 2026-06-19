@@ -593,6 +593,25 @@ def view_asset(asset_id):
     except Exception:
         pass
 
+    # Compute the canonical agent_id target (UPPER-cased hostname convention) so the
+    # asset page can surface a "Re-identify Agent" action when a repurposed/renamed box
+    # is still reporting under its stale enrollment-time agent_id. Prefer the LIVE
+    # telemetry hostname (what the box calls itself now) over the asset name.
+    rmm_target_id = ''
+    rmm_id_mismatch = False
+    if rmm_agent_id and rmm_visible:
+        try:
+            _h = None
+            if rmm_tele is not None:
+                _h = rmm_tele.get('hostname')
+            _src = _h or asset.name
+            if _src:
+                rmm_target_id = str(_src).strip().split('.')[0].upper()
+            rmm_id_mismatch = bool(rmm_target_id) and (rmm_target_id != rmm_agent_id)
+        except Exception:
+            rmm_target_id = ''
+            rmm_id_mismatch = False
+
     # Fetch current monitoring profile for this asset
     monitoring_profile = None
     try:
@@ -673,6 +692,7 @@ def view_asset(asset_id):
                          now=datetime.utcnow,
                          active_loan=active_loan, loan_history=loan_history,
                          rmm_agent_id=rmm_agent_id, rmm_tele=rmm_tele, rmm_visible=rmm_visible,
+                         rmm_target_id=rmm_target_id, rmm_id_mismatch=rmm_id_mismatch,
                          monitoring_profile=monitoring_profile, all_profiles=all_profiles,
                          vuln_count=vuln_count, transfer_targets=transfer_targets,
                          os_patch_count=os_patch_count, sw_patch_count=sw_patch_count,

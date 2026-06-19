@@ -849,6 +849,215 @@ def api_rmm_send_command():
     return jsonify(ok=True, delivered='queue')
 
 
+def _agent_id_target_for_asset(asset_name, tele_hostname):
+    """Compute the canonical agent_id for an asset under the RMM_AGENT_ID convention
+    (UPPER-cased hostname). Prefer the LIVE telemetry hostname when it already reflects
+    a rename (it is what the box actually calls itself); otherwise fall back to the
+    asset's name. Returns '' if neither is usable."""
+    # Live telemetry hostname is the box's own current name — most authoritative for a
+    # post-rename target. Strip any DNS suffix the agent may report.
+    if tele_hostname:
+        h = str(tele_hostname).strip().split('.')[0]
+        if h:
+            return h.upper()
+    if asset_name:
+        return str(asset_name).strip().split('.')[0].upper()
+    return ''
+
+
+def _build_reidentify_ps(old_id, new_id, service_name='CirqueRMM'):
+    """PowerShell that, on the OLD-id agent, swaps ONLY the RMM_AGENT_ID token inside
+    the NSSM AppEnvironmentExtra (REG_MULTI_SZ) from <old> to <new>, rewrites
+    agent.conf's agent_id line for consistency, and restarts the service so the agent
+    reconnects as <new> with the UNCHANGED token.
+
+    Robustness notes:
+      - Reads the live REG_MULTI_SZ and regex-replaces only the RMM_AGENT_ID=<old>
+        entry; every other token (RMM_AGENT_TOKEN / GATEWAY_URL / TRACKER_URL / ...) is
+        preserved untouched. We never re-pass the token, so no secret is handled here.
+      - No token/secret is ever echoed to stdout.
+      - Kept short (Defender ASR sensitivity): no certutil / IWR / download primitives.
+      - Targets the NSSM-managed CirqueRMM service on normal endpoints. (DCs run a NATIVE
+        service and are out of scope for this in-place rename path.)
+    """
+    # old/new are validated server-side to [A-Za-z0-9._-] before reaching here, so they
+    # are safe to interpolate directly into the script.
+    reg = r'HKLM:\SYSTEM\CurrentControlSet\Services\%s\Parameters' % service_name
+    conf = r'C:\CirqueRMM\agent.conf'
+    return (
+        "$ErrorActionPreference='Stop';"
+        "$reg='%s';"
+        "$env=(Get-ItemProperty -Path $reg -Name AppEnvironmentExtra).AppEnvironmentExtra;"
+        # AppEnvironmentExtra is REG_MULTI_SZ -> a string[] in PowerShell; map each entry,
+        # rewriting only the RMM_AGENT_ID line. Case-insensitive match on the key.
+        "$new=@($env | ForEach-Object { if ($_ -match '^RMM_AGENT_ID=') { 'RMM_AGENT_ID=%s' } else { $_ } });"
+        "Set-ItemProperty -Path $reg -Name AppEnvironmentExtra -Value $new -Type MultiString;"
+        # Keep agent.conf consistent (best-effort; it is unread by the agent today).
+        "if (Test-Path '%s') {"
+        " (Get-Content '%s') -replace '^(agent_id\\s*=\\s*).*$','${1}%s' | Set-Content '%s' -Encoding UTF8"
+        " }"
+        "Restart-Service -Name '%s' -Force;"
+        "Write-Output 'reidentify-ok'"
+        % (reg, new_id, conf, conf, new_id, conf, service_name)
+    )
+
+
+@bp.route('/api/rmm/admin/reidentify-agent', methods=['POST'])
+@login_required
+@admin_required
+def api_rmm_reidentify_agent():
+    """Re-identify a repurposed box's RMM agent IN PLACE (no re-enroll).
+
+    Root cause this fixes: agent_id is baked into the NSSM service env var
+    RMM_AGENT_ID (HKLM\\...\\CirqueRMM\\Parameters\\AppEnvironmentExtra) at install
+    time and read once from os.environ at agent startup. A hostname rename never
+    updates it, so a repurposed machine keeps reporting under its old enrollment-time
+    agent_id. Re-enrolling would mint a NEW row and orphan all history; instead we
+    rename the existing rmm_agent row (token + asset binding stay put) and re-key
+    every agent_id-keyed table, then tell the box to swap RMM_AGENT_ID in its service
+    env and restart so it reconnects under the new id with the same token.
+
+    Body: {asset_id, new_id?}  (new_id is an optional explicit override)
+    """
+    data    = request.get_json(force=True) or {}
+    try:
+        asset_id = int(data.get('asset_id'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='asset_id required'), 400
+    override = (data.get('new_id') or '').strip()
+
+    # 1) Find the enabled agent row for this asset.
+    row = db.session.execute(
+        text("SELECT id, agent_id FROM rmm_agent WHERE asset_id = :aid AND enabled = true LIMIT 1"),
+        {'aid': asset_id}
+    ).fetchone()
+    if not row:
+        return jsonify(ok=False, error='No enabled RMM agent linked to this asset'), 404
+    agent_row_id, old_id = row[0], row[1]
+
+    # Asset name + live telemetry hostname feed the canonical target computation.
+    asset = Asset.query.get(asset_id)
+    if not asset:
+        return jsonify(ok=False, error='Asset not found'), 404
+    tele_hostname = None
+    try:
+        t = db.session.execute(
+            text("SELECT hostname FROM rmm_telemetry WHERE agent_id = :aid"),
+            {'aid': old_id}
+        ).fetchone()
+        if t:
+            tele_hostname = t[0]
+    except Exception:
+        tele_hostname = None
+
+    # 2) Compute target (explicit override wins; else canonical from hostname/name).
+    target = override.upper() if override else _agent_id_target_for_asset(asset.name, tele_hostname)
+    if not target:
+        return jsonify(ok=False, error='Could not compute a target agent_id (no hostname or asset name)'), 422
+
+    # Validate the target charset — it is interpolated into PowerShell and used as a
+    # service env value, so keep it to a safe hostname-ish set.
+    if not re.match(r'^[A-Za-z0-9._-]{1,64}$', target):
+        return jsonify(ok=False, error='Target agent_id has invalid characters'), 422
+
+    # 2a) No-op guard.
+    if old_id == target:
+        return jsonify(ok=True, noop=True, old_id=old_id, new_id=target,
+                       message='Agent id already matches the canonical target'), 200
+
+    # 2b) Conflict guard — never blind-merge two live agents.
+    conflict = db.session.execute(
+        text("SELECT id FROM rmm_agent WHERE agent_id = :t AND enabled = true AND id <> :rid LIMIT 1"),
+        {'t': target, 'rid': agent_row_id}
+    ).fetchone()
+    if conflict:
+        return jsonify(ok=False, conflict=True, old_id=old_id, new_id=target,
+                       error=('Another enabled agent already uses id "%s" (row %s). '
+                              'Resolve the duplicate before re-identifying.'
+                              % (target, conflict[0]))), 409
+
+    # 3) Rename the row + re-key every agent_id-keyed table in ONE transaction.
+    #    Discover keyed tables from information_schema so schema drift can't leave a
+    #    table stranded under the old id. rmm_agent itself is re-keyed by primary id
+    #    (so we never touch a same-named row elsewhere), the rest by agent_id = old.
+    rekeyed = {}
+    try:
+        rk_tables = [r[0] for r in db.session.execute(text(
+            "SELECT table_name FROM information_schema.columns "
+            "WHERE column_name = 'agent_id' AND table_schema = 'public' "
+            "AND table_name <> 'rmm_agent' ORDER BY table_name"
+        )).fetchall()]
+
+        # Rename the primary row first so the row exists under <new> by the time the
+        # agent reconnects. (Ordering note: there is a small window between this commit
+        # and the service restart where late OLD-id telemetry could arrive with no row;
+        # that is acceptable — the next heartbeat lands on the renamed row.)
+        res = db.session.execute(
+            text("UPDATE rmm_agent SET agent_id = :t WHERE id = :rid"),
+            {'t': target, 'rid': agent_row_id}
+        )
+        rekeyed['rmm_agent'] = res.rowcount
+
+        for tbl in rk_tables:
+            res = db.session.execute(
+                text("UPDATE %s SET agent_id = :t WHERE agent_id = :o" % tbl),
+                {'t': target, 'o': old_id}
+            )
+            if res.rowcount:
+                rekeyed[tbl] = res.rowcount
+
+        # Sanity: the primary row must have been renamed exactly once.
+        if rekeyed.get('rmm_agent') != 1:
+            raise RuntimeError('rmm_agent rename affected %s rows (expected 1)'
+                               % rekeyed.get('rmm_agent'))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('reidentify-agent: DB re-key failed for asset %s (%s -> %s)',
+                         asset_id, old_id, target)
+        return jsonify(ok=False, error='DB re-key failed: %s' % e), 500
+
+    logger.info('reidentify-agent: asset %s renamed %s -> %s by %s; rekeyed=%s',
+                asset_id, old_id, target, current_user.email, rekeyed)
+
+    # 4) Push the env-swap + restart to the OLD-id agent over the gateway (same path
+    #    api_rmm_cmd / send_command uses). The agent reconnects as <new>.
+    ps = _build_reidentify_ps(old_id, target)
+    dispatch = {'delivered': None, 'ok': False, 'error': None}
+    try:
+        import urllib.request as _ur, json as _json
+        gw_url = '%s/send-msg/%s' % (RMM_GATEWAY_INTERNAL, old_id)
+        body = _json.dumps({'type': 'run_script', 'shell': 'powershell',
+                            'code': ps, 'session_id': 0}).encode()
+        req = _ur.Request(gw_url, data=body,
+                          headers={'Content-Type': 'application/json'}, method='POST')
+        with _ur.urlopen(req, timeout=5) as r:
+            gw_resp = _json.loads(r.read())
+        dispatch['ok'] = bool(gw_resp.get('ok'))
+        dispatch['delivered'] = 'websocket' if dispatch['ok'] else None
+        if not dispatch['ok']:
+            dispatch['error'] = gw_resp.get('error', 'Gateway did not accept the message')
+    except Exception as e:
+        # Agent offline / gateway unreachable: queue it so the swap runs on next pickup.
+        # NOTE: queue is keyed by the OLD id, which is correct — the box still boots with
+        # RMM_AGENT_ID=<old> until the swap runs.
+        try:
+            db.session.execute(
+                text("""INSERT INTO rmm_commands (agent_id, command, command_type, status, created_at)
+                        VALUES (:aid, :cmd, 'powershell', 'pending', NOW())"""),
+                {'aid': old_id, 'cmd': ps}
+            )
+            db.session.commit()
+            dispatch['delivered'] = 'queue'
+            dispatch['ok'] = True
+        except Exception as qe:
+            db.session.rollback()
+            dispatch['error'] = 'gateway failed (%s) and queue failed (%s)' % (e, qe)
+
+    return jsonify(ok=True, old_id=old_id, new_id=target,
+                   rekeyed=rekeyed, dispatch=dispatch), 200
+
+
 @bp.route('/api/rmm/admin/agent-version', methods=['GET', 'POST'])
 @login_required
 def api_rmm_admin_agent_version():

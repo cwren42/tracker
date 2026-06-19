@@ -331,6 +331,57 @@ $out -join "\`n" `;
                         }
                     }
 
+                    // Re-identify a repurposed/renamed box's agent IN PLACE: server renames
+                    // the rmm_agent row + re-keys all agent_id-keyed tables, then pushes a
+                    // PowerShell env-swap + service restart to the OLD-id agent so it
+                    // reconnects under the new id with the same token. No re-enroll.
+                    async function rmmReidentify(){
+                        const link = document.getElementById('rmm-reidentify-btn');
+                        if(!link) return;
+                        const assetId = link.dataset.assetId;
+                        const oldId   = link.dataset.oldId || agentId || '';
+                        const newId   = link.dataset.newId || '';
+                        if(!assetId){ alert('No asset id.'); return; }
+                        if(newId && newId === oldId){
+                            alert(`Agent id already matches the hostname (${oldId}). Nothing to do.`);
+                            return;
+                        }
+                        const tgt = newId || '(computed from hostname)';
+                        if(!confirm(`Re-identify this agent?\n\n  ${oldId}  ->  ${tgt}\n\n`
+                            +`This renames the agent in place (keeps history + token) and tells `
+                            +`the box to swap its service env var and restart. The agent will `
+                            +`briefly disconnect and reconnect under the new id.`)) return;
+                        try{
+                            const r = await fetch('/api/rmm/admin/reidentify-agent',{
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({asset_id: parseInt(assetId,10),
+                                                     new_id: newId || undefined})
+                            }).then(x=>x.json()).catch(()=>({ok:false,error:'request failed'}));
+                            if(!r.ok){
+                                alert('Re-identify failed: '+(r.error||'unknown error'));
+                                return;
+                            }
+                            if(r.noop){
+                                alert(r.message || `Agent id already correct (${r.new_id}).`);
+                                return;
+                            }
+                            const rk = r.rekeyed || {};
+                            const lines = Object.keys(rk).sort().map(k=>`  ${k}: ${rk[k]}`).join('\n');
+                            const dd = r.dispatch || {};
+                            const dispMsg = dd.ok
+                                ? (dd.delivered === 'queue'
+                                    ? 'Env-swap QUEUED (agent offline) — runs on next check-in.'
+                                    : 'Env-swap + restart sent to the box.')
+                                : ('Env-swap dispatch FAILED: '+(dd.error||'unknown')
+                                   +'\nThe DB rename succeeded; re-run once the box is reachable.');
+                            alert(`Re-identified ${r.old_id} -> ${r.new_id}\n\nRows re-keyed:\n`
+                                  +lines+`\n\n`+dispMsg+`\n\nReloading…`);
+                            location.reload();
+                        }catch(e){
+                            alert('Re-identify error: '+e.message);
+                        }
+                    }
+
                     /* ── hardware tab ─────────────────────────── */
                     function rmmFillHw(d){
                         const set = (id,v) => { const e=el(id); if(e) e.textContent=v||'—'; };
@@ -780,6 +831,11 @@ $out -join "\`n" `;
                     document.querySelectorAll('[data-bs-target="#tab-scripts"]').forEach(btn=>{
                         btn.addEventListener('shown.bs.tab', ()=>rmmLoadSavedScripts());
                     });
+                    // Re-identify Agent (Manage ▸ RMM dropdown)
+                    (function(){
+                        const ri = document.getElementById('rmm-reidentify-btn');
+                        if(ri) ri.addEventListener('click', (ev)=>{ ev.preventDefault(); rmmReidentify(); });
+                    })();
                     // Rotate Power chevron with collapse state
                     const powerEl = document.getElementById('powerSubItems');
                     if(powerEl){
@@ -1377,7 +1433,7 @@ $out -join "\`n" `;
                         rmmFsTabClick, rmmFsNav, rmmFsSelect, rmmFsBack, rmmFsRefresh, rmmFsDownload, rmmFsUpload,
                         rmmPowerAction, rmmRequestScreenshot,
                         rmmRestartAgent, rmmUpdateAgent, rmmInstallTray,
-                        rmmRemoveAgent
+                        rmmRemoveAgent, rmmReidentify
                     });
 
                     rmmLoad().catch(err => {

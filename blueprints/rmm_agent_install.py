@@ -491,6 +491,46 @@ def download_agent_file(filename):
     return send_file(path, as_attachment=False, mimetype=_mime)
 
 
+@bp.route('/download/deps/<path:filename>')
+def download_agent_dep(filename):
+    """Serve the China-mirror install dependencies (Python installer, NSSM zip,
+    pip wheelhouse) so installs don't depend on python.org / nssm.cc / PyPI — all
+    of which are slow or throttled from China (KEVIN-LENOVO: ~30 min, python.org
+    timed out at 8/26 MB). The server (on-prem/US, fast internet) holds these on
+    disk under rmm_agent/deps/; install_agent.ps1 fetches them from $TrackerUrl
+    FIRST and only falls back to the public internet if the Tracker fetch fails.
+
+    Auth + access model mirror /download/agent-file: a logged-in browser session
+    OR ?t=<site_enrollment_token>, with a strict filename whitelist (no traversal).
+    Large binaries are served with as_attachment=False so curl -o writes them
+    straight to disk; octet-stream so nothing tries to transcode them.
+    """
+    import os, posixpath, hmac as _hmac
+    allowed = {
+        'python-3.12.4-amd64.exe',          # matches the installer's pinned Python
+        'nssm-2.24-101-g897c7ad.zip',       # matches the nssm.cc URL the installer uses
+        'wheelhouse-cp312-win_amd64.zip',   # agent pip deps (win_amd64 + cp312) + transitive
+    }
+    clean = posixpath.basename(filename)
+    if clean not in allowed:
+        return "File not available.", 404
+
+    t = request.args.get('t', '').strip()
+    if t:
+        expected = _get_or_create_site_enrollment_token()
+        if not _hmac.compare_digest(t, expected):
+            return "Invalid token.", 403
+    elif not current_user.is_authenticated:
+        return redirect(url_for('auth.login', next=request.url))
+
+    path = os.path.join(current_app.root_path, 'rmm_agent', 'deps', clean)
+    if not os.path.exists(path):
+        return f"{clean} not found on server.", 404
+    return send_file(path, as_attachment=False,
+                     mimetype='application/octet-stream',
+                     download_name=clean)
+
+
 @bp.route('/api/rmm/agent/<agent_id>/remove', methods=['POST'])
 @login_required
 def rmm_remove_agent(agent_id):

@@ -250,9 +250,25 @@ foreach ($src in ($candidateSources | Select-Object -Unique)) {
 if (-not $PythonExe) {
     Write-Host "    Python 3.10+ not found. Downloading Python 3.12..." -ForegroundColor Yellow
     $PythonInstaller = "$env:TEMP\python_installer.exe"
+    # China-mirror: pull Python from the Tracker FIRST (China-reachable via the
+    # public tracker.cirquetools.com Cloudflare tunnel); python.org is throttled
+    # from China (KEVIN-LENOVO timed out at 8/26 MB). Try the LAN/primary Tracker,
+    # then the public fallback Tracker, then python.org as a last resort.
+    $PythonDep = "deps/python-3.12.4-amd64.exe"
     $PythonUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe"
-    Write-Host "    Downloading from $PythonUrl ..."
-    Get-HttpFile $PythonUrl $PythonInstaller 300
+    $pyMirrors = @("$TrackerUrl/download/$PythonDep`?t=$SiteToken")
+    if ($TrackerUrlFallback -and $TrackerUrlFallback -ne $TrackerUrl) {
+        $pyMirrors += "$TrackerUrlFallback/download/$PythonDep`?t=$SiteToken"
+    }
+    $pyMirrors += $PythonUrl
+    $pyOk = $false
+    foreach ($m in $pyMirrors) {
+        $shown = $m -replace '\?t=.*$', '?t=***'
+        Write-Host "    Downloading from $shown ..."
+        try { Get-HttpFile $m $PythonInstaller 600; $pyOk = $true; break }
+        catch { Write-Host "      failed ($shown): $_" -ForegroundColor DarkYellow }
+    }
+    if (-not $pyOk) { Write-Error "Could not download Python from Tracker mirror or python.org."; exit 1 }
 
     # Kill any leftover installer processes from a previous failed attempt.
     # The Python stub spawns msiexec.exe as a child; if that child is still running it
@@ -358,9 +374,49 @@ Write-Host "[5/7] Installing Python dependencies..." -ForegroundColor Yellow
 try { sc.exe stop CirqueRMM 2>$null | Out-Null } catch {}
 Start-Sleep -Seconds 2
 
-& $PythonExe -m pip install -q --upgrade pip --timeout 120
-& $PythonExe -m pip install -q -r "$InstallDir\requirements.txt" --timeout 120
-if ($LASTEXITCODE -ne 0) { Write-Error "pip install failed."; exit 1 }
+# China-mirror: install the agent's pip deps from a Tracker-hosted wheelhouse FIRST
+# (offline, --no-index), so PyPI (throttled from China) is only a fallback. The
+# wheelhouse is a flat zip of win_amd64+cp312 wheels (websockets/psutil/mss/Pillow/
+# pystray/pywinpty + transitive) served token-gated from the Tracker. Download it
+# from the Tracker (primary then public fallback), unzip, and pip --find-links it.
+$WheelDep   = "deps/wheelhouse-cp312-win_amd64.zip"
+$WheelZip   = "$env:TEMP\cirque_wheelhouse.zip"
+$WheelDir   = "$env:TEMP\cirque_wheelhouse"
+$wheelReady = $false
+$wheelMirrors = @("$TrackerUrl/download/$WheelDep`?t=$SiteToken")
+if ($TrackerUrlFallback -and $TrackerUrlFallback -ne $TrackerUrl) {
+    $wheelMirrors += "$TrackerUrlFallback/download/$WheelDep`?t=$SiteToken"
+}
+foreach ($m in $wheelMirrors) {
+    $shown = $m -replace '\?t=.*$', '?t=***'
+    try {
+        Write-Host "    Fetching offline wheelhouse from $shown ..."
+        Get-HttpFile $m $WheelZip 300
+        if (Test-Path $WheelDir) { Remove-Item $WheelDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Expand-Archive -Path $WheelZip -DestinationPath $WheelDir -Force
+        $wheelReady = $true
+        break
+    } catch { Write-Host "      wheelhouse fetch failed ($shown): $_" -ForegroundColor DarkYellow }
+}
+
+# pip upgrade is best-effort (non-fatal) and only matters online; skip the PyPI
+# round-trip entirely when we have the offline wheelhouse.
+if (-not $wheelReady) {
+    & $PythonExe -m pip install -q --upgrade pip --timeout 120
+}
+
+$depsOk = $false
+if ($wheelReady) {
+    Write-Host "    Installing dependencies from Tracker wheelhouse (offline)..." -ForegroundColor Green
+    & $PythonExe -m pip install -q --no-index --find-links "$WheelDir" -r "$InstallDir\requirements.txt"
+    if ($LASTEXITCODE -eq 0) { $depsOk = $true }
+    else { Write-Warning "    Offline wheelhouse install failed -- falling back to PyPI." }
+}
+if (-not $depsOk) {
+    & $PythonExe -m pip install -q -r "$InstallDir\requirements.txt" --timeout 120
+    if ($LASTEXITCODE -ne 0) { Write-Error "pip install failed."; exit 1 }
+}
+Remove-Item $WheelZip -Force -ErrorAction SilentlyContinue
 Write-Host "    Dependencies installed." -ForegroundColor Green
 
 # - 6. Install NSSM & register service -
@@ -383,10 +439,26 @@ if (-not (Test-Path $NssmPath)) {
             Write-Host "    Downloading nssm.exe from $TrackerUrl -> $NssmPath ..."
             Get-HttpFile "$TrackerUrl/download/agent-file/nssm.exe?t=$SiteToken" $NssmPath 120
         } catch {
-            Write-Warning "    Tracker NSSM download failed ($_); trying nssm.cc ..."
+            Write-Warning "    Tracker nssm.exe download failed ($_); trying NSSM zip ..."
+            # China-mirror: pull the NSSM zip from the Tracker FIRST (Tracker primary,
+            # then public fallback), and only hit nssm.cc (frequently 503) as a last
+            # resort. Whichever source returns the zip, extract the arch-correct exe.
             $NssmZip     = "$env:TEMP\nssm.zip"
             $NssmExtract = "$env:TEMP\nssm_extract"
-            Get-HttpFile "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip" $NssmZip 120
+            $NssmDep     = "deps/nssm-2.24-101-g897c7ad.zip"
+            $nssmMirrors = @("$TrackerUrl/download/$NssmDep`?t=$SiteToken")
+            if ($TrackerUrlFallback -and $TrackerUrlFallback -ne $TrackerUrl) {
+                $nssmMirrors += "$TrackerUrlFallback/download/$NssmDep`?t=$SiteToken"
+            }
+            $nssmMirrors += "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip"
+            $nssmZipOk = $false
+            foreach ($m in $nssmMirrors) {
+                $shown = $m -replace '\?t=.*$', '?t=***'
+                try { Write-Host "    Downloading NSSM zip from $shown ..."; Get-HttpFile $m $NssmZip 120; $nssmZipOk = $true; break }
+                catch { Write-Host "      failed ($shown): $_" -ForegroundColor DarkYellow }
+            }
+            if (-not $nssmZipOk) { Write-Error "Could not download NSSM from Tracker mirror or nssm.cc."; exit 1 }
+            if (Test-Path $NssmExtract) { Remove-Item $NssmExtract -Recurse -Force -ErrorAction SilentlyContinue }
             Expand-Archive -Path $NssmZip -DestinationPath $NssmExtract -Force
             if ([Environment]::Is64BitOperatingSystem) { $arch = "win64" } else { $arch = "win32" }
             $extracted = Get-ChildItem $NssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match $arch } | Select-Object -First 1
@@ -445,8 +517,15 @@ Write-Host "[7/7] Setting up tray application..." -ForegroundColor Yellow
 $PythonwExe = Join-Path (Split-Path $PythonExe -Parent) "pythonw.exe"
 if (-not (Test-Path $PythonwExe)) { $PythonwExe = $PythonExe }
 
-# Install pystray + pillow (best-effort)
-try { & $PythonExe -m pip install --quiet pystray pillow | Out-Null } catch {}
+# Install pystray + pillow (best-effort). Use the offline wheelhouse if we fetched
+# it above (China-reachable; pystray/pillow + transitive are in it), else PyPI.
+try {
+    if ($wheelReady -and (Test-Path $WheelDir)) {
+        & $PythonExe -m pip install --quiet --no-index --find-links "$WheelDir" pystray pillow | Out-Null
+    } else {
+        & $PythonExe -m pip install --quiet pystray pillow | Out-Null
+    }
+} catch {}
 
 # Write a VBS launcher to All-Users Startup so tray runs on every future login
 $StartupFolder = [System.Environment]::GetFolderPath('CommonStartup')

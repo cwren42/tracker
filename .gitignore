@@ -61,3 +61,17 @@ Thumbs.db
 # so they must NOT live in VCS. Rebuilt on-server from the DB via rmm_agent/build_msi.py.
 rmm_agent/CirqueRMM.msi
 rmm_agent/CirqueRMM.exe
+
+# China-mirror install dependencies (Python installer, NSSM zip, pip wheelhouse).
+# Large third-party binaries downloaded on-server (rmm_agent/deps/), served from
+# disk by /download/deps/<file> — NOT vendored into VCS. Re-create with:
+#   curl -fsSL -o rmm_agent/deps/python-3.12.4-amd64.exe \
+#        https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe
+#   curl -fsSL -o rmm_agent/deps/nssm-2.24-101-g897c7ad.zip \
+#        https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip
+#   python3 -m pip download --only-binary=:all: --platform win_amd64 \
+#        --python-version 312 --implementation cp --abi cp312 \
+#        -d rmm_agent/deps/wheelhouse \
+#        websockets psutil mss Pillow pystray pywinpty
+#   (then zip the wheels flat into rmm_agent/deps/wheelhouse-cp312-win_amd64.zip)
+rmm_agent/deps/

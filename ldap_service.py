@@ -824,14 +824,16 @@ class LDAPService:
         SKIP = {'cirqueusers', 'cirquecomputers', 'cirquecomputersazure',
                 'cirquegroups', 'cirquegroupsazure', 'cirqueservers',
                 'cirquecompany', 'builtin', 'users', 'computers',
-                'cirque-domain-users', 'cirqueadmins', 'domain controllers'}
+                'cirque-domain-users', 'cirqueadmins', 'domain controllers',
+                'cirqueasia'}   # CirqueAsia is a structural parent (Taiwan/China children carry the region)
 
         REGION_MAP = {
             'cirqueus': 'US',
-            'cirquetaiwan': 'Taiwan',
+            'cirquetaiwan': 'Taiwan',   # legacy flat layout — kept during the CirqueAsia transition
+            'taiwan': 'Taiwan',         # new CirqueAsia\Taiwan layout
             'cirquechina': 'China',
             'cirque-china': 'China',
-            'china': 'China',
+            'china': 'China',           # both old (China\CirqueTaiwan) and new (China\CirqueAsia)
         }
 
         department = None

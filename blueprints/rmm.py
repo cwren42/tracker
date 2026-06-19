@@ -884,6 +884,7 @@ def _build_reidentify_ps(old_id, new_id, service_name='CirqueRMM'):
     # are safe to interpolate directly into the script.
     reg = r'HKLM:\SYSTEM\CurrentControlSet\Services\%s\Parameters' % service_name
     conf = r'C:\CirqueRMM\agent.conf'
+    helper = r'C:\CirqueRMM\reident-restart.ps1'
     return (
         "$ErrorActionPreference='Stop';"
         "$reg='%s';"
@@ -896,9 +897,20 @@ def _build_reidentify_ps(old_id, new_id, service_name='CirqueRMM'):
         "if (Test-Path '%s') {"
         " (Get-Content '%s') -replace '^(agent_id\\s*=\\s*).*$','${1}%s' | Set-Content '%s' -Encoding UTF8"
         " }"
-        "Restart-Service -Name '%s' -Force;"
-        "Write-Output 'reidentify-ok'"
-        % (reg, new_id, conf, conf, new_id, conf, service_name)
+        # DETACHED restart: register a one-shot SYSTEM task that stops+starts the service
+        # from its OWN process. An inline Restart-Service self-kills (it stops the agent
+        # running this very script before the start can execute, leaving the service
+        # stopped until the 15-min watchdog rescues it). The detached task survives the
+        # agent dying, so the service comes back near-instantly. Fires in ~15s (the agent
+        # keeps running until then and can return its ack), and self-deletes the task.
+        "$lines=@('Start-Sleep 4','sc.exe stop %s','Start-Sleep 4','sc.exe start %s','schtasks /delete /tn CirqueRMM-Reident /f');"
+        "Set-Content -Path '%s' -Value $lines -Encoding UTF8 -Force;"
+        "$act=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%s\"';"
+        "$trg=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(15));"
+        "$prn=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;"
+        "Register-ScheduledTask -TaskName 'CirqueRMM-Reident' -Action $act -Trigger $trg -Principal $prn -Force | Out-Null;"
+        "Write-Output 'reidentify-scheduled'"
+        % (reg, new_id, conf, conf, new_id, conf, service_name, service_name, helper, helper)
     )
 
 

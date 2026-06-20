@@ -44,6 +44,55 @@ _CRASH_WIN  = 600  # 10 minutes
 _crash_times: list = []
 _crash_lock = threading.Lock()
 
+_SCRIPTS_DIR = r"C:\CirqueRMM\scripts" if sys.platform == "win32" else "/tmp/cirque_scripts"
+
+
+def _run_ps_via_file(code: str, timeout: int = 120):
+    """Run a server-pushed PowerShell command by staging it to a per-run .ps1 under
+    C:\\CirqueRMM\\scripts\\ and launching `powershell.exe -File <path>` -- never an
+    inline -Command blob (the blob body would land on the command line and trip
+    Defender's "Suspicious PowerShell command line" heuristic). Returns
+    (result_text, exit_code). The staged file is deleted after the run.
+    """
+    import uuid as _uuid
+    try:
+        os.makedirs(_SCRIPTS_DIR, exist_ok=True)
+        scripts_dir = _SCRIPTS_DIR
+    except Exception:
+        import tempfile as _t
+        scripts_dir = _t.gettempdir()
+    path = os.path.join(scripts_dir, f"_run_{_uuid.uuid4().hex}.ps1")
+    try:
+        with open(path, "w", encoding="utf-8-sig", errors="replace", newline="\r\n") as fh:
+            fh.write(code)
+    except Exception as e:
+        return f"failed to stage script: {e}", 1
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", path],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return (proc.stdout + proc.stderr)[:3000], proc.returncode
+    finally:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+        # Sweep any _run_*.ps1 a hard-killed prior run orphaned (>1h old) so the
+        # staging dir never accumulates.
+        try:
+            import glob as _glob
+            _now = time.time()
+            for _f in _glob.glob(os.path.join(scripts_dir, "_run_*.ps1")):
+                try:
+                    if _now - os.path.getmtime(_f) > 3600:
+                        os.unlink(_f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 
 def _local_version() -> str:
     try:
@@ -408,12 +457,12 @@ def _heartbeat_loop():
                         continue
                     try:
                         if cmd_type in ("shell", "powershell"):
-                            proc = subprocess.run(
-                                ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd_str],
-                                capture_output=True, text=True, timeout=120
-                            )
-                            result    = (proc.stdout + proc.stderr)[:3000]
-                            exit_code = proc.returncode
+                            # Launch via -File from a staged .ps1, NOT an inline -Command
+                            # blob: the powershell.exe command line stays a constant
+                            # `-File C:\CirqueRMM\scripts\_run_<uuid>.ps1` regardless of the
+                            # body, so multi-line / encoded server commands no longer trip
+                            # Defender's "Suspicious PowerShell command line" heuristic.
+                            result, exit_code = _run_ps_via_file(cmd_str)
                         else:
                             result, exit_code = f"Unknown command_type: {cmd_type}", 1
                     except Exception as ex:

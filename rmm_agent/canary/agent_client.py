@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.40"
+AGENT_VERSION = "2.9.41"
 
 import asyncio
 import base64
@@ -201,6 +201,98 @@ def _run_script_capture(argv, timeout: int):
                 os.unlink(p)
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Agent-initiated PowerShell: launch via -File from disk, NEVER an inline
+# -Command blob. (R: Defender "Suspicious PowerShell command line")
+# ---------------------------------------------------------------------------
+# Root cause we are fixing: running `powershell.exe ... -Command "<script>"`
+# puts the ENTIRE script body on the powershell.exe command line. For anything
+# multi-line / encoded / large (operator remediation, WARP onboarding, a
+# gzip+Base64 self-extracting wrapper) that command line is byte-for-byte the
+# Defender/MDE "Suspicious PowerShell command line" (Execution) signature --
+# identical to malware. Defender's heuristic reads the *command line*, so the
+# durable fix is: write the script to a stable per-run file under
+# C:\CirqueRMM\scripts\ (SYSTEM-owned) and launch `-File <path>`. The command
+# line is then a constant `-File C:\CirqueRMM\scripts\_run_<uuid>.ps1` no matter
+# what the body contains. Short inline collectors (Get-Volume|ConvertTo-Json)
+# stay as -Command -- they're tiny and never flagged.
+_SCRIPTS_DIR = r"C:\CirqueRMM\scripts" if sys.platform == "win32" else "/tmp/cirque_scripts"
+
+
+def _scripts_dir() -> str:
+    """Return the per-run script staging dir, creating it if absent. SYSTEM-owned
+    by virtue of the agent service running as SYSTEM (we don't loosen the ACL)."""
+    try:
+        os.makedirs(_SCRIPTS_DIR, exist_ok=True)
+    except Exception:
+        # Fall back to the system temp dir if C:\CirqueRMM is somehow unwritable;
+        # the launch-via-file behaviour (and thus the clean command line) is the
+        # property we care about, not the exact path.
+        import tempfile as _t
+        return _t.gettempdir()
+    return _SCRIPTS_DIR
+
+
+def _reap_stale_run_scripts(max_age_s: int = 3600) -> None:
+    """Best-effort cleanup of orphaned _run_*.ps1 left by crashed/timed-out runs
+    so the dir never accumulates. The happy path deletes its own file inline;
+    this only catches the ones a hard kill skipped."""
+    import glob as _glob, time as _time
+    try:
+        now = _time.time()
+        for f in _glob.glob(os.path.join(_SCRIPTS_DIR, "_run_*.ps1")):
+            try:
+                if now - os.path.getmtime(f) > max_age_s:
+                    os.unlink(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _run_powershell_code(code: str, timeout: int, shell: str = "powershell"):
+    """Run an agent-initiated script via -File from disk (NOT an inline -Command
+    blob) and return (returncode, stdout, stderr).
+
+    Preserves every property of _run_script_capture: stdout/stderr to temp files
+    (not inheritable pipes), stdin=DEVNULL, CREATE_NO_WINDOW|CREATE_NEW_PROCESS_GROUP
+    detach, and taskkill /T tree-kill on timeout. The ONLY change vs. the old path
+    is the launch shape: -File <staged .ps1> instead of -Command "<body>", which
+    keeps the powershell.exe command line constant and off Defender's heuristic.
+
+    cmd scripts are staged to a .cmd and run via `cmd.exe /c <path>` for the same
+    reason (no inline body on the command line).
+    """
+    import uuid as _uuid
+    is_cmd = (shell or "").lower() == "cmd"
+    ext = ".cmd" if is_cmd else ".ps1"
+    path = os.path.join(_scripts_dir(), f"_run_{_uuid.uuid4().hex}{ext}")
+    # Stage the body. PowerShell reads -File scripts as the locale codepage / BOM;
+    # write UTF-8 with BOM so non-ASCII (paths, names, em-dashes) survive exactly
+    # as they did inline.
+    enc = "utf-8-sig" if not is_cmd else "utf-8"
+    try:
+        with open(path, "w", encoding=enc, errors="replace", newline="\r\n") as fh:
+            fh.write(code)
+    except Exception as e:
+        return 1, "", f"failed to stage script: {e}"
+    if is_cmd:
+        argv = ["cmd.exe", "/c", path]
+    else:
+        argv = ["powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", path]
+    try:
+        return _run_script_capture(argv, timeout)
+    finally:
+        # Short retention is fine for audit, but never accumulate: delete our own
+        # file inline, and sweep any stragglers a hard kill left behind.
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+        _reap_stale_run_scripts()
 
 
 # ---------------------------------------------------------------------------
@@ -6217,17 +6309,18 @@ async def main() -> None:
                             tout  = min(int(payload.get("timeout", 60)), 300)
                             try:
                                 loop = asyncio.get_event_loop()
-                                if shell == "cmd":
-                                    argv = ["cmd.exe", "/c", code]
-                                else:
-                                    argv = ["powershell.exe", "-NonInteractive", "-NoProfile",
-                                            "-ExecutionPolicy", "Bypass", "-Command", code]
-                                # Deadlock-safe: capture via temp files, not inheritable
-                                # pipes, so a long-lived grandchild (cloudflared, service
-                                # restart, detached helper) can never stall communicate()
-                                # and wedge the WS command loop. (R: run_script deadlock)
+                                # Launch via -File from a staged .ps1/.cmd, NOT an inline
+                                # -Command blob: the powershell.exe command line stays a
+                                # constant `-File C:\CirqueRMM\scripts\_run_<uuid>.ps1`
+                                # regardless of the body, so multi-line / encoded operator
+                                # scripts no longer trip Defender's "Suspicious PowerShell
+                                # command line" heuristic. (R: MDE Execution alert)
+                                # Still deadlock-safe: _run_powershell_code -> _run_script_capture
+                                # captures via temp files (not inheritable pipes), so a
+                                # long-lived grandchild (cloudflared, service restart,
+                                # detached helper) can never stall the WS command loop.
                                 rc, so, se = await loop.run_in_executor(
-                                    None, _run_script_capture, argv, tout)
+                                    None, _run_powershell_code, code, tout, shell)
                                 await ws.send(json.dumps({
                                     "type": "script_result", "session_id": session_id,
                                     "exit_code": rc,

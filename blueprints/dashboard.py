@@ -281,7 +281,8 @@ def get_dashboard_data():
 
     total_assets = Asset.query.count()
     in_use = Asset.query.filter_by(status='In Use').count()
-    available = Asset.query.filter_by(status='Available').count()
+    # Assignment is authoritative: an assigned asset is never counted as Available.
+    available = Asset.query.filter_by(status='Available', employee_id=None).count()
     in_repair = Asset.query.filter_by(status='In Repair').count()
     
     # Check warranty expiring soon (within 30 days)

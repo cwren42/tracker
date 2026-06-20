@@ -807,7 +807,13 @@ def edit_asset(asset_id):
         asset.purchase_date = datetime.strptime(request.form.get('purchase_date'), '%Y-%m-%d').date() if request.form.get('purchase_date') else None
         asset.purchase_cost = float(request.form.get('purchase_cost')) if request.form.get('purchase_cost') else None
         asset.warranty_expiry = datetime.strptime(request.form.get('warranty_expiry'), '%Y-%m-%d').date() if request.form.get('warranty_expiry') else None
-        asset.status = request.form.get('status')
+        _new_status = request.form.get('status')
+        # Assignment is authoritative: an asset that still has an assignee can't be
+        # 'Available'. Keep it 'In Use' rather than persisting an assigned+Available
+        # row (which renders both an assignee tag and a green Available badge).
+        if _new_status == 'Available' and asset.employee_id:
+            _new_status = 'In Use'
+        asset.status = _new_status
         asset.location = request.form.get('location')
         asset.notes = request.form.get('notes')
         asset.rustdesk_id = (request.form.get('rustdesk_id') or '').strip() or None
@@ -1128,6 +1134,12 @@ def update_asset_status(asset_id):
             return jsonify({'success': False, 'message': 'Status is required'}), 400
         
         asset = Asset.query.get_or_404(asset_id)
+        # Assignment is authoritative: can't be 'Available' while still assigned.
+        # Reject so the operator unassigns first instead of creating a drift row.
+        if new_status == 'Available' and asset.employee_id:
+            return jsonify({'success': False,
+                            'message': 'Asset is still assigned to an employee. '
+                                       'Unassign it first to mark it Available.'}), 400
         old_status = asset.status
         asset.status = new_status
         asset.updated_at = datetime.utcnow()

@@ -178,6 +178,24 @@ class Asset(db.Model):
             return (datetime.utcnow().date() - self.purchase_date).days / 365.25
         return None
     
+    @property
+    def effective_status(self):
+        """Assignment is authoritative over the Available flag.
+
+        An asset that is assigned to an employee can never read as 'Available' —
+        free-form status edits used to let status drift back to 'Available' while
+        employee_id stayed set, which rendered both an assignee tag and a green
+        Available badge. Display/badge code should use this instead of raw status.
+        """
+        if self.employee_id and self.status == 'Available':
+            return 'In Use'
+        return self.status
+
+    @property
+    def is_available(self):
+        """True only when genuinely unassigned and marked Available."""
+        return self.status == 'Available' and not self.employee_id
+
     def get_lifecycle_status(self):
         """Get lifecycle status: New, Active, Aging, Replace Soon, End of Life"""
         age = self.get_age_years()

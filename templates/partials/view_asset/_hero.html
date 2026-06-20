@@ -36,14 +36,15 @@
             </div>
         </div>
         <div class="d-flex gap-2 flex-wrap align-items-center" style="position:relative;z-index:1;">
-            {% if asset.status == 'Available' %}
+            {# effective_status: an assigned asset can never read 'Available' #}
+            {% if asset.effective_status == 'Available' %}
                 <span class="badge bg-success fs-6 px-3 py-2"><i class="bi bi-check-circle me-1"></i>Available</span>
-            {% elif asset.status == 'In Use' %}
+            {% elif asset.effective_status == 'In Use' %}
                 <span class="badge bg-info fs-6 px-3 py-2"><i class="bi bi-person-check me-1"></i>In Use</span>
-            {% elif asset.status == 'In Repair' %}
+            {% elif asset.effective_status == 'In Repair' %}
                 <span class="badge bg-warning text-dark fs-6 px-3 py-2"><i class="bi bi-tools me-1"></i>In Repair</span>
             {% else %}
-                <span class="badge bg-secondary fs-6 px-3 py-2">{{ asset.status }}</span>
+                <span class="badge bg-secondary fs-6 px-3 py-2">{{ asset.effective_status }}</span>
             {% endif %}
             {% if rmm_agent_id and rmm_visible %}
             <!-- Live telemetry gauges (flare) — IDs kept so rmm_agent.js populates them -->

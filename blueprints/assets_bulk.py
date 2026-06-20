@@ -130,12 +130,19 @@ def bulk_update_status():
         
         # Update assets
         count = 0
+        skipped_assigned = 0
         for asset_id in asset_ids:
             asset = Asset.query.get(asset_id)
             if asset:
+                # Assignment is authoritative: an asset that still has an assignee
+                # can't be marked 'Available'. Skip those (unassign first) instead of
+                # writing an assigned+Available drift row.
+                if new_status == 'Available' and asset.employee_id:
+                    skipped_assigned += 1
+                    continue
                 old_status = asset.status
                 asset.status = new_status
-                
+
                 # Log history
                 history = AssetHistory(
                     asset_id=asset.id,
@@ -144,13 +151,18 @@ def bulk_update_status():
                 )
                 db.session.add(history)
                 count += 1
-        
+
         db.session.commit()
-        
+
+        msg = f'Successfully updated {count} assets'
+        if skipped_assigned:
+            msg += (f'; skipped {skipped_assigned} still assigned to an employee '
+                    f'(unassign them first to mark Available)')
         return jsonify({
             'success': True,
             'count': count,
-            'message': f'Successfully updated {count} assets'
+            'skipped_assigned': skipped_assigned,
+            'message': msg
         })
     
     except Exception as e:

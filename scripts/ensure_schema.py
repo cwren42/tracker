@@ -143,6 +143,10 @@ def ensure_schema():
                 ('battery_health_pct', 'REAL'),
                 ('battery_cycles',     'INTEGER'),
                 ('battery_chemistry',  'TEXT'),
+                # services_down = JSON list of stopped auto-start / watch-listed
+                # services collected by the agent (2.9.40); lights up the
+                # service_down incident signal. Nullable; gateway COALESCEs it.
+                ('services_down',      'TEXT'),
             ]
             for col, typedef in new_telemetry_cols:
                 if not _col_exists("rmm_telemetry", col):

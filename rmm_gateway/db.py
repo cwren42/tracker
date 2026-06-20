@@ -308,6 +308,11 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
         os_edition   = _s("os_edition")
         security_j   = _js("security")
         sysinfo_j    = _js("sysinfo")
+        # services_down (2.9.40): JSON list of stopped auto-start / watch-listed
+        # services. Sent as `services_down`; persisted so the server-side
+        # service_down incident detector has a source. MUST be in the INSERT
+        # below (col + placeholder + value + COALESCE) or it's silently dropped.
+        services_j   = _js("services_down")
 
         # Hardware Info refresh (2.9.36): wifi adapter, battery model/health,
         # timezone every cycle. Strings via _s (None when blank so COALESCE
@@ -333,10 +338,12 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 bios_manufacturer, bios_version, bios_date,
                 gpu_json, sound_card, os_edition, security_json, sysinfo_json,
                 wifi_adapter, battery_model, battery_serial, battery_health_pct,
-                battery_cycles, battery_chemistry, timezone, public_ip
+                battery_cycles, battery_chemistry, timezone, public_ip,
+                services_down
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s,%s,%s,%s,%s,%s,%s)
+                      %s,%s,%s,%s,%s,%s,%s,%s,
+                      %s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -370,7 +377,8 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 battery_cycles=COALESCE(EXCLUDED.battery_cycles, rmm_telemetry.battery_cycles),
                 battery_chemistry=COALESCE(EXCLUDED.battery_chemistry, rmm_telemetry.battery_chemistry),
                 timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone),
-                public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip)
+                public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip),
+                services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down)
             """,
             (
                 agent_id, asset_id,
@@ -403,6 +411,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 wifi_adapter, batt_model, batt_serial, batt_health,
                 batt_cycles, batt_chem, tz_str,
                 data.get("public_ip", "") or None,
+                services_j,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

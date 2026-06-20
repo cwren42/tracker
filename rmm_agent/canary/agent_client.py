@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.39"
+AGENT_VERSION = "2.9.40"
 
 import asyncio
 import base64
@@ -2777,6 +2777,70 @@ def _collect_patches() -> list:
 # Core telemetry collection
 # ---------------------------------------------------------------------------
 
+# Watch-list of critical services we ALWAYS report status for (even if their
+# StartType is Manual/Disabled) so the server can fire a service_down incident
+# when one is Stopped. Keep this short -- the payload is meant to be bounded.
+#   Spooler  = print spooler        WinDefend = Microsoft Defender AV
+#   BITS     = bg transfer (WU)     wuauserv  = Windows Update
+#   CirqueRMMAgent = the agent's own native service (DCs/servers)
+_WATCHED_SERVICES = ("Spooler", "WinDefend", "BITS", "wuauserv",
+                     "CirqueRMMAgent", "CirqueRMM")
+
+
+def _collect_services_down() -> list:
+    """Curated, bounded list of services worth alerting on. Returns a list of
+    {name, display, start_type, status} dicts for:
+      (a) auto-start (StartType=Automatic) services that are NOT Running -- the
+          useful "something that should be up is down" signal; AND
+      (b) any service in _WATCHED_SERVICES that is not Running (even if Manual),
+          so we always have status on the critical few.
+
+    We do NOT ship the full service table every cycle (hundreds of rows) -- only
+    the stopped-auto-starts + the stopped watch-list. Returns [] on non-Windows
+    or any failure (never fabricates).
+    """
+    if platform.system() != "Windows":
+        return []
+    # CIM gives StartMode (Auto/Manual/Disabled) + State (Running/Stopped) +
+    # DelayedAutoStart. Filter to the interesting set IN PowerShell so the JSON
+    # we parse is already small. Auto-but-not-Running OR a watch-listed service.
+    watch = ",".join(f"'{s}'" for s in _WATCHED_SERVICES)
+    script = (
+        "$watch=@(" + watch + ");"
+        "Get-CimInstance Win32_Service | Where-Object {"
+        "  ($_.StartMode -eq 'Auto' -and $_.State -ne 'Running') -or"
+        "  ($watch -contains $_.Name -and $_.State -ne 'Running') } |"
+        " Select-Object Name,DisplayName,StartMode,State |"
+        " ConvertTo-Json -Compress"
+    )
+    try:
+        data = _ps_json(script, timeout=20)
+    except Exception:
+        return []
+    if data is None:
+        return []
+    # ConvertTo-Json emits a bare object (not a list) for a single match.
+    if isinstance(data, dict):
+        data = [data]
+    out = []
+    for s in (data if isinstance(data, list) else []):
+        if not isinstance(s, dict):
+            continue
+        name = (s.get("Name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name":       name,
+            "display":    (s.get("DisplayName") or "").strip(),
+            "start_type": (s.get("StartMode") or "").strip(),
+            "status":     (s.get("State") or "").strip(),
+        })
+        # Hard cap so a pathological box can't bloat the telemetry payload.
+        if len(out) >= 40:
+            break
+    return out
+
+
 def _collect_battery_info() -> dict:
     """Battery model + health/wear + cycle count via `powercfg /batteryreport`.
 
@@ -2952,6 +3016,10 @@ def collect_telemetry(agent_id: str) -> dict:
     # the periodic telemetry. Null/empty on desktops (no battery).
     _batt_info = _collect_battery_info() if batt is not None else {}
 
+    # Stopped auto-start / watch-listed services -> lights up the server-side
+    # `service_down` incident signal. Bounded list (see _collect_services_down).
+    _services_down = _collect_services_down()
+
     return {
         "type":               "telemetry_update",
         "agent_id":           agent_id,
@@ -2978,6 +3046,7 @@ def collect_telemetry(agent_id: str) -> dict:
         "battery_chemistry":  _batt_info.get("chemistry") or None,
         "wifi_adapter":       _wifi_adapter,
         "timezone":           _tz_str,
+        "services_down":      _services_down,
         "disk_json":          disks,
         "network_json":       networks,
         "logged_in_user":     _get_windows_username(),

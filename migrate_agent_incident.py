@@ -66,16 +66,49 @@ def migrate():
 
     # Statuses that mean the incident is still OPEN (not in a terminal state).
     # The partial-unique index below prevents a second OPEN incident for the same
-    # (asset_id, signal_type) — the dedup guarantee that stops the feed flooding.
-    # NOTE: Tier-0 auto incidents now also enter 'remediating' (an OPEN status, in
-    # this predicate) rather than going straight to a terminal 'auto_handled', so
-    # this index finally covers them too (previously they bypassed it). Terminal:
-    # resolved | dismissed | auto_handled | escalated.
+    # DEDUP_KEY — the dedup guarantee that stops the feed flooding.
+    #
+    # The open-incident identity is the dedup_key (NOT (asset_id, signal_type)),
+    # because dedup_key already encodes the right granularity per signal:
+    #   disk_low:{asset}:{drive}      — per (box, drive)
+    #   service_down:{asset}:{svc}    — per (box, SERVICE)  ← a box can have many
+    #   agent_offline:{asset}         — per box
+    #   patch_failed:{job_id}         — per failed job
+    #   defender_critical:{asset}     — per box
+    # Keying on (asset_id, signal_type) wrongly collapsed multiple down services
+    # into ONE service_down incident (a Spooler detection got absorbed into an
+    # already-open BITS incident). Keying on dedup_key gives 1-per-SERVICE for
+    # service_down while keeping 1-per-box for disk_low/defender/offline (their
+    # dedup_key is stable per box) — so this does NOT reintroduce the 5x-duplicate
+    # bug fixed in 2ede87b (that fix is the single-instance scan lock +
+    # check-then-insert; the dedup_keys here are stable per scan).
+    #
+    # NOTE: Tier-0 auto incidents also enter 'remediating' (an OPEN status, in this
+    # predicate) rather than going straight to a terminal 'auto_handled', so this
+    # index covers them too. Terminal: resolved | dismissed | auto_handled |
+    # escalated.
+    #
+    # MIGRATION: the index was previously on (asset_id, signal_type). Drop the old
+    # definition and recreate on (dedup_key). Idempotent + careful: only drop if
+    # the existing index is NOT already the dedup_key one (so re-running is a
+    # no-op), and recreate inside the same transaction.
+    old_def = None
     cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_incident_open
-            ON agent_incident (asset_id, signal_type)
-            WHERE status IN ('new','diagnosed','awaiting_approval','remediating')
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = 'uq_agent_incident_open'
     """)
+    _row = cur.fetchone()
+    if _row:
+        old_def = _row[0] or ''
+    # Recreate only when the live index isn't already keyed on dedup_key.
+    if (old_def is None) or ('(dedup_key)' not in old_def.replace(' ', '')):
+        cur.execute("DROP INDEX IF EXISTS uq_agent_incident_open")
+        cur.execute("""
+            CREATE UNIQUE INDEX uq_agent_incident_open
+                ON agent_incident (dedup_key)
+                WHERE status IN ('new','diagnosed','awaiting_approval','remediating')
+        """)
 
     # Feed query: open incidents newest-first.
     cur.execute("""
@@ -97,7 +130,8 @@ def migrate():
     conn.commit()
     cur.close()
     conn.close()
-    print("Migration complete: agent_incident table + detect_count + indexes created.")
+    print("Migration complete: agent_incident table + detect_count + indexes "
+          "created (uq_agent_incident_open keyed on dedup_key).")
 
 
 if __name__ == "__main__":

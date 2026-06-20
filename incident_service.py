@@ -527,26 +527,34 @@ def _diagnose(signal_type, ctx, fallback):
 _SEVERITY_RANK = {'info': 0, 'warning': 1, 'critical': 2}
 
 
-def _find_open_incident(con, asset_id, signal_type):
-    """Return the existing OPEN incident row for (asset, signal) or None."""
+def _find_open_incident(con, dedup_key):
+    """Return the existing OPEN incident row for this dedup_key or None.
+
+    Keyed on dedup_key (NOT (asset_id, signal_type)) so the open-incident identity
+    matches its intended granularity: per-SERVICE for service_down, per-box for
+    disk_low/defender/offline, per-job for patch_failed. Mirrors the
+    uq_agent_incident_open partial-unique index."""
     return con.execute(
         f"""SELECT id, severity, attempt_count FROM agent_incident
-            WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
+            WHERE dedup_key=%s
               AND status IN {str(_OPEN_STATUSES)}
             ORDER BY id LIMIT 1""",
-        (asset_id, signal_type)
+        (dedup_key,)
     ).fetchone()
 
 
-def _in_cooldown(con, asset_id, signal_type):
+def _in_cooldown(con, signal_type, dedup_key):
+    """Post-resolve cooldown, keyed on dedup_key so it matches the per-signal
+    granularity (e.g. a resolved Spooler incident only cools down Spooler, not the
+    whole box's service_down). Cooldown duration is still per signal_type."""
     mins = _RESOLVE_COOLDOWN_MIN.get(signal_type, 60)
     row = con.execute(
         """SELECT 1 FROM agent_incident
-           WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
+           WHERE dedup_key=%s
              AND status IN ('resolved','dismissed','auto_handled','escalated')
              AND updated_at > NOW() - (%s || ' minutes')::interval
            LIMIT 1""",
-        (asset_id, signal_type, str(mins))
+        (dedup_key, str(mins))
     ).fetchone()
     return bool(row)
 
@@ -580,12 +588,14 @@ def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
     (re-detection of an already-open incident, or in post-resolve cooldown).
     Caller commits."""
     # (1) Already open? Refresh it (last-seen/severity/count) and do NOT insert.
-    existing = _find_open_incident(con, asset_id, signal_type)
+    #     Identity is the dedup_key, so a box can hold one open incident PER
+    #     service_down service (and one per disk/per box for the per-box signals).
+    existing = _find_open_incident(con, dedup_key)
     if existing:
         _refresh_open_incident(con, existing, severity, None)
         return None
-    # (2) Recently resolved? Honour the cooldown before re-opening.
-    if _in_cooldown(con, asset_id, signal_type):
+    # (2) Recently resolved? Honour the cooldown before re-opening (per dedup_key).
+    if _in_cooldown(con, signal_type, dedup_key):
         return None
 
     diag, conf, model = _diagnose(signal_type, ctx, fallback_diag)
@@ -629,9 +639,9 @@ def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
         # could collide on uq_agent_incident_open. Treat the unique violation as
         # "already open" — refresh the existing row instead of inserting.
         con.rollback()
-        logger.info('incident insert collided (already open) asset=%s %s: %s',
-                    asset_id, signal_type, e)
-        again = _find_open_incident(con, asset_id, signal_type)
+        logger.info('incident insert collided (already open) dedup_key=%s: %s',
+                    dedup_key, e)
+        again = _find_open_incident(con, dedup_key)
         if again:
             _refresh_open_incident(con, again, severity, None)
         return None
@@ -817,7 +827,17 @@ def _detect_disk_low(con):
 # Services we will actually fire an incident on (and offer Restart-Service for).
 # Mirrors the agent's _WATCHED_SERVICES; auto-start services NOT on this list are
 # noisy/expected-stopped on plenty of boxes, so we only incident the curated few.
-_SERVICE_DOWN_WATCH = {'spooler', 'windefend', 'bits', 'wuauserv',
+#
+# DELIBERATELY EXCLUDED — Windows services that auto-stop when IDLE (Stopped is
+# NORMAL, not a fault, so they fired false service_down incidents fleet-wide):
+#   * bits     (Background Intelligent Transfer Service) — idle-stops between
+#               transfers; "Stopped" is the steady state, started on demand.
+#   * wuauserv (Windows Update) — also idle-stops (Trigger Start / DelayedAuto);
+#               only running during an update check/scan.
+#   * sppsvc   (Software Protection) — likewise trigger-started/idle-stops.
+# We keep only services whose being-Stopped is a REAL problem: the print Spooler,
+# Defender (windefend), and our own RMM agent service.
+_SERVICE_DOWN_WATCH = {'spooler', 'windefend',
                        'cirquermmagent', 'cirquermm'}
 
 
@@ -986,7 +1006,8 @@ def _verify_pass(con):
     # (a) Queue-backed incidents (disk_low, service_down) — verify when their
     #     rmm_remediation_queue row reaches a terminal state.
     rows = con.execute(
-        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.attempt_count,
+        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.dedup_key,
+                  i.attempt_count,
                   i.chosen_action, q.status AS q_status, q.result_json
            FROM agent_incident i
            JOIN rmm_remediation_queue q ON q.id = i.remediation_queue_id
@@ -997,7 +1018,8 @@ def _verify_pass(con):
     #     (NOT an rmm_remediation_queue row), so they carry no remediation_queue_id.
     #     Verify them off the agent's latest patch-job status instead.
     patch_rows = con.execute(
-        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.attempt_count,
+        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.dedup_key,
+                  i.attempt_count,
                   i.chosen_action,
                   (SELECT status FROM rmm_patch_job j
                    WHERE j.agent_id = i.agent_id
@@ -1021,7 +1043,8 @@ def _verify_pass(con):
     #     happens via the cleared-signal check below. Bounded to disk_low (the only
     #     Tier-0 signal) with NULL queue id, older than 30 min, attempt_count 0.
     stranded_rows = con.execute(
-        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.attempt_count,
+        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.dedup_key,
+                  i.attempt_count,
                   i.chosen_action, NULL AS q_status, NULL AS result_json
            FROM agent_incident i
            WHERE i.status = 'awaiting_approval'
@@ -1039,20 +1062,21 @@ def _verify_pass(con):
         stranded = r['q_status'] is None and r['signal_type'] != 'patch_failed'
         succeeded = r['q_status'] in ('completed', 'no_op', 'success')
         still_bad = _signal_still_present(con, r['signal_type'], r['agent_id'],
-                                          r['asset_id'])
+                                          r['asset_id'], dedup_key=r.get('dedup_key'))
         cleared = (succeeded or stranded) and not still_bad
         # Collision guard: the escalate/park branches below move a row back INTO
         # an OPEN status. If ANOTHER open incident already exists for this
-        # (asset, signal) — e.g. several auto_handled rows piled up from rapid
-        # scans — reopening this one would violate uq_agent_incident_open. In that
-        # case resolve THIS row as superseded instead of crashing the pass.
+        # dedup_key — e.g. several auto_handled rows piled up from rapid scans —
+        # reopening this one would violate uq_agent_incident_open (now keyed on
+        # dedup_key). In that case resolve THIS row as superseded instead of
+        # crashing the pass.
         other_open = None
         if not cleared:
             other_open = con.execute(
                 f"""SELECT id FROM agent_incident
-                    WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
+                    WHERE dedup_key=%s
                       AND id <> %s AND status IN {str(_OPEN_STATUSES)} LIMIT 1""",
-                (r['asset_id'], r['signal_type'], r['id'])).fetchone()
+                (r['dedup_key'], r['id'])).fetchone()
         if other_open:
             con.execute(
                 """UPDATE agent_incident
@@ -1143,10 +1167,40 @@ def _post_verify_to_thread(con, incident_id, text, result_json=None):
         logger.info('verify thread post skipped for %s: %s', incident_id, e)
 
 
-def _signal_still_present(con, signal_type, agent_id, asset_id):
+def _signal_still_present(con, signal_type, agent_id, asset_id, dedup_key=None):
     """Cheap re-check of a single asset's signal for the verify pass.
     Returns True if the original condition is still present."""
     try:
+        if signal_type == 'service_down':
+            # The specific service is encoded in the dedup_key
+            # (service_down:{asset}:{service}); re-check THAT service's latest
+            # telemetry status. Without this branch a restarted-then-re-stopped
+            # service would falsely verify as cleared (and flap). Fail-safe: if we
+            # can't identify the service, treat as cleared (don't block resolve).
+            svc = None
+            if dedup_key:
+                parts = dedup_key.split(':', 2)
+                if len(parts) == 3:
+                    svc = parts[2]
+            if not svc:
+                return False
+            r = con.execute(
+                """SELECT services_down FROM rmm_telemetry
+                   WHERE asset_id=%s ORDER BY captured_at DESC LIMIT 1""",
+                (asset_id,)).fetchone()
+            if not r or not r['services_down']:
+                return False
+            try:
+                svcs = json.loads(r['services_down'])
+            except Exception:
+                return False
+            for s in (svcs if isinstance(svcs, list) else []):
+                if not isinstance(s, dict):
+                    continue
+                if (s.get('name') or '').strip().lower() == svc.strip().lower():
+                    return (s.get('status') or '').strip().lower() != 'running'
+            # Service no longer in the down-list -> it's running (cleared).
+            return False
         if signal_type == 'disk_low':
             r = con.execute(
                 """SELECT disk_json FROM rmm_telemetry

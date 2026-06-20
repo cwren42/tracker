@@ -56,10 +56,21 @@ def migrate():
         )
     """)
 
+    # detect_count: how many times re-detection has refreshed this OPEN incident
+    # (the idempotent dedup bumps this instead of inserting a duplicate row).
+    # Added later — guard with IF NOT EXISTS so the migration stays re-runnable.
+    cur.execute("""
+        ALTER TABLE agent_incident
+            ADD COLUMN IF NOT EXISTS detect_count INTEGER NOT NULL DEFAULT 1
+    """)
+
     # Statuses that mean the incident is still OPEN (not in a terminal state).
     # The partial-unique index below prevents a second OPEN incident for the same
     # (asset_id, signal_type) — the dedup guarantee that stops the feed flooding.
-    # Terminal: resolved | dismissed | auto_handled | escalated.
+    # NOTE: Tier-0 auto incidents now also enter 'remediating' (an OPEN status, in
+    # this predicate) rather than going straight to a terminal 'auto_handled', so
+    # this index finally covers them too (previously they bypassed it). Terminal:
+    # resolved | dismissed | auto_handled | escalated.
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_incident_open
             ON agent_incident (asset_id, signal_type)
@@ -86,7 +97,7 @@ def migrate():
     conn.commit()
     cur.close()
     conn.close()
-    print("Migration complete: agent_incident table + indexes created.")
+    print("Migration complete: agent_incident table + detect_count + indexes created.")
 
 
 if __name__ == "__main__":

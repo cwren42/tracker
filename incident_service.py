@@ -73,6 +73,17 @@ AUTONOMY = {
 _SERVER_CATEGORIES = {'server', 'servers', 'hypervisor', 'domain controller',
                       'dc', 'nas', 'storage'}
 
+# Name-based server detection (Bug-3 backstop). SENSEL-SERVER-1 was filed as
+# category='Workstation' / device_type='Windows Workstation' with a NULL OS, so
+# the category/OS checks missed it and a cleanup auto-ran on a server. Asset data
+# is not always trustworthy; the hostname usually is. These regexes catch the
+# common server-name conventions so a mislabeled asset can never auto-remediate.
+import re as _re
+_SERVER_NAME_RE = _re.compile(
+    r'(?:^|[-_ ])(?:srv|server|svr|dc\d*|nas|esx|esxi|vmhost|hyperv|hyper-v|'
+    r'prox(?:mox)?|filesrv|fileserver|sql|exch(?:ange)?|vcenter)'
+    r'(?:[-_ \d]|$)', _re.IGNORECASE)
+
 # Cooldown (minutes) after an incident reaches a terminal state before the same
 # (asset, signal) may open a fresh incident. Stops resolve->re-open flapping.
 _RESOLVE_COOLDOWN_MIN = {
@@ -136,21 +147,44 @@ def _effective_tier(con, signal_type):
     return AUTONOMY.get(signal_type, TIER_NOTIFY)
 
 
+def _is_server_or_critical(con, asset_id):
+    """Robustly decide whether an asset is a server / critical box that must
+    never auto-remediate. Checks (in order, any hit wins):
+      * category in the server set (server/dc/nas/hypervisor/…),
+      * 'server' in device_type,
+      * 'server' in os_version (e.g. 'Windows Server 2019'),
+      * the hostname matching a server-name convention (the Bug-3 backstop, for
+        mislabeled assets like SENSEL-SERVER-1 filed as a 'Workstation').
+    Fail-CLOSED: if we cannot read the asset, treat it as server (never auto)."""
+    if asset_id is None:
+        return False
+    try:
+        a = con.execute(
+            "SELECT name, category, device_type, os_version FROM asset WHERE id=%s",
+            (asset_id,)
+        ).fetchone()
+    except Exception:
+        return True  # fail closed — can't verify it's safe, so don't auto-run
+    if not a:
+        return True
+    cat = (a['category'] or '').strip().lower()
+    dtype = (a['device_type'] or '').strip().lower()
+    osv = (a['os_version'] or '').strip().lower()
+    name = (a['name'] or '').strip()
+    if cat in _SERVER_CATEGORIES or cat == 'dc':
+        return True
+    if 'server' in dtype or 'server' in osv:
+        return True
+    if name and _SERVER_NAME_RE.search(name):
+        return True
+    return False
+
+
 def _force_tier_for_asset(con, asset_id, tier):
     """Servers/critical assets are forced to tier-2 (notify only) — never auto."""
     if asset_id is None:
         return tier
-    try:
-        a = con.execute(
-            "SELECT category, device_type FROM asset WHERE id=%s", (asset_id,)
-        ).fetchone()
-    except Exception:
-        return tier
-    if not a:
-        return tier
-    cat = (a['category'] or '').strip().lower()
-    dtype = (a['device_type'] or '').strip().lower()
-    if cat in _SERVER_CATEGORIES or 'server' in dtype or cat == 'dc':
+    if _is_server_or_critical(con, asset_id):
         return max(tier, TIER_NOTIFY)
     return tier
 
@@ -192,9 +226,22 @@ def _restart_service_payload(service_name):
     return {'type': 'run_script', 'shell': 'powershell', 'code': code, 'timeout': 120}
 
 
-def build_actions(con, signal_type, ctx):
+def build_actions(con, signal_type, ctx, asset_id=None):
     """Return the templated action set for a signal. `ctx` carries detector
-    specifics (e.g. {'service': 'Spooler'} or {'patch_job_id': 42})."""
+    specifics (e.g. {'service': 'Spooler'} or {'patch_job_id': 42}).
+
+    Bug-3 guard: for server/critical assets we STRIP every 'run' action so the
+    feed never renders an Approve-to-run button (notify-only: ticket/dismiss).
+    This is belt-and-braces with _force_tier_for_asset (which forces Tier-2): the
+    stored proposed_actions themselves carry no runnable action for a server, so
+    even the chat/approve_fix paths have nothing to execute."""
+    actions = _build_actions_raw(signal_type, ctx)
+    if asset_id is not None and _is_server_or_critical(con, asset_id):
+        actions = [a for a in actions if a.get('kind') != 'run']
+    return actions
+
+
+def _build_actions_raw(signal_type, ctx):
     if signal_type == 'disk_low':
         return [
             {'key': 'clear_caches', 'label': 'Clear safe caches (C:)',
@@ -256,16 +303,35 @@ def _diagnose(signal_type, ctx, fallback):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Incident upsert (dedup + cooldown)
+#
+# DEDUP CONTRACT (Bug-1 fix): there must be at most ONE open incident per
+# (asset_id, signal_type). Re-detection of an already-open condition UPDATEs the
+# existing row (bumps updated_at/last-seen, detect_count, severity) and returns
+# None — it NEVER inserts a second row. A NEW insert happens only when no open
+# incident exists and the (asset, signal) is not in post-resolve cooldown.
+#
+# Two layers of protection:
+#   1. The scheduled scan runs single-instance (a file lock in sync_scheduler) so
+#      the 5 gunicorn workers don't each fire the same scan concurrently. This is
+#      the primary fix — the original duplicates were 5 workers racing the
+#      check-then-insert, all committing before any other saw the row.
+#   2. This check-then-update-else-insert + the partial-unique index
+#      (uq_agent_incident_open) as a backstop against any residual race (e.g. a
+#      manual "Scan now" overlapping the scheduled pass).
 # ─────────────────────────────────────────────────────────────────────────────
-def _open_incident_exists(con, asset_id, signal_type):
-    row = con.execute(
-        f"""SELECT id FROM agent_incident
+# Severity rank for "upgrade only" on re-detection (never downgrade an open one).
+_SEVERITY_RANK = {'info': 0, 'warning': 1, 'critical': 2}
+
+
+def _find_open_incident(con, asset_id, signal_type):
+    """Return the existing OPEN incident row for (asset, signal) or None."""
+    return con.execute(
+        f"""SELECT id, severity, attempt_count FROM agent_incident
             WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
               AND status IN {str(_OPEN_STATUSES)}
-            LIMIT 1""",
+            ORDER BY id LIMIT 1""",
         (asset_id, signal_type)
     ).fetchone()
-    return row['id'] if row else None
 
 
 def _in_cooldown(con, asset_id, signal_type):
@@ -281,17 +347,45 @@ def _in_cooldown(con, asset_id, signal_type):
     return bool(row)
 
 
+def _refresh_open_incident(con, inc_row, severity, diag):
+    """Re-detection of an already-open condition: bump last-seen + detect_count,
+    upgrade severity if it worsened, refresh the diagnosis text. Idempotent — does
+    NOT change status, does NOT re-enqueue, does NOT create a row.
+
+    Commits ITSELF: the detectors only commit when _create_incident returns a new
+    id (truthy), and this refresh path returns None, so without committing here
+    the bump would be rolled back when the pooled connection is returned. (Bug-1
+    follow-up — the refresh must actually persist.)"""
+    cur_rank = _SEVERITY_RANK.get((inc_row.get('severity') or '').lower(), 1)
+    new_rank = _SEVERITY_RANK.get((severity or '').lower(), 1)
+    sev = severity if new_rank > cur_rank else inc_row['severity']
+    con.execute(
+        """UPDATE agent_incident
+           SET updated_at=NOW(),
+               detect_count=COALESCE(detect_count,1)+1,
+               severity=%s,
+               diagnosis_text=COALESCE(%s, diagnosis_text)
+           WHERE id=%s""",
+        (sev, diag, inc_row['id']))
+    con.commit()
+
+
 def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
                      dedup_key, ctx, fallback_diag):
-    """Create a NEW incident (diagnose + propose + tier). Returns incident id or
-    None if deduped/cooled-down. Caller commits."""
-    if _open_incident_exists(con, asset_id, signal_type):
+    """Detect-or-update. Returns a NEW incident id if one was created, else None
+    (re-detection of an already-open incident, or in post-resolve cooldown).
+    Caller commits."""
+    # (1) Already open? Refresh it (last-seen/severity/count) and do NOT insert.
+    existing = _find_open_incident(con, asset_id, signal_type)
+    if existing:
+        _refresh_open_incident(con, existing, severity, None)
         return None
+    # (2) Recently resolved? Honour the cooldown before re-opening.
     if _in_cooldown(con, asset_id, signal_type):
         return None
 
     diag, conf, model = _diagnose(signal_type, ctx, fallback_diag)
-    actions = build_actions(con, signal_type, ctx)
+    actions = build_actions(con, signal_type, ctx, asset_id=asset_id)
 
     tier = _force_tier_for_asset(con, asset_id, _effective_tier(con, signal_type))
 
@@ -304,42 +398,67 @@ def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
         if not auto_action:
             tier = TIER_PROPOSE
 
-    status = ('auto_handled' if tier == TIER_AUTO
+    # Bug-2 fix: the status must reflect REALITY. A Tier-0 auto incident is NOT
+    # "handled" the instant it is enqueued — the box may be offline and the
+    # cleanup only queued. It enters 'remediating' (an OPEN state); only the
+    # verify pass flips it to 'resolved' once the queue row completes (exit 0)
+    # AND the signal has actually cleared. Tier-1 -> awaiting_approval (human
+    # clicks), Tier-2 -> diagnosed (notify-only).
+    status = ('remediating' if (tier == TIER_AUTO and auto_action)
               else 'awaiting_approval' if tier == TIER_PROPOSE
-              else 'diagnosed')  # tier-2 notify: diagnosed, waits for human
+              else 'diagnosed')
 
     try:
         row = con.execute(
             """INSERT INTO agent_incident
                  (asset_id, agent_id, signal_type, severity, dedup_key, status,
                   diagnosis_text, ai_confidence, ai_model, proposed_actions,
-                  pushed_channel, created_at, updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                  pushed_channel, detect_count, created_at, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,NOW(),NOW())
                RETURNING id""",
             (asset_id, agent_id, signal_type, severity, dedup_key, status,
              diag, conf, model, json.dumps(actions),
              _notifier().channel)
         ).fetchone()
     except Exception as e:
-        # The partial-unique index is the last line of defense against a race
-        # creating two open incidents for the same (asset, signal). Treat the
-        # unique violation as "already open" and move on.
+        # Backstop: a residual race (manual scan overlapping the scheduled pass)
+        # could collide on uq_agent_incident_open. Treat the unique violation as
+        # "already open" — refresh the existing row instead of inserting.
         con.rollback()
-        logger.info('incident insert skipped for asset=%s %s: %s',
+        logger.info('incident insert collided (already open) asset=%s %s: %s',
                     asset_id, signal_type, e)
+        again = _find_open_incident(con, asset_id, signal_type)
+        if again:
+            _refresh_open_incident(con, again, severity, None)
         return None
     inc_id = row['id']
 
-    # Tier-0: auto-enqueue the safe action right now and stamp it.
+    # Tier-0: auto-enqueue the safe action right now and stamp it. Status stays
+    # 'remediating' until verify confirms it actually ran AND cleared.
+    #
+    # If the enqueue genuinely FAILED (rq_id is None — e.g. the gateway POST
+    # errored, NOT merely an offline box which still gets a queued row), do NOT
+    # leave the incident stranded in 'remediating': the verify pass keys off the
+    # rmm_remediation_queue row, so a NULL queue id would never be re-evaluated
+    # and re-detection stays blocked forever. Park it as awaiting_approval so a
+    # human can retry the safe action from the feed. An offline box returns a real
+    # queued row id, so it correctly stays remediating until the box flushes it.
     if tier == TIER_AUTO and auto_action:
         rq_id = _enqueue_action(con, asset_id, agent_id, auto_action)
-        con.execute(
-            """UPDATE agent_incident
-               SET chosen_action=%s, remediation_queue_id=%s,
-                   attempt_count=attempt_count+1, updated_at=NOW()
-               WHERE id=%s""",
-            (auto_action['key'], rq_id, inc_id)
-        )
+        if rq_id is None:
+            con.execute(
+                """UPDATE agent_incident
+                   SET status='awaiting_approval', chosen_action=%s, updated_at=NOW(),
+                       verify_result='auto-enqueue failed (gateway unreachable) — awaiting manual retry'
+                   WHERE id=%s""",
+                (auto_action['key'], inc_id))
+        else:
+            con.execute(
+                """UPDATE agent_incident
+                   SET chosen_action=%s, remediation_queue_id=%s,
+                       attempt_count=attempt_count+1, updated_at=NOW()
+                   WHERE id=%s""",
+                (auto_action['key'], rq_id, inc_id))
 
     _notifier().push({'id': inc_id, 'signal_type': signal_type,
                       'asset_id': asset_id})
@@ -601,18 +720,42 @@ def _verify_pass(con):
     # Only act on patch rows whose latest job actually finished (completed/failed).
     patch_rows = [r for r in patch_rows
                   if r['q_status'] in ('completed', 'failed', 'success')]
-    for r in list(rows) + list(patch_rows):
+    # (c) Self-heal for Tier-0 incidents parked in awaiting_approval because the
+    #     auto-enqueue FAILED (gateway unreachable) — these carry NO queue row, so
+    #     branch (a) can't see them, and re-detection is blocked while they're
+    #     open. If the disk signal has since cleared on its own, resolve them
+    #     (which starts the cooldown and unblocks re-detection); otherwise leave
+    #     them for the human. Treat them as "succeeded=False" so the resolve only
+    #     happens via the cleared-signal check below. Bounded to disk_low (the only
+    #     Tier-0 signal) with NULL queue id, older than 30 min, attempt_count 0.
+    stranded_rows = con.execute(
+        """SELECT i.id, i.asset_id, i.agent_id, i.signal_type, i.attempt_count,
+                  i.chosen_action, NULL AS q_status, NULL AS result_json
+           FROM agent_incident i
+           WHERE i.status = 'awaiting_approval'
+             AND i.signal_type = 'disk_low'
+             AND i.remediation_queue_id IS NULL
+             AND i.chosen_action IS NOT NULL
+             AND i.updated_at < NOW() - INTERVAL '30 minutes'"""
+    ).fetchall()
+    for r in list(rows) + list(patch_rows) + list(stranded_rows):
         checked += 1
+        # 'stranded' = a Tier-0 row parked because the auto-enqueue failed; it has
+        # no queue row (q_status None) and nothing "ran", so it can only be cleared
+        # by the signal resolving on its own (self-heal after a transient gateway
+        # blip). It must NOT count as a failed attempt or hit the circuit breaker.
+        stranded = r['q_status'] is None and r['signal_type'] != 'patch_failed'
         succeeded = r['q_status'] in ('completed', 'no_op', 'success')
         still_bad = _signal_still_present(con, r['signal_type'], r['agent_id'],
                                           r['asset_id'])
+        cleared = (succeeded or stranded) and not still_bad
         # Collision guard: the escalate/park branches below move a row back INTO
         # an OPEN status. If ANOTHER open incident already exists for this
         # (asset, signal) — e.g. several auto_handled rows piled up from rapid
         # scans — reopening this one would violate uq_agent_incident_open. In that
         # case resolve THIS row as superseded instead of crashing the pass.
         other_open = None
-        if not (succeeded and not still_bad):
+        if not cleared:
             other_open = con.execute(
                 f"""SELECT id FROM agent_incident
                     WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
@@ -626,7 +769,7 @@ def _verify_pass(con):
                 (f'superseded by open incident #{other_open["id"]}', r['id']))
             con.commit()
             continue
-        if succeeded and not still_bad:
+        if cleared:
             con.execute(
                 """UPDATE agent_incident
                    SET status='resolved', resolved_at=NOW(), updated_at=NOW(),
@@ -637,6 +780,12 @@ def _verify_pass(con):
                 con, r['id'],
                 "Verified: the remediation completed and the condition has cleared. "
                 "Resolving this incident.", r.get('result_json'))
+        elif stranded:
+            # Parked-and-still-bad: nothing ran (enqueue had failed), so this is
+            # NOT a failed attempt — don't escalate or rewrite it. Leave it
+            # awaiting_approval for the human; a later scan will re-check / resolve
+            # if the disk frees up on its own.
+            continue
         elif r['attempt_count'] >= _MAX_ATTEMPTS:
             # Circuit-breaker: stop retrying, escalate + auto-open a ticket.
             tid = _open_ticket(con, r['asset_id'],

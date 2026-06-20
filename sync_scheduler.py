@@ -77,6 +77,7 @@ DISABLE_BACKUP_SCHEDULER = os.environ.get('DISABLE_BACKUP_SCHEDULER', '').strip(
 
 QUARANTINE_SYNC_LOCK_PATH = os.environ.get('TRACKER_QUARANTINE_SYNC_LOCK_PATH', '/tmp/tracker_quarantine_sync.lock')
 METRICS_SNAPSHOT_LOCK_PATH = os.environ.get('TRACKER_METRICS_SNAPSHOT_LOCK_PATH', '/tmp/tracker_metrics_snapshot.lock')
+INCIDENT_SCAN_LOCK_PATH = os.environ.get('TRACKER_INCIDENT_SCAN_LOCK_PATH', '/tmp/tracker_incident_scan.lock')
 METRICS_HISTORY_RETENTION_DAYS = int(os.environ.get('METRICS_HISTORY_RETENTION_DAYS', '90'))
 QUARANTINE_SYNC_INTERVAL_MINUTES = int(os.environ.get('QUARANTINE_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_QUARANTINE_SYNC = os.environ.get('DISABLE_QUARANTINE_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
@@ -348,12 +349,22 @@ def start_sync_scheduler(flask_app):
 
 def run_incident_scan_job(flask_app):
     """Scheduler wrapper for the Proactive AI Remediation detector/orchestrator.
-    incident_service.scan is itself fully fail-safe; this just guards the import."""
-    try:
-        import incident_service
-        incident_service.run_incident_scan_job(flask_app)
-    except Exception:
-        logger.exception('incident scan job failed to launch')
+
+    SINGLE-INSTANCE (Bug-1 primary fix): gunicorn runs multiple worker processes
+    and each starts its own BackgroundScheduler, so without a cross-process lock
+    every worker fires this same scan on the same tick — 5 workers => 5 concurrent
+    scans, each racing the detect-or-insert and committing a duplicate open
+    incident per (asset, signal). The non-blocking file lock makes exactly ONE
+    worker run the pass per tick; the rest no-op. (Same pattern as every other
+    job in this module.) incident_service.scan is itself fully fail-safe."""
+    with _file_lock(INCIDENT_SCAN_LOCK_PATH) as acquired:
+        if not acquired:
+            return
+        try:
+            import incident_service
+            incident_service.run_incident_scan_job(flask_app)
+        except Exception:
+            logger.exception('incident scan job failed to launch')
 
 
 def run_metrics_snapshot_job(flask_app):

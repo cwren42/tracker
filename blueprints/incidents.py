@@ -183,6 +183,14 @@ def act(incident_id):
             result = {'ok': True, 'status': 'resolved', 'ticket_id': tid}
 
         elif kind == 'run':
+            # Bug-3 guard (defense-in-depth): a server/critical asset must NEVER
+            # run an automated change, even via a crafted POST. The feed strips
+            # run buttons for servers, but enforce it here too — the only allowed
+            # actions on a server are ticket/dismiss.
+            if _inc._is_server_or_critical(con, inc['asset_id']):
+                return jsonify({'ok': False,
+                                'error': 'server/critical asset is notify-only '
+                                         '(no automated remediation)'}), 403
             payload = action.get('run_payload') or {}
             # Special case: patch retry re-enqueues the failed Windows Update job.
             if payload.get('type') == 'retry_patch_job':
@@ -410,6 +418,13 @@ def approve_fix(incident_id):
                               "Approved → ticket creation failed.",
                               meta={'approved_by': uid})
             return jsonify({'ok': True, 'status': 'resolved', 'ticket_id': tid})
+
+        # Bug-3 guard (defense-in-depth): never execute a CHANGE on a
+        # server/critical asset, even an AI-proposed one approved by a click.
+        if _inc._is_server_or_critical(con, inc['asset_id']):
+            return jsonify({'ok': False,
+                            'error': 'server/critical asset is notify-only '
+                                     '(no automated remediation)'}), 403
 
         # A CHANGE: enqueue via the existing remediation path.
         action = {'key': 'ai_proposed_fix', 'kind': 'run',

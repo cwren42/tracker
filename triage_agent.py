@@ -378,7 +378,9 @@ def tool_run_readonly_diagnostic(con, agent_id, asset_id, diag_key, arg=None):
 
 
 def tool_get_similar_past_fixes(con, signal_type):
-    """Prior resolutions for this signal type across the fleet — what worked."""
+    """Prior resolutions for this signal type across the fleet — what worked, plus
+    the LEARNING-LOOP success stats (Feature 3): for each action that was applied
+    to this signal, how many past cases it resolved (resolved N / total M)."""
     rows = con.execute(
         """SELECT i.asset_id, a.name AS host, i.status, i.chosen_action,
                   i.verify_result, i.created_at
@@ -386,7 +388,28 @@ def tool_get_similar_past_fixes(con, signal_type):
            WHERE i.signal_type=%s
              AND i.status IN ('resolved','auto_handled')
            ORDER BY i.created_at DESC LIMIT 6""", (signal_type,)).fetchall()
-    return {'signal_type': signal_type, 'past_fixes': [
+    # Per-action success rate from the recorded outcomes (the learning loop).
+    learning = {'signal_overall': None, 'by_action': []}
+    try:
+        import incident_service as _inc
+        learning['signal_overall'] = _inc.fix_success_stats(con, signal_type)
+        ar = con.execute(
+            """SELECT chosen_action,
+                      COUNT(*) FILTER (WHERE success) AS resolved,
+                      COUNT(*) AS total
+               FROM incident_fix_outcome
+               WHERE signal_type=%s AND chosen_action IS NOT NULL
+               GROUP BY chosen_action ORDER BY total DESC""",
+            (signal_type,)).fetchall()
+        learning['by_action'] = [
+            {'action': a['chosen_action'], 'resolved': a['resolved'],
+             'total': a['total'],
+             'summary': f"resolved {a['resolved']}/{a['total']} past cases"}
+            for a in ar]
+    except Exception as e:
+        logger.info('similar-past-fixes learning stats skipped (%s): %s',
+                    signal_type, e)
+    return {'signal_type': signal_type, 'learning': learning, 'past_fixes': [
         {'host': r['host'], 'status': r['status'],
          'action': r['chosen_action'], 'result': r['verify_result'],
          'when': str(r['created_at'])} for r in rows]}
@@ -438,8 +461,12 @@ def _tool_specs():
                 "diagnosis": {"type": "string", "description": "what is wrong, grounded in the diagnostics you ran"},
                 "fix_label": {"type": "string", "description": "short human label for the action, e.g. 'Restart Spooler'"},
                 "why_it_works": {"type": "string", "description": "why this fix resolves the diagnosed cause"},
-                "action_kind": {"type": "string", "enum": ["run_script", "restart_service", "clear_disk_cache", "retry_patch", "ticket_only"],
-                                "description": "the category of change; ticket_only when no safe automated fix exists"},
+                "action_kind": {"type": "string", "enum": ["run_script", "restart_service", "clear_disk_cache", "installer_cleanup", "retry_patch", "ticket_only"],
+                                "description": ("the category of change; ticket_only when no safe automated fix exists. "
+                                                "Use installer_cleanup for a disk_low box whose C:\\Windows\\Installer is "
+                                                "a major hog and the safe cache cleanup can't reach it: it runs the SAFE "
+                                                "DISM /StartComponentCleanup (WinSxS) and REPORTS orphaned Installer files "
+                                                "for manual review — it does NOT delete Installer packages.")},
                 "service_name": {"type": "string", "description": "for restart_service: the exact Windows service name"},
                 "powershell": {"type": "string", "description": "for run_script: the EXACT mutating PowerShell to run on approval"}},
                 "required": ["diagnosis", "fix_label", "why_it_works", "action_kind"]}}},
@@ -508,6 +535,20 @@ def _normalize_proposal(args, incident):
         proposal['run_payload'] = _inc._disk_cleanup_payload()
         proposal['risk_tier'] = 0
         proposal['execute'] = 'run'
+    elif kind == 'installer_cleanup':
+        # Feature 4: SAFE DISM component-store cleanup + READ-ONLY orphan report.
+        # Always Tier-1 (risk_tier 1 -> human Approve). Maps to the vetted template;
+        # the model cannot author the script. Never deletes Installer packages.
+        proposal['run_payload'] = _inc._installer_cleanup_payload()
+        proposal['risk_tier'] = 1
+        proposal['execute'] = 'run'
+        if not why:
+            proposal['why_it_works'] = (
+                "Runs the Microsoft-supported DISM /StartComponentCleanup to reclaim "
+                "superseded WinSxS components (safe), then produces a READ-ONLY report "
+                "of orphaned C:\\Windows\\Installer MSI/MSP files and reclaimable size. "
+                "It does NOT delete Installer packages — deleting in-use MSI/MSP breaks "
+                "app repair/uninstall, so that reclaim is left for manual review.")
     elif kind == 'restart_service':
         svc = (args.get('service_name') or '').strip()
         if not svc:
@@ -553,7 +594,7 @@ def _normalize_proposal(args, incident):
 # ─────────────────────────────────────────────────────────────────────────────
 # The agentic loop
 # ─────────────────────────────────────────────────────────────────────────────
-def _system_prompt(incident, asset_name):
+def _system_prompt(incident, asset_name, learning_note=''):
     return (
         "You are an expert IT operations engineer triaging a device incident for a "
         "managed Windows/Linux fleet. You have tools to read asset context, telemetry, "
@@ -571,7 +612,30 @@ def _system_prompt(incident, asset_name):
         "short final summary to the technician.\n\n"
         f"Incident: signal={incident.get('signal_type')} severity={incident.get('severity')} "
         f"on asset '{asset_name}'. First-pass diagnosis: {incident.get('diagnosis_text') or '(none)'}"
+        + (("\n\n" + learning_note) if learning_note else "")
     )
+
+
+def _learning_note(con, signal_type):
+    """A one-line confidence nudge built from the learning loop (Feature 3): the
+    fleet success rate for this signal's past fixes. Empty when no history yet.
+    Fail-safe (never raises)."""
+    try:
+        import incident_service as _inc
+        s = _inc.fix_success_stats(con, signal_type)
+        if not s.get('total'):
+            return ''
+        pct = round(s['rate'] * 100)
+        lean = ('lean toward proposing the historically-successful automated fix'
+                if pct >= 60 else
+                'be cautious — past automated fixes for this signal often did NOT '
+                'clear it, so prefer deeper diagnosis or ticket_only')
+        return (f"LEARNING LOOP: across the fleet, recorded fixes for "
+                f"'{signal_type}' resolved {s['resolved']}/{s['total']} past cases "
+                f"({pct}%). Weight your recommended-fix confidence accordingly and "
+                f"{lean}. Use get_similar_past_fixes for the per-action breakdown.")
+    except Exception:
+        return ''
 
 
 def _run_loop(con, incident, seed_messages, created_by=None, max_iters=_MAX_ITERS):
@@ -768,7 +832,8 @@ def triage_incident(incident_id, *, force=False, app=None):
                      f"Starting automated triage for {inc.get('signal_type')} on {asset_name}.",
                      meta={'auto': True})
 
-        seed = [{'role': 'system', 'content': _system_prompt(inc, asset_name)},
+        ln = _learning_note(con, inc.get('signal_type'))
+        seed = [{'role': 'system', 'content': _system_prompt(inc, asset_name, ln)},
                 {'role': 'user', 'content':
                  f"Triage this {inc.get('signal_type')} incident on {asset_name}. "
                  f"Investigate with read-only tools, then propose a gated fix."}]
@@ -864,7 +929,9 @@ def _rebuild_openai_messages(con, inc, asset_name):
     compact context), and user turns. We do NOT replay tool_call/tool_result id
     pairs (those ids are stale) — instead we fold tool results into context as
     plain notes, which keeps the model grounded without id-matching errors."""
-    msgs = [{'role': 'system', 'content': _system_prompt(inc, asset_name)}]
+    msgs = [{'role': 'system',
+             'content': _system_prompt(inc, asset_name,
+                                       _learning_note(con, inc.get('signal_type')))}]
     for m in get_thread(con, inc['id']):
         role = m['role']
         if role == 'user':

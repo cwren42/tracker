@@ -83,8 +83,66 @@ def feed():
             open_count += 1
         incidents.append(d)
 
+    signal_toggles = _signal_toggle_state()
+    con = _db()
+    try:
+        teams_configured = bool(_inc._get_setting(con, 'teams_webhook_url', ''))
+    finally:
+        con.close()
     return render_template('incidents.html',
-                           incidents=incidents, open_count=open_count)
+                           incidents=incidents, open_count=open_count,
+                           signal_toggles=signal_toggles,
+                           teams_configured=teams_configured)
+
+
+# Human labels for the per-signal toggle switches (Feature 1).
+_SIGNAL_LABELS = {
+    'disk_low': 'Low disk space',
+    'service_down': 'Service down',
+    'agent_offline_but_up': 'Agent not checking in',
+    'patch_failed': 'Patch install failed',
+    'defender_critical': 'Critical vulnerability',
+}
+
+
+def _signal_toggle_state():
+    """Return [{signal, label, enabled}] for the per-signal switch row."""
+    con = _db()
+    try:
+        out = []
+        for sig in _inc.SIGNAL_TYPES:
+            out.append({'signal': sig,
+                        'label': _SIGNAL_LABELS.get(sig, sig),
+                        'enabled': _inc._signal_enabled(con, sig)})
+        return out
+    finally:
+        con.close()
+
+
+@bp.route('/incidents/signal-toggle', methods=['POST'])
+@login_required
+@admin_required
+def signal_toggle():
+    """Flip a per-signal detection switch (Feature 1). Writes the Setting
+    'incident_signal_<signal>_enabled' = '1'/'0'. Detection of that signal is
+    skipped on the next scan when off; re-enabling reuses the same scan."""
+    data = request.get_json(silent=True) or request.form
+    signal = (data.get('signal') or '').strip()
+    enabled = str(data.get('enabled')).strip().lower() in ('1', 'true', 'yes', 'on')
+    if signal not in _inc.SIGNAL_TYPES:
+        return jsonify({'ok': False, 'error': 'unknown signal'}), 400
+    con = _db()
+    try:
+        key = f'incident_signal_{signal}_enabled'
+        val = '1' if enabled else '0'
+        con.execute(
+            """INSERT INTO setting (key, value) VALUES (%s, %s)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (key, val))
+        con.commit()
+    finally:
+        con.close()
+    return jsonify({'ok': True, 'signal': signal, 'enabled': enabled})
 
 
 # ─────────────────────────────────────────────────────────────

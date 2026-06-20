@@ -25,6 +25,34 @@
     </div>
   </div>
 
+  <!-- Per-signal detection switches (Feature 1) -->
+  {% if signal_toggles %}
+  <div class="card border-0 mb-3">
+    <div class="card-body py-2">
+      <div class="d-flex align-items-center flex-wrap gap-3">
+        <span class="small text-muted me-1"><i class="bi bi-toggles me-1"></i>Detection</span>
+        {% for t in signal_toggles %}
+        <div class="form-check form-switch m-0">
+          <input class="form-check-input signal-switch" type="checkbox" role="switch"
+                 id="sig-{{ t.signal }}" data-signal="{{ t.signal }}"
+                 {% if t.enabled %}checked{% endif %}>
+          <label class="form-check-label small" for="sig-{{ t.signal }}">{{ t.label }}</label>
+        </div>
+        {% endfor %}
+        <span class="small text-muted ms-auto" id="signal-toggle-status"></span>
+      </div>
+      <div class="small text-muted mt-2">
+        <i class="bi bi-microsoft-teams me-1"></i>Teams alerts:
+        {% if teams_configured %}
+          <span class="text-success">on</span> (posting actionable incidents to the configured webhook)
+        {% else %}
+          <span class="text-secondary">off</span> — set Setting <code>teams_webhook_url</code> to enable
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if not incidents %}
     <div class="card border-0">
       <div class="card-body text-center text-muted py-5">
@@ -109,4 +137,39 @@
   .incident-card { transition: box-shadow .12s ease, transform .12s ease; }
   .incident-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); transform: translateY(-1px); }
 </style>
+<script>
+(function () {
+  var status = document.getElementById('signal-toggle-status');
+  function flash(msg, ok) {
+    if (!status) return;
+    status.textContent = msg;
+    status.className = 'small ms-auto ' + (ok ? 'text-success' : 'text-danger');
+    setTimeout(function () { status.textContent = ''; }, 2500);
+  }
+  document.querySelectorAll('.signal-switch').forEach(function (el) {
+    el.addEventListener('change', function () {
+      var sig = el.getAttribute('data-signal');
+      var enabled = el.checked;
+      el.disabled = true;
+      fetch("{{ url_for('incidents.signal_toggle') }}", {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json',
+                  'X-CSRFToken': "{{ csrf_token() }}"},
+        body: JSON.stringify({signal: sig, enabled: enabled})
+      }).then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j && j.ok) {
+            flash((j.enabled ? 'Enabled' : 'Disabled') + ' detection for ' + sig, true);
+          } else {
+            el.checked = !enabled;
+            flash('Failed to update ' + sig, false);
+          }
+        }).catch(function () {
+          el.checked = !enabled;
+          flash('Failed to update ' + sig, false);
+        }).finally(function () { el.disabled = false; });
+    });
+  });
+})();
+</script>
 {% endblock %}

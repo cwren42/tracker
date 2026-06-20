@@ -123,10 +123,121 @@ class InAppNotifier(Notifier):
                     incident.get('asset_id'))
 
 
+class TeamsNotifier(Notifier):
+    """Feature 5: post an Adaptive Card to a Teams Incoming Webhook on a new
+    ACTIONABLE incident. CONFIGURABLE + DEFAULT OFF — driven entirely by the
+    Setting 'teams_webhook_url'. Empty (the default) = disabled, so this is built
+    and ready but INERT until an operator pastes a webhook URL.
+
+    Inline approve-with-callback is intentionally OUT of scope: the card carries a
+    deep-link 'Open in Tracker' button to the incident chat; all actions happen by
+    clicking through to the Tracker. Fully fail-safe — a webhook error NEVER
+    affects incident creation (best-effort POST, swallowed)."""
+    channel = 'teams'
+
+    def __init__(self, webhook_url, base_url):
+        self.webhook_url = webhook_url
+        self.base_url = (base_url or '').rstrip('/')
+
+    def push(self, incident: dict) -> None:
+        if not self.webhook_url:
+            return
+        card = build_teams_card(incident, self.base_url)
+        try:
+            import requests
+            requests.post(self.webhook_url, json=card, timeout=8)
+            logger.info('incident #%s posted to Teams webhook', incident.get('id'))
+        except Exception as e:
+            logger.info('Teams notify skipped for incident %s: %s',
+                        incident.get('id'), e)
+
+
+def build_teams_card(incident: dict, base_url: str) -> dict:
+    """Build the Teams MessageCard/Adaptive-Card envelope for an incident. Pure
+    function (no network) so it can be dry-run/unit-tested without sending.
+
+    We use the broadly-compatible Adaptive Card wrapped in an
+    'application/vnd.microsoft.card.adaptive' attachment, which Teams Incoming
+    Webhooks render. The 'Open in Tracker' Action.OpenUrl deep-links to the
+    incident chat."""
+    sev = (incident.get('severity') or 'warning').lower()
+    colour = {'critical': 'attention', 'warning': 'warning',
+              'info': 'good'}.get(sev, 'default')
+    sig = incident.get('signal_type') or 'incident'
+    asset = incident.get('asset_name') or (
+        f"asset {incident.get('asset_id')}" if incident.get('asset_id') else 'unknown asset')
+    diagnosis = (incident.get('diagnosis_text') or '(no AI diagnosis yet)')[:1200]
+    inc_id = incident.get('id')
+    deep_link = f"{base_url}/incidents/{inc_id}/chat" if (base_url and inc_id) else None
+
+    body = [
+        {"type": "TextBlock", "size": "Large", "weight": "Bolder",
+         "color": colour, "wrap": True,
+         "text": f"{sev.upper()}: {sig.replace('_', ' ')}"},
+        {"type": "TextBlock", "spacing": "None", "isSubtle": True, "wrap": True,
+         "text": f"on **{asset}**"},
+        {"type": "TextBlock", "wrap": True, "text": diagnosis},
+    ]
+    actions = []
+    if deep_link:
+        actions.append({"type": "Action.OpenUrl", "title": "Open in Tracker",
+                        "url": deep_link})
+
+    card = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+    }
+    if actions:
+        card["actions"] = actions
+
+    return {
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": None,
+            "content": card,
+        }],
+    }
+
+
+# Signals worth pushing to Teams — ACTIONABLE only (don't spam the channel with
+# notify-only Defender list / offline-agent rows). Mirrors _AUTO_TRIAGE_SIGNALS.
+_TEAMS_PUSH_SIGNALS = {'disk_low', 'patch_failed', 'service_down'}
+
+
 def _notifier() -> Notifier:
-    """Resolve the active notifier. Today always in-app; Phase 2 can branch on a
-    Setting (e.g. incident_push_channel) without touching the detector."""
+    """Resolve the active notifier. In-app is always the system of record. Feature
+    5: when 'teams_webhook_url' is configured we ALSO fan out to Teams (handled in
+    _push_notifications, which the detector calls). This still returns the in-app
+    notifier so pushed_channel stays 'in_app' (the row IS the canonical push)."""
     return InAppNotifier()
+
+
+def _push_notifications(con, incident: dict):
+    """Fan-out push for a freshly-created ACTIONABLE incident. Always pushes
+    in-app (the row). Additionally posts to Teams when a webhook is configured
+    (Feature 5 — default off). Best-effort: never raises."""
+    try:
+        InAppNotifier().push(incident)
+    except Exception:
+        pass
+    # Teams (configurable, default OFF): only for actionable signals. Fire the
+    # webhook POST on a daemon thread so a slow/unreachable Teams endpoint can
+    # NEVER stretch the detector's open (uncommitted) transaction / pooled conn.
+    try:
+        webhook = _get_setting(con, 'teams_webhook_url', '')
+        if webhook and incident.get('signal_type') in _TEAMS_PUSH_SIGNALS:
+            base = _get_setting(con, 'tracker_public_base_url',
+                                'https://tracker.cirquetools.com')
+            import threading
+            threading.Thread(
+                target=TeamsNotifier(webhook, base).push,
+                args=(incident,), daemon=True).start()
+    except Exception as e:
+        logger.info('teams fan-out skipped for incident %s: %s',
+                    incident.get('id'), e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +249,20 @@ def _get_setting(con, key, default=''):
         return r['value'] if r and r['value'] is not None else default
     except Exception:
         return default
+
+
+def _signal_enabled(con, signal_type):
+    """Per-signal master switch (Feature 1). Setting key
+    'incident_signal_<signal>_enabled' — default ON ('1'). When OFF the detector
+    is SKIPPED entirely (no new incidents created). Re-enabling reuses the same
+    scan, so existing/terminal rows are untouched. Truthy = '1'/'true' (any case)."""
+    v = _get_setting(con, f'incident_signal_{signal_type}_enabled', '1')
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# All signal types that have a detector / per-signal toggle (UI + defaults).
+SIGNAL_TYPES = ('disk_low', 'service_down', 'agent_offline_but_up',
+                'patch_failed', 'defender_critical')
 
 
 def _effective_tier(con, signal_type):
@@ -212,6 +337,68 @@ def _disk_cleanup_payload():
     }
 
 
+def _installer_cleanup_payload():
+    """SAFE Windows component-store cleanup for the C:\\Windows\\Installer hog
+    (Feature 4). SAFETY-FIRST — this is deliberately CONSERVATIVE:
+
+      * It does NOT delete anything in C:\\Windows\\Installer. Deleting in-use
+        MSI/MSP packages there breaks application repair/uninstall, so we never
+        do an aggressive Installer purge.
+      * It RUNS the Microsoft-sanctioned, safe component-store cleanup
+        (DISM /Online /Cleanup-Image /StartComponentCleanup) which reclaims
+        superseded WinSxS components — supported and reversible-safe.
+      * It then produces a READ-ONLY PatchCleaner-style REPORT of orphaned
+        Installer files (MSI/MSP not referenced by any registered product) and
+        the reclaimable size, for MANUAL review — it does NOT act on them.
+
+    Always Tier-1 (risk_tier 1 -> human approval), servers excluded by
+    build_actions()."""
+    code = (
+        "$ErrorActionPreference='SilentlyContinue'\n"
+        "Write-Output '=== SAFE component-store cleanup (DISM /StartComponentCleanup) ==='\n"
+        "Write-Output 'This does NOT touch C:\\Windows\\Installer. It cleans superseded WinSxS components only.'\n"
+        "$before=(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\").FreeSpace\n"
+        "dism.exe /Online /Cleanup-Image /StartComponentCleanup | Out-String | Write-Output\n"
+        "$after=(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\").FreeSpace\n"
+        "if($before -and $after){ Write-Output (\"Freed by DISM: {0} GB (C: free now {1} GB)\" -f "
+        "[math]::Round(($after-$before)/1GB,2),[math]::Round($after/1GB,1)) }\n"
+        "\n"
+        "Write-Output ''\n"
+        "Write-Output '=== READ-ONLY report: orphaned C:\\Windows\\Installer packages (NOT deleted) ==='\n"
+        "Write-Output 'PatchCleaner-style: MSI/MSP files in the Installer cache not referenced by any registered product.'\n"
+        "try {\n"
+        "  $referenced = New-Object System.Collections.Generic.HashSet[string]\n"
+        "  # LocalPackage = the cached MSI for each installed product.\n"
+        "  Get-ChildItem 'HKLM:\\SOFTWARE\\Classes\\Installer\\Products' -EA SilentlyContinue | ForEach-Object {\n"
+        "    $sp=(Get-ItemProperty (Join-Path $_.PSPath 'SourceList\\Net') -EA SilentlyContinue)\n"
+        "  }\n"
+        "  # Patches + Products LocalPackage references via the Windows Installer COM-less registry view.\n"
+        "  $roots=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products',\n"
+        "           'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Patches')\n"
+        "  foreach($r in $roots){\n"
+        "    Get-ChildItem $r -Recurse -EA SilentlyContinue | ForEach-Object {\n"
+        "      $lp=(Get-ItemProperty $_.PSPath -EA SilentlyContinue).LocalPackage\n"
+        "      if($lp){ [void]$referenced.Add(([string]$lp).ToLower()) }\n"
+        "    }\n"
+        "  }\n"
+        "  $dir='C:\\Windows\\Installer'\n"
+        "  $files=Get-ChildItem -LiteralPath $dir -File -Force -Include *.msi,*.msp -EA SilentlyContinue\n"
+        "  if(-not $files){ $files=Get-ChildItem -LiteralPath $dir -File -Force -EA SilentlyContinue | "
+        "Where-Object { $_.Extension -in '.msi','.msp' } }\n"
+        "  $orphans=@(); $orphanBytes=0\n"
+        "  foreach($f in $files){\n"
+        "    if(-not $referenced.Contains($f.FullName.ToLower())){ $orphans+=$f; $orphanBytes+=$f.Length }\n"
+        "  }\n"
+        "  $totalBytes=($files | Measure-Object Length -Sum).Sum\n"
+        "  Write-Output (\"Installer cache: {0} files, {1} GB total\" -f $files.Count,[math]::Round($totalBytes/1GB,2))\n"
+        "  Write-Output (\"Likely-orphaned (unreferenced): {0} files, ~{1} GB reclaimable by manual review\" -f "
+        "$orphans.Count,[math]::Round($orphanBytes/1GB,2))\n"
+        "  Write-Output 'NOTE: orphaned MSI/MSP are NOT deleted automatically — deleting in-use packages breaks app repair/uninstall. Review with PatchCleaner manually if reclaim is needed.'\n"
+        "  $orphans | Sort-Object Length -Descending | Select-Object -First 15 Name,@{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table -Auto | Out-String | Write-Output\n"
+        "} catch { Write-Output (\"Installer-orphan report failed: $($_.Exception.Message)\") }\n")
+    return {'type': 'run_script', 'shell': 'powershell', 'code': code, 'timeout': 600}
+
+
 def _restart_service_payload(service_name):
     # NB: service_down is currently NO-OP (no telemetry source), but the template
     # is here and safe so the action set is complete the moment a source exists.
@@ -246,6 +433,23 @@ def _build_actions_raw(signal_type, ctx):
         return [
             {'key': 'clear_caches', 'label': 'Clear safe caches (C:)',
              'kind': 'run', 'risk_tier': 0, 'run_payload': _disk_cleanup_payload()},
+            # Feature 4: SAFE component-store cleanup (DISM) + a READ-ONLY report of
+            # orphaned C:\Windows\Installer packages. risk_tier 1 -> ALWAYS Tier-1
+            # propose (human approval), NEVER auto. It does NOT delete Installer
+            # files; it only runs the Microsoft-sanctioned WinSxS cleanup and
+            # reports the orphan reclaim for manual review. Servers are stripped of
+            # all 'run' actions in build_actions().
+            {'key': 'installer_cleanup',
+             'label': 'Clean component store (DISM) + report Installer orphans',
+             'kind': 'run', 'risk_tier': 1,
+             'run_payload': _installer_cleanup_payload(),
+             'why_it_works': (
+                 "Runs the Microsoft-supported DISM /StartComponentCleanup to reclaim "
+                 "superseded WinSxS components (safe), then produces a READ-ONLY report "
+                 "of orphaned C:\\Windows\\Installer MSI/MSP files and the reclaimable "
+                 "size. It does NOT delete any Installer packages — deleting in-use "
+                 "MSI/MSP there breaks app repair/uninstall, so that reclaim is left "
+                 "for manual review. Requires human approval (Tier-1).")},
             _TICKET_ACTION, _DISMISS_ACTION,
         ]
     if signal_type == 'service_down':
@@ -460,8 +664,19 @@ def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
                    WHERE id=%s""",
                 (auto_action['key'], rq_id, inc_id))
 
-    _notifier().push({'id': inc_id, 'signal_type': signal_type,
-                      'asset_id': asset_id})
+    # Fan-out push (in-app always; Teams when a webhook is configured — Feature 5).
+    asset_name = None
+    if asset_id is not None:
+        try:
+            an = con.execute("SELECT name FROM asset WHERE id=%s",
+                             (asset_id,)).fetchone()
+            asset_name = an['name'] if an else None
+        except Exception:
+            asset_name = None
+    _push_notifications(con, {
+        'id': inc_id, 'signal_type': signal_type, 'asset_id': asset_id,
+        'asset_name': asset_name, 'severity': severity,
+        'diagnosis_text': diag})
 
     # ── Auto-kick the agentic triage loop for ACTIONABLE signals only ──────────
     # disk_low / patch_failed / service_down (Tier 0/1) → triage NOW so the
@@ -505,11 +720,57 @@ def _enqueue_action(con, asset_id, agent_id, action):
 # DETECTORS — each returns the count it created. Individually fail-safe.
 # Build them all; NO-OP (don't fabricate) when a source isn't reliably present.
 # ─────────────────────────────────────────────────────────────────────────────
+def _disk_thresholds(con):
+    """The single source of truth for the disk-low threshold, read from Settings.
+    Used by BOTH the detector and the verify pass so verify matches detection.
+    Fail-safe to the documented defaults (10% / 10 GB) on a bad/blank value."""
+    def _f(key, default):
+        try:
+            return float(_get_setting(con, key, str(default)))
+        except (TypeError, ValueError):
+            return float(default)
+    return _f('incident_disk_low_pct', 10), _f('incident_disk_low_gb', 10)
+
+
+def _disk_drive_is_low(d, threshold_pct, threshold_gb):
+    """Given one disk dict from telemetry's disk_json and the thresholds, return
+    (is_low, free_pct, free_gb) using the SAME logic for detection and verify.
+    Returns (None, …) when the dict is not a FIXED OS-relevant drive to consider
+    (so callers can `continue`)."""
+    dt = d.get('drive_type')
+    mp = (d.get('mountpoint') or '').strip().upper().rstrip('\\').rstrip('/')
+    is_os = mp == 'C:' or (d.get('mountpoint') or '') == '/'
+    if dt is not None:
+        try:
+            if int(dt) != 3:
+                return None, None, None
+        except (TypeError, ValueError):
+            if not is_os:
+                return None, None, None
+    elif not is_os:
+        return None, None, None
+    total = d.get('total_gb') or 0
+    free = d.get('free_gb')
+    # Coerce percent defensively — some agents serialize numerics as strings; a
+    # raw `100 - '7'` would TypeError and abort the whole detector for this scan.
+    pct = None
+    if 'percent' in d and d['percent'] is not None:
+        try:
+            pct = float(d['percent'])
+        except (TypeError, ValueError):
+            pct = None
+    if free is None and pct is not None and total:
+        free = round(total * (100 - pct) / 100.0, 1)
+    free_pct = (100 - pct) if pct is not None else (
+        round(free / total * 100, 1) if (total and free is not None) else 100)
+    low = free_pct <= threshold_pct or (free is not None and free <= threshold_gb)
+    return low, free_pct, free
+
+
 def _detect_disk_low(con):
     """Latest telemetry per agent; FIXED-drive free% below threshold."""
     created = 0
-    threshold_pct = float(_get_setting(con, 'incident_disk_low_pct', '10'))
-    threshold_gb = float(_get_setting(con, 'incident_disk_low_gb', '10'))
+    threshold_pct, threshold_gb = _disk_thresholds(con)
     rows = con.execute(
         """SELECT DISTINCT ON (t.agent_id)
                   t.agent_id, t.asset_id, t.hostname, t.disk_json
@@ -525,28 +786,15 @@ def _detect_disk_low(con):
         except Exception:
             continue
         for d in (disks if isinstance(disks, list) else []):
-            # DriveType gate: FIXED only (3). No drive_type -> legacy OS-drive gate.
-            dt = d.get('drive_type')
+            # DriveType gate + threshold check via the shared helper so the verify
+            # pass uses the identical logic (Feature-2 fix).
             mp = (d.get('mountpoint') or '').strip().upper().rstrip('\\').rstrip('/')
-            is_os = mp == 'C:' or (d.get('mountpoint') or '') == '/'
-            if dt is not None:
-                try:
-                    if int(dt) != 3:
-                        continue
-                except (TypeError, ValueError):
-                    if not is_os:
-                        continue
-            elif not is_os:
+            low, free_pct, free = _disk_drive_is_low(d, threshold_pct, threshold_gb)
+            if low is None:  # not a FIXED OS-relevant drive — skip
                 continue
-            total = d.get('total_gb') or 0
-            free = d.get('free_gb')
-            if free is None and 'percent' in d and total:
-                free = round(total * (100 - d['percent']) / 100.0, 1)
-            free_pct = (100 - d['percent']) if 'percent' in d else (
-                round(free / total * 100, 1) if total else 100)
-            low = free_pct <= threshold_pct or (free is not None and free <= threshold_gb)
             if not low:
                 continue
+            total = d.get('total_gb') or 0
             drive = d.get('device', mp or '?')
             ctx = {'host': r['hostname'], 'drive': drive,
                    'free_pct': round(free_pct, 1), 'free_gb': free,
@@ -566,14 +814,58 @@ def _detect_disk_low(con):
     return created
 
 
+# Services we will actually fire an incident on (and offer Restart-Service for).
+# Mirrors the agent's _WATCHED_SERVICES; auto-start services NOT on this list are
+# noisy/expected-stopped on plenty of boxes, so we only incident the curated few.
+_SERVICE_DOWN_WATCH = {'spooler', 'windefend', 'bits', 'wuauserv',
+                       'cirquermmagent', 'cirquermm'}
+
+
 def _detect_service_down(con):
-    """A watched critical service not Running — IF telemetry carries service state.
-    Our telemetry (security_json/sysinfo_json) does NOT include running-service
-    state today, so this detector NO-OPs (it does not fabricate). The action
-    template + tier are already defined so it lights up the moment the agent
-    starts shipping a services list."""
-    # No reliable source -> no-op. (Checked sysinfo_json/security_json schema.)
-    return 0
+    """A watched critical service Stopped per the agent's `services_down`
+    telemetry (2.9.40+). The agent ships a bounded list of stopped auto-start /
+    watch-listed services as JSON; we incident only on the curated watch-list
+    (_SERVICE_DOWN_WATCH) so we don't spam on benign auto-starts. One incident
+    per (asset, service) — dedup is enforced by _create_incident's open-incident
+    contract. NO-OPs cleanly for agents on older versions (services_down NULL)."""
+    created = 0
+    rows = con.execute(
+        """SELECT DISTINCT ON (t.agent_id)
+                  t.agent_id, t.asset_id, t.hostname, t.services_down
+           FROM rmm_telemetry t
+           WHERE t.captured_at > NOW() - INTERVAL '2 hours'
+             AND t.services_down IS NOT NULL
+           ORDER BY t.agent_id, t.captured_at DESC"""
+    ).fetchall()
+    for r in rows:
+        try:
+            svcs = json.loads(r['services_down'])
+        except Exception:
+            continue
+        for s in (svcs if isinstance(svcs, list) else []):
+            if not isinstance(s, dict):
+                continue
+            name = (s.get('name') or '').strip()
+            status = (s.get('status') or '').strip()
+            if not name or status.lower() == 'running':
+                continue
+            if name.lower() not in _SERVICE_DOWN_WATCH:
+                continue
+            display = (s.get('display') or name).strip()
+            start_type = (s.get('start_type') or '').strip()
+            ctx = {'host': r['hostname'], 'service': name, 'display': display,
+                   'start_type': start_type, 'status': status or 'Stopped'}
+            fb = (f"{display} ({name}) is {status or 'Stopped'} on {r['hostname']}"
+                  f" but should be running. Restarting the service will attempt to"
+                  f" bring it back up; if it won't stay running it needs manual"
+                  f" review (dependency failure, corruption, or a disabled state).")
+            if _create_incident(con, asset_id=r['asset_id'], agent_id=r['agent_id'],
+                                signal_type='service_down', severity='warning',
+                                dedup_key=f"service_down:{r['asset_id']}:{name}",
+                                ctx=ctx, fallback_diag=fb):
+                con.commit()
+                created += 1
+    return created
 
 
 def _detect_agent_offline_but_up(con):
@@ -776,6 +1068,13 @@ def _verify_pass(con):
                        verify_result='resolved: remediation completed and signal cleared'
                    WHERE id=%s""", (r['id'],))
             con.commit()
+            # Learning loop: only count it as a fix when an action actually ran
+            # (NOT a stranded self-heal where nothing was applied).
+            if not stranded:
+                _record_fix_outcome(
+                    con, incident_id=r['id'], asset_id=r['asset_id'],
+                    signal_type=r['signal_type'], chosen_action=r['chosen_action'],
+                    success=True, detail='remediation completed and signal cleared')
             _post_verify_to_thread(
                 con, r['id'],
                 "Verified: the remediation completed and the condition has cleared. "
@@ -799,6 +1098,11 @@ def _verify_pass(con):
                 (f'escalated to ticket #{tid} after {r["attempt_count"]} attempts'
                  if tid else 'escalated (ticket create failed)', r['id']))
             con.commit()
+            _record_fix_outcome(
+                con, incident_id=r['id'], asset_id=r['asset_id'],
+                signal_type=r['signal_type'], chosen_action=r['chosen_action'],
+                success=False,
+                detail=f'escalated after {r["attempt_count"]} failed attempts')
             _post_verify_to_thread(
                 con, r['id'],
                 f"The fix was attempted {r['attempt_count']}x but the condition "
@@ -851,10 +1155,13 @@ def _signal_still_present(con, signal_type, agent_id, asset_id):
             if not r or not r['disk_json']:
                 return False
             disks = json.loads(r['disk_json'])
+            # Feature-2 fix: honour the SAME Settings the detector uses
+            # (incident_disk_low_pct / _gb) via the shared helper so verify
+            # matches detection — not a hardcoded 10%.
+            threshold_pct, threshold_gb = _disk_thresholds(con)
             for d in (disks if isinstance(disks, list) else []):
-                if d.get('drive_type') not in (None, 3):
-                    continue
-                if 'percent' in d and (100 - d['percent']) <= 10:
+                low, _fp, _fg = _disk_drive_is_low(d, threshold_pct, threshold_gb)
+                if low:
                     return True
             return False
         if signal_type == 'patch_failed':
@@ -868,6 +1175,61 @@ def _signal_still_present(con, signal_type, agent_id, asset_id):
     except Exception:
         return False
     return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Learning loop (Feature 3) — record the OUTCOME of a remediation attempt so we
+# can surface "this fix resolved N/M past cases" and nudge AI confidence.
+# Fail-safe + idempotent (one row per incident via uq_incident_fix_outcome_incident).
+# ─────────────────────────────────────────────────────────────────────────────
+def _record_fix_outcome(con, *, incident_id, asset_id, signal_type,
+                        chosen_action, success, detail=None):
+    """Write one outcome row. Best-effort: a learning-loop write must NEVER break
+    the verify pass. Skips when no real action was applied (chosen_action None)."""
+    if not chosen_action:
+        return
+    try:
+        con.execute(
+            """INSERT INTO incident_fix_outcome
+                 (incident_id, asset_id, signal_type, chosen_action, success,
+                  detail, created_at)
+               VALUES (%s,%s,%s,%s,%s,%s,NOW())
+               ON CONFLICT (incident_id) DO NOTHING""",
+            (incident_id, asset_id, signal_type, chosen_action, bool(success),
+             (detail or '')[:300]))
+        con.commit()
+    except Exception as e:
+        logger.info('fix-outcome record skipped for incident %s: %s',
+                    incident_id, e)
+        try:
+            con.rollback()
+        except Exception:
+            pass
+
+
+def fix_success_stats(con, signal_type, chosen_action=None):
+    """Aggregate the learning loop: (resolved, total) past outcomes for a signal,
+    optionally for one action. Used by triage to surface "resolved N/M cases" and
+    to nudge confidence. Returns {'resolved': int, 'total': int, 'rate': float}.
+    Fail-safe to zeros (e.g. table not yet migrated)."""
+    try:
+        if chosen_action:
+            r = con.execute(
+                """SELECT COUNT(*) FILTER (WHERE success) AS ok, COUNT(*) AS n
+                   FROM incident_fix_outcome
+                   WHERE signal_type=%s AND chosen_action=%s""",
+                (signal_type, chosen_action)).fetchone()
+        else:
+            r = con.execute(
+                """SELECT COUNT(*) FILTER (WHERE success) AS ok, COUNT(*) AS n
+                   FROM incident_fix_outcome WHERE signal_type=%s""",
+                (signal_type,)).fetchone()
+        ok = (r['ok'] if r else 0) or 0
+        n = (r['n'] if r else 0) or 0
+        return {'resolved': ok, 'total': n,
+                'rate': round(ok / n, 3) if n else 0.0}
+    except Exception:
+        return {'resolved': 0, 'total': 0, 'rate': 0.0}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -920,6 +1282,12 @@ def scan(app=None):
         if _get_setting(con, 'incident_scan_enabled', '1') not in ('1', 'true', 'True'):
             return {'disabled': True}
         for name, fn in _DETECTORS:
+            # Feature 1: per-signal master switch. A disabled signal's detector is
+            # skipped entirely (creates no incidents). The verify pass still runs
+            # for already-open incidents so they can resolve/close normally.
+            if not _signal_enabled(con, name):
+                summary['created'][name] = 'disabled'
+                continue
             try:
                 summary['created'][name] = fn(con)
             except Exception as e:

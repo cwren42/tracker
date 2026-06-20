@@ -1194,7 +1194,8 @@ def _record_fix_outcome(con, *, incident_id, asset_id, signal_type,
                  (incident_id, asset_id, signal_type, chosen_action, success,
                   detail, created_at)
                VALUES (%s,%s,%s,%s,%s,%s,NOW())
-               ON CONFLICT (incident_id) DO NOTHING""",
+               ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
+               DO NOTHING""",
             (incident_id, asset_id, signal_type, chosen_action, bool(success),
              (detail or '')[:300]))
         con.commit()

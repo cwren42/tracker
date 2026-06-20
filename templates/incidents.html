@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}AI Assist — Incidents{% endblock %}
+{% block content %}
+<div class="container-fluid px-3 py-3">
+
+  <!-- Header -->
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">
+        <i class="bi bi-robot text-primary me-2"></i>AI Assist
+        {% if open_count %}<span class="badge rounded-pill bg-danger ms-1">{{ open_count }}</span>{% endif %}
+      </h4>
+      <small class="text-muted">Proactive remediation — the assistant detects an issue, diagnoses it, and offers 1-click fixes</small>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <form method="post" action="{{ url_for('incidents.scan_now') }}" class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-outline-primary" type="submit">
+          <i class="bi bi-search me-1"></i>Scan now
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% if not incidents %}
+    <div class="card border-0">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-check-circle fs-1 d-block mb-2 text-success"></i>
+        No incidents. The assistant scans the fleet automatically every few minutes.
+      </div>
+    </div>
+  {% endif %}
+
+  {% set sev_pill = {'critical':'bg-danger', 'warning':'bg-warning text-dark', 'info':'bg-info text-dark'} %}
+  {% set sig_icon = {
+      'disk_low':'bi-hdd-fill', 'service_down':'bi-gear-fill',
+      'agent_offline_but_up':'bi-plug', 'patch_failed':'bi-patch-exclamation',
+      'defender_critical':'bi-shield-exclamation'} %}
+  {% set sig_label = {
+      'disk_low':'Low disk space', 'service_down':'Service down',
+      'agent_offline_but_up':'Agent not checking in', 'patch_failed':'Patch install failed',
+      'defender_critical':'Critical vulnerability'} %}
+
+  {% for inc in incidents %}
+  <div class="card border-0 mb-2 {% if not inc.is_open %}opacity-75{% endif %}">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div class="flex-grow-1">
+          <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+            <span class="badge rounded-pill {{ sev_pill.get(inc.severity, 'bg-secondary') }}">{{ inc.severity }}</span>
+            <strong><i class="bi {{ sig_icon.get(inc.signal_type, 'bi-bell') }} me-1"></i>{{ sig_label.get(inc.signal_type, inc.signal_type) }}</strong>
+            <span class="text-muted">on</span>
+            <strong>{{ inc.asset_name or (('asset ' ~ inc.asset_id) if inc.asset_id else 'unknown') }}</strong>
+            {% if inc.ai_confidence %}
+              <span class="badge bg-light text-dark border" title="AI narrative confidence">
+                <i class="bi bi-cpu me-1"></i>{{ (inc.ai_confidence * 100) | round | int }}%
+              </span>
+            {% endif %}
+          </div>
+          {% if inc.diagnosis_text %}
+            <div class="text-body mb-2" style="max-width:70ch;">{{ inc.diagnosis_text }}</div>
+          {% endif %}
+          <div class="small text-muted">
+            <span title="{{ inc.created_at }}">opened {{ inc.created_at }}</span>
+            {% if inc.ai_model %} &middot; {{ inc.ai_model }}{% endif %}
+            {% if inc.verify_result %} &middot; <em>{{ inc.verify_result }}</em>{% endif %}
+          </div>
+        </div>
+
+        <!-- Status / actions -->
+        <div class="text-end">
+          {% if inc.status == 'auto_handled' %}
+            <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>handled automatically</span>
+            <div class="small text-muted mt-1">Ran: {{ inc.chosen_action or 'safe cleanup' }}</div>
+          {% elif inc.status == 'remediating' %}
+            <span class="badge bg-info text-dark"><i class="bi bi-arrow-repeat me-1"></i>remediating</span>
+          {% elif inc.status == 'resolved' %}
+            <span class="badge bg-success">resolved</span>
+          {% elif inc.status == 'escalated' %}
+            <span class="badge bg-danger">escalated</span>
+          {% elif inc.status == 'dismissed' %}
+            <span class="badge bg-secondary">dismissed</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if inc.is_open and inc.proposed_actions %}
+      <div class="d-flex gap-2 flex-wrap mt-3">
+        {% for a in inc.proposed_actions %}
+          <form method="post" action="{{ url_for('incidents.act', incident_id=inc.id) }}" class="d-inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action_key" value="{{ a.key }}">
+            <button type="submit"
+              class="btn btn-sm {% if a.kind == 'run' and a.risk_tier == 0 %}btn-success{% elif a.kind == 'run' %}btn-primary{% elif a.kind == 'ticket' %}btn-outline-secondary{% else %}btn-outline-secondary{% endif %}"
+              {% if a.kind == 'run' %}onclick="return confirm('Run: {{ a.label }} on {{ inc.asset_name or inc.asset_id }}?');"{% endif %}>
+              {% if a.kind == 'run' %}<i class="bi bi-lightning-charge-fill me-1"></i>{% elif a.kind == 'ticket' %}<i class="bi bi-ticket-detailed me-1"></i>{% else %}<i class="bi bi-x-circle me-1"></i>{% endif %}{{ a.label }}
+            </button>
+          </form>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}

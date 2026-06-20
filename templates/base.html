@@ -129,6 +129,12 @@
         {% if current_user.role == 'admin' %}
         <div class="nav-section-label">Operations</div>
 
+        <a class="sidebar-link {% if request.endpoint == 'incidents.feed' %}active{% endif %}"
+           href="{{ url_for('incidents.feed') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="AI Assist">
+            <i class="bi bi-robot" style="color:#6366f1"></i><span class="link-label">AI Assist</span>
+            <span id="incident-badge" class="badge rounded-pill bg-danger ms-auto" style="display:none;"></span>
+        </a>
+
         <!-- Monitoring group -->
         <a class="sidebar-link sidebar-parent {% if (request.endpoint and request.endpoint.startswith('monitoring')) or (request.endpoint and 'quarantine' in request.endpoint) %}active{% endif %}"
            data-bs-toggle="collapse" href="#sub-monitoring" role="button"
@@ -697,5 +703,26 @@
         };
     })();
     </script>
+    {% if current_user.is_authenticated and current_user.role == 'admin' %}
+    <script>
+    // AI Assist nav badge — open-incident count, polled lightly.
+    (function () {
+      var el = document.getElementById('incident-badge');
+      if (!el) return;
+      function refresh() {
+        fetch('{{ url_for("incidents.badge") }}', {headers: {'X-Requested-With': 'fetch'}})
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d) return;
+            if (d.open > 0) { el.textContent = d.open; el.style.display = ''; }
+            else { el.style.display = 'none'; }
+          })
+          .catch(function () {});
+      }
+      refresh();
+      setInterval(refresh, 60000);
+    })();
+    </script>
+    {% endif %}
 </body>
 </html>

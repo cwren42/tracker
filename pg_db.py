@@ -212,6 +212,14 @@ class _Conn:
     def commit(self):
         self._conn.commit()
 
+    def rollback(self):
+        # Reset an aborted/uncommitted transaction so the same pooled connection
+        # can keep being used (psycopg2 leaves a failed txn in "aborted" state —
+        # every subsequent execute() raises InFailedSqlTransaction until rollback).
+        # Mirrors sqlite3.Connection.rollback(); background services that catch a
+        # mid-loop error and continue on the same _Conn depend on this.
+        self._conn.rollback()
+
     def close(self):
         # Return connection to pool rather than closing it.
         try:

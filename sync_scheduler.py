@@ -323,10 +323,37 @@ def start_sync_scheduler(flask_app):
         misfire_grace_time=120,
     )
 
+    # Proactive AI Remediation: detect -> diagnose -> propose/auto-handle ->
+    # verify. Fully fail-safe (incident_service.scan swallows its own errors), so
+    # a bad pass can never wedge the scheduler. 10-min cadence (telemetry is
+    # 5-min pull-based; no need to scan faster).
+    if os.environ.get('DISABLE_INCIDENT_SCAN', '').lower() not in ('1', 'true', 'yes'):
+        _scheduler.add_job(
+            func=lambda: run_incident_scan_job(flask_app),
+            trigger='interval',
+            minutes=int(os.environ.get('INCIDENT_SCAN_INTERVAL_MINUTES', '10')),
+            id='incident_scan',
+            name='Proactive AI Remediation incident scan',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
+        )
+
     _scheduler.start()
     logger.info('Started sync scheduler')
 
     return _scheduler
+
+
+def run_incident_scan_job(flask_app):
+    """Scheduler wrapper for the Proactive AI Remediation detector/orchestrator.
+    incident_service.scan is itself fully fail-safe; this just guards the import."""
+    try:
+        import incident_service
+        incident_service.run_incident_scan_job(flask_app)
+    except Exception:
+        logger.exception('incident scan job failed to launch')
 
 
 def run_metrics_snapshot_job(flask_app):

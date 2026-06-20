@@ -1778,6 +1778,166 @@ def compute_and_store_reconciliation_snapshot(con, machines, machine_vulns, fetc
         return None
 
 
+def _resolve_installed_version(con_software_index, asset_id, product_key, software_name, vendor):
+    """Best-effort installed version for (asset, software) from rmm_software.
+
+    Defender's per-machine software feed does NOT carry the installed version,
+    but our own RMM software inventory does. con_software_index is the dict
+    built by _build_asset_software_versions(): asset_id -> [(name_lc, version)].
+    Matches on a normalized substring of the Defender product/display name.
+    Returns the version string or None (None renders as "—" in the UI; we never
+    fabricate a version).
+    """
+    rows = con_software_index.get(asset_id)
+    if not rows:
+        return None
+
+    def _norm(s):
+        return ''.join(c for c in (s or '').lower() if c.isalnum())
+
+    # Candidate keys to match against installed-software names, most specific first.
+    cands = [_norm(software_name), _norm(product_key)]
+    # product_key is often a vendor-stripped token (e.g. "chrome"); also try the
+    # bare last token of the display name.
+    cands = [c for c in cands if len(c) >= 3]
+    if not cands:
+        return None
+    best = None
+    for name_lc, version in rows:
+        nm = _norm(name_lc)
+        for c in cands:
+            if c in nm or nm in c:
+                # Prefer the longest version string (full installed build).
+                if version and (best is None or len(version) > len(best)):
+                    best = version
+                break
+    return best
+
+
+def _build_asset_software_versions(con):
+    """asset_id -> list of (software_name_lc, version) from rmm_software.
+
+    Built once per sync so version resolution is in-memory (no per-row query)."""
+    idx: dict = {}
+    try:
+        for row in con.execute(
+            """SELECT ra.asset_id, lower(rs.name) AS sw_name, rs.version AS ver
+               FROM rmm_software rs
+               JOIN rmm_agent ra ON ra.agent_id = rs.agent_id
+               WHERE ra.asset_id IS NOT NULL AND rs.version IS NOT NULL"""
+        ).fetchall():
+            idx.setdefault(row['asset_id'], []).append((row['sw_name'], row['ver']))
+    except Exception as e:
+        logger.warning(f'software-update sync: could not load rmm_software versions: {e}')
+    return idx
+
+
+def sync_defender_software_updates(con, svc, machine_asset_map):
+    """Populate device_software_update from Defender 3rd-party software-update
+    recommendations. Reuses the caller's connection + Defender service + the
+    SAME machine->asset map the CVE sync built (do NOT null-join on device hash).
+
+    Mirrors the CVE sync's close-by-absence handling EXACTLY: a per-run seen-set
+    anti-join keyed on the EXACT (asset_id, product_key) pairs confirmed THIS
+    run — NOT a synced_at/NOW() timestamp window (the timestamp approach once
+    auto-closed every freshly-inserted row when a naive-UTC start was read in the
+    session TZ, commit 7bbaf27). Only rows genuinely absent this run are closed.
+
+    Caller commits. Returns (rows_written, error_or_None).
+    """
+    try:
+        recs = svc.get_software_update_recommendations()
+        version_index = _build_asset_software_versions(con)
+
+        # (asset_id, product_key) pairs confirmed THIS run. Only entries absent
+        # from this set may be closed by close-by-absence.
+        seen_pairs: set = set()
+        written = 0
+        for rec in recs:
+            product_key = rec['product_key']
+            if not product_key:
+                continue
+            for m in rec['machines']:
+                asset_id = machine_asset_map.get(m['machineId'])
+                if not asset_id:
+                    continue  # untracked / Defender-side machine — skip (no null-join)
+                installed = _resolve_installed_version(
+                    version_index, asset_id, product_key,
+                    rec['software_name'], rec['vendor'])
+                con.execute(
+                    """INSERT INTO device_software_update
+                       (asset_id, agent_id, software_name, product_key, vendor,
+                        current_version, recommended_version, severity, weaknesses,
+                        public_exploit, source, status, synced_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?, 'defender','Open', NOW())
+                       ON CONFLICT(asset_id, product_key) DO UPDATE SET
+                         software_name=excluded.software_name,
+                         vendor=excluded.vendor,
+                         current_version=excluded.current_version,
+                         recommended_version=excluded.recommended_version,
+                         severity=excluded.severity,
+                         weaknesses=excluded.weaknesses,
+                         public_exploit=excluded.public_exploit,
+                         synced_at=excluded.synced_at,
+                         -- Defender still flags this update → re-open it unless a
+                         -- human deliberately Accepted it (sticky).
+                         status=CASE WHEN device_software_update.status='Accepted'
+                                     THEN 'Accepted' ELSE 'Open' END""",
+                    (asset_id, m['machineId'], rec['software_name'], product_key,
+                     rec['vendor'], installed, rec['recommended_version'],
+                     rec['severity'], rec['weaknesses'], rec['public_exploit'])
+                )
+                seen_pairs.add((asset_id, product_key))
+                written += 1
+
+        # ── Close-by-absence (seen-set anti-join, NOT a timestamp window) ──
+        # If Defender no longer reports an update for a (asset, product) it
+        # monitors, the app has been updated → mark 'Updated'. Scope the close to
+        # Defender-monitored assets only; never touch a human 'Accepted' row.
+        defender_asset_ids = list(set(machine_asset_map.values()))
+        if defender_asset_ids:
+            import psycopg2.extras as _pg_extras
+            raw = con.cursor()._c  # raw psycopg2 cursor (RealDictCursor)
+            raw.execute(
+                "CREATE TEMP TABLE _dsu_seen "
+                "(asset_id BIGINT, product_key TEXT) ON COMMIT DROP"
+            )
+            if seen_pairs:
+                _pg_extras.execute_values(
+                    raw,
+                    "INSERT INTO _dsu_seen (asset_id, product_key) VALUES %s",
+                    list(seen_pairs),
+                    page_size=5000,
+                )
+                raw.execute("CREATE INDEX ON _dsu_seen (asset_id, product_key)")
+            raw.execute(
+                """
+                UPDATE device_software_update dsu
+                SET status = 'Updated',
+                    remediation_note = 'Cleared by Defender re-assessment: no update flagged',
+                    updated_at = NOW()
+                WHERE dsu.asset_id = ANY(%s)
+                  AND dsu.status = 'Open'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM _dsu_seen s
+                      WHERE s.asset_id = dsu.asset_id
+                        AND s.product_key = dsu.product_key
+                  )
+                """,
+                (defender_asset_ids,)
+            )
+            cleared = raw.rowcount
+            if cleared:
+                logger.info(f'Software-update sync: auto-closed {cleared} updates no longer flagged by Defender')
+
+        logger.info(f'Software-update sync: wrote {written} device-software-update rows '
+                    f'across {len(set(p[0] for p in seen_pairs))} assets')
+        return written, None
+    except Exception as e:
+        logger.error(f'Software-update sync failed (non-fatal): {e}', exc_info=True)
+        return 0, str(e)
+
+
 def sync_defender_vulnerabilities():
     """
     Pull vulnerabilities from Defender API into vulnerability_cache
@@ -1956,6 +2116,17 @@ def sync_defender_vulnerabilities():
                             f'{cve_closed} alert ticket(s) (CVE remediated everywhere)')
         except Exception as e:
             logger.error(f'CVE remediation loop failed (non-fatal): {e}', exc_info=True)
+
+        # ── 3rd-party software-update recommendations (Chrome/Zoom/Acrobat →
+        # newer version). Reuses the SAME Defender service + machine->asset map
+        # so the headline "N apps have updates available" maps to the right
+        # asset. Best-effort: a failure here never fails the CVE sync. ──
+        try:
+            sw_written, sw_err = sync_defender_software_updates(con, svc, machine_asset_map)
+            if sw_err:
+                logger.warning(f'Defender sync: software-update step error (non-fatal): {sw_err}')
+        except Exception as e:
+            logger.error(f'Defender sync: software-update step crashed (non-fatal): {e}', exc_info=True)
 
         # ── Persist the reconciliation snapshot from THIS pull (machines +
         # all_machine_vulns are already in hand, so the waterfall math is nearly

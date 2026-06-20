@@ -72,6 +72,7 @@
 {% include "partials/view_asset/_tab_alerts.html" %}
 {% include "partials/view_asset/_tab_security.html" %}
 {% include "partials/view_asset/_tab_patches.html" %}
+{% include "partials/view_asset/_tab_software_updates.html" %}
 {% include "partials/view_asset/_tab_software.html" %}
 {% include "partials/view_asset/_tab_scripts.html" %}
 {% include "partials/view_asset/_tab_lifecycle.html" %}
@@ -142,7 +143,7 @@
 <script>
 window.ASSET_CFG = { assetId: {{ asset.id }} };
 </script>
-<script src="/static/js/view_asset.js"></script>
+<script src="/static/js/view_asset.js?v={{ asset_version }}"></script>
 <script>
 // Activate an in-page tab/pane by its hash target. Used by the hero Manage menu AND
 // the stat cards. Some panes (Patches, Vulnerabilities) no longer have a nav trigger
@@ -227,15 +228,21 @@ document.addEventListener('shown.bs.tab', function(ev) {
 // Activate tab from URL hash (e.g. /assets/1#tab-patches, /assets/1#tab-rmm-services)
 (function() {
     const hash = window.location.hash;
-    if (hash) {
-        const target = document.querySelector(`[data-bs-target="${hash}"]`);
-        if (target) {
-            bootstrap.Tab.getOrCreateInstance(target).show();
-            target.scrollIntoView({block: 'nearest'});
-            if (hash === '#tab-vulns' && typeof loadAssetVulns === 'function') {
-                loadAssetVulns();
-            }
-        }
+    if (!hash) return;
+    const target = document.querySelector(`[data-bs-target="${hash}"]`);
+    if (target) {
+        bootstrap.Tab.getOrCreateInstance(target).show();
+        target.scrollIntoView({block: 'nearest'});
+    } else if (typeof rmmShowTab === 'function' && document.querySelector(hash)) {
+        // Pane has no nav-tab trigger (e.g. #tab-software-updates is opened by a
+        // stat card via rmmShowTab) — show it manually on deep-link.
+        rmmShowTab(null, hash);
+    }
+    if (hash === '#tab-vulns' && typeof loadAssetVulns === 'function') {
+        loadAssetVulns();
+    }
+    if (hash === '#tab-software-updates' && typeof loadAssetSoftwareUpdates === 'function') {
+        loadAssetSoftwareUpdates();
     }
 })();
 </script>

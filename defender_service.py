@@ -181,6 +181,120 @@ class DefenderService:
             logger.error(f'Error fetching recommendations: {str(e)}')
             return []
     
+    def get_recommendation_machine_references(self, recommendation_id):
+        """Get the machines exposed by a single security recommendation.
+
+        Each entry carries the Defender machine id (`id`) + `computerDnsName`,
+        which is exactly what build_machine_asset_map() keys on. Returns [] on
+        error so one bad rec never aborts the whole software-update pull.
+        """
+        try:
+            data = self._get(f'recommendations/{recommendation_id}/machineReferences')
+            return data.get('value', [])
+        except Exception as e:
+            logger.error(f'Error fetching machineReferences for {recommendation_id}: {str(e)}')
+            return []
+
+    def get_software_update_recommendations(self):
+        """Pull per-device 3rd-party software-update recommendations from MDE.
+
+        Scope: the "Update <software>" recommendations — outdated installed
+        applications (Chrome, Zoom, Acrobat, …) that have a newer version
+        available. Distinct from OS/driver patches and from the CVE list.
+
+        Filters the org-wide /recommendations feed to:
+            remediationType == 'Update'  AND  recommendationCategory == 'Application'
+        then, for each, fetches the affected machines (machineReferences).
+
+        Returns a list of dicts, one per recommendation:
+            {
+              'recommendation_id', 'product_key', 'software_name', 'vendor',
+              'recommended_version', 'severity', 'weaknesses', 'public_exploit',
+              'machines': [ {machineId, computerDnsName, osPlatform}, ... ]
+            }
+        The caller maps machineId -> asset_id and resolves the installed version.
+        """
+        try:
+            recs = self.get_recommendations()
+        except Exception as e:
+            logger.error(f'Error fetching recommendations for software updates: {str(e)}')
+            return []
+
+        def _sev(score):
+            # Defender severityScore is a float (0..~10). Bucket it to match the
+            # severity vocabulary the rest of the security UI uses.
+            try:
+                s = float(score or 0)
+            except (TypeError, ValueError):
+                s = 0.0
+            if s >= 9:
+                return 'Critical'
+            if s >= 7:
+                return 'High'
+            if s >= 4:
+                return 'Medium'
+            if s > 0:
+                return 'Low'
+            return 'Unknown'
+
+        import re as _re
+
+        def _clean_name(rec):
+            # recommendationName looks like "Update Google Chrome to version
+            # 149.0.7827.155" or "Update Microsoft Teams". Strip the leading verb
+            # and any trailing "to version …" so the card shows just the product.
+            nm = (rec.get('recommendationName') or '').strip()
+            nm = _re.sub(r'^update\s+', '', nm, flags=_re.IGNORECASE)
+            nm = _re.sub(r'\s+to\s+version\s+\S+.*$', '', nm, flags=_re.IGNORECASE)
+            return nm.strip() or (rec.get('productName') or 'Unknown')
+
+        # Exclude OS / built-in-OS products — those belong to OS Patches, not the
+        # 3rd-party-app card. Keeps the "N apps have updates" headline from
+        # double-counting Windows feature/quality updates.
+        def _is_os_product(pk):
+            pk = (pk or '').lower()
+            return (pk.startswith('windows_') or pk.startswith('windows ')
+                    or pk in ('windows', 'windows_server'))
+
+        out = []
+        for r in recs:
+            if r.get('remediationType') != 'Update':
+                continue
+            if r.get('recommendationCategory') != 'Application':
+                continue
+            # Skip recs nothing is exposed to (resolved org-wide).
+            if not (r.get('exposedMachinesCount') or 0):
+                continue
+            product_key = (r.get('productName') or '').strip()
+            if _is_os_product(product_key):
+                continue  # OS update — handled by OS Patches, not this card
+            rid = r.get('id')
+            if not rid:
+                continue
+            machines = self.get_recommendation_machine_references(rid)
+            if not machines:
+                continue
+            out.append({
+                'recommendation_id': rid,
+                'product_key': product_key,
+                'software_name': _clean_name(r),
+                'vendor': (r.get('vendor') or '').strip(),
+                'recommended_version': (r.get('recommendedVersion') or '').strip(),
+                'severity': _sev(r.get('severityScore')),
+                'weaknesses': r.get('weaknesses', 0) or 0,
+                'public_exploit': bool(r.get('publicExploit')),
+                'machines': [
+                    {
+                        'machineId': m.get('id'),
+                        'computerDnsName': m.get('computerDnsName'),
+                        'osPlatform': m.get('osPlatform'),
+                    }
+                    for m in machines if m.get('id')
+                ],
+            })
+        logger.info(f'Fetched {len(out)} 3rd-party software-update recommendations from Defender')
+        return out
+
     def get_software_by_machine(self):
         """Get software inventory organized by machine"""
         try:

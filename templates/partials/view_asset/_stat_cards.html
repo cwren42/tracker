@@ -10,11 +10,11 @@
         </div>
     </div>
     <div class="col-6 col-md-3">
-        <div class="stat-card d-flex align-items-center gap-3{% if sw_patch_count %} border-warning{% endif %}" role="button" style="cursor:pointer;" onclick="return rmmShowTab(event,'#tab-patches')" title="Pending driver updates (Windows Update)">
-            <i class="bi bi-cpu sc-icon {% if sw_patch_count %}text-warning{% else %}text-success{% endif %}"></i>
+        <div class="stat-card d-flex align-items-center gap-3{% if sw_update_count %} border-warning{% endif %}" role="button" style="cursor:pointer;" onclick="loadAssetSoftwareUpdates(); return rmmShowTab(event,'#tab-software-updates')" title="3rd-party apps with a newer version available (Microsoft Defender)">
+            <i class="bi bi-box-arrow-up sc-icon {% if sw_update_count %}text-warning{% else %}text-success{% endif %}"></i>
             <div>
-                <div class="sc-label">Driver Updates</div>
-                <div class="sc-value">{{ sw_patch_count }} <small class="text-muted" style="font-size:.6rem;">pending</small></div>
+                <div class="sc-label">Software Updates</div>
+                <div class="sc-value">{{ sw_update_count }} <small class="text-muted" style="font-size:.6rem;">app{{ '' if sw_update_count == 1 else 's' }}</small></div>
             </div>
         </div>
     </div>

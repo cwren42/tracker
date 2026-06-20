@@ -644,6 +644,19 @@ def view_asset(asset_id):
     except Exception:
         pass
 
+    # Software Updates badge count — outdated 3rd-party apps Defender flags for
+    # this asset (distinct from CVEs and OS/driver patches; "apps with updates").
+    sw_update_count = 0
+    try:
+        row = db.session.execute(
+            text("SELECT COUNT(*) FROM device_software_update WHERE asset_id=:aid AND status='Open'"),
+            {'aid': asset_id}
+        ).fetchone()
+        if row:
+            sw_update_count = row[0]
+    except Exception:
+        pass
+
     # Stat-card counts: OS vs software pending patches + active alerts by severity
     os_patch_count = 0
     sw_patch_count = 0
@@ -696,6 +709,7 @@ def view_asset(asset_id):
                          monitoring_profile=monitoring_profile, all_profiles=all_profiles,
                          vuln_count=vuln_count, transfer_targets=transfer_targets,
                          os_patch_count=os_patch_count, sw_patch_count=sw_patch_count,
+                         sw_update_count=sw_update_count,
                          alert_counts=alert_counts, asset_alerts=asset_alerts)
 
 
@@ -730,6 +744,36 @@ def asset_ad_groups(asset_id):
         return jsonify(enabled=True, host=host, groups=groups)
     except Exception:
         return jsonify(enabled=True, host=host, groups=[])
+
+
+@bp.route('/api/assets/<int:asset_id>/software-updates')
+@login_required
+@admin_required
+def api_asset_software_updates(asset_id):
+    """Outdated 3rd-party apps (Defender software-update recommendations) for one
+    asset — name · installed version → recommended version · severity. Backs the
+    Software Updates pane. Read-only; ordered by severity then app name."""
+    Asset.query.get_or_404(asset_id)
+    rows = db.session.execute(
+        text("""SELECT software_name, vendor, current_version, recommended_version,
+                       severity, weaknesses, public_exploit, synced_at
+                FROM device_software_update
+                WHERE asset_id=:aid AND status='Open'
+                ORDER BY CASE severity
+                           WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
+                           WHEN 'Medium' THEN 3 WHEN 'Low' THEN 4 ELSE 5 END,
+                         lower(software_name)"""),
+        {'aid': asset_id}
+    ).fetchall()
+    last_sync = db.session.execute(
+        text("SELECT MAX(synced_at) FROM device_software_update WHERE asset_id=:aid"),
+        {'aid': asset_id}
+    ).scalar()
+    return jsonify(
+        ok=True,
+        updates=[dict(r._mapping) for r in rows],
+        last_sync=last_sync.isoformat() if last_sync else None,
+    )
 
 
 @bp.route('/assets/<int:asset_id>/rmm/<section>')

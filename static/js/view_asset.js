@@ -122,6 +122,49 @@ async function loadAssetVulns() {
   loadVulnHistory();
 }
 
+let _assetSwUpdLoaded = false;
+function _escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function loadAssetSoftwareUpdates() {
+  if (_assetSwUpdLoaded) return;
+  _assetSwUpdLoaded = true;
+  const spinner = document.getElementById('asset-swupd-spinner');
+  const empty   = document.getElementById('asset-swupd-empty');
+  const table   = document.getElementById('asset-swupd-table');
+  const tbody   = document.getElementById('asset-swupd-tbody');
+  const sync    = document.getElementById('asset-swupd-last-sync');
+  try {
+    const r = await fetch(`/api/assets/${_assetId}/software-updates`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const ups = d.updates || [];
+    spinner.style.display = 'none';
+    if (d.last_sync && sync) sync.textContent = 'Synced ' + d.last_sync.slice(0, 16).replace('T', ' ');
+    if (!ups.length) { empty.style.display = ''; return; }
+    table.style.display = '';
+    tbody.innerHTML = ups.map(u => {
+      const sevClass = {Critical:'text-danger', High:'text-warning', Medium:'text-info', Low:'text-secondary'}[u.severity] || 'text-muted';
+      const cur = u.current_version ? _escHtml(u.current_version)
+                  : '<span class="text-muted">unknown</span>';
+      const rec = u.recommended_version ? _escHtml(u.recommended_version)
+                  : '<span class="text-muted">latest</span>';
+      return `<tr>
+        <td><strong>${_escHtml(u.software_name) || '—'}</strong>${u.public_exploit ? ' <span class="badge bg-danger ms-1" style="font-size:.6rem;" title="Public exploit available">exploit</span>' : ''}</td>
+        <td class="text-muted" style="font-size:.75rem;">${_escHtml(u.vendor) || '—'}</td>
+        <td style="font-size:.78rem;"><span class="text-muted">${cur}</span> <i class="bi bi-arrow-right mx-1 text-muted"></i> <span class="text-success fw-semibold">${rec}</span></td>
+        <td><span class="${sevClass}" style="font-weight:700;font-size:.78rem;">${_escHtml(u.severity) || '—'}</span></td>
+        <td class="text-muted" style="font-size:.78rem;">${u.weaknesses || 0}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    spinner.style.display = 'none';
+    table.style.display = '';
+    tbody.innerHTML = `<tr><td colspan="5" class="text-danger py-3 text-center">Error: ${_escHtml(e.message)}</td></tr>`;
+  }
+}
+
 function updateVulnSelection() {
   const checks = document.querySelectorAll('.vuln-row-check:checked');
   const bar = document.getElementById('asset-vuln-bulk-bar');

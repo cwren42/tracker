@@ -85,6 +85,51 @@ def _openai_chat(messages: list, model: str = None, max_tokens: int = 800) -> st
     return resp["choices"][0]["message"]["content"].strip()
 
 
+def openai_chat_tools(messages: list, tools: list = None, model: str = None,
+                      max_tokens: int = 900, temperature: float = 0.2) -> dict:
+    """Call the configured chat endpoint with OpenAI tool/function-calling support.
+
+    Returns the raw assistant `message` dict (so the caller can inspect
+    `tool_calls` and `content`). Used by the agentic triage loop (triage_agent.py).
+    gpt-4o supports parallel tool calls; we let the model decide which read-only
+    tools to invoke and iterate. Raises on transport failure (caller fail-safes).
+
+    NB: passes `tools` straight through to /chat/completions. Ollama models vary
+    in tool-call support — triage_agent gates on ai_config and degrades when the
+    model returns no usable tool_calls."""
+    import ai_config
+    if not ai_config.ready():
+        raise ValueError("AI not configured")
+    api_key = ai_config.api_key()
+    model = model or ai_config.chat_model()
+    body = {
+        "model":       model,
+        "messages":    messages,
+        "max_tokens":  max_tokens,
+        "temperature": temperature,
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    payload = json.dumps(body).encode()
+    req = urllib.request.Request(
+        ai_config.base_url() + "/chat/completions",
+        data=payload,
+        headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        resp = json.loads(r.read())
+    choice = resp.get("choices", [{}])[0]
+    msg = choice.get("message", {}) or {}
+    # Attach usage so the loop can enforce a token budget.
+    msg["_usage"] = resp.get("usage", {}) or {}
+    return msg
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Ticket assistant
 # ──────────────────────────────────────────────────────────────────────────────

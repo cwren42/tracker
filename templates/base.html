@@ -129,9 +129,13 @@
         {% if current_user.role == 'admin' %}
         <div class="nav-section-label">Operations</div>
 
-        <a class="sidebar-link {% if request.endpoint == 'incidents.feed' %}active{% endif %}"
-           href="{{ url_for('incidents.feed') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="AI Assist">
-            <i class="bi bi-robot" style="color:#6366f1"></i><span class="link-label">AI Assist</span>
+        <a class="sidebar-link {% if request.endpoint == 'incidents.assist_page' %}active{% endif %}"
+           href="{{ url_for('incidents.assist_page') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="AI Assist">
+            <i class="bi bi-robot" style="color:var(--accent)"></i><span class="link-label">AI Assist</span>
+        </a>
+        <a class="sidebar-link {% if request.endpoint and request.endpoint.startswith('incidents.') and request.endpoint != 'incidents.assist_page' %}active{% endif %}"
+           href="{{ url_for('incidents.feed') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Incidents">
+            <i class="bi bi-clipboard2-pulse" style="color:var(--accent)"></i><span class="link-label">Incidents</span>
             <span id="incident-badge" class="badge rounded-pill bg-danger ms-auto" style="display:none;"></span>
         </a>
 

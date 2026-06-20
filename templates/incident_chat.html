@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Triage — {{ inc.asset_name or inc.signal_type }}{% endblock %}
+{% block content %}
+{% set sig_label = {
+    'disk_low':'Low disk space', 'service_down':'Service down',
+    'agent_offline_but_up':'Agent not checking in', 'patch_failed':'Patch install failed',
+    'defender_critical':'Critical vulnerability'} %}
+<div class="container-fluid px-3 py-3" style="max-width:920px;">
+
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <a href="{{ url_for('incidents.feed') }}" class="text-muted small text-decoration-none">
+        <i class="bi bi-arrow-left me-1"></i>Incidents</a>
+      <h4 class="mb-0 mt-1">
+        <i class="bi bi-robot text-primary me-2"></i>{{ sig_label.get(inc.signal_type, inc.signal_type) }}
+        <span class="text-muted">on</span> {{ inc.asset_name or ('asset ' ~ inc.asset_id) }}
+      </h4>
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      <span id="status-pill" class="badge rounded-pill bg-secondary">{{ inc.status }}</span>
+      <form method="post" action="{{ url_for('incidents.retriage', incident_id=inc.id) }}" id="retriage-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-outline-secondary" type="submit" title="Re-run triage">
+          <i class="bi bi-arrow-clockwise"></i></button>
+      </form>
+    </div>
+  </div>
+
+  <div id="thread" class="d-flex flex-column gap-2 mb-3"></div>
+
+  <!-- Proposal / Approve gate -->
+  <div id="proposal-box"></div>
+
+  <!-- Reply -->
+  <form id="reply-form" class="d-flex gap-2 mt-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="text" id="reply-text" class="form-control" autocomplete="off"
+           placeholder="Reply… (e.g. “why?”, “check the System event log”, “what else could it be?”)">
+    <button class="btn btn-primary" type="submit" id="reply-btn"><i class="bi bi-send"></i></button>
+  </form>
+</div>
+
+<script>
+const INCIDENT_ID = {{ inc.id }};
+const CSRF = "{{ csrf_token() }}";
+const THREAD_URL = "{{ url_for('incidents.thread_json', incident_id=inc.id) }}";
+const REPLY_URL = "{{ url_for('incidents.reply', incident_id=inc.id) }}";
+const APPROVE_URL = "{{ url_for('incidents.approve_fix', incident_id=inc.id) }}";
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
+
+function bubble(m){
+  const role = m.role;
+  if (role === 'user') {
+    return `<div class="align-self-end" style="max-width:80%;">
+      <div class="p-2 px-3 rounded-3 bg-primary text-white">${esc(m.content)}</div></div>`;
+  }
+  if (role === 'tool') {
+    const tr = m.tool_result || {};
+    let out = tr.stdout || tr.note || tr.error || '';
+    const det = out ? `<details class="mt-1"><summary class="small text-muted">output</summary>
+        <pre class="small mb-0 mt-1 p-2 bg-body-secondary rounded" style="white-space:pre-wrap;max-height:280px;overflow:auto;">${esc(out)}</pre></details>` : '';
+    return `<div class="align-self-start" style="max-width:88%;">
+      <div class="small text-muted"><i class="bi bi-tools me-1"></i>${esc(m.content)}</div>${det}</div>`;
+  }
+  if (role === 'system') {
+    return `<div class="align-self-center text-center my-1">
+      <span class="badge bg-body-secondary text-secondary fw-normal">${esc(m.content)}</span></div>`;
+  }
+  // assistant
+  const pf = m.proposed_fix;
+  let body = esc(m.content||'').replace(/\n/g,'<br>');
+  if (pf) {
+    body = `<div class="fw-semibold mb-1">Diagnosis</div>${esc(pf.diagnosis||m.content||'').replace(/\n/g,'<br>')}`;
+  }
+  return `<div class="align-self-start" style="max-width:88%;">
+    <div class="p-2 px-3 rounded-3 bg-body-secondary border">
+      <div class="small text-primary mb-1"><i class="bi bi-robot me-1"></i>AI triage</div>${body}</div></div>`;
+}
+
+function proposalCard(pf){
+  if (!pf) return '';
+  const change = pf.execute !== 'ticket';
+  const btn = change
+    ? `<button class="btn btn-success btn-sm" id="approve-btn"><i class="bi bi-check2-circle me-1"></i>Approve &amp; run: ${esc(pf.fix_label)}</button>`
+    : `<button class="btn btn-outline-primary btn-sm" id="approve-btn"><i class="bi bi-ticket-detailed me-1"></i>Approve → open ticket</button>`;
+  const aiAuthored = pf.ai_authored ? `<span class="badge bg-warning text-dark ms-1" title="model-written script">AI-written script</span>` : '';
+  return `<div class="card border-primary border-2 mb-2">
+    <div class="card-body">
+      <div class="fw-semibold mb-1"><i class="bi bi-wrench-adjustable me-1 text-primary"></i>Recommended fix ${aiAuthored}</div>
+      <div class="mb-2">${esc(pf.fix_label)}</div>
+      <div class="small text-muted">Why this works</div>
+      <div class="mb-3">${esc(pf.why_it_works||'').replace(/\n/g,'<br>')}</div>
+      ${pf.run_payload && pf.run_payload.code ? `<details class="mb-2"><summary class="small text-muted">command to run</summary>
+        <pre class="small mb-0 mt-1 p-2 bg-body-secondary rounded" style="white-space:pre-wrap;max-height:240px;overflow:auto;">${esc(pf.run_payload.code)}</pre></details>`:''}
+      <div class="d-flex gap-2">${btn}</div>
+      <div class="form-text mt-1">Read-only diagnostics ran automatically. This CHANGE runs only when you approve.</div>
+    </div></div>`;
+}
+
+let lastLen = -1, lastStatus = '';
+async function refresh(){
+  let r;
+  try { r = await (await fetch(THREAD_URL)).json(); } catch(e){ return; }
+  if (!r.ok) return;
+  const open = ['new','diagnosed','awaiting_approval','remediating'].includes(r.status);
+  document.getElementById('status-pill').textContent = r.triage_state==='running' ? 'investigating…' : r.status;
+  // thread
+  if (r.thread.length !== lastLen || r.status !== lastStatus){
+    lastLen = r.thread.length; lastStatus = r.status;
+    const t = document.getElementById('thread');
+    t.innerHTML = r.thread.map(bubble).join('');
+    // proposal only when still open + present
+    const showProp = r.proposed_fix && open && r.status !== 'remediating';
+    document.getElementById('proposal-box').innerHTML = showProp ? proposalCard(r.proposed_fix) : '';
+    const ab = document.getElementById('approve-btn');
+    if (ab) ab.onclick = approve;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+  document.getElementById('reply-form').style.display = open ? '' : 'none';
+}
+
+async function approve(){
+  const ab = document.getElementById('approve-btn');
+  ab.disabled = true; ab.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Approving…';
+  try {
+    await fetch(APPROVE_URL, {method:'POST', headers:{'X-Requested-With':'fetch','X-CSRFToken':CSRF}});
+  } catch(e){}
+  lastLen = -1; refresh();
+}
+
+document.getElementById('reply-form').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const inp = document.getElementById('reply-text');
+  const txt = inp.value.trim(); if(!txt) return;
+  inp.value=''; const btn=document.getElementById('reply-btn');
+  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+  // optimistic
+  lastLen=-1;
+  try {
+    await fetch(REPLY_URL, {method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+      body: JSON.stringify({text:txt})});
+  } catch(e){}
+  btn.disabled=false; btn.innerHTML='<i class="bi bi-send"></i>';
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 4000);
+</script>
+{% endblock %}

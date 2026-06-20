@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI Assist — Incidents{% endblock %}
+{% block title %}Incidents — AI Triage{% endblock %}
 {% block content %}
 <div class="container-fluid px-3 py-3">
 
@@ -7,15 +7,18 @@
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
       <h4 class="mb-0">
-        <i class="bi bi-robot text-primary me-2"></i>AI Assist
+        <i class="bi bi-clipboard2-pulse text-primary me-2"></i>Incidents
         {% if open_count %}<span class="badge rounded-pill bg-danger ms-1">{{ open_count }}</span>{% endif %}
       </h4>
-      <small class="text-muted">Proactive remediation — the assistant detects an issue, diagnoses it, and offers 1-click fixes</small>
+      <small class="text-muted">The assistant detects an issue, auto-runs read-only diagnostics, and recommends a fix — open one to chat and approve.</small>
     </div>
     <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('incidents.assist_page') }}">
+        <i class="bi bi-robot me-1"></i>Ask AI Assist
+      </a>
       <form method="post" action="{{ url_for('incidents.scan_now') }}" class="d-inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-sm btn-outline-primary" type="submit">
+        <button class="btn btn-sm btn-outline-secondary" type="submit">
           <i class="bi bi-search me-1"></i>Scan now
         </button>
       </form>
@@ -42,7 +45,9 @@
       'defender_critical':'Critical vulnerability'} %}
 
   {% for inc in incidents %}
-  <div class="card border-0 mb-2 {% if not inc.is_open %}opacity-75{% endif %}">
+  {% if inc.signal_type != 'ai_assist' %}
+  <a href="{{ url_for('incidents.chat', incident_id=inc.id) }}" class="text-decoration-none text-reset">
+  <div class="card border-0 mb-2 incident-card {% if not inc.is_open %}opacity-75{% endif %}">
     <div class="card-body">
       <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
         <div class="flex-grow-1">
@@ -84,24 +89,24 @@
         </div>
       </div>
 
-      {% if inc.is_open and inc.proposed_actions %}
-      <div class="d-flex gap-2 flex-wrap mt-3">
-        {% for a in inc.proposed_actions %}
-          <form method="post" action="{{ url_for('incidents.act', incident_id=inc.id) }}" class="d-inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action_key" value="{{ a.key }}">
-            <button type="submit"
-              class="btn btn-sm {% if a.kind == 'run' and a.risk_tier == 0 %}btn-success{% elif a.kind == 'run' %}btn-primary{% elif a.kind == 'ticket' %}btn-outline-secondary{% else %}btn-outline-secondary{% endif %}"
-              {% if a.kind == 'run' %}onclick="return confirm('Run: {{ a.label }} on {{ inc.asset_name or inc.asset_id }}?');"{% endif %}>
-              {% if a.kind == 'run' %}<i class="bi bi-lightning-charge-fill me-1"></i>{% elif a.kind == 'ticket' %}<i class="bi bi-ticket-detailed me-1"></i>{% else %}<i class="bi bi-x-circle me-1"></i>{% endif %}{{ a.label }}
-            </button>
-          </form>
-        {% endfor %}
+      <div class="mt-2 small">
+        {% if inc.triage_state == 'running' %}
+          <span class="text-info"><span class="spinner-border spinner-border-sm me-1"></span>AI is investigating…</span>
+        {% elif inc.is_open %}
+          <span class="text-primary"><i class="bi bi-chat-dots me-1"></i>Open triage chat
+            {% if inc.proposed_fix %}<span class="badge bg-primary-subtle text-primary ms-1">fix recommended</span>{% endif %}
+          </span>
+        {% endif %}
       </div>
-      {% endif %}
     </div>
   </div>
+  </a>
+  {% endif %}
   {% endfor %}
 
 </div>
+<style>
+  .incident-card { transition: box-shadow .12s ease, transform .12s ease; }
+  .incident-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); transform: translateY(-1px); }
+</style>
 {% endblock %}

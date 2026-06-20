@@ -343,7 +343,24 @@ def _create_incident(con, *, asset_id, agent_id, signal_type, severity,
 
     _notifier().push({'id': inc_id, 'signal_type': signal_type,
                       'asset_id': asset_id})
+
+    # ── Auto-kick the agentic triage loop for ACTIONABLE signals only ──────────
+    # disk_low / patch_failed / service_down (Tier 0/1) → triage NOW so the
+    # recommendation is ready when a human opens it. Tier-2 NOTIFY signals
+    # (defender_critical, agent_offline_but_up) triage LAZILY on first open — we
+    # do NOT auto-burn dozens of gpt-4o loops for the Defender list (cost control).
+    # Fail-safe: a triage error never affects incident creation.
+    if signal_type in _AUTO_TRIAGE_SIGNALS:
+        try:
+            import triage_agent
+            triage_agent.triage_incident(inc_id)
+        except Exception as e:
+            logger.info('auto-triage skipped for incident %s: %s', inc_id, e)
     return inc_id
+
+
+# Signals whose triage loop fires automatically on creation (the rest are lazy).
+_AUTO_TRIAGE_SIGNALS = {'disk_low', 'patch_failed', 'service_down'}
 
 
 def _enqueue_action(con, asset_id, agent_id, action):
@@ -589,6 +606,26 @@ def _verify_pass(con):
         succeeded = r['q_status'] in ('completed', 'no_op', 'success')
         still_bad = _signal_still_present(con, r['signal_type'], r['agent_id'],
                                           r['asset_id'])
+        # Collision guard: the escalate/park branches below move a row back INTO
+        # an OPEN status. If ANOTHER open incident already exists for this
+        # (asset, signal) — e.g. several auto_handled rows piled up from rapid
+        # scans — reopening this one would violate uq_agent_incident_open. In that
+        # case resolve THIS row as superseded instead of crashing the pass.
+        other_open = None
+        if not (succeeded and not still_bad):
+            other_open = con.execute(
+                f"""SELECT id FROM agent_incident
+                    WHERE asset_id IS NOT DISTINCT FROM %s AND signal_type=%s
+                      AND id <> %s AND status IN {str(_OPEN_STATUSES)} LIMIT 1""",
+                (r['asset_id'], r['signal_type'], r['id'])).fetchone()
+        if other_open:
+            con.execute(
+                """UPDATE agent_incident
+                   SET status='resolved', resolved_at=NOW(), updated_at=NOW(),
+                       verify_result=%s WHERE id=%s""",
+                (f'superseded by open incident #{other_open["id"]}', r['id']))
+            con.commit()
+            continue
         if succeeded and not still_bad:
             con.execute(
                 """UPDATE agent_incident
@@ -596,6 +633,10 @@ def _verify_pass(con):
                        verify_result='resolved: remediation completed and signal cleared'
                    WHERE id=%s""", (r['id'],))
             con.commit()
+            _post_verify_to_thread(
+                con, r['id'],
+                "Verified: the remediation completed and the condition has cleared. "
+                "Resolving this incident.", r.get('result_json'))
         elif r['attempt_count'] >= _MAX_ATTEMPTS:
             # Circuit-breaker: stop retrying, escalate + auto-open a ticket.
             tid = _open_ticket(con, r['asset_id'],
@@ -609,6 +650,11 @@ def _verify_pass(con):
                 (f'escalated to ticket #{tid} after {r["attempt_count"]} attempts'
                  if tid else 'escalated (ticket create failed)', r['id']))
             con.commit()
+            _post_verify_to_thread(
+                con, r['id'],
+                f"The fix was attempted {r['attempt_count']}x but the condition "
+                f"persists. Escalated" + (f" to ticket #{tid}." if tid else "."),
+                r.get('result_json'))
         else:
             # Failed/still-bad but under the breaker: park as awaiting_approval so a
             # human (or a future re-propose) can decide. Don't auto-retry silently.
@@ -618,7 +664,30 @@ def _verify_pass(con):
                        verify_result='remediation did not clear the signal — needs review'
                    WHERE id=%s""", (r['id'],))
             con.commit()
+            _post_verify_to_thread(
+                con, r['id'],
+                "The fix ran but the condition is still present. Parking for review — "
+                "reply here to investigate further or approve another action.",
+                r.get('result_json'))
     return checked
+
+
+def _post_verify_to_thread(con, incident_id, text, result_json=None):
+    """Post a remediation result back into the incident chat thread (fail-safe)."""
+    try:
+        import triage_agent
+        meta = None
+        if result_json:
+            try:
+                rj = json.loads(result_json) if isinstance(result_json, str) else result_json
+                out = (rj.get('stdout') or '')[:1500]
+                if out:
+                    text = text + "\n\n[agent output]\n" + out
+            except Exception:
+                pass
+        triage_agent.post_message(con, incident_id, 'system', text, meta=meta)
+    except Exception as e:
+        logger.info('verify thread post skipped for %s: %s', incident_id, e)
 
 
 def _signal_still_present(con, signal_type, agent_id, asset_id):

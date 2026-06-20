@@ -54,6 +54,7 @@ def feed():
             """SELECT i.*, a.name AS asset_name
                FROM agent_incident i
                LEFT JOIN asset a ON a.id = i.asset_id
+               WHERE i.signal_type <> 'ai_assist'
                ORDER BY
                  CASE WHEN i.status IN ('new','diagnosed','awaiting_approval','remediating')
                       THEN 0 ELSE 1 END,
@@ -96,7 +97,8 @@ def badge():
     con = _db()
     try:
         r = con.execute(
-            f"SELECT COUNT(*) AS c FROM agent_incident WHERE status IN {str(_OPEN)}"
+            f"SELECT COUNT(*) AS c FROM agent_incident "
+            f"WHERE status IN {str(_OPEN)} AND signal_type <> 'ai_assist'"
         ).fetchone()
         return jsonify({'open': r['c'] if r else 0})
     finally:
@@ -214,6 +216,284 @@ def _asset_name(con, asset_id):
         return 'unknown asset'
     a = con.execute("SELECT name FROM asset WHERE id=%s", (asset_id,)).fetchone()
     return (a['name'] if a else None) or f'asset {asset_id}'
+
+
+# ─────────────────────────────────────────────────────────────
+#  CHAT — per-incident conversation thread (the AI Triage Chat)
+# ─────────────────────────────────────────────────────────────
+def _uid():
+    return current_user.id if hasattr(current_user, 'id') else None
+
+
+def _run_bg(fn, *args, **kwargs):
+    """Run a (potentially slow) triage call on a background daemon thread so it
+    never blocks the gunicorn worker. The UI polls /thread for results. The
+    thread pushes its own app context; the triage fns manage their own DB conn.
+    Fully fail-safe — a thread error is logged, never surfaced."""
+    import threading
+    from app import app
+
+    def _target():
+        with app.app_context():
+            try:
+                fn(*args, **kwargs)
+            except Exception:
+                logger.exception('background triage thread failed: %s', getattr(fn, '__name__', fn))
+
+    threading.Thread(target=_target, daemon=True).start()
+
+
+@bp.route('/incidents/<int:incident_id>/chat')
+@login_required
+@admin_required
+def chat(incident_id):
+    """The conversation view for one incident. Lazily triages Tier-2 NOTIFY
+    signals (defender_critical / agent_offline_but_up) on FIRST open so we don't
+    auto-burn gpt-4o loops for the whole Defender list."""
+    import triage_agent as _tri
+    con = _db()
+    try:
+        inc = con.execute(
+            """SELECT i.*, a.name AS asset_name
+               FROM agent_incident i LEFT JOIN asset a ON a.id=i.asset_id
+               WHERE i.id=%s""", (incident_id,)).fetchone()
+        if not inc:
+            return ("Incident not found", 404)
+        inc = dict(inc)
+        # Lazy triage on first open for the notify-tier signals.
+        lazy = inc['signal_type'] in ('defender_critical', 'agent_offline_but_up')
+        needs = (inc.get('triage_state') in (None, '') )
+    finally:
+        con.close()
+
+    if lazy and needs:
+        # Kick lazy triage in the BACKGROUND so the page renders instantly; the
+        # client polls /thread and watches the AI work appear. Mark running now
+        # so a double-open (or the poll racing) doesn't start a second loop.
+        con2 = _db()
+        won = False
+        try:
+            cur = con2.execute(
+                "UPDATE agent_incident SET triage_state='running', updated_at=NOW() "
+                "WHERE id=%s AND (triage_state IS NULL OR triage_state='')",
+                (incident_id,))
+            con2.commit()
+            won = (getattr(cur, 'rowcount', 0) or 0) > 0
+        finally:
+            con2.close()
+        if won:
+            _run_bg(_tri.triage_incident, incident_id, force=True)
+
+    con = _db()
+    try:
+        inc = con.execute(
+            """SELECT i.*, a.name AS asset_name
+               FROM agent_incident i LEFT JOIN asset a ON a.id=i.asset_id
+               WHERE i.id=%s""", (incident_id,)).fetchone()
+        inc = dict(inc)
+        thread = _tri.get_thread(con, incident_id)
+        pf = inc.get('proposed_fix')
+        if isinstance(pf, str):
+            try:
+                pf = json.loads(pf)
+            except Exception:
+                pf = None
+        inc['proposed_fix'] = pf
+        pa = inc.get('proposed_actions')
+        if isinstance(pa, str):
+            try:
+                pa = json.loads(pa)
+            except Exception:
+                pa = []
+        inc['proposed_actions'] = pa or []
+        inc['is_open'] = inc['status'] in _OPEN
+    finally:
+        con.close()
+    return render_template('incident_chat.html', inc=inc, thread=thread)
+
+
+@bp.route('/incidents/<int:incident_id>/thread')
+@login_required
+@admin_required
+def thread_json(incident_id):
+    """Poll endpoint: the chat thread + current proposal + status as JSON."""
+    import triage_agent as _tri
+    con = _db()
+    try:
+        inc = con.execute(
+            "SELECT status, triage_state, proposed_fix FROM agent_incident WHERE id=%s",
+            (incident_id,)).fetchone()
+        if not inc:
+            return jsonify({'ok': False, 'error': 'not found'}), 404
+        thread = _tri.get_thread(con, incident_id)
+        pf = inc['proposed_fix']
+        if isinstance(pf, str):
+            try:
+                pf = json.loads(pf)
+            except Exception:
+                pf = None
+    finally:
+        con.close()
+    return jsonify({'ok': True, 'thread': thread, 'status': inc['status'],
+                    'triage_state': inc['triage_state'], 'proposed_fix': pf})
+
+
+@bp.route('/incidents/<int:incident_id>/reply', methods=['POST'])
+@login_required
+@admin_required
+def reply(incident_id):
+    """Technician replies in the thread → continue the agentic loop."""
+    import triage_agent as _tri
+    text = (request.form.get('text') or
+            (request.json or {}).get('text') if request.is_json else
+            request.form.get('text'))
+    if request.is_json and not text:
+        text = (request.json or {}).get('text')
+    text = (text or '').strip()
+    if not text:
+        return jsonify({'ok': False, 'error': 'empty message'}), 400
+    # Persist the tech's turn NOW (instant in the UI); run the AI loop in the bg.
+    _tri.post_user_message(incident_id, text, created_by=_uid())
+    _run_bg(_tri.continue_incident_chat, incident_id, text,
+            created_by=_uid(), post_user=False)
+    return jsonify({'ok': True, 'queued': True})
+
+
+@bp.route('/incidents/<int:incident_id>/retriage', methods=['POST'])
+@login_required
+@admin_required
+def retriage(incident_id):
+    """Force a fresh triage pass (e.g. after telemetry refresh) — backgrounded."""
+    import triage_agent as _tri
+    _run_bg(_tri.triage_incident, incident_id, force=True)
+    return jsonify({'ok': True, 'queued': True})
+
+
+@bp.route('/incidents/<int:incident_id>/approve_fix', methods=['POST'])
+@login_required
+@admin_required
+def approve_fix(incident_id):
+    """Approve the AI's GATED change proposal → execute via the EXISTING
+    remediation path → post the result back into the thread.
+
+    This is the only place a triage-proposed CHANGE can run, and only on an
+    explicit human click. Read-only diagnostics never come through here."""
+    import triage_agent as _tri
+    con = _db()
+    try:
+        inc = con.execute("SELECT * FROM agent_incident WHERE id=%s",
+                          (incident_id,)).fetchone()
+        if not inc:
+            return jsonify({'ok': False, 'error': 'not found'}), 404
+        inc = dict(inc)
+        pf = inc.get('proposed_fix')
+        if isinstance(pf, str):
+            pf = json.loads(pf)
+        if not pf:
+            return jsonify({'ok': False, 'error': 'no proposal to approve'}), 400
+
+        uid = _uid()
+        execute = pf.get('execute')
+        if execute == 'ticket':
+            subject = f"[{inc['signal_type']}] {_asset_name(con, inc['asset_id'])}"
+            body = (pf.get('diagnosis') or '') + "\n\nWhy this fix: " + (pf.get('why_it_works') or '')
+            tid = _inc._open_ticket(con, inc['asset_id'], subject, inc['signal_type'], body=body)
+            con.execute(
+                """UPDATE agent_incident
+                   SET status='resolved', chosen_action='ai_ticket', approved_by=%s,
+                       approved_at=NOW(), resolved_at=NOW(), updated_at=NOW(),
+                       verify_result=%s WHERE id=%s""",
+                (uid, f'ticket #{tid} opened' if tid else 'ticket create failed', incident_id))
+            con.commit()
+            _tri.post_message(con, incident_id, 'system',
+                              f"Approved → opened ticket #{tid}." if tid else
+                              "Approved → ticket creation failed.",
+                              meta={'approved_by': uid})
+            return jsonify({'ok': True, 'status': 'resolved', 'ticket_id': tid})
+
+        # A CHANGE: enqueue via the existing remediation path.
+        action = {'key': 'ai_proposed_fix', 'kind': 'run',
+                  'risk_tier': pf.get('risk_tier', 1),
+                  'run_payload': pf.get('run_payload') or {}}
+        payload = action['run_payload']
+        if payload.get('type') == 'retry_patch_job':
+            rq_id = _retry_patch_job(con, inc, payload.get('patch_job_id'), uid)
+        else:
+            rq_id = _inc._enqueue_action(con, inc['asset_id'], inc['agent_id'], action)
+        con.execute(
+            """UPDATE agent_incident
+               SET status='remediating', chosen_action='ai_proposed_fix',
+                   remediation_queue_id=COALESCE(%s, remediation_queue_id),
+                   approved_by=%s, approved_at=NOW(),
+                   attempt_count=attempt_count+1, updated_at=NOW() WHERE id=%s""",
+            (rq_id, uid, incident_id))
+        con.commit()
+        _tri.post_message(con, incident_id, 'system',
+                          f"Approved → executing '{pf.get('fix_label')}'. "
+                          f"The result will post here when the agent reports back.",
+                          meta={'approved_by': uid, 'queue_id': rq_id})
+        return jsonify({'ok': True, 'status': 'remediating', 'queue_id': rq_id})
+    finally:
+        con.close()
+
+
+# ─────────────────────────────────────────────────────────────
+#  GLOBAL AI ASSIST — unscoped chat (not tied to one incident)
+# ─────────────────────────────────────────────────────────────
+@bp.route('/ai-assist')
+@login_required
+@admin_required
+def assist_page():
+    import triage_agent as _tri
+    con = _db()
+    try:
+        inc = _tri.get_or_create_assist_thread(con, _uid())
+        thread = _tri.get_thread(con, inc['id'])
+    finally:
+        con.close()
+    return render_template('ai_assist.html', inc=inc, thread=thread)
+
+
+@bp.route('/ai-assist/send', methods=['POST'])
+@login_required
+@admin_required
+def assist_send():
+    import triage_agent as _tri
+    text = request.form.get('text') or (request.json or {}).get('text') if request.is_json else request.form.get('text')
+    if request.is_json and not text:
+        text = (request.json or {}).get('text')
+    target = request.form.get('target_asset') or (
+        (request.json or {}).get('target_asset') if request.is_json else None)
+    text = (text or '').strip()
+    if not text:
+        return jsonify({'ok': False, 'error': 'empty message'}), 400
+    uid = _uid()
+    # Post the user turn + bind target synchronously (instant in UI); run the loop
+    # in the background so the request returns immediately.
+    inc_id = _tri.assist_prepare(uid, text, target_asset=target)
+    _run_bg(_tri.assist_chat, uid, text, target_asset=target, post_user=False)
+    return jsonify({'ok': True, 'queued': True, 'incident_id': inc_id})
+
+
+@bp.route('/ai-assist/thread')
+@login_required
+@admin_required
+def assist_thread_json():
+    import triage_agent as _tri
+    con = _db()
+    try:
+        inc = _tri.get_or_create_assist_thread(con, _uid())
+        thread = _tri.get_thread(con, inc['id'])
+        pf = inc.get('proposed_fix')
+        if isinstance(pf, str):
+            try:
+                pf = json.loads(pf)
+            except Exception:
+                pf = None
+    finally:
+        con.close()
+    return jsonify({'ok': True, 'incident_id': inc['id'], 'thread': thread,
+                    'proposed_fix': pf})
 
 
 def _retry_patch_job(con, inc, src_job_id, uid):

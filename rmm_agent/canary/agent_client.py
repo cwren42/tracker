@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.38"
+AGENT_VERSION = "2.9.39"
 
 import asyncio
 import base64
@@ -121,6 +121,86 @@ def _open_update_url(req, timeout):
             else:
                 raise
     return urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Deadlock-safe script runner (R: run_script child-handle deadlock)
+# ---------------------------------------------------------------------------
+# Root cause we are fixing: subprocess.run(..., capture_output=True) wires the
+# child's stdout/stderr to OS pipes whose READ ends communicate() drains until
+# EOF. If the launched script spawns a LONG-LIVED grandchild (e.g. cloudflared,
+# a service restart, a detached helper) that INHERITS those pipe write handles,
+# the pipes never hit EOF even after the direct child exits -> communicate()
+# blocks forever -> the run_in_executor future never completes. Worse, on
+# TimeoutExpired subprocess.run kills only the direct child and then RE-CALLS
+# communicate() during cleanup, which re-blocks on the inherited handles. The
+# WS receive loop awaits that future and stops accepting commands fleet-wide.
+#
+# Fix: never give the child an inheritable pipe. Redirect stdout/stderr to
+# regular TEMP FILES, give the child its own process group / detached console,
+# and close_fds so grandchildren inherit nothing of ours. We wait() (no pipe
+# drain) and read the files back, so a lingering grandchild can NEVER stall us.
+def _run_script_capture(argv, timeout: int):
+    """Run argv, capture stdout/stderr via temp files (not inheritable pipes).
+
+    Returns (returncode, stdout_text, stderr_text). On timeout the WHOLE process
+    tree is killed (taskkill /T on Windows) and TimeoutExpired is raised. A
+    lingering grandchild that inherits nothing of ours cannot block the wait.
+    """
+    import tempfile as _tmp, time as _time
+    creationflags = 0
+    if sys.platform == "win32":
+        # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP -> the child (and anything
+        # it detaches) is in its own group with no console handle of ours.
+        creationflags = 0x08000000 | 0x00000200
+    out_f = _tmp.NamedTemporaryFile(prefix="cirque_rs_out_", suffix=".txt", delete=False)
+    err_f = _tmp.NamedTemporaryFile(prefix="cirque_rs_err_", suffix=".txt", delete=False)
+    out_path, err_path = out_f.name, err_f.name
+    out_f.close(); err_f.close()
+    proc = None
+    try:
+        of = open(out_path, "wb"); ef = open(err_path, "wb")
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,   # no inherited stdin
+                stdout=of, stderr=ef,        # files, NOT pipes -> no EOF dependency
+                close_fds=True,              # grandchildren inherit none of our fds
+                creationflags=creationflags,
+            )
+        finally:
+            of.close(); ef.close()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire tree so the file handles get released and we don't
+            # leak a runaway. Then re-raise so the caller reports a timeout.
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=15,
+                                   creationflags=0x08000000)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+            raise
+        rc = proc.returncode
+        try:
+            stdout = open(out_path, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            stdout = ""
+        try:
+            stderr = open(err_path, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            stderr = ""
+        return rc, stdout, stderr
+    finally:
+        for p in (out_path, err_path):
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +581,10 @@ _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
 _tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
 _periodic_update_started = False  # only spawn the 4h self-update task once per process
+_warp_logged_state = None  # last logged state string, to avoid log spam each connect
+_warp_worker_launched_at = 0.0  # monotonic ts of last SYSTEM-worker launch (cooldown)
+_WARP_WORKER_COOLDOWN = 1800.0  # don't relaunch the enroll worker more than once / 30 min
+_WARP_CONFIG_CACHE = None  # None=not fetched; (org, client_id, client_secret) or (None,...)
 
 # Per-agent behaviour flags pushed by server on connect via agent_config message.
 # Servers set these to True so neither RustDesk nor the systray are installed.
@@ -1085,6 +1169,333 @@ def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
                 fh.write(cfg)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare WARP bake-in (off-site boxes only)
+# ---------------------------------------------------------------------------
+# Off-site Windows boxes can't reach the internal RustDesk relay (10.15.0.63)
+# directly. Cloudflare WARP private-network routing carries RustDesk's UDP
+# rendezvous to the relay over the WARP mesh with zero internet exposure (the
+# Cloudflare HTTP/WS tunnel mangles RustDesk's binary frames; only WARP's full
+# L3 WireGuard works -- see memory rustdesk-offsite-cloudflare-deadend).
+#
+# ensure_warp() is idempotent and SAFE TO CALL REPEATEDLY:
+#   * On-LAN/site boxes (relay TCP 21116 directly reachable) -> SKIP entirely.
+#   * Already enrolled in org 'cirquetools' AND connected -> done.
+#   * Otherwise drop a one-shot SYSTEM scheduled task that does ALL the
+#     long-lived / connection-bouncing work (WARP install/restart/enroll/connect
+#     + RustDesk toml). We NEVER inline-launch those from run_script / the WS
+#     loop -- a lingering child would deadlock the command loop (Change 1).
+_WARP_CLI = r'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe'
+_WARP_PROGDATA = r'C:\ProgramData\Cloudflare'
+_WARP_MSI_URL = 'https://downloads.cloudflareclient.com/v1/download/windows/ga'
+_RELAY_PROBE_IP = '10.15.0.63'   # internal RustDesk relay (rust.corp.cirque.com)
+_RELAY_PROBE_PORT = 21116
+
+
+def _warp_is_offsite(on_lan: bool) -> bool:
+    """Decide, FAIL-CLOSED toward on-site, whether this box is genuinely off-site
+    and therefore needs WARP. LAN/site boxes MUST be classified on-site so they
+    never get a switch_locked WARP enrollment.
+
+    on_lan is the connection's OWN already-resolved verdict (True when the agent
+    connected to the internal LAN endpoints because rmm.corp.cirque.com was
+    TLS-reachable; False when it fell back to the Cloudflare public endpoints).
+    This is the authoritative signal and is NOT subject to a fresh transient
+    probe failure: a real LAN box always connects on the LAN endpoints.
+
+    We declare off-site ONLY when BOTH hold:
+      (1) the connection itself used the Cloudflare fallback (on_lan is False), AND
+      (2) a fresh direct TCP probe to the relay 10.15.0.63:21116 also fails.
+    If either says on-site, we skip WARP. So a transient probe blip on a LAN box
+    cannot trigger enrollment (its on_lan stays True)."""
+    if on_lan:
+        return False  # connected on internal endpoints -> definitively on-site
+    # On Cloudflare fallback: confirm with a direct relay probe before enrolling.
+    # If the relay is somehow directly reachable here (e.g. split routing), treat
+    # as on-site and skip.
+    try:
+        with socket.create_connection((_RELAY_PROBE_IP, _RELAY_PROBE_PORT), timeout=2.5):
+            return False
+    except Exception:
+        return True
+
+
+def _get_warp_config(tracker_url: str, agent_id: str, token: str):
+    """Fetch the WARP enrollment (org, client_id, client_secret) from the tracker,
+    authenticated by agent_id + token. Cached per-process. LAN-primary then public
+    Cloudflare fallback (mirrors _get_rustdesk_relay). Returns (None, None, None)
+    on any failure / unset server-side so the caller skips WARP gracefully.
+
+    The secret is held only in memory for the lifetime of one enrollment and is
+    written to the (machine-only) MDM store via the SYSTEM task; it is never
+    logged or echoed."""
+    global _WARP_CONFIG_CACHE
+    if _WARP_CONFIG_CACHE is not None:
+        return _WARP_CONFIG_CACHE
+    import urllib.request as _ur
+    fallback = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
+    bases = []
+    for b in (tracker_url, fallback):
+        b = (b or "").rstrip("/")
+        if b and b not in bases:
+            bases.append(b)
+    for base in bases:
+        try:
+            url = f"{base}/api/rmm/warp-config/{agent_id}?token={token}"
+            req = _ur.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
+                body = json.loads(resp.read())
+            org = (body.get("organization") or "").strip()
+            cid = (body.get("auth_client_id") or "").strip()
+            sec = (body.get("auth_client_secret") or "").strip()
+            if org and cid and sec:
+                _WARP_CONFIG_CACHE = (org, cid, sec)
+                print(f"[warp] enrollment config fetched from {base} (org={org})", flush=True)
+                return _WARP_CONFIG_CACHE
+            print("[warp] enrollment config unavailable -- skipping", flush=True)
+            _WARP_CONFIG_CACHE = (None, None, None)
+            return _WARP_CONFIG_CACHE
+        except Exception as e:
+            print(f"[warp] config fetch failed from {base}: {e}", flush=True)
+            continue
+    return (None, None, None)
+
+
+def _warp_enrolled_and_connected(org: str) -> bool:
+    """True if warp-cli reports registration in *org* AND a Connected status."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return False
+    try:
+        reg = _sp.run([_WARP_CLI, "--accept-tos", "registration", "show"],
+                      capture_output=True, text=True, errors="replace",
+                      timeout=15, creationflags=0x08000000)
+        if org.lower() not in (reg.stdout or "").lower():
+            return False
+        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=15, creationflags=0x08000000)
+        return "connected" in (st.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
+    """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
+    only if needed, connect, then write a clean internal RustDesk2.toml preserving
+    the existing key. Logs to disk. No secrets here (they're already in MDM)."""
+    return (
+        '$ErrorActionPreference = "SilentlyContinue"\n'
+        '$Log   = "C:\\ProgramData\\Cloudflare\\warp_bakein.log"\n'
+        '$cli   = "C:\\Program Files\\Cloudflare\\Cloudflare WARP\\warp-cli.exe"\n'
+        f'$Org   = "{org}"\n'
+        'function L($m){ "$(Get-Date -Format o)  $m" | Out-File $Log -Append }\n'
+        '"" | Out-File $Log\n'
+        'L "=== warp bakein worker start ==="\n'
+        'Restart-Service -Name CloudflareWARP -Force\n'
+        'Start-Sleep -Seconds 12\n'
+        '$reg = (& $cli --accept-tos registration show 2>&1 | Out-String)\n'
+        'if ($reg -notmatch [regex]::Escape($Org)) {\n'
+        '    L "registration org != $Org -> re-enrolling"\n'
+        '    & $cli --accept-tos registration delete 2>&1 | Out-File $Log -Append\n'
+        '    Start-Sleep -Seconds 5\n'
+        '    & $cli --accept-tos registration new $Org 2>&1 | Out-File $Log -Append\n'
+        '    Start-Sleep -Seconds 6\n'
+        '} else { L "registration already in org $Org" }\n'
+        '& $cli --accept-tos connect 2>&1 | Out-File $Log -Append\n'
+        'Start-Sleep -Seconds 12\n'
+        'L ("WARP status: " + ((& $cli --accept-tos status 2>&1) -join " | "))\n'
+        '$rdDirs = @(\n'
+        '  "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Roaming\\RustDesk\\config",\n'
+        '  "$env:APPDATA\\RustDesk\\config",\n'
+        '  "C:\\ProgramData\\RustDesk\\config"\n'
+        ') | Where-Object { Test-Path $_ }\n'
+        'foreach ($d in $rdDirs) {\n'
+        '    $toml = Join-Path $d "RustDesk2.toml"\n'
+        '    $key  = ""\n'
+        '    if (Test-Path $toml) {\n'
+        '        $m = Select-String -Path $toml -Pattern "^\\s*key\\s*=\\s*\'([^\']*)\'" -EA SilentlyContinue | Select-Object -First 1\n'
+        '        if ($m) { $key = $m.Matches[0].Groups[1].Value }\n'
+        '    }\n'
+        '    $body = "rendezvous_server = \'' + relay_host + '\'`nnat_type = 1`nserial = 0`n`n[options]`ncustom-rendezvous-server = \'' + relay_host + '\'`nrelay-server = \'\'`napi-server = \'\'`nkey = \'$key\'"\n'
+        '    Set-Content -Path $toml -Value $body -Encoding UTF8\n'
+        '    L "wrote $toml (key preserved: $([bool]$key))"\n'
+        '}\n'
+        'Restart-Service -Name RustDesk -Force -EA SilentlyContinue\n'
+        'Start-Sleep -Seconds 5\n'
+        '$st = ((& $cli --accept-tos status 2>&1) -join " | ")\n'
+        '$c = New-Object Net.Sockets.TcpClient\n'
+        f'$a = $c.BeginConnect("{relay_ip}", {_RELAY_PROBE_PORT}, $null, $null)\n'
+        '$ok = $a.AsyncWaitHandle.WaitOne(5000); $relayReach = ($ok -and $c.Connected); $c.Close()\n'
+        f'L "VERIFY relay {relay_ip}:{_RELAY_PROBE_PORT} reachable: $relayReach"\n'
+        'if (($st -match "Connected") -and $relayReach) { L "RESULT: OK" } else { L "RESULT: FAIL" }\n'
+        'L "=== warp bakein worker done ==="\n'
+    )
+
+
+def _warp_log_once(state: str, msg: str) -> None:
+    """Print msg only when the WARP state CHANGES, to avoid spamming the log on
+    every reconnect (ensure_warp is re-evaluated each connect by design)."""
+    global _warp_logged_state
+    if _warp_logged_state != state:
+        print(msg, flush=True)
+        _warp_logged_state = state
+
+
+def ensure_warp(tracker_url: str, agent_id: str, token: str, on_lan: bool) -> None:
+    """Idempotently enroll OFF-SITE boxes into Cloudflare WARP so they can reach
+    the internal RustDesk relay. On-LAN/site boxes skip. Safe to call repeatedly
+    and RE-EVALUATED every connect, so a laptop that roams LAN->off-site enrolls
+    without waiting for a process restart.
+
+    on_lan = the connection's own resolved verdict (True when the agent connected
+    on the internal LAN endpoints; False on the Cloudflare fallback). It is the
+    fail-closed off-site signal -- a real LAN box always has on_lan=True so it can
+    never be misclassified by a transient probe.
+
+    All long-lived steps run inside a one-shot SYSTEM scheduled task that logs to
+    disk (deadlock-safe per Change 1); this function only stages files + launches
+    the task and returns quickly. Windows-only."""
+    global _warp_worker_launched_at
+    if sys.platform != "win32":
+        return
+    import subprocess as _sp, time as _time
+    try:
+        # 1) OFF-SITE gate (fail-closed toward on-site). LAN/site boxes MUST skip.
+        if not _warp_is_offsite(on_lan):
+            _warp_log_once("onsite", "[warp] on-LAN/site (relay reachable) -- skipping WARP")
+            return
+
+        org_default = 'cirquetools'
+        # 2) Idempotent: already enrolled + connected in our org -> done.
+        if _warp_enrolled_and_connected(org_default):
+            _warp_log_once("enrolled", f"[warp] already enrolled in {org_default} and connected -- ok")
+            return
+
+        # 3) A worker we launched may still be converging -- don't re-fire it more
+        #    than once per cooldown window. (Re-evaluated, but rate-limited.)
+        now = _time.monotonic()
+        if (now - _warp_worker_launched_at) < _WARP_WORKER_COOLDOWN:
+            _warp_log_once("converging", "[warp] enrollment worker recently launched -- waiting to converge")
+            return
+
+        # 4) Fetch enrollment token from the tracker (never hardcoded in source).
+        org, cid, sec = _get_warp_config(tracker_url, agent_id, token)
+        if not (org and cid and sec):
+            print("[warp] no enrollment config available -- deferring", flush=True)
+            return
+        rd_server, _rd_key = _get_rustdesk_relay(tracker_url, agent_id, token)
+        relay_host = rd_server or 'rust.corp.cirque.com'
+
+        os.makedirs(_WARP_PROGDATA, exist_ok=True)
+
+        # Write MDM to the Policies key + mdm.xml so a WARP service restart enrolls
+        # headless into OUR org (NOT consumer WARP). switch_locked, onboarding off.
+        try:
+            import winreg  # type: ignore
+            rp = r"SOFTWARE\Policies\Cloudflare\Warp"
+            k = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, rp)
+            winreg.SetValueEx(k, "organization", 0, winreg.REG_SZ, org)
+            winreg.SetValueEx(k, "service_mode", 0, winreg.REG_SZ, "warp")
+            winreg.SetValueEx(k, "auto_connect", 0, winreg.REG_DWORD, 0)
+            winreg.SetValueEx(k, "onboarding", 0, winreg.REG_DWORD, 0)
+            winreg.SetValueEx(k, "switch_locked", 0, winreg.REG_DWORD, 1)
+            winreg.SetValueEx(k, "auth_client_id", 0, winreg.REG_SZ, cid)
+            winreg.SetValueEx(k, "auth_client_secret", 0, winreg.REG_SZ, sec)
+            winreg.CloseKey(k)
+        except Exception as e:
+            print(f"[warp] MDM registry write failed: {e}", flush=True)
+
+        mdm_xml = (
+            "<dict>\n"
+            f"  <key>organization</key><string>{org}</string>\n"
+            "  <key>service_mode</key><string>warp</string>\n"
+            "  <key>auto_connect</key><integer>0</integer>\n"
+            f"  <key>auth_client_id</key><string>{cid}</string>\n"
+            f"  <key>auth_client_secret</key><string>{sec}</string>\n"
+            "  <key>switch_locked</key><true/>\n"
+            "  <key>onboarding</key><false/>\n"
+            "</dict>\n"
+        )
+        try:
+            with open(os.path.join(_WARP_PROGDATA, "mdm.xml"), "w", encoding="utf-8") as fh:
+                fh.write(mdm_xml)
+        except Exception as e:
+            print(f"[warp] mdm.xml write failed: {e}", flush=True)
+
+        # If WARP isn't installed, install the MSI first (quiet). The SYSTEM task
+        # restarts/enrolls after; if the MSI is still landing the next process
+        # cycle re-runs and the task picks up the now-present warp-cli.
+        if not os.path.isfile(_WARP_CLI):
+            print("[warp] warp-cli absent -- installing MSI", flush=True)
+            _warp_install_msi()
+
+        # Stage the one-shot SYSTEM worker that does ALL long-lived steps.
+        worker = _build_warp_worker_ps1(org, relay_host, _RELAY_PROBE_IP)
+        worker_path = os.path.join(_WARP_PROGDATA, "warp_bakein_worker.ps1")
+        with open(worker_path, "w", encoding="utf-8") as fh:
+            fh.write(worker)
+
+        tn = "CF_WARP_Bakein"
+        _sp.run(["schtasks", "/Delete", "/TN", tn, "/F"],
+                capture_output=True, timeout=15, creationflags=0x08000000)
+        # Backstop trigger: a near-future ONCE time (~2 min ahead) in case the
+        # explicit /Run below doesn't take -- so enrollment isn't pinned to a
+        # fixed wall-clock that an off-hours/asleep box might never reach.
+        st = _time.strftime("%H:%M", _time.localtime(_time.time() + 120))
+        cr = _sp.run(["schtasks", "/Create", "/TN", tn, "/TR",
+                      f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{worker_path}"',
+                      "/SC", "ONCE", "/ST", st, "/RU", "SYSTEM", "/RL", "HIGHEST", "/F"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=20, creationflags=0x08000000)
+        if cr.returncode != 0:
+            print(f"[warp] schtasks /Create failed (rc={cr.returncode}): "
+                  f"{(cr.stderr or cr.stdout or '').strip()[:200]}", flush=True)
+            return
+        rr = _sp.run(["schtasks", "/Run", "/TN", tn],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=20, creationflags=0x08000000)
+        if rr.returncode != 0:
+            print(f"[warp] schtasks /Run failed (rc={rr.returncode}); "
+                  f"backstop ONCE trigger at {st} will fire it", flush=True)
+        # Mark launch time so we don't re-fire within the cooldown window; the
+        # next connect after cooldown re-evaluates (retries if the worker failed).
+        _warp_worker_launched_at = _time.monotonic()
+        _warp_log_once("launched", "[warp] enrollment worker launched (SYSTEM task) -- converging")
+    except Exception as e:
+        print(f"[warp] ensure_warp error: {e}", flush=True)
+
+
+def _warp_install_msi() -> None:
+    """Download + silently install the Cloudflare WARP MSI. Returns when msiexec
+    exits; the SYSTEM worker handles enrollment afterward."""
+    import subprocess as _sp, urllib.request as _ur, tempfile as _tmp
+    try:
+        tmp = _tmp.NamedTemporaryFile(suffix=".msi", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        req = _ur.Request(_WARP_MSI_URL, headers={"User-Agent": "CirqueRMM"})
+        with _ur.urlopen(req, timeout=200) as resp, open(tmp_path, "wb") as fh:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        if os.path.getsize(tmp_path) < 1_000_000:
+            print("[warp] MSI download too small -- aborting", flush=True)
+            os.unlink(tmp_path)
+            return
+        r = _sp.run(["msiexec", "/i", tmp_path, "/qn", "/norestart"],
+                    capture_output=True, timeout=300, creationflags=0x08000000)
+        print(f"[warp] msiexec exit={r.returncode}", flush=True)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[warp] MSI install failed: {e}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -5249,7 +5660,26 @@ async def main() -> None:
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
                 if not _disable_rustdesk:
-                    loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
+                    # Run rustdesk-ensure THEN warp-ensure in a single background
+                    # executor, in that order: WARP bake-in (off-site boxes only;
+                    # on-LAN/site boxes skip) needs the clean RustDesk toml + key
+                    # to already exist so its SYSTEM worker can preserve the key.
+                    # Both are idempotent and deadlock-safe (WARP heavy steps run
+                    # inside a one-shot SYSTEM task), and run off-thread so neither
+                    # blocks the WebSocket from establishing.
+                    # on_lan = this connection's OWN resolved verdict (LAN endpoint
+                    # vs Cloudflare fallback). Fail-closed off-site signal for WARP.
+                    _on_lan = (tracker_url == _LAN_TRACKER_URL)
+                    def _rustdesk_then_warp():
+                        try:
+                            ensure_rustdesk(tracker_url, agent_id, token)
+                        except Exception as _e:
+                            print(f"[rustdesk] ensure error: {_e}", flush=True)
+                        try:
+                            ensure_warp(tracker_url, agent_id, token, _on_lan)
+                        except Exception as _e:
+                            print(f"[warp] ensure error: {_e}", flush=True)
+                    loop.run_in_executor(None, _rustdesk_then_warp)
 
                 # Collect extended info (hardware/OS/security) once on connect
                 try:
@@ -5719,23 +6149,21 @@ async def main() -> None:
                             try:
                                 loop = asyncio.get_event_loop()
                                 if shell == "cmd":
-                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
-                                        ["cmd.exe", "/c", code], capture_output=True,
-                                        text=True, timeout=tout,
-                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
-                                    ))
+                                    argv = ["cmd.exe", "/c", code]
                                 else:
-                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
-                                        ["powershell.exe", "-NonInteractive", "-NoProfile",
-                                         "-ExecutionPolicy", "Bypass", "-Command", code],
-                                        capture_output=True, text=True, timeout=tout,
-                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
-                                    ))
+                                    argv = ["powershell.exe", "-NonInteractive", "-NoProfile",
+                                            "-ExecutionPolicy", "Bypass", "-Command", code]
+                                # Deadlock-safe: capture via temp files, not inheritable
+                                # pipes, so a long-lived grandchild (cloudflared, service
+                                # restart, detached helper) can never stall communicate()
+                                # and wedge the WS command loop. (R: run_script deadlock)
+                                rc, so, se = await loop.run_in_executor(
+                                    None, _run_script_capture, argv, tout)
                                 await ws.send(json.dumps({
                                     "type": "script_result", "session_id": session_id,
-                                    "exit_code": r.returncode,
-                                    "stdout": r.stdout[-32000:],
-                                    "stderr": r.stderr[-8000:],
+                                    "exit_code": rc,
+                                    "stdout": so[-32000:],
+                                    "stderr": se[-8000:],
                                 }))
                             except subprocess.TimeoutExpired:
                                 await ws.send(json.dumps({

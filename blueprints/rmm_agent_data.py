@@ -605,3 +605,26 @@ def api_rmm_rustdesk_config(agent_id):
     return jsonify({'server': server, 'key': key})
 
 
+@bp.route('/api/rmm/warp-config/<agent_id>')
+def api_rmm_warp_config(agent_id):
+    """Return the Cloudflare WARP headless-enrollment service token for the agent
+    to write into its MDM config at runtime. Authenticated by agent_id + token
+    (same gating as rustdesk-config) so the enrollment SECRET never lives in
+    agent source / MSI / git.
+
+    Off-site agents fetch this and enroll into WARP service-mode so they can reach
+    the internal RustDesk relay (10.15.0.63) over the WARP private-network mesh.
+    On-LAN/site agents reach the relay directly and skip WARP entirely (never call
+    this). Values come from server env (WARP_ENROLL_CF_ID / WARP_ENROLL_CF_SECRET
+    via .secrets.env). If either is unset, returns empty strings so the agent
+    skips WARP configuration gracefully (no crash)."""
+    token = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+    return jsonify({
+        'organization': 'cirquetools',
+        'auth_client_id': os.environ.get('WARP_ENROLL_CF_ID', ''),
+        'auth_client_secret': os.environ.get('WARP_ENROLL_CF_SECRET', ''),
+    })
+
+

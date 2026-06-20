@@ -475,6 +475,42 @@ def assist_send():
     return jsonify({'ok': True, 'queued': True, 'incident_id': inc_id})
 
 
+@bp.route('/ai-assist/device-search')
+@login_required
+@admin_required
+def assist_device_search():
+    """Typeahead for the chat-widget device picker. Returns up to 10 asset
+    names matching ``q`` by name (prefix matches first), so the operator can
+    pick a box instead of needing the exact hostname. Targeting stays optional —
+    the name string is what triage_agent._resolve_asset_by_name expects."""
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 1:
+        return jsonify({'ok': True, 'results': []})
+    con = _db()
+    try:
+        rows = con.execute(
+            """SELECT a.name,
+                      (ra.agent_id IS NOT NULL) AS has_agent
+               FROM asset a
+               LEFT JOIN rmm_agent ra ON ra.asset_id=a.id AND ra.enabled=TRUE
+               WHERE a.name ILIKE %s AND a.name IS NOT NULL AND a.name <> ''
+               ORDER BY (LOWER(a.name) LIKE LOWER(%s)) DESC,
+                        ra.last_seen_at DESC NULLS LAST,
+                        a.name ASC
+               LIMIT 10""",
+            (f'%{q}%', f'{q}%')).fetchall()
+        seen, out = set(), []
+        for r in rows:
+            nm = r['name']
+            if nm in seen:
+                continue
+            seen.add(nm)
+            out.append({'name': nm, 'has_agent': bool(r['has_agent'])})
+    finally:
+        con.close()
+    return jsonify({'ok': True, 'results': out})
+
+
 @bp.route('/ai-assist/thread')
 @login_required
 @admin_required

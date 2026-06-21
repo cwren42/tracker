@@ -157,22 +157,27 @@ if (-not ($tkDlls | Where-Object { $_.Name -match '^tcl\d' })) { throw "no tcl*.
 if (-not ($tkDlls | Where-Object { $_.Name -match '^tk\d'  })) { throw "no tk*.dll found near $fullBase"  }
 foreach ($d in $tkDlls) { Copy-Item $d.FullName $EmbedRoot -Force }
 
-# (d) Tcl/Tk runtime DATA. Ask the full interpreter where its tcl library actually
-#     is (robust across installer / setup-python / nuget layouts) instead of guessing
-#     a tcl\ subdir. 'info library' → ...\tcl\tcl8.6 ; its parent is the tcl\ root.
+# (d) Tcl/Tk runtime DATA. Ask the full interpreter where its tcl/tk libraries
+#     actually are (robust across installer / setup-python / nuget layouts) instead
+#     of guessing. 'info library' → ...\tcl\tcl8.6 (the dir that holds init.tcl);
+#     [tk_library] → ...\tcl\tk8.6. Derive the EXACT subdir names from those paths,
+#     NOT from a directory glob — a tcl root often ALSO contains a bare 'tcl8\' Tcl9
+#     module dir (no init.tcl), and a glob would wrongly pick tcl8 over tcl8.6.
 $tclLibDir = (& $FullPython -c "import tkinter;print(tkinter.Tcl().eval('info library'))").Trim()
 if (-not (Test-Path $tclLibDir)) { throw "full Python reported tcl library '$tclLibDir' which does not exist" }
-$tclRoot = Split-Path $tclLibDir -Parent          # ...\tcl  (holds tcl8.6\ and tk8.6\)
+$tkLibDir  = (& $FullPython -c "import tkinter;r=tkinter.Tk();r.withdraw();print(r.tk.eval('set tk_library'));r.destroy()").Trim()
+if (-not (Test-Path $tkLibDir)) { throw "full Python reported tk library '$tkLibDir' which does not exist" }
+$tclDataName = Split-Path $tclLibDir -Leaf        # e.g. tcl8.6
+$tkDataName  = Split-Path $tkLibDir  -Leaf        # e.g. tk8.6
+$tclRoot = Split-Path $tclLibDir -Parent          # ...\tcl  (holds tcl8.6\, tk8.6\, helpers)
 $embedTcl = Join-Path $EmbedRoot "tcl"
 New-Item -ItemType Directory -Force -Path $embedTcl | Out-Null
-# Copy every tcl*/tk* data dir under the tcl root (tcl8.6, tk8.6, and helpers).
-$tclDataDirs = Get-ChildItem $tclRoot -Directory | Where-Object { $_.Name -match '^(tcl|tk)\d' }
-if (-not $tclDataDirs) { throw "no tcl8.6/tk8.6 runtime data found under $tclRoot" }
-foreach ($dd in $tclDataDirs) { Copy-Item $dd.FullName (Join-Path $embedTcl $dd.Name) -Recurse -Force }
-# Resolve the exact subdir NAMES we copied so sitecustomize points at the right ones.
-$tclDataName = ($tclDataDirs | Where-Object { $_.Name -match '^tcl\d' } | Select-Object -First 1).Name
-$tkDataName  = ($tclDataDirs | Where-Object { $_.Name -match '^tk\d'  } | Select-Object -First 1).Name
-if (-not $tclDataName -or -not $tkDataName) { throw "could not resolve tcl/tk data dir names under $tclRoot" }
+# Copy the ENTIRE tcl root so helper module dirs (tcl8\, tcl9\, opt0.4 etc.) come along;
+# init.tcl + the tk widgets live in the tcl8.6\ / tk8.6\ leaves we point the env at.
+Copy-Item (Join-Path $tclRoot '*') $embedTcl -Recurse -Force
+if (-not (Test-Path (Join-Path $embedTcl "$tclDataName\init.tcl"))) {
+    throw "grafted tcl data missing init.tcl at $embedTcl\$tclDataName (expected from $tclLibDir)"
+}
 
 # (e) sitecustomize.py — set TCL_LIBRARY/TK_LIBRARY to the BUNDLED tcl data on every
 #     interpreter startup (site is enabled, so sitecustomize runs automatically). This

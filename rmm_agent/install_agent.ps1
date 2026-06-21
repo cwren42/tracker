@@ -38,7 +38,14 @@ param(
 
     # When set (e.g. invoked by the MSI installer), skips downloading agent files
     # because the MSI already installed them.
-    [switch]$SkipDownload
+    [switch]$SkipDownload,
+
+    # Python source. By DEFAULT the installer ships a PRIVATE, self-contained Python
+    # under $InstallDir\python\ (embedded-Python bundle from the Tracker mirror) so the
+    # endpoint needs NO system-wide Python and no python.org reachability. Pass
+    # -UseSystemPython to fall back to the legacy behaviour (find/install a system
+    # Python under C:\Program Files\Python312\) — kept for revert/escape-hatch only.
+    [switch]$UseSystemPython
 )
 
 $ErrorActionPreference = "Stop"
@@ -208,10 +215,85 @@ if (-not $Token) {
     }
 }
 
-# - 1. Find or install Python -
-Write-Host "[1/7] Checking Python..." -ForegroundColor Yellow
+# - 1. Provision Python (PRIVATE embedded bundle by default; system Python on -UseSystemPython) -
+Write-Host "[1/7] Provisioning Python..." -ForegroundColor Yellow
 
-$PythonExe = $null
+$PythonExe   = $null
+$PrivatePython = $false   # set true once the embedded bundle is in place
+
+if (-not $UseSystemPython) {
+    # --- Embedded-Python bundle: a self-contained CPython under $InstallDir\python\ ---
+    # No system Python, no python.org dependency, version-pinned. The bundle (built by
+    # build_python_bundle.ps1 / CI) carries the agent's deps + tkinter, so nothing is
+    # pip-installed at runtime and the tray dialogs work. Fetched from the Tracker mirror
+    # (LAN/primary first, public Cloudflare fallback) — China-reachable, never python.org.
+    $PyDir       = "$InstallDir\python"
+    $PyExePath   = "$PyDir\python.exe"
+    $PyBundleDep = "deps/cirque-python-embed-3.12.4-win_amd64.zip"
+    $PyBundleZip = "$env:TEMP\cirque-python-embed.zip"
+
+    # Idempotent: if a prior install already deployed the private Python and it runs, reuse it.
+    $haveGoodPrivate = $false
+    if (Test-Path $PyExePath) {
+        try {
+            $pv = & $PyExePath --version 2>&1
+            if ($pv -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10) { $haveGoodPrivate = $true }
+        } catch {}
+    }
+
+    if (-not $haveGoodPrivate) {
+        $bundleMirrors = @("$TrackerUrl/download/$PyBundleDep`?t=$SiteToken")
+        if ($TrackerUrlFallback -and $TrackerUrlFallback -ne $TrackerUrl) {
+            $bundleMirrors += "$TrackerUrlFallback/download/$PyBundleDep`?t=$SiteToken"
+        }
+        $bundleOk = $false
+        foreach ($m in $bundleMirrors) {
+            $shown = $m -replace '\?t=.*$', '?t=***'
+            Write-Host "    Downloading embedded-Python bundle from $shown ..."
+            try { Get-HttpFile $m $PyBundleZip 600; $bundleOk = $true; break }
+            catch { Write-Host "      failed ($shown): $_" -ForegroundColor DarkYellow }
+        }
+        if (-not $bundleOk) {
+            Write-Warning "    Embedded-Python bundle unavailable on the Tracker mirror -- falling back to system Python."
+            Write-Warning "    (To make this the default, build the bundle: rmm_agent/build_python_bundle.ps1, then place it in the Tracker deps mirror.)"
+            $UseSystemPython = $true
+        } else {
+            # Fresh-extract: stop the service so python\ files aren't in use, then wipe + unzip.
+            try { sc.exe stop CirqueRMM 2>$null | Out-Null } catch {}
+            Start-Sleep -Seconds 2
+            if (Test-Path $PyDir) { Remove-Item $PyDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Force -Path $PyDir | Out-Null
+            Expand-Archive -Path $PyBundleZip -DestinationPath $PyDir -Force
+            Remove-Item $PyBundleZip -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $PyExePath)) {
+                Write-Warning "    Bundle extracted but $PyExePath missing -- falling back to system Python."
+                $UseSystemPython = $true
+            }
+        }
+    }
+
+    if (-not $UseSystemPython) {
+        # Verify the private interpreter runs AND imports a core agent dep before committing.
+        try {
+            $pv = & $PyExePath --version 2>&1
+            & $PyExePath -c "import psutil, websockets, ssl; print('deps ok')" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "private interpreter failed to import agent deps" }
+            $PythonExe = $PyExePath
+            $PrivatePython = $true
+            Write-Host "    Using PRIVATE embedded Python: $PythonExe ($pv)" -ForegroundColor Green
+        } catch {
+            Write-Warning "    Private Python self-test failed ($_) -- falling back to system Python."
+            $UseSystemPython = $true
+        }
+    }
+}
+
+if ($UseSystemPython -and -not $PythonExe) {
+    Write-Host "    (Legacy mode) Locating or installing a SYSTEM Python..." -ForegroundColor Yellow
+}
+
+# --- Legacy system-Python discovery/install (revert path / escape hatch) ---
+if (-not $PythonExe) {
 # Also search common install paths directly (avoids Windows Store stub issues)
 $extraPaths = @(
     "C:\Python312\python.exe", "C:\Python311\python.exe", "C:\Python310\python.exe",
@@ -315,6 +397,9 @@ if (-not $PythonExe) {
     if (-not $PythonExe) { Write-Error "Python installation failed. Install manually from python.org"; exit 1 }
     Write-Host "    Python installed: $PythonExe" -ForegroundColor Green
 }
+}  # end legacy system-Python block
+
+if (-not $PythonExe) { Write-Error "No usable Python (neither embedded bundle nor system Python)."; exit 1 }
 
 # - 2. Create install directory -
 Write-Host "[2/7] Creating install directory: $InstallDir" -ForegroundColor Yellow
@@ -374,6 +459,15 @@ Write-Host "[5/7] Installing Python dependencies..." -ForegroundColor Yellow
 try { sc.exe stop CirqueRMM 2>$null | Out-Null } catch {}
 Start-Sleep -Seconds 2
 
+if ($PrivatePython) {
+    # The embedded bundle already carries every agent dependency (+ pystray/pillow +
+    # tkinter) in its own site-packages — verified at build time. Nothing to pip-install;
+    # skip the wheelhouse round-trip entirely. $wheelReady stays false so the tray step
+    # below uses the bundled packages (already present) rather than re-installing.
+    $wheelReady = $false
+    Write-Host "    Private embedded Python carries all deps -- skipping pip install." -ForegroundColor Green
+} else {
+
 # China-mirror: install the agent's pip deps from a Tracker-hosted wheelhouse FIRST
 # (offline, --no-index), so PyPI (throttled from China) is only a fallback. The
 # wheelhouse is a flat zip of win_amd64+cp312 wheels (websockets/psutil/mss/Pillow/
@@ -418,6 +512,7 @@ if (-not $depsOk) {
 }
 Remove-Item $WheelZip -Force -ErrorAction SilentlyContinue
 Write-Host "    Dependencies installed." -ForegroundColor Green
+}  # end system-Python dependency install
 
 # - 6. Install NSSM & register service -
 Write-Host "[6/7] Configuring Windows service..." -ForegroundColor Yellow
@@ -517,15 +612,20 @@ Write-Host "[7/7] Setting up tray application..." -ForegroundColor Yellow
 $PythonwExe = Join-Path (Split-Path $PythonExe -Parent) "pythonw.exe"
 if (-not (Test-Path $PythonwExe)) { $PythonwExe = $PythonExe }
 
-# Install pystray + pillow (best-effort). Use the offline wheelhouse if we fetched
-# it above (China-reachable; pystray/pillow + transitive are in it), else PyPI.
-try {
-    if ($wheelReady -and (Test-Path $WheelDir)) {
-        & $PythonExe -m pip install --quiet --no-index --find-links "$WheelDir" pystray pillow | Out-Null
-    } else {
-        & $PythonExe -m pip install --quiet pystray pillow | Out-Null
-    }
-} catch {}
+# Install pystray + pillow (best-effort). The private embedded bundle already ships
+# both (+ tkinter) so we install NOTHING in that mode. Otherwise use the offline
+# wheelhouse if we fetched it above (China-reachable), else PyPI.
+if ($PrivatePython) {
+    Write-Host "    Tray deps (pystray/pillow/tkinter) bundled in private Python." -ForegroundColor Green
+} else {
+    try {
+        if ($wheelReady -and (Test-Path $WheelDir)) {
+            & $PythonExe -m pip install --quiet --no-index --find-links "$WheelDir" pystray pillow | Out-Null
+        } else {
+            & $PythonExe -m pip install --quiet pystray pillow | Out-Null
+        }
+    } catch {}
+}
 
 # Write a VBS launcher to All-Users Startup so tray runs on every future login
 $StartupFolder = [System.Environment]::GetFolderPath('CommonStartup')

@@ -507,9 +507,15 @@ def download_agent_dep(filename):
     """
     import os, posixpath, hmac as _hmac
     allowed = {
-        'python-3.12.4-amd64.exe',          # matches the installer's pinned Python
+        'python-3.12.4-amd64.exe',          # matches the installer's pinned Python (legacy system-Python path)
         'nssm-2.24-101-g897c7ad.zip',       # matches the nssm.cc URL the installer uses
         'wheelhouse-cp312-win_amd64.zip',   # agent pip deps (win_amd64 + cp312) + transitive
+        # Self-contained embedded-Python bundle (default install path): a relocatable
+        # CPython 3.12.4 carrying the agent's deps + tkinter, extracted to C:\CirqueRMM\
+        # python\. Built by rmm_agent/build_python_bundle.ps1 (CI: agent-python-bundle.yml),
+        # so no endpoint needs system Python. Keep the filename pinned in lockstep with
+        # the installer's $PyBundleDep and the bundle build's $PyVersion.
+        'cirque-python-embed-3.12.4-win_amd64.zip',
     }
     clean = posixpath.basename(filename)
     if clean not in allowed:

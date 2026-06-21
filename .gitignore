@@ -74,4 +74,11 @@ rmm_agent/CirqueRMM.exe
 #        -d rmm_agent/deps/wheelhouse \
 #        websockets psutil mss Pillow pystray pywinpty
 #   (then zip the wheels flat into rmm_agent/deps/wheelhouse-cp312-win_amd64.zip)
+#
+# Embedded-Python bundle (default install path — a self-contained CPython under
+# C:\CirqueRMM\python\, so endpoints need NO system Python). Built on Windows by
+# rmm_agent/build_python_bundle.ps1 (CI: .github/workflows/agent-python-bundle.yml),
+# then dropped here and served token-gated by /download/deps/<file>:
+#   cirque-python-embed-3.12.4-win_amd64.zip
+# Keep its version in lockstep with deps/python-3.12.4-amd64.exe and the cp312 wheelhouse.
 rmm_agent/deps/

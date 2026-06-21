@@ -1,0 +1,94 @@
+name: Build RMM Agent Python Bundle
+
+# Builds the self-contained embedded-Python bundle the RMM agent ships with
+# (cirque-python-embed-3.12.4-win_amd64.zip) on a clean Windows runner — the only
+# place a win_amd64 interpreter + .pyd/.dll can be assembled and import-verified.
+#
+# The job runs rmm_agent/build_python_bundle.ps1, which:
+#   * pulls the python.org *embeddable* 3.12.4 distro,
+#   * enables site-packages (._pth) + bootstraps pip,
+#   * vendors the agent's deps (websockets/psutil/mss/Pillow/pystray/pywinpty),
+#   * grafts tkinter + Tcl-Tk (the embeddable distro omits them; the tray needs them),
+#   * VERIFIES the bundled interpreter imports every dep AND constructs a Tk().
+#
+# Output: a run artifact (and, on tag agent-pybundle-v*, a Release asset). Download it
+# and drop it into the Tracker deps mirror (rmm_agent/deps/) — it's gitignored, served
+# token-gated by /download/deps/<file> to install_agent.ps1 (LAN/Cloudflare first).
+#
+# Trigger: manual ("Run workflow") or tag agent-pybundle-v*.
+
+on:
+  push:
+    tags: [ "agent-pybundle-v*" ]
+  workflow_dispatch:
+    inputs:
+      py_version:
+        description: "CPython version to bundle (keep == deps/ pinned Python)"
+        default: "3.12.4"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    steps:
+      # Path-scoped checkout of ONLY rmm_agent/ — same reason as agent-build.yml:
+      # a full checkout trips over evidence/policy PDFs with newlines in their names,
+      # illegal on NTFS. We only need rmm_agent/ to build the bundle.
+      - name: Checkout rmm_agent
+        shell: bash
+        run: |
+          git init -q .
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout -q "$GITHUB_SHA" -- rmm_agent
+          ls rmm_agent
+
+      - name: Set up Python 3.12 (source for tkinter/Tcl-Tk + pip)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build + verify embedded-Python bundle
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.py_version }}"
+          if (-not $ver) { $ver = "3.12.4" }
+          # The runner's actions/setup-python gives us a FULL 3.12 to graft tkinter from.
+          $full = (Get-Command python).Source
+          Write-Host "Full CPython for tkinter graft: $full"
+          ./rmm_agent/build_python_bundle.ps1 -PyVersion $ver -OutDir "rmm_agent/deps" -FullPython $full
+
+      - name: Compute checksum
+        id: meta
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem rmm_agent/deps/cirque-python-embed-*.zip | Select-Object -First 1
+          if (-not $zip) { throw "bundle zip not produced" }
+          $sha = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          $sha | Out-File -FilePath "rmm_agent/deps/$($zip.Name).sha256" -NoNewline -Encoding ascii
+          Write-Host "Built $($zip.Name)  sha256=$sha  size=$([math]::Round($zip.Length/1MB,1)) MB"
+          "name=$($zip.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: |
+            rmm_agent/deps/cirque-python-embed-*.zip
+            rmm_agent/deps/cirque-python-embed-*.zip.sha256
+          retention-days: 30
+
+      - name: Create Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/agent-pybundle-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rmm_agent/deps/cirque-python-embed-*.zip
+            rmm_agent/deps/cirque-python-embed-*.zip.sha256
+          body: |
+            Self-contained embedded-Python bundle for the Cirque RMM agent.
+            Drop the zip into the Tracker deps mirror (rmm_agent/deps/); served
+            token-gated by /download/deps/<file> to install_agent.ps1.

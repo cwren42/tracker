@@ -108,9 +108,19 @@ if (Test-Path $Wheelhouse) {
 if ($LASTEXITCODE -ne 0) { throw "pystray/pillow install failed" }
 
 # ── 5. Graft tkinter + Tcl-Tk from a full CPython install ─────────────────────
-# The tray's dialogs import tkinter, which the embeddable distro omits. Copy the
-# tkinter Lib package, _tkinter.pyd, the Tcl/Tk DLLs and the tcl runtime tree from
-# a full 3.12.x. Without this, every tray dialog raises ModuleNotFoundError: _tkinter.
+# The tray's dialogs import tkinter, which the embeddable distro omits. A correct
+# graft needs ALL of: (a) the tkinter package, (b) _tkinter.pyd, (c) the Tcl/Tk
+# runtime DLLs, and (d) the tcl8.6 / tk8.6 runtime DATA (init.tcl etc.) — in a
+# layout the embeddable's sys.path + Tk's library search actually resolve.
+#
+# Two historical bugs this section fixes:
+#   * the tkinter package was dropped into Lib\, but the ._pth only puts
+#     Lib\site-packages on sys.path (NOT Lib\) → "No module named 'tkinter'".
+#     Fix: drop the package into Lib\site-packages\ which is already on the path.
+#   * Tk() couldn't find init.tcl because the embeddable has no registry/install
+#     to anchor TCL_LIBRARY. Fix: copy the runtime DATA into the bundle's tcl\ dir
+#     AND set TCL_LIBRARY/TK_LIBRARY at interpreter startup via a sitecustomize.py
+#     baked into the bundle (works in the CI verify AND on a real endpoint).
 Write-Host "[5] Grafting tkinter + Tcl-Tk from full CPython ($FullPython)"
 $fullBase = (& $FullPython -c "import sys,os;print(os.path.dirname(sys.executable))").Trim()
 if (-not (Test-Path $fullBase)) { throw "could not locate full CPython base from '$FullPython'" }
@@ -118,33 +128,67 @@ $fullVer  = (& $FullPython -c "import sys;print('%d.%d'%sys.version_info[:2])").
 $embedVer = ($PyVersion -split '\.')[0..1] -join '.'
 if ($fullVer -ne $embedVer) { throw "FullPython is $fullVer but bundling $embedVer — minor versions must match for tkinter ABI" }
 
-# pythonXY.zip in the embeddable distro holds the stdlib; tkinter needs to live in
-# Lib\ (a real dir) so its package data + _tkinter.pyd resolve. Create Lib\ and copy.
-$embedLib = Join-Path $EmbedRoot "Lib"
-New-Item -ItemType Directory -Force -Path $embedLib | Out-Null
-Copy-Item (Join-Path $fullBase "Lib\tkinter") (Join-Path $embedLib "tkinter") -Recurse -Force
-# _tkinter.pyd + the loader DLLs live in DLLs\ (pyd) and the base dir (tcl/tk DLLs).
-foreach ($pyd in @("_tkinter.pyd")) {
-    $src = Join-Path $fullBase "DLLs\$pyd"
-    if (Test-Path $src) { Copy-Item $src $EmbedRoot -Force } else { throw "missing $src" }
+# (a) tkinter package → Lib\site-packages\tkinter (site-packages is ALREADY on the
+#     ._pth, so this fixes the import without touching the path further).
+$embedSP = Join-Path $EmbedRoot "Lib\site-packages"
+New-Item -ItemType Directory -Force -Path $embedSP | Out-Null
+$tkPkgSrc = Join-Path $fullBase "Lib\tkinter"
+if (-not (Test-Path $tkPkgSrc)) { throw "tkinter package not found at $tkPkgSrc" }
+Copy-Item $tkPkgSrc (Join-Path $embedSP "tkinter") -Recurse -Force
+
+# (b) _tkinter.pyd → next to python.exe (embeddable root is on the .pyd search path).
+$pydSrc = Join-Path $fullBase "DLLs\_tkinter.pyd"
+if (-not (Test-Path $pydSrc)) { throw "missing $pydSrc" }
+Copy-Item $pydSrc $EmbedRoot -Force
+
+# (c) Tcl/Tk runtime DLLs (tcl86t.dll, tk86t.dll, zlib1.dll) → embeddable root.
+#     They live in DLLs\ on the standard installer layout; fall back to the base dir.
+$dllSearch = @((Join-Path $fullBase "DLLs"), $fullBase)
+$tkDlls = @()
+foreach ($dir in $dllSearch) {
+    if (Test-Path $dir) {
+        $tkDlls += Get-ChildItem $dir -Filter "*.dll" |
+                   Where-Object { $_.Name -match '^(tcl\d|tk\d|zlib1\.dll$)' }
+    }
 }
-# Tcl/Tk runtime DLLs — names are version-suffixed (tcl86t.dll/tk86t.dll for 3.12).
-$tkDlls = Get-ChildItem (Join-Path $fullBase "DLLs") -Filter "*.dll" |
-          Where-Object { $_.Name -match '^(tcl|tk)\d|^zlib1\.dll$' }
-if (-not $tkDlls) {
-    # Some layouts keep the DLLs in the base dir, not DLLs\.
-    $tkDlls = Get-ChildItem $fullBase -Filter "*.dll" | Where-Object { $_.Name -match '^(tcl|tk)\d' }
-}
+# Dedup by name (a DLL may exist in both DLLs\ and base); first hit wins.
+$tkDlls = $tkDlls | Group-Object Name | ForEach-Object { $_.Group[0] }
+if (-not ($tkDlls | Where-Object { $_.Name -match '^tcl\d' })) { throw "no tcl*.dll found near $fullBase" }
+if (-not ($tkDlls | Where-Object { $_.Name -match '^tk\d'  })) { throw "no tk*.dll found near $fullBase"  }
 foreach ($d in $tkDlls) { Copy-Item $d.FullName $EmbedRoot -Force }
-# The tcl/ runtime tree (init.tcl etc.). It sits in the install root's tcl\ dir.
-$tclSrc = Join-Path $fullBase "tcl"
-if (-not (Test-Path $tclSrc)) {
-    # actions/setup-python layout: <base>\tcl may be one level up
-    $tclSrc = Join-Path (Split-Path $fullBase) "tcl"
-}
-if (-not (Test-Path $tclSrc)) { throw "could not find tcl/ runtime tree near $fullBase" }
-Copy-Item $tclSrc (Join-Path $EmbedRoot "tcl") -Recurse -Force
-Write-Host "    grafted tkinter, _tkinter.pyd, $($tkDlls.Count) Tcl/Tk DLLs, tcl/ runtime"
+
+# (d) Tcl/Tk runtime DATA. Ask the full interpreter where its tcl library actually
+#     is (robust across installer / setup-python / nuget layouts) instead of guessing
+#     a tcl\ subdir. 'info library' → ...\tcl\tcl8.6 ; its parent is the tcl\ root.
+$tclLibDir = (& $FullPython -c "import tkinter;print(tkinter.Tcl().eval('info library'))").Trim()
+if (-not (Test-Path $tclLibDir)) { throw "full Python reported tcl library '$tclLibDir' which does not exist" }
+$tclRoot = Split-Path $tclLibDir -Parent          # ...\tcl  (holds tcl8.6\ and tk8.6\)
+$embedTcl = Join-Path $EmbedRoot "tcl"
+New-Item -ItemType Directory -Force -Path $embedTcl | Out-Null
+# Copy every tcl*/tk* data dir under the tcl root (tcl8.6, tk8.6, and helpers).
+$tclDataDirs = Get-ChildItem $tclRoot -Directory | Where-Object { $_.Name -match '^(tcl|tk)\d' }
+if (-not $tclDataDirs) { throw "no tcl8.6/tk8.6 runtime data found under $tclRoot" }
+foreach ($dd in $tclDataDirs) { Copy-Item $dd.FullName (Join-Path $embedTcl $dd.Name) -Recurse -Force }
+# Resolve the exact subdir NAMES we copied so sitecustomize points at the right ones.
+$tclDataName = ($tclDataDirs | Where-Object { $_.Name -match '^tcl\d' } | Select-Object -First 1).Name
+$tkDataName  = ($tclDataDirs | Where-Object { $_.Name -match '^tk\d'  } | Select-Object -First 1).Name
+if (-not $tclDataName -or -not $tkDataName) { throw "could not resolve tcl/tk data dir names under $tclRoot" }
+
+# (e) sitecustomize.py — set TCL_LIBRARY/TK_LIBRARY to the BUNDLED tcl data on every
+#     interpreter startup (site is enabled, so sitecustomize runs automatically). This
+#     makes Tk() resolve init.tcl on a real endpoint, not just in the CI verify, with
+#     no env wiring required in install_agent.ps1 / NSSM.
+$siteCust = @"
+# Auto-generated by build_python_bundle.ps1 — points the embedded interpreter at the
+# Tcl/Tk runtime data we grafted into <bundle>\tcl, so tkinter.Tk() finds init.tcl.
+import os, sys
+_root = os.path.dirname(os.path.abspath(sys.executable))
+_tcl = os.path.join(_root, 'tcl')
+os.environ.setdefault('TCL_LIBRARY', os.path.join(_tcl, '$tclDataName'))
+os.environ.setdefault('TK_LIBRARY',  os.path.join(_tcl, '$tkDataName'))
+"@
+Set-Content -Path (Join-Path $embedSP "sitecustomize.py") -Value $siteCust -Encoding UTF8
+Write-Host "    grafted tkinter pkg, _tkinter.pyd, $($tkDlls.Count) Tcl/Tk DLLs, tcl data ($tclDataName/$tkDataName), sitecustomize"
 
 # ── 6. Verify: the bundled interpreter imports EVERY agent dependency ─────────
 Write-Host "[6] Verifying bundled interpreter imports all agent dependencies" -ForegroundColor Yellow
@@ -162,9 +206,14 @@ for m in mods:
     except Exception as e:
         print("  FAIL ", m, "->", e)
         failed.append(m)
-# tkinter must be able to construct a Tk (needs Tcl/Tk DLLs + tcl/ runtime).
+# tkinter must be able to construct a Tk (needs Tcl/Tk DLLs + tcl/ runtime data).
+# Report which tcl library the bundle resolved (set by the baked sitecustomize).
+import os
+print("  TCL_LIBRARY =", os.environ.get("TCL_LIBRARY"))
+print("  TK_LIBRARY  =", os.environ.get("TK_LIBRARY"))
 try:
     import tkinter
+    print("  info library:", tkinter.Tcl().eval("info library"))
     r = tkinter.Tk(); r.withdraw(); r.destroy()
     print("  OK    tkinter.Tk() constructed")
 except Exception as e:
@@ -174,6 +223,11 @@ sys.exit(1 if failed else 0)
 '@
 $verifyFile = Join-Path $Work "verify_bundle.py"
 Set-Content -Path $verifyFile -Value $verify -Encoding UTF8
+# Clear any TCL/TK env the runner's full Python may have exported, so the verify
+# genuinely exercises the BUNDLE's own sitecustomize-driven resolution (not the
+# runner's tcl tree). On a real endpoint there's nothing to inherit anyway.
+$env:TCL_LIBRARY = $null
+$env:TK_LIBRARY  = $null
 & $EmbedPy $verifyFile
 if ($LASTEXITCODE -ne 0) { throw "Bundle verification FAILED — one or more agent deps did not import." }
 Write-Host "    all agent dependencies import under the bundled interpreter." -ForegroundColor Green

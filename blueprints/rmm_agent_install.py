@@ -347,10 +347,12 @@ def rmm_enroll():
         # enrolls under a new hostname, so the name won't match its existing procurement
         # record — but the serial will, linking it instead of spawning a duplicate.
         # Garbage OEM serials ("TobefilledbyO.E.M." etc.) repeat across machines, never match.
+        # NOTE: input is normalized (lower, strip spaces/dots/dashes) before lookup,
+        # so set entries must ALSO be space/dot/dash-free or they can never match.
         _GARBAGE_SERIALS = {
             'tobefilled', 'tobefilledbyoem', 'tobefillbyoem',
-            'default string', 'system serial number',
-            'not specified', 'none', 'n/a', 'na', 'o.e.m.', '',
+            'default', 'defaultstring', 'systemserialnumber',
+            'notspecified', 'none', 'n/a', 'na', 'oem', '',
         }
         def _is_garbage_serial(s: str) -> bool:
             return (s or '').lower().replace(' ', '').replace('.', '').replace('-', '') in _GARBAGE_SERIALS

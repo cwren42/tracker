@@ -456,6 +456,12 @@ class LicenseAssignment(db.Model):
     status = db.Column(db.String(20), default='Active')  # Active, Returned
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Relationships the templates rely on (view_license.html references
+    # assignment.asset / assignment.employee). asset_id and employee_id are
+    # mutually-exclusive per row; foreign_keys is explicit since both columns
+    # are FKs out to different tables.
+    asset = db.relationship('Asset', foreign_keys=[asset_id])
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
 
 class Setting(db.Model):
     id = db.Column(db.Integer, primary_key=True)

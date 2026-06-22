@@ -157,6 +157,16 @@ def ensure_schema():
                 else:
                     print(f"✓ rmm_telemetry.{col} exists")
 
+            # license_assignment.license_key — per-seat product key (e.g. Visual
+            # Studio Pro per-user keys). Surfaced masked on the license detail page.
+            if not _col_exists("license_assignment", "license_key"):
+                print("Adding license_assignment.license_key...")
+                db.session.execute(text("ALTER TABLE license_assignment ADD COLUMN license_key TEXT"))
+                db.session.commit()
+                print("✓ Added license_assignment.license_key")
+            else:
+                print("✓ license_assignment.license_key exists")
+
             # Create asset_loan, installed_app tables
             db.create_all()
             print("✓ asset_loan / installed_app tables verified")

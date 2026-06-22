@@ -137,7 +137,9 @@
                     <tbody>
                         {% for license in licenses %}
                         <tr>
-                            <td><strong>{{ license.software_name }}</strong></td>
+                            <td><strong>{{ license.software_name }}</strong>
+                                {% if license.license_key %}<i class="bi bi-key-fill text-warning" data-bs-toggle="tooltip" title="Master license key on file — open the license to reveal"></i>{% endif %}
+                            </td>
                             <td>{{ license.vendor or '-' }}</td>
                             <td><span class="badge bg-secondary">{{ license.license_type or 'N/A' }}</span></td>
                             <td>

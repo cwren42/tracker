@@ -260,6 +260,7 @@ def assign_license(license_id):
             asset_id=int(asset_id) if asset_id else None,
             employee_id=int(employee_id),
             product_component=product_component if product_component else None,
+            license_key=(request.form.get('license_key') or '').strip() or None,
             notes=request.form.get('notes'),
             status='Active'
         )

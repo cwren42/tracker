@@ -182,6 +182,7 @@
                         <tr>
                             <th>Assigned To</th>
                             <th>Product/Component</th>
+                            <th>Product Key</th>
                             <th>Type</th>
                             <th>Assigned Date</th>
                             <th>Status</th>
@@ -212,6 +213,19 @@
                                     <span class="badge bg-info">{{ assignment.product_component }}</span>
                                 {% else %}
                                     <span class="text-muted">Full License</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if assignment.license_key %}
+                                <div class="input-group input-group-sm" style="max-width:220px;">
+                                    <input type="password" class="form-control form-control-sm" value="{{ assignment.license_key }}" readonly id="akey{{ assignment.id }}">
+                                    <button class="btn btn-outline-secondary" type="button" title="Show/Hide"
+                                            onclick="var f=document.getElementById('akey{{ assignment.id }}');f.type=(f.type=='password'?'text':'password');">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                                {% else %}
+                                    <span class="text-muted">—</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -319,7 +333,14 @@
                         </datalist>
                         <small class="form-text text-muted">Specify which product/component this user needs (e.g., some users may only need Acrobat Pro from Creative Cloud)</small>
                     </div>
-                    
+
+                    <div class="mb-3">
+                        <label class="form-label"><i class="bi bi-key text-warning"></i> Product Key (Optional)</label>
+                        <input type="text" class="form-control" name="license_key"
+                               placeholder="Per-user product key (e.g. Visual Studio Pro key for this seat)">
+                        <small class="form-text text-muted">For Per-User licenses with a key per seat (Visual Studio, etc.). Stored masked.</small>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label"><i class="bi bi-laptop text-primary"></i> Assign to Device (Optional)</label>
                         <select class="form-select" name="asset_id">

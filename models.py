@@ -452,6 +452,7 @@ class LicenseAssignment(db.Model):
     asset_id = db.Column(db.Integer, db.ForeignKey('asset.id'))
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'))
     product_component = db.Column(db.String(200))  # Specific product/component (e.g., "Adobe Acrobat Pro", "Full Suite")
+    license_key = db.Column(db.Text)  # per-seat product key (e.g. VS Pro per-user key)
     assigned_date = db.Column(db.Date, default=datetime.utcnow)
     status = db.Column(db.String(20), default='Active')  # Active, Returned
     notes = db.Column(db.Text)

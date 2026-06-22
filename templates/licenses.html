@@ -162,6 +162,17 @@
                                             {% if rec.flag=='over' %}+{{ rec.used - rec.owned }} over seats{% else %}paying, 0 installed{% endif %}
                                         </div>
                                     {% endif %}
+                                    {% if rec.versions %}
+                                    <div class="small mt-1" style="line-height:1.25;">
+                                        {% for v in rec.versions[:6] %}
+                                        <div class="text-truncate" style="max-width:270px;"
+                                             title="{{ v.name }}{% if v.builds %} — builds: {{ v.builds|join(', ') }}{% endif %}">
+                                            {{ v.name }} <span class="badge rounded-pill bg-light text-dark border">×{{ v.count }}</span>
+                                        </div>
+                                        {% endfor %}
+                                        {% if rec.versions|length > 6 %}<div class="text-muted">+{{ rec.versions|length - 6 }} more…</div>{% endif %}
+                                    </div>
+                                    {% endif %}
                                 {% else %}
                                     <span class="text-muted small">—</span>
                                 {% endif %}
@@ -238,7 +249,20 @@
                     <tbody>
                     {% for u in untracked %}
                         <tr>
-                            <td><strong>{{ u.label }}</strong></td>
+                            <td>
+                                <strong>{{ u.label }}</strong>
+                                {% if u.versions %}
+                                <div class="small mt-1" style="line-height:1.25;">
+                                    {% for v in u.versions[:5] %}
+                                    <div class="text-truncate" style="max-width:240px;"
+                                         title="{{ v.name }}{% if v.builds %} — builds: {{ v.builds|join(', ') }}{% endif %}">
+                                        {{ v.name }} <span class="badge rounded-pill bg-light text-dark border">×{{ v.count }}</span>
+                                    </div>
+                                    {% endfor %}
+                                    {% if u.versions|length > 5 %}<div class="text-muted">+{{ u.versions|length - 5 }} more…</div>{% endif %}
+                                </div>
+                                {% endif %}
+                            </td>
                             <td>{{ u.vendor }}</td>
                             <td><span class="badge bg-warning text-dark">{{ u.used }} device{{ 's' if u.used != 1 }}</span></td>
                             <td class="small text-muted" style="max-width:420px;">

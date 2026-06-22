@@ -106,9 +106,9 @@ def _name_matches(name, inc, exc):
 
 
 def installs_for(cur, inc, exc):
-    """Return {agent_id: matched_name} for the broadest include set, filtered in
-    Python by the precise include/exclude. We pre-filter in SQL with a coarse
-    ILIKE OR-set to keep the row count down, then apply the real regex here."""
+    """Return {agent_id: {"name":.., "version":..}} for the broadest include set,
+    filtered in Python by the precise include/exclude. We pre-filter in SQL with a
+    coarse ILIKE OR-set to keep the row count down, then apply the real regex here."""
     # Coarse SQL prefilter: any include's first \w token.
     like_terms = set()
     for p in inc:
@@ -118,13 +118,31 @@ def installs_for(cur, inc, exc):
             like_terms.add(m.group(0).lower())
     if not like_terms:
         return {}
-    sql = "SELECT agent_id, name FROM rmm_software WHERE " + \
+    sql = "SELECT agent_id, name, version FROM rmm_software WHERE " + \
           " OR ".join(["LOWER(name) LIKE %s"] * len(like_terms))
     cur.execute(sql, tuple(f"%{t}%" for t in like_terms))
     out = {}
-    for agent_id, name in cur.fetchall():
+    for agent_id, name, version in cur.fetchall():
         if name and _name_matches(name, inc, exc):
-            out.setdefault(agent_id, name)
+            out.setdefault(agent_id, {"name": name,
+                                      "version": (version or "").strip() or None})
+    return out
+
+
+def _version_breakdown(installs):
+    """Group matched installs by product name -> device count + distinct builds.
+    installs = {agent_id: {"name":.., "version":..}}. Sorted by count desc so the
+    most-deployed version shows first (e.g. 'Visual Studio Professional 2017' x11)."""
+    groups = {}
+    for v in installs.values():
+        nm = v["name"]
+        g = groups.setdefault(nm, {"name": nm, "count": 0, "builds": set()})
+        g["count"] += 1
+        if v.get("version"):
+            g["builds"].add(v["version"])
+    out = [{"name": g["name"], "count": g["count"], "builds": sorted(g["builds"])}
+           for g in groups.values()]
+    out.sort(key=lambda x: (-x["count"], x["name"]))
     return out
 
 
@@ -174,10 +192,12 @@ def reconcile(cur):
             "employees": len(employees), "status": status,
             "expiry_date": expiry.isoformat() if expiry else None,
             "flag": flag,
+            "versions": _version_breakdown(installs),
             "devices": [{"agent_id": a,
                          "asset_id": agent_meta.get(a, {}).get("asset_id"),
                          "asset_name": agent_meta.get(a, {}).get("asset_name") or a,
-                         "software": installs[a]} for a in agents],
+                         "software": installs[a]["name"],
+                         "version": installs[a].get("version")} for a in agents],
         })
 
     untracked = []
@@ -189,10 +209,12 @@ def reconcile(cur):
         agents = sorted(installs.keys())
         untracked.append({
             "label": d["label"], "vendor": d["vendor"], "used": len(agents),
+            "versions": _version_breakdown(installs),
             "devices": [{"agent_id": a,
                          "asset_id": agent_meta.get(a, {}).get("asset_id"),
                          "asset_name": agent_meta.get(a, {}).get("asset_name") or a,
-                         "software": installs[a]} for a in agents],
+                         "software": installs[a]["name"],
+                         "version": installs[a].get("version")} for a in agents],
         })
     untracked.sort(key=lambda x: -x["used"])
     return {"tracked": tracked, "untracked": untracked}

@@ -383,7 +383,7 @@
                         <tbody>
                             {% for lic in m365_licenses %}
                             <tr>
-                                <td><strong>{{ lic.sku }}</strong></td>
+                                <td><strong>{{ lic.friendly or lic.sku }}</strong>{% if lic.friendly and lic.friendly != lic.sku %} <span class="text-muted small">({{ lic.sku }})</span>{% endif %}</td>
                                 <td>
                                     {% for plan in lic.plans[:6] %}
                                         <span class="badge bg-light text-dark border me-1 mb-1" style="font-size:.7rem;">{{ plan }}</span>

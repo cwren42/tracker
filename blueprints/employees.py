@@ -924,7 +924,11 @@ def view_employee(employee_id):
     m365_licenses = []
     if employee.m365_licenses_json:
         try:
+            from m365_service import friendly_sku
             m365_licenses = json.loads(employee.m365_licenses_json)
+            for _l in m365_licenses:
+                if isinstance(_l, dict):
+                    _l['friendly'] = friendly_sku(_l.get('sku'))
         except Exception:
             pass
     return render_template('view_employee.html', 

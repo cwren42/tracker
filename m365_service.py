@@ -11,6 +11,48 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 
 
+# Microsoft licensing SKU partNumber -> human-friendly product name. Graph returns
+# the cryptic skuPartNumber (e.g. "SPB"); this maps the ones present in the tenant
+# (plus common extras) to readable names. Unmapped SKUs fall back to the raw code.
+M365_SKU_NAMES = {
+    "SPB": "Microsoft 365 Business Premium",
+    "O365_BUSINESS_PREMIUM": "Microsoft 365 Business Standard",
+    "O365_BUSINESS_ESSENTIALS": "Microsoft 365 Business Basic",
+    "SPE_E3": "Microsoft 365 E3",
+    "SPE_E5": "Microsoft 365 E5",
+    "ENTERPRISEPACK": "Office 365 E3",
+    "ENTERPRISEPREMIUM": "Office 365 E5",
+    "STANDARDPACK": "Office 365 E1",
+    "Microsoft_365_Copilot": "Microsoft 365 Copilot",
+    "FLOW_FREE": "Power Automate (Free)",
+    "POWER_BI_STANDARD": "Power BI (Free)",
+    "POWERAPPS_DEV": "Power Apps for Developer",
+    "Power_Pages_vTrial_for_Makers": "Power Pages vTrial (Makers)",
+    "CCIBOTS_PRIVPREV_VIRAL": "Copilot Studio Viral Trial",
+    "VISIOCLIENT": "Visio Plan 2",
+    "PROJECTPROFESSIONAL": "Project Plan 3",
+    "MCOEV": "Teams Phone Standard",
+    "MCOPSTN1": "Teams Calling Plan (Domestic)",
+    "MCOPSTN2": "Teams Calling Plan (Domestic & Intl)",
+    "MCOPSTNC": "Teams Communications Credits",
+    "Teams_Premium_(for_Departments)": "Teams Premium",
+    "AAD_PREMIUM": "Microsoft Entra ID P1",
+    "AAD_PREMIUM_P2": "Microsoft Entra ID P2",
+    "EMS": "Enterprise Mobility + Security E3",
+    "EMSPREMIUM": "Enterprise Mobility + Security E5",
+    "RIGHTSMANAGEMENT_ADHOC": "Azure Rights Management (Ad-hoc)",
+    "WIN_DEF_ATP": "Microsoft Defender for Endpoint",
+    "CPC_E_2C_4GB_128GB": "Windows 365 Enterprise (2vCPU/4GB/128GB)",
+}
+
+
+def friendly_sku(sku):
+    """Map a Graph skuPartNumber to a readable product name (raw code as fallback)."""
+    if not sku:
+        return sku
+    return M365_SKU_NAMES.get(sku, M365_SKU_NAMES.get(str(sku).strip(), str(sku)))
+
+
 class M365Service:
     """Service for Microsoft Graph API integration"""
     

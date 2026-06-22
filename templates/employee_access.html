@@ -82,7 +82,7 @@
       <div class="small text-muted mb-1">Microsoft 365</div>
       <ul class="list-unstyled small mb-3">
         {% for l in m365_licenses %}
-        <li><i class="bi bi-dot"></i>{{ l.skuPartNumber or l.sku or l.name or l if l is mapping else l }}</li>
+        <li><i class="bi bi-dot"></i>{{ l.friendly or l.skuPartNumber or l.sku or l.name or l if l is mapping else l }}</li>
         {% endfor %}
       </ul>
       {% endif %}

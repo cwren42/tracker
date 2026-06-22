@@ -53,6 +53,20 @@ $ServiceName = "CirqueRMM"
 $TrayName    = "CirqueRMM Tray"
 if (-not $AgentId) { $AgentId = $env:COMPUTERNAME }
 
+# - Normalize TEMP before anything uses it. Some profiles (short-name / uninitialized /
+#   redirected) have a $env:TEMP whose folder does not exist, which makes EVERY download
+#   below (python bundle, wheelhouse, nssm) fail with "path ... does not exist". Fall back
+#   to the system temp (always present + admin-writable). Wrapped so it can never throw. -
+try {
+    if (-not $env:TEMP -or -not (Test-Path -LiteralPath $env:TEMP)) {
+        $env:TEMP = "$env:SystemRoot\Temp"; $env:TMP = "$env:SystemRoot\Temp"
+    }
+    New-Item -ItemType Directory -Force -Path $env:TEMP -ErrorAction SilentlyContinue | Out-Null
+} catch {
+    $env:TEMP = "$env:SystemRoot\Temp"; $env:TMP = "$env:SystemRoot\Temp"
+    New-Item -ItemType Directory -Force -Path $env:TEMP -ErrorAction SilentlyContinue | Out-Null
+}
+
 # - Fallback crash log in TEMP: written before anything else so we always get SOMETHING -
 $FallbackLog = "$env:TEMP\CirqueRMM_install.log"
 "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') === Install starting on $env:COMPUTERNAME (PID $PID) SiteToken=$(if($SiteToken){'set'}else{'MISSING'}) ===" | Out-File $FallbackLog -Append -Encoding UTF8

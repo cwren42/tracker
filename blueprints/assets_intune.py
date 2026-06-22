@@ -306,7 +306,7 @@ def perform_intune_asset_sync():
             if not value:
                 return None
             low = value.lower()
-            if low in ['unknown', 'n/a', 'none', 'default string',
+            if low in ['unknown', 'n/a', 'none', 'default', 'default string',
                        'system serial number', '0123456789', 'to be filled by o.e.m.']:
                 return None
             # BIOS placeholder serials ("TobefilledbyO.E.M.", "To be filled by O.E.M.")

@@ -143,7 +143,7 @@ def import_assets():
                         
                         # Handle serial number - set to None if it's a placeholder or empty
                         serial = row.get('Serial Number', '').strip()
-                        if serial.lower() in ['', 'to be filled by o.e.m.', 'default string', 'n/a', 'na', 'none', 'unknown', '123456789', '0', '00000000']:
+                        if serial.lower() in ['', 'to be filled by o.e.m.', 'default', 'default string', 'n/a', 'na', 'none', 'unknown', '123456789', '0', '00000000']:
                             serial = None
                         # Check if serial number already exists in database
                         elif serial and Asset.query.filter_by(serial_number=serial).first():

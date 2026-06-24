@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.41"
+AGENT_VERSION = "2.9.45"
 
 import asyncio
 import base64
@@ -28,6 +28,7 @@ import platform
 import socket
 import subprocess
 import sys
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -1291,27 +1292,27 @@ def _warp_is_offsite(on_lan: bool) -> bool:
     and therefore needs WARP. LAN/site boxes MUST be classified on-site so they
     never get a switch_locked WARP enrollment.
 
-    on_lan is the connection's OWN already-resolved verdict (True when the agent
-    connected to the internal LAN endpoints because rmm.corp.cirque.com was
-    TLS-reachable; False when it fell back to the Cloudflare public endpoints).
-    This is the authoritative signal and is NOT subject to a fresh transient
-    probe failure: a real LAN box always connects on the LAN endpoints.
+    AUTHORITATIVE SIGNAL = direct reachability of the relay 10.15.0.63:21116.
+    on_lan (tracker.corp.cirque.com was TLS-reachable at connect) is NOT reliable
+    here: the Tracker is ALSO published publicly, so an OFF-LAN box reaches it and
+    connects on the "LAN" endpoints -> on_lan=True even though it is off-site.
+    Trusting on_lan made ensure_warp skip exactly the boxes that need WARP
+    (observed on PEDRO-XPS 2026-06-23: on_lan=True, relay unreachable). The relay
+    is only reachable from inside the LAN/site OR once WARP is up, so probing it
+    directly is the true test.
 
-    We declare off-site ONLY when BOTH hold:
-      (1) the connection itself used the Cloudflare fallback (on_lan is False), AND
-      (2) a fresh direct TCP probe to the relay 10.15.0.63:21116 also fails.
-    If either says on-site, we skip WARP. So a transient probe blip on a LAN box
-    cannot trigger enrollment (its on_lan stays True)."""
-    if on_lan:
-        return False  # connected on internal endpoints -> definitively on-site
-    # On Cloudflare fallback: confirm with a direct relay probe before enrolling.
-    # If the relay is somehow directly reachable here (e.g. split routing), treat
-    # as on-site and skip.
-    try:
-        with socket.create_connection((_RELAY_PROBE_IP, _RELAY_PROBE_PORT), timeout=2.5):
-            return False
-    except Exception:
-        return True
+    Retry a few times so a transient blip on a REAL LAN box can't trigger a
+    spurious enrollment (a genuine LAN box answers on 21116 within a couple of
+    tries). on_lan is kept only for the log line, not for gating."""
+    import time as _t
+    for attempt in range(3):
+        try:
+            with socket.create_connection((_RELAY_PROBE_IP, _RELAY_PROBE_PORT), timeout=2.5):
+                return False  # relay reachable (on-LAN, or WARP already up) -> skip
+        except Exception:
+            if attempt < 2:
+                _t.sleep(1)
+    return True  # relay unreachable after retries -> genuinely off-site, needs WARP
 
 
 def _get_warp_config(tracker_url: str, agent_id: str, token: str):
@@ -1377,7 +1378,12 @@ def _warp_enrolled_and_connected(org: str) -> bool:
 def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
     """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
     only if needed, connect, then write a clean internal RustDesk2.toml preserving
-    the existing key. Logs to disk. No secrets here (they're already in MDM)."""
+    the existing key. Logs to disk. No secrets here (they're already in MDM).
+
+    RustDesk is pointed at the relay *IP* (relay_ip), NOT the hostname: this worker
+    only ever runs on OFF-SITE boxes, where rust.corp.cirque.com is split-DNS
+    internal-only and resolves to the dead public edge -- only the IP is reachable
+    over the WARP mesh. (Validated on TW-PTP2 2026-06-22; relay_host kept for ref.)"""
     return (
         '$ErrorActionPreference = "SilentlyContinue"\n'
         '$Log   = "C:\\ProgramData\\Cloudflare\\warp_bakein.log"\n'
@@ -1399,6 +1405,12 @@ def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
         '& $cli --accept-tos connect 2>&1 | Out-File $Log -Append\n'
         'Start-Sleep -Seconds 12\n'
         'L ("WARP status: " + ((& $cli --accept-tos status 2>&1) -join " | "))\n'
+        '# Clear the stale "Awaiting external log in" GUI prompt that the WARP\n'
+        '# taskbar app pops in a logged-in user session during the brief\n'
+        '# de-register->re-register window. warp-svc holds the tunnel; the GUI\n'
+        '# relaunches clean (Connected) since registration is valid + onboarding=0.\n'
+        'Get-Process | Where-Object { ($_.ProcessName -like "*Cloudflare*" -or $_.ProcessName -like "*warp*") -and $_.ProcessName -ne "warp-svc" } | Stop-Process -Force -EA SilentlyContinue\n'
+        'L "cleared stale WARP GUI prompt (warp-svc kept)"\n'
         '$rdDirs = @(\n'
         '  "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Roaming\\RustDesk\\config",\n'
         '  "$env:APPDATA\\RustDesk\\config",\n'
@@ -1411,7 +1423,7 @@ def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
         '        $m = Select-String -Path $toml -Pattern "^\\s*key\\s*=\\s*\'([^\']*)\'" -EA SilentlyContinue | Select-Object -First 1\n'
         '        if ($m) { $key = $m.Matches[0].Groups[1].Value }\n'
         '    }\n'
-        '    $body = "rendezvous_server = \'' + relay_host + '\'`nnat_type = 1`nserial = 0`n`n[options]`ncustom-rendezvous-server = \'' + relay_host + '\'`nrelay-server = \'\'`napi-server = \'\'`nkey = \'$key\'"\n'
+        '    $body = "rendezvous_server = \'' + relay_ip + '\'`nnat_type = 1`nserial = 0`n`n[options]`ncustom-rendezvous-server = \'' + relay_ip + '\'`nrelay-server = \'' + relay_ip + '\'`napi-server = \'\'`nkey = \'$key\'"\n'
         '    Set-Content -Path $toml -Value $body -Encoding UTF8\n'
         '    L "wrote $toml (key preserved: $([bool]$key))"\n'
         '}\n'
@@ -3025,9 +3037,40 @@ def _collect_battery_info() -> dict:
                 pass
 
 
+# Serializes ALL psutil.cpu_percent() sampling across the agent's telemetry
+# collectors. collect_telemetry() and the system-info builder can run on
+# different threads/tasks concurrently; overlapping psutil sampling intermittently
+# yielded a spurious exact-100.0 reading on high-core boxes (e.g. GEARS, 80 cores)
+# while the OS perf counter showed the box idle. The lock guarantees one sampler
+# at a time; averaging + an outlier guard add defense-in-depth.
+_CPU_SAMPLE_LOCK = threading.Lock()
+
+
+def _sample_cpu_percent(samples: int = 2, interval: float = 0.5) -> float:
+    """Return CPU% averaged over a few serialized psutil samples.
+
+    Drops a lone exact-100.0 outlier when the other samples clearly disagree
+    (the known psutil artifact). Falls back to 0.0 only if every sample failed.
+    """
+    vals = []
+    with _CPU_SAMPLE_LOCK:
+        for _ in range(max(1, samples)):
+            try:
+                vals.append(float(psutil.cpu_percent(interval=interval)))
+            except Exception:
+                pass
+    if not vals:
+        return 0.0
+    if len(vals) > 1 and any(v >= 99.5 for v in vals):
+        non_max = [v for v in vals if v < 99.5]
+        if non_max:
+            vals = non_max  # discard the 100.0 artifact, keep the real samples
+    return round(sum(vals) / len(vals), 1)
+
+
 def collect_telemetry(agent_id: str) -> dict:
     """Collect real-time telemetry and return a telemetry_update message dict."""
-    cpu_pct  = psutil.cpu_percent(interval=1)
+    cpu_pct  = _sample_cpu_percent(samples=2, interval=0.5)
     cpu_freq = psutil.cpu_freq()
     mem      = psutil.virtual_memory()
     batt     = psutil.sensors_battery()
@@ -3877,7 +3920,7 @@ async def _do_reboot_sequence():
     try:
         import psutil
 
-        t["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+        t["cpu_percent"] = _sample_cpu_percent(samples=2, interval=0.5)
 
         mem = psutil.virtual_memory()
         t["ram_total_gb"] = round(mem.total / (1024 ** 3), 2)
@@ -5800,8 +5843,12 @@ async def main() -> None:
 
     while True:
         try:
+            # WS keepalive ON (2.9.42): ping_interval=None left dead connections
+            # (VPN flips / link drops / NAT idle-timeout) undetected for minutes, so
+            # the gateway kept a stale 'live' entry and dispatched commands vanished.
+            # Generous ping_timeout tolerates laggy hotspots w/o false-closing slow links.
             async with websockets.connect(ws_url, max_size=20 * 1024 * 1024,
-                                              ping_interval=None) as ws:
+                                              ping_interval=30, ping_timeout=60) as ws:
                 print(f"[agent] Connected to gateway as {agent_id}", flush=True)
 
                 loop = asyncio.get_event_loop()

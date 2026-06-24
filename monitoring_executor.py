@@ -21,7 +21,7 @@ sys.path.insert(0, '/var/www/tracker')
 from app import app, db
 from app import Asset, MonitoringProfile, MonitoringCheck, MonitoringAlert
 from app import ProfileCheck, AssetMonitoringProfile, MaintenanceWindow
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, text
 
 # Setup logging
 logging.basicConfig(
@@ -35,9 +35,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class MonitoringExecutor:
+    # Threshold metric checks are debounced: a single over-threshold reading is
+    # held; an alert only fires on the 2nd consecutive failure. Protects against
+    # transient telemetry artifacts (e.g. psutil intermittently reporting 100%).
+    DEBOUNCE_TYPES = {'cpu', 'memory', 'disk'}
+    DEBOUNCE_MIN_CONSEC = 2
+
     def __init__(self):
         self.running = False
         self.last_cleanup = datetime.utcnow()
+        self._consec_fail = {}  # (asset_id, check_id) -> consecutive failure count
         
     def is_in_maintenance_window(self, asset):
         """Check if asset is currently in a maintenance window"""
@@ -198,11 +205,25 @@ class MonitoringExecutor:
         self.store_check_result(result)
         
         # Generate or resolve alerts based on result
+        norm_type = check_type.replace('linux_', '').replace('windows_', '')
+        key = (asset.id, check.id)
         if not result['success']:
-            self.generate_alert(asset, check, result, profile)
+            if norm_type in self.DEBOUNCE_TYPES or check_type in self.DEBOUNCE_TYPES:
+                n = self._consec_fail.get(key, 0) + 1
+                self._consec_fail[key] = n
+                if n >= self.DEBOUNCE_MIN_CONSEC:
+                    self.generate_alert(asset, check, result, profile)
+                else:
+                    logger.info(
+                        f"Debounce: {check.name} on {asset.name} over threshold "
+                        f"({n}/{self.DEBOUNCE_MIN_CONSEC}) — holding, no alert yet"
+                    )
+            else:
+                self.generate_alert(asset, check, result, profile)
         else:
+            self._consec_fail.pop(key, None)
             self.auto_resolve_alerts(asset, check)
-        
+
         return result
     
     def check_cpu(self, asset, params):
@@ -214,9 +235,10 @@ class MonitoringExecutor:
         cpu_usage = self.get_asset_telemetry(asset, 'cpu_usage')
         
         if cpu_usage is None:
+            # No fresh telemetry (asset offline / not reporting) -> skip, don't alert.
             return {
-                'success': False,
-                'message': 'CPU usage data not available',
+                'success': True,
+                'message': 'CPU usage: no fresh telemetry (skipped)',
                 'value': None
             }
         
@@ -243,9 +265,10 @@ class MonitoringExecutor:
         mem_usage = self.get_asset_telemetry(asset, 'memory_percent')
         
         if mem_usage is None:
+            # No fresh telemetry (asset offline / not reporting) -> skip, don't alert.
             return {
-                'success': False,
-                'message': 'Memory usage data not available',
+                'success': True,
+                'message': 'Memory usage: no fresh telemetry (skipped)',
                 'value': None
             }
         
@@ -274,9 +297,10 @@ class MonitoringExecutor:
         disk_usage = self.get_asset_telemetry(asset, 'disk_usage')
         
         if disk_usage is None:
+            # No fresh telemetry (asset offline / not reporting) -> skip, don't alert.
             return {
-                'success': False,
-                'message': f'Disk usage data not available for {mountpoint}',
+                'success': True,
+                'message': f'Disk usage ({mountpoint}): no fresh telemetry (skipped)',
                 'value': None
             }
         
@@ -308,9 +332,17 @@ class MonitoringExecutor:
         
         # Query RMM agent or use last known status
         service_status = self.check_asset_service(asset, service_name)
-        
+
+        if service_status is None:
+            # No fresh telemetry (asset offline) -> skip, don't alert.
+            return {
+                'success': True,
+                'message': f"Service '{service_name}': no fresh telemetry (skipped)",
+                'value': None
+            }
+
         success = service_status == 'running'
-        
+
         return {
             'success': success,
             'value': service_status,
@@ -351,7 +383,15 @@ class MonitoringExecutor:
             }
         
         is_running = self.check_asset_process(asset, process_name)
-        
+
+        if is_running is None:
+            # No process telemetry is collected today -> skip rather than guess.
+            return {
+                'success': True,
+                'message': f"Process '{process_name}': no telemetry source (skipped)",
+                'value': None
+            }
+
         return {
             'success': is_running,
             'value': process_name,
@@ -574,29 +614,78 @@ class MonitoringExecutor:
         }
     
     def get_asset_telemetry(self, asset, metric):
-        """Get telemetry data from RMM agent for an asset"""
-        # TODO: Implement RMM agent telemetry retrieval
-        # For now, return mock data based on asset attributes
-        
-        # Check if asset has recent telemetry (in real implementation)
-        # For development, return sample values
-        import random
-        
+        """Get real telemetry for an asset from the RMM agent feed (rmm_telemetry).
+
+        Returns None when the asset has no FRESH telemetry (offline / not reporting)
+        so the caller can skip rather than fire a bogus alert. Freshness is gated on
+        last_seen (captured_at is agent-clock-skewed and unreliable). Keyed by asset_id;
+        hostname is frequently blank in this table.
+        """
+        row = db.session.execute(text("""
+            SELECT cpu_percent, ram_percent, disk_json
+            FROM rmm_telemetry
+            WHERE asset_id = :aid
+              AND last_seen > now() - interval '30 minutes'
+            ORDER BY last_seen DESC
+            LIMIT 1
+        """), {"aid": asset.id}).fetchone()
+
+        if not row:
+            return None  # no fresh telemetry -> caller treats as skip, not failure
+
+        cpu_percent, ram_percent, disk_json = row
+
         if metric == 'cpu_usage':
-            return random.uniform(10, 95)
-        elif metric == 'memory_percent':
-            return random.uniform(20, 85)
-        elif metric == 'disk_usage':
-            return random.uniform(30, 90)
-        
+            return round(float(cpu_percent), 1) if cpu_percent is not None else None
+
+        if metric == 'memory_percent':
+            return round(float(ram_percent), 1) if ram_percent is not None else None
+
+        if metric == 'disk_usage':
+            # disk_json: [{"mountpoint": "C:\\", "percent": 65.7, "drive_type": 3, ...}]
+            # Report the busiest FIXED disk (drive_type 3); ignore removable/network.
+            if not disk_json:
+                return None
+            try:
+                disks = json.loads(disk_json) if isinstance(disk_json, str) else disk_json
+            except (ValueError, TypeError):
+                return None
+            pcts = [d.get('percent') for d in disks
+                    if d.get('drive_type') == 3 and d.get('percent') is not None]
+            return round(max(pcts), 1) if pcts else None
+
         return None
     
     def check_asset_service(self, asset, service_name):
-        """Check service status via RMM agent"""
-        # TODO: Implement RMM agent service check
-        # For now, return mock status
-        import random
-        return random.choice(['running', 'stopped'])
+        """Resolve a named service's state from real agent telemetry.
+
+        Source = rmm_telemetry.services_down: the agent's list of auto-start
+        services that are currently Stopped. Returns:
+          'stopped' -> service_name is in that list (auto service not running)
+          'running' -> fresh telemetry exists and service is NOT listed down
+          None      -> no fresh telemetry (asset offline) -> caller skips
+        Matches the service short name OR display name, case-insensitive.
+        """
+        row = db.session.execute(text("""
+            SELECT services_down
+            FROM rmm_telemetry
+            WHERE asset_id = :aid
+              AND last_seen > now() - interval '30 minutes'
+            ORDER BY last_seen DESC
+            LIMIT 1
+        """), {"aid": asset.id}).fetchone()
+        if not row:
+            return None
+        try:
+            down = json.loads(row[0]) if row[0] else []
+        except (ValueError, TypeError):
+            down = []
+        target = (service_name or '').strip().lower()
+        for svc in down:
+            if target in (str(svc.get('name', '')).lower(),
+                          str(svc.get('display', '')).lower()):
+                return 'stopped'
+        return 'running'
     
     def check_asset_port(self, asset, port):
         """Check if port is listening"""
@@ -614,11 +703,11 @@ class MonitoringExecutor:
             return False
     
     def check_asset_process(self, asset, process_name):
-        """Check if process is running via RMM agent"""
-        # TODO: Implement RMM agent process check
-        # For now, return mock status
-        import random
-        return random.choice([True, False])
+        """Per-process state is NOT collected in telemetry today, so this cannot be
+        answered from stored data. Return None so check_process skips rather than
+        inventing a result (was previously random). A real implementation needs a
+        live agent probe or a new process-list telemetry field."""
+        return None
     
     def store_check_result(self, result):
         """Store check result in database"""

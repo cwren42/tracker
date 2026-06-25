@@ -33,11 +33,17 @@ def messages():
 
     activity = request.get_json(silent=True) or {}
     atype = activity.get("type")
+    _frm = activity.get("from") or {}
+    _conv = activity.get("conversation") or {}
+    log.info("teams inbound: type=%s convType=%s aad=%s name=%r text=%r",
+             atype, _conv.get("conversationType"), _frm.get("aadObjectId"),
+             _frm.get("name"), (activity.get("text") or "")[:60])
 
     try:
         if atype == "message":
             text, card = teams_intake.handle_message(activity)
-            teams_bot.send_reply(activity, text=text, card=card)
+            ok = teams_bot.send_reply(activity, text=text, card=card)
+            log.info("teams reply sent=%s (convType=%s)", ok, _conv.get("conversationType"))
         elif atype == "invoke":
             # Action.Execute callbacks (1-click resolve/escalate) -> handle + return
             # the adaptiveCard/action invoke response directly as the HTTP body.

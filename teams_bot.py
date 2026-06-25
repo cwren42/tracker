@@ -19,6 +19,7 @@ import os
 import json
 import logging
 import urllib.request
+import urllib.error
 
 import jwt  # PyJWT
 
@@ -113,15 +114,25 @@ def send_reply(incoming_activity, text=None, card=None):
         if act_id:
             url += f"/{act_id}"  # reply-to threads under the user's message
         body = _reply_activity(text=text, card=card)
-        # echo back recipient/from so Teams threads it correctly
-        if incoming_activity.get("from"):
-            body["recipient"] = incoming_activity["from"]
+        # Full reply envelope — the connector 400s without from/recipient/conversation.
+        body["conversation"] = incoming_activity.get("conversation")
+        body["from"] = incoming_activity.get("recipient")   # the bot
+        body["recipient"] = incoming_activity.get("from")   # the user
+        if act_id:
+            body["replyToId"] = act_id
         token = _connector_token()
         req = urllib.request.Request(
             url, data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=15)
         return True
+    except urllib.error.HTTPError as he:
+        try:
+            detail = he.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            detail = ""
+        log.error("teams send_reply HTTP %s: %s", he.code, detail)
+        return False
     except Exception:
         log.exception("teams send_reply failed")
         return False

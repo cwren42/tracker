@@ -56,3 +56,23 @@ def messages():
 
     # Always 200 so Teams doesn't retry-storm; the reply went via the connector.
     return ("", 200)
+
+
+@bp.route("/outgoing", methods=["POST"])
+def outgoing():
+    """Teams Outgoing Webhook endpoint — NOT a bot. Teams POSTs the @mention here
+    (HMAC-signed) and we reply synchronously in the HTTP response. Different
+    delivery path than the bot, so it sidesteps the tenant's bot-message routing."""
+    raw = request.get_data()  # raw bytes required for HMAC
+    if not teams_bot.verify_outgoing_hmac(raw, request.headers.get("Authorization", "")):
+        log.warning("teams outgoing: HMAC verification failed")
+        return jsonify(type="message", text="Unauthorized."), 401
+    payload = request.get_json(silent=True) or {}
+    log.info("teams outgoing inbound: from=%r text=%r",
+             (payload.get("from") or {}).get("name"), (payload.get("text") or "")[:60])
+    try:
+        reply = teams_intake.respond_text(payload.get("text"), payload.get("from") or {})
+    except Exception:
+        log.exception("teams outgoing: handling failed")
+        reply = "Sorry — something went wrong on our side. Please try again."
+    return jsonify(type="message", text=reply)

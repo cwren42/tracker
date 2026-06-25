@@ -200,6 +200,81 @@ def handle_message(activity):
     return (reply, _ticket_card(ticket_id, subject, ctx_block, fix=fix))
 
 
+def respond_text(text, from_dict):
+    """Synchronous responder for the Teams Outgoing Webhook path: triage a message
+    and return a plain markdown reply string (Teams renders it in-thread). Reuses
+    the same triage + context + ticket-creation as the bot; the only difference is
+    the reply is the HTTP response, not a connector post. Never raises."""
+    text = _strip_mention(text)
+    if not text:
+        return ("Hi — tell me what you need (e.g. \"my laptop is slow\" or "
+                "\"I need access to the Finance SharePoint\") and I'll help or open a ticket.")
+    activity = {"from": from_dict or {}}
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        emp = _resolve_employee(cur, activity)
+        asset_id = asset_name = None
+        if emp["id"]:
+            cur.execute("SELECT id,name FROM asset WHERE employee_id=%s", (emp["id"],))
+            rows = cur.fetchall()
+            if len(rows) == 1:
+                asset_id, asset_name = rows[0]
+    finally:
+        conn.close()
+
+    ctx_block = ""
+    try:
+        ctx_block = context_service.context_block_for_ticket(
+            asset_id=asset_id, reporter_email=emp.get("email"))
+    except Exception:
+        log.exception("teams outgoing: context fetch failed")
+
+    triage = {"action": "ticket", "reply": None}
+    try:
+        import ai_engine
+        triage = ai_engine.triage_teams_message(text, ctx_block)
+    except Exception:
+        log.exception("teams outgoing: triage failed")
+
+    if triage.get("action") == "answer":
+        return (triage.get("reply") or "Here's what I found.") + \
+               "\n\n_If that doesn't sort it, mention me again and I'll open a ticket._"
+
+    subject = triage.get("subject") or ((text[:80] + "…") if len(text) > 80 else text)
+    priority = triage.get("priority") or "Normal"
+    category = triage.get("category")
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO support_ticket
+               (status, priority, source, subject, description, category,
+                reporter_name, reporter_email, asset_id, hostname, created_at, updated_at)
+               VALUES ('Open',%s,'teams',%s,%s,%s,%s,%s,%s,%s, now(), now())
+               RETURNING id""",
+            (priority, subject, f"{text}\n\n(opened via Teams by {emp.get('name') or 'unknown'})",
+             category, emp.get("name"), emp.get("email"), asset_id, asset_name))
+        ticket_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    try:
+        import event_bus
+        event_bus.publish("ticket.created", {
+            "ticket_id": ticket_id, "subject": subject, "priority": priority,
+            "category": category, "asset_id": asset_id,
+            "submitter_email": emp.get("email"), "source": "teams",
+        }, source="teams")
+    except Exception:
+        log.exception("teams outgoing: ticket.created publish failed (ticket=%s)", ticket_id)
+
+    base = _deeplink_base()
+    head = triage.get("reply") or "I've opened a ticket and a tech will follow up."
+    return f"{head}\n\n**Ticket #{ticket_id}** — [view in Tracker]({base}/tickets/{ticket_id})"
+
+
 def handle_invoke(activity):
     """Handle an Action.Execute (1-click) from a card. Returns the Bot Framework
     adaptiveCard/action invoke response (a message shown to the user)."""

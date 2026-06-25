@@ -17,6 +17,9 @@ set, so the endpoint is built-and-ready but inert until the Azure Bot is provisi
 """
 import os
 import json
+import hmac
+import base64
+import hashlib
 import logging
 import urllib.request
 import urllib.error
@@ -42,6 +45,27 @@ def _cfg():
 def enabled():
     app_id, secret, _ = _cfg()
     return bool(app_id and secret)
+
+
+# ---- Outgoing Webhook (NOT a bot — Teams @mention -> our URL, HMAC-signed) ----
+def outgoing_token():
+    return os.environ.get("TEAMS_OUTGOING_TOKEN", "").strip()
+
+
+def verify_outgoing_hmac(raw_body, auth_header):
+    """Verify a Teams Outgoing Webhook request. Teams signs the raw body with
+    HMAC-SHA256 using the base64 security token it generated, and sends
+    'Authorization: HMAC <base64sig>'. Returns True only on a valid signature."""
+    token = outgoing_token()
+    if not token or not auth_header or not auth_header.startswith("HMAC "):
+        return False
+    provided = auth_header[5:].strip()
+    try:
+        key = base64.b64decode(token)
+        digest = base64.b64encode(hmac.new(key, raw_body, hashlib.sha256).digest()).decode()
+    except Exception:
+        return False
+    return hmac.compare_digest(digest, provided)
 
 
 # ---- inbound auth -----------------------------------------------------------

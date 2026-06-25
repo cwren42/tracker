@@ -1,0 +1,68 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "97e796ef-0264-40fb-ba05-70bee42f6c09",
+  "packageName": "com.cirque.itassistant",
+  "developer": {
+    "name": "Cirque IT",
+    "websiteUrl": "https://tracker.cirquetools.com",
+    "privacyUrl": "https://tracker.cirquetools.com",
+    "termsOfUseUrl": "https://tracker.cirquetools.com"
+  },
+  "name": {
+    "short": "Cirque IT",
+    "full": "Cirque IT Assistant"
+  },
+  "description": {
+    "short": "Ask IT for help right in Teams.",
+    "full": "Cirque's IT helpdesk front door. Ask in plain language \u2014 I answer simple things instantly, or open a context-enriched ticket with your device and account details already attached, and can apply a tested fix with one tap."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0E1330",
+  "bots": [
+    {
+      "botId": "9985fd1a-3f7f-45ea-9995-1912d0c2fc1a",
+      "scopes": [
+        "personal",
+        "team",
+        "groupChat"
+      ],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": [
+            "personal",
+            "team",
+            "groupChat"
+          ],
+          "commands": [
+            {
+              "title": "Get help",
+              "description": "Describe your issue, e.g. 'my laptop is slow'"
+            },
+            {
+              "title": "Request access",
+              "description": "e.g. 'I need access to the Finance SharePoint'"
+            },
+            {
+              "title": "How-to",
+              "description": "Ask an IT how-to question and I'll answer in chat"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "tracker.cirquetools.com"
+  ]
+}

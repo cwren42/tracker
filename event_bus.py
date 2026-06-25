@@ -307,6 +307,14 @@ def _dispatch_once(flask_app):
                 if etype == "ticket.created":
                     tid = payload.get("ticket_id")
                     if tid is not None:
+                        # Built-in subscriber: Phase-01 context enrichment. Stamp the
+                        # reporter + device context onto the ticket as an internal note
+                        # so a tech sees the full picture on open. Idempotent.
+                        try:
+                            import ticket_enrich
+                            ticket_enrich.enrich(int(tid))
+                        except Exception:
+                            log.exception("ticket.created: context enrich failed (ticket=%s)", tid)
                         try:
                             import ticket_autoscoop
                             ticket_autoscoop.scoop(int(tid))

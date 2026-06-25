@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.45"
+AGENT_VERSION = "2.9.46"
 
 import asyncio
 import base64
@@ -1375,6 +1375,74 @@ def _warp_enrolled_and_connected(org: str) -> bool:
         return False
 
 
+def _warp_is_up() -> bool:
+    """True if the WARP CLI exists and reports a Connected tunnel (ANY org)."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return False
+    try:
+        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=15, creationflags=0x08000000)
+        return "connected" in (st.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _warp_teardown() -> None:
+    """Tear WARP DOWN on a box that is on-site (or VPN-connected; relay reachable).
+
+    Off-site enrollment is otherwise ONE-DIRECTIONAL: WARP stays connected on
+    return and hijacks DNS (internal *.corp.cirque.com -> public edge), breaking
+    DC location / AD / GP. This makes a roaming box self-heal BOTH ways. Quick
+    warp-cli calls + registry/file clears, safe to run inline; idempotent.
+      1) disconnect (restores the NIC's normal DNS immediately)
+      2) registration delete (unenroll; clears the switch_locked enrollment)
+      3) remove the MDM org policy (registry values + mdm.xml) so warp-svc does
+         NOT silently re-enroll while on-site
+    Windows-only."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return
+
+    def _cli(*args):
+        try:
+            _sp.run([_WARP_CLI, "--accept-tos", *args],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=20, creationflags=0x08000000)
+        except Exception as e:
+            print(f"[warp] teardown {' '.join(args)} failed: {e}", flush=True)
+
+    _cli("disconnect")
+    _cli("registration", "delete")
+
+    # Neutralize MDM so the service can't re-enroll on-site.
+    try:
+        import winreg  # type: ignore
+        try:
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                               r"SOFTWARE\Policies\Cloudflare\Warp", 0, winreg.KEY_SET_VALUE)
+            for v in ("organization", "auth_client_id", "auth_client_secret",
+                      "switch_locked", "service_mode", "auto_connect", "onboarding"):
+                try:
+                    winreg.DeleteValue(k, v)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(k)
+        except FileNotFoundError:
+            pass
+    except Exception as e:
+        print(f"[warp] teardown MDM registry-clear failed: {e}", flush=True)
+    try:
+        _mdm = os.path.join(_WARP_PROGDATA, "mdm.xml")
+        if os.path.isfile(_mdm):
+            os.remove(_mdm)
+    except Exception as e:
+        print(f"[warp] teardown mdm.xml remove failed: {e}", flush=True)
+
+    print("[warp] torn down (relay reachable: on-site/VPN) -- internal DNS/AD restored", flush=True)
+
+
 def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
     """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
     only if needed, connect, then write a clean internal RustDesk2.toml preserving
@@ -1467,9 +1535,16 @@ def ensure_warp(tracker_url: str, agent_id: str, token: str, on_lan: bool) -> No
         return
     import subprocess as _sp, time as _time
     try:
-        # 1) OFF-SITE gate (fail-closed toward on-site). LAN/site boxes MUST skip.
+        # 1) OFF-SITE gate (fail-closed toward on-site). LAN/site boxes MUST skip,
+        #    AND if WARP is still up from a prior off-site stint, tear it DOWN now
+        #    so internal DNS/AD work again (the relay is reachable on-site OR once
+        #    the corp VPN is connected -> both cases self-heal here).
         if not _warp_is_offsite(on_lan):
-            _warp_log_once("onsite", "[warp] on-LAN/site (relay reachable) -- skipping WARP")
+            if _warp_is_up():
+                _warp_log_once("teardown", "[warp] on-site/VPN (relay reachable) but WARP up -- tearing down")
+                _warp_teardown()
+            else:
+                _warp_log_once("onsite", "[warp] on-LAN/site (relay reachable) -- skipping WARP")
             return
 
         org_default = 'cirquetools'

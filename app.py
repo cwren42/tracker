@@ -188,6 +188,7 @@ from blueprints import auth, assets, dashboard, employees, internal_audit, licen
 from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
 from blueprints import backup, quarantine, patch_mgmt, systems, incidents
+from blueprints import context as context_bp
 
 app.register_blueprint(auth.bp)
 app.register_blueprint(assets.bp)
@@ -217,6 +218,7 @@ app.register_blueprint(quarantine.bp)
 app.register_blueprint(systems.bp)
 app.register_blueprint(patch_mgmt.bp)
 app.register_blueprint(incidents.bp)
+app.register_blueprint(context_bp.bp)
 
 # ── CSRF exemptions for non-browser endpoints ──────────────────────────────
 # Agents and external API consumers authenticate via agent token / API key, not

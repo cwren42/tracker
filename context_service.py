@@ -308,13 +308,19 @@ def _connect():
 
 
 def get_person_context(ident):
-    with _connect() as conn:
+    conn = _connect()
+    try:
         return ContextService(conn).person(ident)
+    finally:
+        conn.close()  # psycopg2 `with conn` ends the txn but leaves the socket open
 
 
 def get_device_context(ident):
-    with _connect() as conn:
+    conn = _connect()
+    try:
         return ContextService(conn).device(ident)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

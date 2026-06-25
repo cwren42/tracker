@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.35"
+AGENT_VERSION = "2.9.36"
 
 import asyncio
 import base64
@@ -5067,8 +5067,13 @@ async def main() -> None:
 
     while True:
         try:
+            # WS keepalive ON (2.9.36, ported from canary 2.9.42): ping_interval=None
+            # left dead connections (VPN flips / link drops / NAT idle-timeout)
+            # undetected for minutes, so the gateway kept a stale 'live' entry and
+            # dispatched commands vanished — the fleet-wide "WS is flaky" / commands-
+            # queue problem. Generous ping_timeout tolerates laggy links w/o false-close.
             async with websockets.connect(ws_url, max_size=20 * 1024 * 1024,
-                                              ping_interval=None) as ws:
+                                              ping_interval=30, ping_timeout=60) as ws:
                 print(f"[agent] Connected to gateway as {agent_id}", flush=True)
 
                 loop = asyncio.get_event_loop()

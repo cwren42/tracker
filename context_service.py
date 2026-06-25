@@ -323,6 +323,70 @@ def get_device_context(ident):
         conn.close()
 
 
+# --- compact summaries for LLM prompts (token-cheap, key facts + risks) -------
+def _fmt(v, dash="?"):
+    return v if v not in (None, "", []) else dash
+
+
+def device_summary_text(d):
+    if not d:
+        return None
+    t = d.get("telemetry") or {}
+    owner = (d.get("owner") or {})
+    live = "no live telemetry"
+    if t:
+        live = (f"online={t.get('online')} (seen {_fmt(t.get('last_seen_age'))}); "
+                f"cpu {_fmt(t.get('cpu_percent'))}% / ram {_fmt(t.get('ram_percent'))}% / "
+                f"disk {_fmt(t.get('disk_busiest_pct'))}%; user {_fmt(t.get('logged_in_user'))}")
+    risks = "; ".join(d.get("risk_flags") or []) or "none"
+    return (f"Device {_fmt(d.get('name'))} — {_fmt(d.get('model'))}, {_fmt(d.get('os_version'))}; "
+            f"region={_fmt(d.get('region'))}; Intune {_fmt(d.get('intune_compliance'))}; {live}. "
+            f"Owner: {_fmt(owner.get('name'),'unassigned')}"
+            f"{(' (' + owner['department'] + ')') if owner.get('department') else ''}. "
+            f"Open tickets: {d.get('tickets', {}).get('open_count', 0)}. Risks: {risks}.")
+
+
+def person_summary_text(p):
+    if not p:
+        return None
+    ad = p.get("accounts", {}).get("ad", {})
+    m365 = p.get("accounts", {}).get("m365", {})
+    st = p.get("status", {})
+    status = "offboarded" if st.get("offboarded") else "active"
+    risks = "; ".join(p.get("risk_flags") or []) or "none"
+    return (f"Reporter {_fmt(p.get('name'))} — {_fmt(p.get('job_title'))}, {_fmt(p.get('department'))}, "
+            f"{_fmt(p.get('location'))}; status {status}; AD enabled={ad.get('enabled')} "
+            f"region={_fmt(ad.get('region'))}; M365 {m365.get('license_count', 0)} license(s); "
+            f"devices {len(p.get('devices') or [])}. Risks: {risks}.")
+
+
+def context_block_for_ticket(asset_id=None, reporter_email=None):
+    """Return a short plain-text 'LIVE CONTEXT' block for a ticket's device +
+    reporter, ready to drop into an LLM prompt. Empty string if nothing resolves.
+    Never raises -- context is enrichment, not a hard dependency."""
+    lines = []
+    conn = None
+    try:
+        conn = _connect()
+        svc = ContextService(conn)
+        if asset_id:
+            d = svc.device(str(asset_id))
+            s = device_summary_text(d)
+            if s:
+                lines.append(s)
+        if reporter_email:
+            p = svc.person(reporter_email)
+            s = person_summary_text(p)
+            if s:
+                lines.append(s)
+    except Exception:
+        return ""
+    finally:
+        if conn is not None:
+            conn.close()
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     import sys
     kind = sys.argv[1] if len(sys.argv) > 1 else "person"

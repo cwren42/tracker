@@ -226,12 +226,27 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
     except Exception:
         log.exception("knowledge grounding failed (non-fatal)")
 
+    # ── Live entity context (Phase 0 context layer) ────────────────────────
+    # Ground the diagnosis in WHO reported it and WHICH device: live telemetry,
+    # Intune compliance, AD region, account status, and derived risk flags.
+    # Best-effort — context is enrichment, never a hard dependency.
+    live_context = ""
+    try:
+        import context_service
+        live_context = context_service.context_block_for_ticket(
+            asset_id=ticket["asset_id"], reporter_email=ticket["reporter_email"])
+    except Exception:
+        log.exception("live context enrichment failed (non-fatal)")
+
     system_prompt = (
         "You are an expert IT support engineer for an internal IT/RMM helpdesk. "
         "Diagnose the ticket and propose a resolution. Ground your answer in the provided "
         "knowledge base (runbooks we wrote from past resolutions, plus policy & system docs) "
         "and prior resolved tickets in the same category — prefer a matching runbook, it's how "
-        "we solved this before. Respond with ONLY a JSON object (no markdown, no prose):\n"
+        "we solved this before. When LIVE CONTEXT is provided, use it: the reporter's account "
+        "state and the device's live telemetry, compliance, and risk flags often point straight "
+        "at the cause (e.g. disk full, non-compliant, offboarded). Respond with ONLY a JSON object "
+        "(no markdown, no prose):\n"
         '{"diagnosis": "...", "resolution_steps": ["step1","step2",...], '
         '"can_auto_resolve": true/false, "category": "hardware|software|network|email|account|security|other", '
         '"confidence": 0.0-1.0, "estimated_minutes": N}\n'
@@ -257,12 +272,17 @@ def suggest_ticket_resolution(ticket_id: int) -> dict:
         knowledge_block = ("\n\nRelevant knowledge base entries (prefer a matching runbook):\n"
                            + "\n".join(klines))
 
+    context_block = ""
+    if live_context:
+        context_block = "\n\nLIVE CONTEXT (reporter + device, current):\n" + live_context
+
     user_prompt = (
         f"NEW TICKET #{ticket_id}\n"
         f"Subject: {ticket['subject']}\n"
         f"Description: {ticket['description'] or 'N/A'}\n"
         f"Priority: {ticket['priority']}\n"
-        f"Category: {ticket['category'] or 'N/A'}\n\n"
+        f"Category: {ticket['category'] or 'N/A'}\n"
+        f"{context_block}\n\n"
         f"{history_block}"
         f"{knowledge_block}"
     )

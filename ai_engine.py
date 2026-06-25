@@ -377,6 +377,41 @@ def dismiss_ticket_suggestion(suggestion_id: int) -> bool:
     return True
 
 
+def triage_teams_message(text: str, context_text: str = "") -> dict:
+    """Front-door triage for a Teams message: ANSWER directly (self-service) or open a
+    TICKET. Runs on a cheap model (openai_triage_model, default gpt-4.1-mini) since it's
+    high-volume + lightweight. Returns {action, reply, subject, priority, category}.
+    Fail-safe: anything unparseable or uncertain -> ticket, so a request is never dropped."""
+    model = _get_setting("openai_triage_model", "gpt-4.1-mini")
+    system = (
+        "You are the IT helpdesk front door in Microsoft Teams. Choose ONE action:\n"
+        "ANSWER — only for general how-to / informational questions you can FULLY resolve in "
+        "chat (e.g. 'how do I set an out-of-office?', 'where's the VPN guide?').\n"
+        "TICKET — anything needing access/account/password changes, hardware, software installs, "
+        "on-site work, anything device-specific, or anything you can't fully resolve yourself.\n"
+        "If LIVE CONTEXT shows a relevant problem (e.g. a near-full disk), reference it in your reply.\n"
+        "Keep the reply friendly and concise. Respond with ONLY a JSON object:\n"
+        '{"action":"answer"|"ticket","reply":"<message to the user>",'
+        '"subject":"<short ticket title if ticket>","priority":"Low|Normal|High|Urgent",'
+        '"category":"hardware|software|network|email|account|security|other"}'
+    )
+    user = f"USER MESSAGE:\n{text}"
+    if context_text:
+        user += f"\n\nLIVE CONTEXT:\n{context_text}"
+    try:
+        raw = _openai_chat([{"role": "system", "content": system},
+                            {"role": "user", "content": user}], model=model, max_tokens=400)
+        data = _loads_lenient(raw) or {}
+    except Exception:
+        log.exception("triage_teams_message failed")
+        data = {}
+    if data.get("action") not in ("answer", "ticket"):
+        data["action"] = "ticket"           # fail-safe: never drop a request
+    if not data.get("reply"):
+        data["reply"] = "Thanks — I've opened a ticket and a tech will follow up."
+    return data
+
+
 def _keyword_score(text: str, keywords: str) -> tuple:
     """Score a fix's comma-separated `fix_keywords` against the ticket text.
     Returns (n_matches, [matched phrases]). Substring match, so multi-word

@@ -39,9 +39,11 @@ def messages():
             text, card = teams_intake.handle_message(activity)
             teams_bot.send_reply(activity, text=text, card=card)
         elif atype == "invoke":
-            # Action.Execute callbacks (1-click fix/approve) land here — wired next.
-            log.info("teams: invoke received (name=%s) — not yet handled",
-                     activity.get("name"))
+            # Action.Execute callbacks (1-click resolve/escalate) -> handle + return
+            # the adaptiveCard/action invoke response directly as the HTTP body.
+            if activity.get("name") == "adaptiveCard/action":
+                return jsonify(teams_intake.handle_invoke(activity)), 200
+            log.info("teams: unhandled invoke name=%s", activity.get("name"))
         # conversationUpdate / typing / etc. -> silent 200
     except Exception:
         log.exception("teams: activity handling failed (type=%s)", atype)

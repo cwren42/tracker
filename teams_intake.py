@@ -57,7 +57,7 @@ def _add_note(cur, ticket_id, text):
         "VALUES (%s, NULL, %s, TRUE, FALSE, now())", (ticket_id, text))
 
 
-def _ticket_card(ticket_id, subject, ctx_block):
+def _ticket_card(ticket_id, subject, ctx_block, fix=None):
     body = [
         {"type": "TextBlock", "size": "Large", "weight": "Bolder", "color": "good",
          "wrap": True, "text": f"Ticket #{ticket_id} opened"},
@@ -66,21 +66,62 @@ def _ticket_card(ticket_id, subject, ctx_block):
     if ctx_block:
         body.append({"type": "TextBlock", "wrap": True, "separator": True,
                      "text": "**What I already see:**\n" + ctx_block})
+    if fix:
+        body.append({"type": "TextBlock", "wrap": True, "spacing": "Medium", "color": "accent",
+                     "text": f"💡 I have a tested fix for this: **{fix['fix_name']}**. Apply it now?"})
     base = _deeplink_base()
+    actions = []
+    if fix:
+        actions.append({"type": "Action.Execute", "title": f"🔧 Apply fix",
+                        "verb": "apply_fix",
+                        "data": {"ticket_id": ticket_id, "fix_id": fix["fix_id"],
+                                 "asset_id": fix["asset_id"]}})
+    actions += [
+        {"type": "Action.Execute", "title": "✅ Mark resolved",
+         "verb": "ticket_resolved", "data": {"ticket_id": ticket_id}},
+        {"type": "Action.Execute", "title": "⏫ Escalate",
+         "verb": "ticket_escalate", "data": {"ticket_id": ticket_id}},
+        {"type": "Action.OpenUrl", "title": "View in Tracker",
+         "url": f"{base}/tickets/{ticket_id}"},
+    ]
     return {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "version": "1.4",
         "body": body,
-        "actions": [
-            {"type": "Action.Execute", "title": "✅ Mark resolved",
-             "verb": "ticket_resolved", "data": {"ticket_id": ticket_id}},
-            {"type": "Action.Execute", "title": "⏫ Escalate",
-             "verb": "ticket_escalate", "data": {"ticket_id": ticket_id}},
-            {"type": "Action.OpenUrl", "title": "View in Tracker",
-             "url": f"{base}/tickets/{ticket_id}"},
-        ],
+        "actions": actions,
     }
+
+
+# confidence floor to OFFER a 1-click fix (mirrors auto-scoop's AUTOSCOOP_HIGH)
+_FIX_OFFER_CONFIDENCE = 0.80
+
+
+def _match_offerable_fix(ticket_id, asset_id):
+    """Return {fix_id, fix_name, asset_id} if a confident, tested library fix matches
+    this ticket AND the device is online (so the apply can actually run); else None."""
+    if not asset_id:
+        return None
+    try:
+        import ai_engine
+        m = ai_engine.match_ticket_to_fix(ticket_id)
+    except Exception:
+        log.exception("teams intake: fix match failed (ticket=%s)", ticket_id)
+        return None
+    if not (m.get("fix_id") and m.get("confidence", 0) >= _FIX_OFFER_CONFIDENCE and m.get("is_tested")):
+        return None
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM rmm_telemetry WHERE asset_id=%s "
+                    "AND last_seen > now() - interval '30 minutes' LIMIT 1", (asset_id,))
+        online = cur.fetchone() is not None
+    finally:
+        conn.close()
+    if not online:
+        return None
+    return {"fix_id": m["fix_id"], "fix_name": m.get("fix_name") or f"fix #{m['fix_id']}",
+            "asset_id": asset_id}
 
 
 def handle_message(activity):
@@ -154,8 +195,9 @@ def handle_message(activity):
     except Exception:
         log.exception("teams intake: ticket.created publish failed (ticket=%s)", ticket_id)
 
+    fix = _match_offerable_fix(ticket_id, asset_id)
     reply = triage.get("reply") or (f"Opened ticket #{ticket_id} — a tech will follow up.")
-    return (reply, _ticket_card(ticket_id, subject, ctx_block))
+    return (reply, _ticket_card(ticket_id, subject, ctx_block, fix=fix))
 
 
 def handle_invoke(activity):
@@ -171,7 +213,27 @@ def handle_invoke(activity):
         conn = _connect()
         try:
             cur = conn.cursor()
-            if verb == "ticket_escalate" and tid:
+            if verb == "apply_fix" and tid:
+                fix_id = data.get("fix_id")
+                asset_id = data.get("asset_id")
+                approver = "teams:" + (((activity.get("from") or {}).get("name")) or "user")
+                import threading
+                import workflow_engine
+
+                def _run(fid=fix_id, aid=asset_id, t=tid, who=approver):
+                    try:
+                        # Calling the handler directly = the post-approval execution path
+                        # (the gate lives in _drive, not the handler). Audited via
+                        # _device_action -> command_ledger; closes the ticket on success.
+                        workflow_engine._action_apply_fix(
+                            {"fix_id": fid, "asset_id": aid, "ticket_id": t},
+                            {"approver": who, "ticket_id": t, "asset_id": aid, "fix_id": fid})
+                    except Exception:
+                        log.exception("teams apply_fix run failed (ticket=%s fix=%s)", t, fid)
+
+                threading.Thread(target=_run, daemon=True, name=f"teams-applyfix-{tid}").start()
+                msg = f"🔧 Applying the fix on your device now — I'll close #{tid} if it works."
+            elif verb == "ticket_escalate" and tid:
                 cur.execute("UPDATE support_ticket SET priority='High', updated_at=now() WHERE id=%s", (tid,))
                 _add_note(cur, tid, "[teams] user escalated — priority raised to High")
                 msg = f"⏫ Escalated ticket #{tid} to High — a tech will jump on it."

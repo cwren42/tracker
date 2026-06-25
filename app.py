@@ -189,6 +189,7 @@ from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
 from blueprints import backup, quarantine, patch_mgmt, systems, incidents
 from blueprints import context as context_bp
+from blueprints import teams_bot as teams_bot_bp
 
 app.register_blueprint(auth.bp)
 app.register_blueprint(assets.bp)
@@ -219,6 +220,7 @@ app.register_blueprint(systems.bp)
 app.register_blueprint(patch_mgmt.bp)
 app.register_blueprint(incidents.bp)
 app.register_blueprint(context_bp.bp)
+app.register_blueprint(teams_bot_bp.bp)
 
 # ── CSRF exemptions for non-browser endpoints ──────────────────────────────
 # Agents and external API consumers authenticate via agent token / API key, not
@@ -232,6 +234,7 @@ _CSRF_EXEMPT_PREFIXES = (
     '/api/rmm/screenshot/',  # RMM screenshot upload
     '/rmm/agent/',           # agent launcher/repair/tray/version/file
     '/agent/',               # misc/monitoring Linux agent install + heartbeat
+    '/api/teams/',           # Teams bot messaging endpoint (Bot Framework JWT auth)
 )
 _CSRF_EXEMPT_RULES = {
     '/api/rmm/<agent_id>/software',         # RMM software inventory upload

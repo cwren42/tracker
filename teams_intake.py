@@ -57,6 +57,55 @@ def _add_note(cur, ticket_id, text):
         "VALUES (%s, NULL, %s, TRUE, FALSE, now())", (ticket_id, text))
 
 
+def _open_ticket_for_conversation(conv_id):
+    """The still-open ticket already mapped to this Teams thread/conversation, or None.
+    Lets follow-up messages in a thread append to one ticket instead of spawning new ones."""
+    if not conv_id:
+        return None
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT tc.ticket_id FROM teams_conversation tc "
+            "JOIN support_ticket st ON st.id = tc.ticket_id "
+            "WHERE tc.conversation_id = %s AND lower(st.status) NOT IN ('closed','resolved') "
+            "LIMIT 1", (conv_id,))
+        r = cur.fetchone()
+        return r[0] if r else None
+    finally:
+        conn.close()
+
+
+def _map_conversation(conv_id, ticket_id):
+    """Remember which ticket this Teams thread opened (upsert), so replies append to it."""
+    if not conv_id:
+        return
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO teams_conversation (conversation_id, ticket_id, created_at) "
+            "VALUES (%s, %s, now()) "
+            "ON CONFLICT (conversation_id) DO UPDATE SET ticket_id=EXCLUDED.ticket_id, created_at=now()",
+            (conv_id, ticket_id))
+    finally:
+        conn.close()
+
+
+def _append_reply_to_ticket(ticket_id, name, text):
+    """Append a Teams follow-up to an existing ticket as a visible reply note + bump updated_at."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ticket_note (ticket_id, user_id, content, is_internal, is_reply, created_at) "
+            "VALUES (%s, NULL, %s, FALSE, TRUE, now())",
+            (ticket_id, f"[Teams reply from {name or 'user'}] {text}"))
+        cur.execute("UPDATE support_ticket SET updated_at=now() WHERE id=%s", (ticket_id,))
+    finally:
+        conn.close()
+
+
 def _ticket_card(ticket_id, subject, ctx_block, fix=None):
     body = [
         {"type": "TextBlock", "size": "Large", "weight": "Bolder", "color": "good",
@@ -132,6 +181,14 @@ def handle_message(activity):
         return ("Hi — tell me what you need (e.g. \"my laptop is slow\" or "
                 "\"I need access to the Finance SharePoint\") and I'll help or open a ticket.", None)
 
+    # Continuation: if this thread/conversation already has an OPEN ticket, append the
+    # follow-up to it instead of opening a new one — keeps a back-and-forth on one ticket.
+    conv_id = (activity.get("conversation") or {}).get("id")
+    existing = _open_ticket_for_conversation(conv_id)
+    if existing:
+        _append_reply_to_ticket(existing, (activity.get("from") or {}).get("name"), text)
+        return (f"Got it — added that to **ticket #{existing}**. Reply here anytime with more detail.", None)
+
     # who + their primary device
     conn = _connect()
     try:
@@ -195,6 +252,7 @@ def handle_message(activity):
     except Exception:
         log.exception("teams intake: ticket.created publish failed (ticket=%s)", ticket_id)
 
+    _map_conversation(conv_id, ticket_id)   # so follow-ups in this thread append here
     fix = _match_offerable_fix(ticket_id, asset_id)
     reply = triage.get("reply") or (f"Opened ticket #{ticket_id} — a tech will follow up.")
     return (reply, _ticket_card(ticket_id, subject, ctx_block, fix=fix))

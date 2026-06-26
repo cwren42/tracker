@@ -254,7 +254,21 @@ def handle_message(activity):
 
     _map_conversation(conv_id, ticket_id)   # so follow-ups in this thread append here
     fix = _match_offerable_fix(ticket_id, asset_id)
+
+    # Agentic loop: if we know the device, probe it live + post a diagnosis follow-up.
+    if asset_id:
+        conv_ref = {"serviceUrl": activity.get("serviceUrl"),
+                    "conversation": activity.get("conversation"),
+                    "from": activity.get("from"), "recipient": activity.get("recipient")}
+        try:
+            import teams_diagnose
+            teams_diagnose.kick_off(conv_ref, ticket_id, asset_id, text, ctx_block)
+        except Exception:
+            log.exception("teams: diagnose kickoff failed")
+
     reply = triage.get("reply") or (f"Opened ticket #{ticket_id} — a tech will follow up.")
+    if asset_id:
+        reply += "\n\n_Checking your machine now — I'll follow up here in a moment._"
     return (reply, _ticket_card(ticket_id, subject, ctx_block, fix=fix))
 
 

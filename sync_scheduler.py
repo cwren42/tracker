@@ -232,6 +232,18 @@ def start_sync_scheduler(flask_app):
             misfire_grace_time=600,
         )
 
+    _scheduler.add_job(
+        func=lambda: run_patch_reboot_force_sweep_job(flask_app),
+        trigger='interval',
+        hours=1,
+        id='patch_reboot_force_sweep',
+        name='Hourly patch reboot-force sweep (user-controlled grace, then force)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
     if not DISABLE_DEFENDER_SYNC:
         _scheduler.add_job(
             func=lambda: run_defender_vuln_sync_job(flask_app),
@@ -411,6 +423,83 @@ def run_auto_approve_patches_job(flask_app):
             logger.info(f'Auto-approve patches: deployed={deployed} skipped/offline={skipped}')
         except Exception as exc:
             logger.error(f'Auto-approve patches error: {exc}')
+
+
+def run_patch_reboot_force_sweep_job(flask_app):
+    """Enforce the patch reboot policy: install + notify -> user-controlled grace -> force.
+    Force-reboots ONLINE boxes whose reboot-bearing patch completed more than the grace
+    window ago (Setting patch_reboot_grace_hours, default 24) AND that have NOT rebooted
+    since (boot time still older than the patch). Sends force_reboot once per job."""
+    import urllib.request as _req
+    import json as _json
+    from sqlalchemy import text as _text
+    with flask_app.app_context():
+        from app import db, Setting
+        # INERT until explicitly activated: only patches that completed AFTER this
+        # timestamp were installed under the notify-first policy (the user actually saw
+        # the 24h notice). Without it we'd force-reboot pre-existing un-rebooted boxes
+        # that never got a grace window. Unset => do nothing.
+        since_row = Setting.query.filter_by(key='patch_reboot_policy_since').first()
+        if not since_row or not (since_row.value or '').strip():
+            return
+        since = since_row.value.strip()
+        grow = Setting.query.filter_by(key='patch_reboot_grace_hours').first()
+        grace = int(grow.value) if grow and str(grow.value).strip().isdigit() else 24
+        try:
+            # DISTINCT ON (agent_id): one decision per box. Exclude servers/DCs by both
+            # asset.device_type AND live telemetry os_name (DCs run Server OS).
+            cands = db.session.execute(_text("""
+                SELECT DISTINCT ON (pj.agent_id) pj.agent_id
+                FROM rmm_patch_job pj
+                JOIN rmm_agent ra ON ra.agent_id = pj.agent_id
+                JOIN asset a ON a.id = ra.asset_id
+                JOIN LATERAL (
+                    SELECT uptime_seconds, last_seen, os_name FROM rmm_telemetry
+                    WHERE agent_id = pj.agent_id
+                    ORDER BY last_seen DESC NULLS LAST LIMIT 1
+                ) t ON true
+                WHERE pj.status='completed' AND pj.reboot_required = true
+                  AND pj.completed_at >= CAST(:since AS timestamptz)
+                  AND pj.completed_at < now() - make_interval(hours => :grace)
+                  AND COALESCE(pj.notes,'') NOT LIKE '%%force_reboot_sent%%'
+                  AND t.last_seen > now() - interval '15 minutes'
+                  AND (t.last_seen - (t.uptime_seconds * interval '1 second')) < pj.completed_at
+                  AND COALESCE(a.device_type,'') NOT ILIKE '%%server%%'
+                  AND COALESCE(t.os_name,'')   NOT ILIKE '%%server%%'
+                  AND COALESCE(a.name,'')      NOT ILIKE '%%server%%'
+                  AND COALESCE(a.ad_dn,'')     NOT ILIKE '%%Domain Controllers%%'
+                ORDER BY pj.agent_id, pj.completed_at DESC
+            """), {'since': since, 'grace': grace}).fetchall()
+        except Exception as exc:
+            logger.error(f'Patch reboot-force sweep query error: {exc}')
+            return
+        if not cands:
+            return
+        gw = os.environ.get('RMM_GATEWAY_INTERNAL', 'http://127.0.0.1:8765')
+        forced = 0
+        for (aid,) in cands:
+            try:
+                req = _req.Request(
+                    f"{gw}/send-msg/{aid}",
+                    data=_json.dumps({'type': 'force_reboot'}).encode(),
+                    headers={'Content-Type': 'application/json'}, method='POST')
+                with _req.urlopen(req, timeout=10) as resp:
+                    ok = _json.loads(resp.read()).get('ok')
+                if ok:
+                    # Mark ALL of this box's qualifying jobs so siblings don't re-trigger.
+                    db.session.execute(_text(
+                        "UPDATE rmm_patch_job SET notes = COALESCE(notes,'') || "
+                        "' [force_reboot_sent ' || now()::text || ']', updated_at=NOW() "
+                        "WHERE agent_id=:aid AND status='completed' AND reboot_required=true "
+                        "AND COALESCE(notes,'') NOT LIKE '%%force_reboot_sent%%'"),
+                        {'aid': aid})
+                    db.session.commit()
+                    forced += 1
+                    logger.info(f'Patch reboot-force: force_reboot -> {aid} ({grace}h grace elapsed)')
+            except Exception as exc:
+                logger.warning(f'Patch reboot-force: failed for {aid}: {exc}')
+        if forced:
+            logger.info(f'Patch reboot-force sweep: forced {forced} box(es) after {grace}h grace')
 
 
 def run_quarantine_sync_job(flask_app):

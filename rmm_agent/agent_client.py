@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.36"
+AGENT_VERSION = "2.9.37"
 
 import asyncio
 import base64
@@ -2531,6 +2531,68 @@ $form.Add_Shown({ $tick.Start() })
 $tick.Stop()
 exit 0
 """
+
+# Non-forcing "restart needed" notice shown in the user's session right after a
+# reboot-bearing patch install when the server did NOT allow an immediate reboot.
+# The user stays in control for the grace window; the server force-reboots later
+# via the force_reboot command if the machine is still reboot-pending. Exit 10 =
+# the user chose Restart Now; exit 0 = Later / dismissed.
+_REBOOT_NOTIFY_PS = r"""
+param([int]$GraceHours = 24)
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cirque IT - Security Updates Installed"
+$form.Size = New-Object System.Drawing.Size(500, 215)
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.TopMost = $true
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$img = New-Object System.Windows.Forms.PictureBox
+$img.Image = ([System.Drawing.SystemIcons]::Information).ToBitmap()
+$img.Location = New-Object System.Drawing.Point(12, 15)
+$img.Size = New-Object System.Drawing.Size(48, 48)
+$form.Controls.Add($img)
+$lbl = New-Object System.Windows.Forms.Label
+$lbl.Text = "Security updates have been installed by your IT department.`n`nA restart is required to finish. Please restart within $GraceHours hours at a convenient time. If you don't, your computer will restart automatically."
+$lbl.Location = New-Object System.Drawing.Point(70, 12)
+$lbl.Size = New-Object System.Drawing.Size(410, 95)
+$lbl.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$form.Controls.Add($lbl)
+$lBtn = New-Object System.Windows.Forms.Button
+$lBtn.Text = "Restart Later"
+$lBtn.Location = New-Object System.Drawing.Point(70, 132)
+$lBtn.Size = New-Object System.Drawing.Size(160, 32)
+$lBtn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+$form.Controls.Add($lBtn)
+$rBtn = New-Object System.Windows.Forms.Button
+$rBtn.Text = "Restart Now"
+$rBtn.Location = New-Object System.Drawing.Point(260, 132)
+$rBtn.Size = New-Object System.Drawing.Size(120, 32)
+$rBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+$form.Controls.Add($rBtn)
+$form.AcceptButton = $rBtn
+$form.CancelButton = $lBtn
+$res = $form.ShowDialog()
+if ($res -eq [System.Windows.Forms.DialogResult]::OK) { exit 10 } else { exit 0 }
+"""
+
+
+def _notify_reboot_pending(grace_hours: int = 24):
+    """Show the non-forcing 'restart needed' notice in the user's session after a
+    reboot-bearing install. If the user clicks Restart Now, reboot with a short grace;
+    otherwise leave the reboot pending for the server's force-reboot sweep."""
+    try:
+        code = _run_dialog_in_user_session(_REBOOT_NOTIFY_PS, 60 * 60 * 1000)  # up to 1h to respond
+        if code == 10:
+            print("[agent] User chose Restart Now after security-update install", flush=True)
+            subprocess.run(
+                ["shutdown", "/r", "/t", "60", "/c", "Restarting for security updates (Cirque IT)"],
+                creationflags=0x08000000,
+            )
+    except Exception as e:
+        print(f"[agent] reboot notify error: {e}", flush=True)
 
 
 def _run_dialog_in_user_session(ps_code: str, timeout_ms: int = 36 * 60 * 1000) -> int:
@@ -5519,8 +5581,14 @@ async def main() -> None:
                             # Only reboot when the server explicitly allows it. Otherwise the
                             # reboot stays pending (reboot_required is reported) and the user
                             # reboots on their own schedule via the tray.
-                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
-                                asyncio.create_task(_do_reboot_sequence())
+                            if result.get("reboot_required") and not result.get("error"):
+                                if allow_reboot:
+                                    asyncio.create_task(_do_reboot_sequence())
+                                else:
+                                    # User-controlled policy: notify the user, leave the reboot
+                                    # pending. The server force-reboots after the grace window
+                                    # (force_reboot command) if still pending.
+                                    loop2.run_in_executor(None, _notify_reboot_pending)
                             continue
 
                         # --- Deploy patches by CVE ID (WUA searches locally) ---
@@ -5539,8 +5607,18 @@ async def main() -> None:
                                 "job_id": job_id,
                                 "result": result,
                             }))
+                            # CVE patches land in cve_patch_job, which the reboot-force sweep does
+                            # NOT cover — so we do NOT show the notify-with-auto-restart promise
+                            # here. Reboot only when the server explicitly allows it; otherwise it
+                            # stays pending for the user (no force). (Policy applies to OS patches.)
                             if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
+                            continue
+
+                        # --- Force reboot (grace window elapsed; server-initiated) ---
+                        if msg_type == "force_reboot":
+                            print("[agent] force_reboot received — grace window elapsed, rebooting with final warning", flush=True)
+                            asyncio.create_task(_do_reboot_sequence())
                             continue
 
                         # --- Legacy exec ---

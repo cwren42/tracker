@@ -63,6 +63,7 @@ DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM loca
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
 VULN_EMAIL_LOCK_PATH = os.environ.get('TRACKER_VULN_EMAIL_LOCK_PATH', '/tmp/tracker_vuln_email.lock')
+PATCH_REBOOT_SWEEP_LOCK_PATH = os.environ.get('TRACKER_PATCH_REBOOT_SWEEP_LOCK_PATH', '/tmp/tracker_patch_reboot_sweep.lock')
 VULN_EMAIL_HOUR = int(os.environ.get('VULN_EMAIL_HOUR', '7'))  # 7 AM local time (after 2 AM Defender sync)
 DISABLE_VULN_EMAIL = os.environ.get('DISABLE_VULN_EMAIL', '').strip() in ('1', 'true', 'yes', 'on')
 
@@ -433,7 +434,10 @@ def run_patch_reboot_force_sweep_job(flask_app):
     import urllib.request as _req
     import json as _json
     from sqlalchemy import text as _text
-    with flask_app.app_context():
+    with _file_lock(PATCH_REBOOT_SWEEP_LOCK_PATH) as acquired:
+      if not acquired:
+        return  # another gunicorn worker holds the sweep lock this tick
+      with flask_app.app_context():
         from app import db, Setting
         # INERT until explicitly activated: only patches that completed AFTER this
         # timestamp were installed under the notify-first policy (the user actually saw

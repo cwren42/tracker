@@ -285,6 +285,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
     cur = get_cursor(conn)
     try:
         captured_at = data.get("captured_at") or now_iso()
+        clock_utc = data.get("clock_utc")  # aware UTC iso from agent (>=2.9.38); NULL for older
 
         # Extended fields — only update when the agent sends them (non-None).
         # This preserves previously stored values if a periodic update omits them.
@@ -339,11 +340,11 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 gpu_json, sound_card, os_edition, security_json, sysinfo_json,
                 wifi_adapter, battery_model, battery_serial, battery_health_pct,
                 battery_cycles, battery_chemistry, timezone, public_ip,
-                services_down
+                services_down, clock_utc
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,
-                      %s)
+                      %s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -378,7 +379,8 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 battery_chemistry=COALESCE(EXCLUDED.battery_chemistry, rmm_telemetry.battery_chemistry),
                 timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone),
                 public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip),
-                services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down)
+                services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down),
+                clock_utc=COALESCE(EXCLUDED.clock_utc, rmm_telemetry.clock_utc)
             """,
             (
                 agent_id, asset_id,
@@ -412,6 +414,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 batt_cycles, batt_chem, tz_str,
                 data.get("public_ip", "") or None,
                 services_j,
+                clock_utc,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.37"
+AGENT_VERSION = "2.9.38"
 
 import asyncio
 import base64
@@ -2418,6 +2418,8 @@ def collect_telemetry(agent_id: str) -> dict:
         "os_arch":            platform.machine(),
         "public_ip":          _get_public_ip(),
         "captured_at":        datetime.now().isoformat(),
+        # Aware UTC so the server can measure clock skew tz-independently (Kerberos guard).
+        "clock_utc":          datetime.now(timezone.utc).isoformat(),
     }
 
 

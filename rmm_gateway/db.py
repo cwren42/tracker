@@ -286,6 +286,18 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
     try:
         captured_at = data.get("captured_at") or now_iso()
         clock_utc = data.get("clock_utc")  # aware UTC iso from agent (>=2.9.38); NULL for older
+        # Clock skew measured AT INGEST: (server now) - (box's UTC belief). ~transit if the
+        # clock is fine; large if w32time is off / clock wrong. Computed here (not later) so it
+        # never conflates telemetry sample-age. NULL for pre-2.9.38 agents.
+        clock_skew_seconds = None
+        if clock_utc:
+            try:
+                _cu = datetime.fromisoformat(clock_utc)
+                if _cu.tzinfo is None:
+                    _cu = _cu.replace(tzinfo=timezone.utc)
+                clock_skew_seconds = (datetime.now(timezone.utc) - _cu).total_seconds()
+            except Exception:
+                clock_skew_seconds = None
 
         # Extended fields — only update when the agent sends them (non-None).
         # This preserves previously stored values if a periodic update omits them.
@@ -340,11 +352,11 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 gpu_json, sound_card, os_edition, security_json, sysinfo_json,
                 wifi_adapter, battery_model, battery_serial, battery_health_pct,
                 battery_cycles, battery_chemistry, timezone, public_ip,
-                services_down, clock_utc
+                services_down, clock_utc, clock_skew_seconds
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s)
+                      %s,%s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -380,7 +392,8 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 timezone=COALESCE(EXCLUDED.timezone, rmm_telemetry.timezone),
                 public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip),
                 services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down),
-                clock_utc=COALESCE(EXCLUDED.clock_utc, rmm_telemetry.clock_utc)
+                clock_utc=COALESCE(EXCLUDED.clock_utc, rmm_telemetry.clock_utc),
+                clock_skew_seconds=COALESCE(EXCLUDED.clock_skew_seconds, rmm_telemetry.clock_skew_seconds)
             """,
             (
                 agent_id, asset_id,
@@ -415,6 +428,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 data.get("public_ip", "") or None,
                 services_j,
                 clock_utc,
+                clock_skew_seconds,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

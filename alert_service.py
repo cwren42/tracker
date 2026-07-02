@@ -52,6 +52,7 @@ _AUTO_RESOLVE_TYPES = frozenset({
     'battery_low', 'battery_not_chg',
     'av_disabled', 'firewall_off', 'pending_reboot',
     'failed_logins', 'not_seen', 'cve_unpatched',
+    'clock_skew',
 })
 
 # Alert types that must DEDUP (track an alert_state row + reuse the open ticket
@@ -940,7 +941,7 @@ def _eval_agent_alerts(con, rules_by_type):
         """SELECT a.agent_id, a.asset_id, t.hostname,
                   t.cpu_percent, t.ram_percent, t.battery_percent,
                   t.battery_present, t.battery_charging,
-                  t.disk_json, t.security_json, a.last_seen_at
+                  t.disk_json, t.security_json, t.clock_skew_seconds, a.last_seen_at
            FROM rmm_agent a
            LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
            WHERE a.enabled = true"""
@@ -965,6 +966,21 @@ def _eval_agent_alerts(con, rules_by_type):
                                     agent_id=aid, asset_id=asset_id, hostname=host)
                 except Exception:
                     pass
+
+        # ── Clock skew (Kerberos guard) ──────────────────────────────────────
+        # Computed at ingest (server_now - agent clock_utc): tz/DST-proof and free of
+        # telemetry sample-age. Checked BEFORE the cpu-null guard so skew coverage never
+        # depends on CPU sampling. A >5-min skew breaks Kerberos (see HOBBS-LENOVO w32time).
+        rule = rules_by_type.get('clock_skew')
+        if rule and rule['enabled'] and ag['clock_skew_seconds'] is not None:
+            skew = abs(ag['clock_skew_seconds'])
+            thresh = rule['threshold_value'] or 300
+            if skew > thresh:
+                _fire_alert(con, rule,
+                            f'{host} system clock is {int(skew)}s off UTC '
+                            f'(threshold {int(thresh)}s) — Kerberos/domain auth at risk; '
+                            f'check the Windows Time (w32time) service.',
+                            agent_id=aid, asset_id=asset_id, hostname=host)
 
         # Skip telemetry checks if no data
         if ag['cpu_percent'] is None:

@@ -393,7 +393,11 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 public_ip=COALESCE(EXCLUDED.public_ip, rmm_telemetry.public_ip),
                 services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down),
                 clock_utc=COALESCE(EXCLUDED.clock_utc, rmm_telemetry.clock_utc),
-                clock_skew_seconds=COALESCE(EXCLUDED.clock_skew_seconds, rmm_telemetry.clock_skew_seconds)
+                clock_skew_seconds=COALESCE(EXCLUDED.clock_skew_seconds, rmm_telemetry.clock_skew_seconds),
+                -- last_seen was DEFAULT now() but never refreshed on upsert, so it froze at each
+                -- row's first insert (misreported live boxes as offline/dead). Refresh it every
+                -- telemetry so it actually tracks last check-in.
+                last_seen=now()
             """,
             (
                 agent_id, asset_id,

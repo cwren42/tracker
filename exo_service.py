@@ -177,6 +177,83 @@ def add_to_allowlist(domain: str) -> dict:
     return add_domain_exception_to_allow(ALLOW_RULE, domain)
 
 
+# ── Quarantine actions (run behind approval) ──────────────────────────────────────
+# There is NO REST API (Graph or api.security.microsoft.com) to release/delete a
+# quarantined message — those endpoints do not exist and return 405. The only app-only
+# path is the Exchange Online cmdlets Release-QuarantineMessage / Delete-QuarantineMessage,
+# run through the same cert-based session as the transport-rule ops above. The Tracker's
+# Entra service principal must hold an EXO RBAC role with the "Quarantine" management role
+# entry (e.g. Security Administrator) for these to succeed; otherwise pwsh emits an
+# access-denied that we surface verbatim.
+#
+# Get-QuarantineMessage cannot filter on the Defender NetworkMessageId, so we locate the
+# quarantined item by its RFC5322 Message-Id header (-MessageId) scoped to the recipient,
+# then act on the returned quarantine Identity.
+_IID_RE = re.compile(r"^<?[^<>@\s]{1,512}@[^<>@\s]{1,512}>?$")
+
+
+def _safe_iid(internet_message_id: str) -> str:
+    """Validate + normalize an RFC5322 Message-Id (angle brackets optional)."""
+    iid = (internet_message_id or "").strip()
+    if not iid or not _IID_RE.match(iid):
+        raise ExoError(f"unsafe/invalid internet message-id: {internet_message_id!r}")
+    if not iid.startswith("<"):
+        iid = "<" + iid
+    if not iid.endswith(">"):
+        iid = iid + ">"
+    return iid
+
+
+def _safe_recipient(recipient: str) -> str:
+    r = (recipient or "").strip().lower()
+    # An SMTP address: local-part @ domain. Reuse the domain validator on the RHS.
+    if "@" not in r:
+        raise ExoError(f"unsafe/invalid recipient: {recipient!r}")
+    local, _, dom = r.partition("@")
+    if not local or not re.match(r"^[a-z0-9._%+\-]{1,256}$", local):
+        raise ExoError(f"unsafe/invalid recipient: {recipient!r}")
+    safe_domain(dom)  # validates the domain half; raises on bad input
+    return r
+
+
+_QMSG_LOOKUP = r"""
+  if (-not (Get-Command Get-QuarantineMessage -ErrorAction SilentlyContinue)) {
+    _emit @{ ok=$false; stage="rbac"; error="This app-only service principal cannot run quarantine cmdlets. Grant its EXO service principal a management role with the 'Quarantine' role entry (e.g. Security Administrator) via New-ManagementRoleAssignment, then retry." }
+    exit 0
+  }
+  $items = @(Get-QuarantineMessage -MessageId $env:TARGET_IID -RecipientAddress $env:TARGET_RECIP -ErrorAction Stop)
+  if (-not $items -or $items.Count -eq 0) {
+    _emit @{ ok=$false; stage="lookup"; error="message not found in quarantine (may have expired or already been actioned)" }
+    exit 0
+  }
+  $qid = $items[0].Identity
+"""
+
+
+def release_quarantine_message(internet_message_id: str, recipient: str) -> dict:
+    """Release a quarantined message to the recipient's inbox via EXO app-only PowerShell.
+    Locates the item by Message-Id header + recipient, then Release-QuarantineMessage."""
+    iid = _safe_iid(internet_message_id)
+    recip = _safe_recipient(recipient)
+    body = _QMSG_LOOKUP + r"""
+  Release-QuarantineMessage -Identity $qid -ReleaseToAll -ErrorAction Stop | Out-Null
+  _emit @{ ok=$true; action="release"; identity=$qid; recipient=$env:TARGET_RECIP }
+"""
+    return _run_ps(body, {"TARGET_IID": iid, "TARGET_RECIP": recip})
+
+
+def delete_quarantine_message(internet_message_id: str, recipient: str) -> dict:
+    """Permanently delete a quarantined message via EXO app-only PowerShell.
+    Locates the item by Message-Id header + recipient, then Delete-QuarantineMessage."""
+    iid = _safe_iid(internet_message_id)
+    recip = _safe_recipient(recipient)
+    body = _QMSG_LOOKUP + r"""
+  Delete-QuarantineMessage -Identity $qid -ErrorAction Stop | Out-Null
+  _emit @{ ok=$true; action="delete"; identity=$qid; recipient=$env:TARGET_RECIP }
+"""
+    return _run_ps(body, {"TARGET_IID": iid, "TARGET_RECIP": recip})
+
+
 def add_domain_exception_to_allow(rule_name: str, domain: str) -> dict:
     """Append `domain` to a rule's SenderDomainIs (used for the allow rule, where membership
     of SenderDomainIs is what grants SCL=-1)."""

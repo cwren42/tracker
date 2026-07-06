@@ -3,9 +3,13 @@ quarantine_service.py — Exchange Online quarantine integration via Microsoft D
 
 Required Azure App permissions (all Application type, grant admin consent):
   - ThreatHunting.Read.All        — Advanced Hunting KQL (list/sync)
-  - SecurityEvents.ReadWrite.All  — Remediation actions (release/delete)
+  - Mail.ReadWrite (Graph)        — delete a *delivered* message from the recipient mailbox
 
-No Exchange PS RBAC role assignment required.
+Release/Delete FROM QUARANTINE has NO REST API (neither Graph nor api.security.microsoft.com
+expose one — those paths return 405). It is done via Exchange Online app-only PowerShell
+(Release-QuarantineMessage / Delete-QuarantineMessage) through exo_service, using the cert-based
+service principal. That principal must hold an EXO RBAC role granting the "Quarantine" management
+role entry (e.g. Security Administrator) for the release/delete cmdlets to succeed.
 """
 import json
 import logging
@@ -16,6 +20,17 @@ from urllib.parse import urlparse
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def exo_service_error():
+    """Return the exo_service.ExoError type for use in `except` clauses, importing lazily so
+    quarantine_service has no import-time dependency on the EXO/pwsh stack."""
+    try:
+        import exo_service
+        return exo_service.ExoError
+    except Exception:
+        return ()  # nothing extra to catch; the broad Exception clause still applies
+
 
 # ── Microsoft API endpoints ───────────────────────────────────────────────────
 _GRAPH_BASE   = "https://graph.microsoft.com/v1.0"
@@ -357,61 +372,57 @@ EmailEvents
             return "Anti-Spam"
         return "Unknown"
 
-    # ── Release / Delete actions via Microsoft Defender REST API ────────────────
-    # Requires SecurityEvents.ReadWrite.All (Application permission, admin consented).
-    # No Exchange PS RBAC role assignment needed.
+    # ── Release / Delete actions via Exchange Online app-only PowerShell ────────
+    # There is NO REST endpoint for quarantine release/delete (Graph analyzedEmail beta
+    # remediation excludes it; api.security.microsoft.com/api/quarantine/* does not exist →
+    # 405). These delegate to exo_service (Release-/Delete-QuarantineMessage over the
+    # cert-based EXO session), located by internet Message-Id header + recipient.
 
-    def release_message(self, message_id: str, recipient: str) -> dict:
+    def release_message(self, internet_message_id: str, recipient: str) -> dict:
         """
         Release a quarantined message to the recipient's inbox.
-        Uses the Defender for Office 365 remediation API.
-        """
-        try:
-            resp = requests.post(
-                f"{_SECURITY_API}/api/quarantine/release",
-                headers=self._security_headers(),
-                json={"NetworkMessageId": message_id, "RecipientAddress": recipient},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return {"success": True, "result": resp.json() if resp.content else {}}
-        except requests.HTTPError as e:
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "") if e.response else ""
-            except Exception:
-                pass
-            logger.error("Release failed for %s: %s — %s", message_id, e, body)
-            return {"success": False, "error": body or str(e)}
-        except Exception as e:
-            logger.error("Release error for %s: %s", message_id, e)
-            return {"success": False, "error": str(e)}
 
-    def delete_message(self, message_id: str) -> dict:
+        Uses Exchange Online app-only PowerShell (Release-QuarantineMessage) — there is NO
+        REST API (Graph or api.security.microsoft.com) that can release quarantine; those
+        endpoints do not exist and return 405. The item is located by its RFC5322 Message-Id
+        header (internet_message_id) scoped to the recipient.
         """
-        Soft-delete a quarantined message (marks it for deletion).
-        Uses the Defender for Office 365 remediation API.
-        """
+        if not internet_message_id:
+            return {"success": False, "error": "Internet message ID is required to release from quarantine."}
         try:
-            resp = requests.post(
-                f"{_SECURITY_API}/api/quarantine/delete",
-                headers=self._security_headers(),
-                json={"NetworkMessageId": message_id},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return {"success": True, "result": resp.json() if resp.content else {}}
-        except requests.HTTPError as e:
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "") if e.response else ""
-            except Exception:
-                pass
-            logger.error("Delete failed for %s: %s — %s", message_id, e, body)
-            return {"success": False, "error": body or str(e)}
-        except Exception as e:
-            logger.error("Delete error for %s: %s", message_id, e)
+            import exo_service
+            res = exo_service.release_quarantine_message(internet_message_id, recipient or "")
+        except exo_service_error() as e:
+            logger.error("Release failed for %s: %s", internet_message_id, e)
             return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error("Release error for %s: %s", internet_message_id, e)
+            return {"success": False, "error": str(e)}
+        if res.get("ok"):
+            return {"success": True, "result": res}
+        return {"success": False, "error": res.get("error", "Release failed.")}
+
+    def delete_message(self, internet_message_id: str, recipient: str = "") -> dict:
+        """
+        Permanently delete a quarantined message.
+
+        Uses Exchange Online app-only PowerShell (Delete-QuarantineMessage) — see
+        release_message for why there is no REST path. Located by Message-Id + recipient.
+        """
+        if not internet_message_id:
+            return {"success": False, "error": "Internet message ID is required to delete from quarantine."}
+        try:
+            import exo_service
+            res = exo_service.delete_quarantine_message(internet_message_id, recipient or "")
+        except exo_service_error() as e:
+            logger.error("Delete failed for %s: %s", internet_message_id, e)
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error("Delete error for %s: %s", internet_message_id, e)
+            return {"success": False, "error": str(e)}
+        if res.get("ok"):
+            return {"success": True, "result": res}
+        return {"success": False, "error": res.get("error", "Delete failed.")}
 
     def delete_mailbox_message(self, recipient: str, internet_message_id: str) -> dict:
         """

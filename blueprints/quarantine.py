@@ -610,7 +610,7 @@ def quarantine_release(message_id):
         return redirect(url_for("quarantine.quarantine_detail", message_id=message_id))
     try:
         svc = _get_qsvc()
-        result = svc.release_message(message_id, msg.recipient_address or "")
+        result = svc.release_message(msg.internet_message_id or "", msg.recipient_address or "")
         if result.get("success"):
             msg.release_status = "Released"
             msg.released_by = current_user.username
@@ -762,7 +762,10 @@ _MAILBOX_MESSAGE_STATUSES = {"Delivered", "Junk", "Released"}
 
 def _delete_email_message(svc, msg: QuarantineMessage):
     if msg.release_status == "Quarantined":
-        return svc.delete_message(msg.message_id), "Message permanently deleted from quarantine."
+        return (
+            svc.delete_message(msg.internet_message_id or "", msg.recipient_address or ""),
+            "Message permanently deleted from quarantine.",
+        )
     if msg.release_status in _MAILBOX_MESSAGE_STATUSES:
         return (
             svc.delete_mailbox_message(msg.recipient_address or "", msg.internet_message_id or ""),
@@ -1501,7 +1504,7 @@ def quarantine_bulk():
             continue
         try:
             if action == "release":
-                r = svc.release_message(mid, msg.recipient_address or "")
+                r = svc.release_message(msg.internet_message_id or "", msg.recipient_address or "")
             else:
                 r, _ = _delete_email_message(svc, msg)
             if r.get("success"):

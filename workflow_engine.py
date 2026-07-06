@@ -236,7 +236,7 @@ def _action_webhook(config: dict, ctx: dict) -> tuple:
 
 
 def _action_release_quarantine(config: dict, ctx: dict) -> tuple:
-    """Release a quarantined/blocked email via Defender, then auto-close the linked
+    """Release a quarantined/blocked email via Exchange Online (app-only PowerShell), then auto-close the linked
     release-request ticket. Medium-risk: the gate PARKS this at /approvals (and in
     Mission Control) so a human signs off before a quarantined message is delivered.
     Runs in the workflow daemon — no app context / no current_user — so it uses env
@@ -249,18 +249,27 @@ def _action_release_quarantine(config: dict, ctx: dict) -> tuple:
         return False, {"error": "No message_id"}
     db = _db()
     try:
-        # Backfill the recipient from the message row if the trigger didn't carry one.
-        if not recipient:
-            row = db.execute("SELECT recipient_address FROM quarantine_message WHERE message_id=?",
-                             (message_id,)).fetchone()
-            recipient = (row["recipient_address"] if row else "") or ""
-        # Defender release (context-free: env creds + HTTPS).
+        # Release goes through EXO app-only PowerShell (Release-QuarantineMessage), located by
+        # the RFC5322 Message-Id header + recipient — NOT the Defender NetworkMessageId (there is
+        # no REST release endpoint). Backfill both from the message row from the stored msg row.
+        internet_message_id = _render(config.get("internet_message_id", ctx.get("internet_message_id", "")), ctx)
+        if not internet_message_id or not recipient:
+            row = db.execute(
+                "SELECT internet_message_id, recipient_address FROM quarantine_message WHERE message_id=?",
+                (message_id,)).fetchone()
+            if not internet_message_id:
+                internet_message_id = (row["internet_message_id"] if row else "") or ""
+            if not recipient:
+                recipient = (row["recipient_address"] if row else "") or ""
+        if not internet_message_id:
+            return False, {"error": "No internet_message_id for message — cannot locate in quarantine"}
+        # Release (context-free: env EXO cert creds via exo_service).
         from quarantine_service import QuarantineService
         from m365_config import get_m365_credentials
         tid, cid, sec = get_m365_credentials()
         if not (tid and cid and sec):
             return False, {"error": "M365 credentials not configured"}
-        result = QuarantineService(tid, cid, sec).release_message(message_id, recipient)
+        result = QuarantineService(tid, cid, sec).release_message(internet_message_id, recipient)
         if not result.get("success"):
             return False, {"error": result.get("error", "release failed")}
         # Mark released + auto-close the [qmsg:] release-request ticket (system actor).

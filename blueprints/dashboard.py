@@ -235,10 +235,9 @@ def _action_center_groups():
 @login_required
 @admin_required
 def action_center():
-    """Deterministic cross-module 'needs attention' view with drill-downs. Admin-only
-    (IT-operational tooling) — consistent with mission_control/approvals/events."""
-    groups = _action_center_groups()
-    return render_template('action_center.html', groups=groups)
+    """Backward-compat: this view is now the Action Center tab of the Mission Control
+    hub. Redirect bookmarks/old links there (keeps existing url_for references working)."""
+    return redirect(url_for('dashboard.mission_control', tab='action-center'))
 
 
 def get_default_widgets():
@@ -946,22 +945,10 @@ def _query_resolved(type_=None, risk=None, device=None, q=None,
 @login_required
 @admin_required
 def approvals():
-    """Agentic action-gate inbox: parked approvals (decide) + resolved history (audit).
-    Medium/high-risk device actions land here instead of firing automatically —
-    see approval.py / docs/AGENTIC_IT_OS_GAMEPLAN.md."""
-    pending = _query_pending()
-    resolved, has_more = _query_resolved()
-    types = sorted({i['action_type'] for i in pending + resolved if i['action_type']})
-    devices = sorted({i['device'] for i in pending + resolved if i['device']})
-    # Only hit AD for OU/group pickers when there's actually an onboard awaiting
-    # approval (fail-soft: empty lists degrade the card to a notice, never 500s).
-    ad_ous, ad_groups = [], []
-    if any(i.get('is_onboard') for i in pending):
-        ad_ous, ad_groups = _onboard_directory_options()
-    return render_template('approvals.html', pending=pending, resolved=resolved,
-                           has_more=has_more, types=types, devices=devices,
-                           history_days=APPROVALS_HISTORY_DAYS,
-                           ad_ous=ad_ous, ad_groups=ad_groups)
+    """Backward-compat: the agentic action-gate inbox is now the Approvals tab of the
+    Mission Control hub. Redirect old links/bookmarks (and the approval action routes'
+    non-AJAX redirects) there — the interactive actions live in the tab now."""
+    return redirect(url_for('dashboard.mission_control', tab='approvals'))
 
 
 def _ou_hierarchy(ous, base_dn):
@@ -1276,21 +1263,9 @@ def employee_access(employee_id):
 @login_required
 @admin_required
 def events():
-    """Recent events on the bus + dispatch status. Read-only window onto event_outbox."""
-    from sqlalchemy import text
-    rows, counts = [], {}
-    try:
-        res = db.session.execute(text(
-            "SELECT id, event_type, source, status, attempts, last_error, "
-            "created_at, dispatched_at FROM event_outbox ORDER BY id DESC LIMIT 100"))
-        rows = [dict(r._mapping) for r in res]
-        cres = db.session.execute(text(
-            "SELECT status, COUNT(*) AS n FROM event_outbox GROUP BY status"))
-        counts = {r._mapping['status']: r._mapping['n'] for r in cres}
-    except Exception:
-        # Table may not exist yet (dispatcher creates it at startup).
-        db.session.rollback()
-    return render_template('events.html', rows=rows, counts=counts)
+    """Backward-compat: the event-bus monitor is now the Event Bus tab of the Mission
+    Control hub. Redirect old links (event_requeue's redirect + the timeline links)."""
+    return redirect(url_for('dashboard.mission_control', tab='events'))
 
 
 @bp.route('/ledger/<int:row_id>')
@@ -1362,12 +1337,14 @@ def event_requeue(event_id):
 
 
 # ── Mission Control — the single pane onto the whole agentic OS ──────────────────
-@bp.route('/mission-control')
-@login_required
-@admin_required
-def mission_control():
-    """One view of the brain: world-model coverage, the approval queue, the command
-    ledger, the event bus, and workflow activity — the layers stitched together."""
+# Valid hub tabs (used by the route + the backward-compat redirects).
+MC_TABS = ('overview', 'action-center', 'approvals', 'events')
+
+
+def _mission_control_overview_data():
+    """Gather the Overview-tab data: world-model coverage, the approval queue preview,
+    the command ledger, the event-bus mix, workflow activity, KB size, and the unified
+    activity timeline. Split out of the route so the hub can render it as one tab."""
     from sqlalchemy import text
     from models import Asset, License, LicenseAssignment, CommandLedger
     from soc2_models import M365User, IntuneDevice
@@ -1463,12 +1440,120 @@ def mission_control():
                          'status': r.get('status'), 'link': None})
     timeline = sorted([t for t in timeline if t['ts']], key=lambda t: t['ts'], reverse=True)[:15]
 
+    return dict(world=world, pending=pending, pending_n=pending_n,
+                recent_actions=recent_actions, ledger_counts=ledger_counts,
+                event_counts=event_counts, recent_events=recent_events,
+                wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs,
+                automations=automations, kb=kb, timeline=timeline)
+
+
+def _events_data():
+    """Event-bus tab data: recent event_outbox rows + status counts. Fail-soft."""
+    from sqlalchemy import text
+    rows, counts = [], {}
+    try:
+        res = db.session.execute(text(
+            "SELECT id, event_type, source, status, attempts, last_error, "
+            "created_at, dispatched_at FROM event_outbox ORDER BY id DESC LIMIT 100"))
+        rows = [dict(r._mapping) for r in res]
+        cres = db.session.execute(text(
+            "SELECT status, COUNT(*) AS n FROM event_outbox GROUP BY status"))
+        counts = {r._mapping['status']: r._mapping['n'] for r in cres}
+    except Exception:
+        db.session.rollback()
+    return rows, counts
+
+
+def _approvals_data():
+    """Approvals tab data: parked pending + resolved history + filter option lists +
+    the onboard OU/group pickers (only queried when an onboard is actually parked)."""
+    pending = _query_pending()
+    resolved, has_more = _query_resolved()
+    types = sorted({i['action_type'] for i in pending + resolved if i['action_type']})
+    devices = sorted({i['device'] for i in pending + resolved if i['device']})
+    ad_ous, ad_groups = [], []
+    if any(i.get('is_onboard') for i in pending):
+        ad_ous, ad_groups = _onboard_directory_options()
+    return dict(pending=pending, resolved=resolved, has_more=has_more,
+                types=types, devices=devices, history_days=APPROVALS_HISTORY_DAYS,
+                ad_ous=ad_ous, ad_groups=ad_groups)
+
+
+@bp.route('/mission-control')
+@login_required
+@admin_required
+def mission_control():
+    """The single admin hub — four tabs (Overview · Action Center · Approvals ·
+    Event Bus) stitched into one pane. Deep-link a tab with ?tab=<name> (the client
+    keeps the URL hash in sync too). Each tab's data is gathered fail-soft so one
+    failing query shows that tab's error state without 500-ing the whole hub."""
+    active_tab = (request.args.get('tab') or '').strip().lower()
+    if active_tab not in MC_TABS:
+        active_tab = 'overview'
+
+    # Each tab gathered independently; a failure degrades to that tab's error banner.
+    errors = {}
+
+    mc = {}
+    try:
+        mc = _mission_control_overview_data()
+    except Exception:
+        current_app.logger.exception('mission_control overview data failed')
+        db.session.rollback()
+        errors['overview'] = True
+
+    ac_groups = []
+    try:
+        ac_groups = _action_center_groups()
+    except Exception:
+        current_app.logger.exception('mission_control action-center data failed')
+        db.session.rollback()
+        errors['action-center'] = True
+
+    appr = {}
+    try:
+        appr = _approvals_data()
+    except Exception:
+        current_app.logger.exception('mission_control approvals data failed')
+        db.session.rollback()
+        errors['approvals'] = True
+
+    ev_rows, ev_counts = [], {}
+    try:
+        ev_rows, ev_counts = _events_data()
+    except Exception:
+        current_app.logger.exception('mission_control events data failed')
+        db.session.rollback()
+        errors['events'] = True
+
     return render_template('mission_control.html',
-                           world=world, pending=pending, pending_n=pending_n,
-                           recent_actions=recent_actions, ledger_counts=ledger_counts,
-                           event_counts=event_counts, recent_events=recent_events,
-                           wf_enabled=wf_enabled, run_counts=run_counts, recent_runs=recent_runs,
-                           automations=automations, kb=kb, timeline=timeline)
+                           active_tab=active_tab, mc_errors=errors,
+                           # Overview
+                           world=mc.get('world', {}), pending=mc.get('pending', []),
+                           pending_n=mc.get('pending_n', 0),
+                           recent_actions=mc.get('recent_actions', []),
+                           ledger_counts=mc.get('ledger_counts', {}),
+                           event_counts=mc.get('event_counts', {}),
+                           recent_events=mc.get('recent_events', []),
+                           wf_enabled=mc.get('wf_enabled', 0),
+                           run_counts=mc.get('run_counts', {}),
+                           recent_runs=mc.get('recent_runs', []),
+                           automations=mc.get('automations', []),
+                           kb=mc.get('kb', {'total': 0, 'runbook': 0, 'manual': 0}),
+                           timeline=mc.get('timeline', []),
+                           # Action Center
+                           groups=ac_groups,
+                           # Approvals
+                           appr_pending=appr.get('pending', []),
+                           appr_resolved=appr.get('resolved', []),
+                           appr_has_more=appr.get('has_more', False),
+                           appr_types=appr.get('types', []),
+                           appr_devices=appr.get('devices', []),
+                           appr_history_days=appr.get('history_days', APPROVALS_HISTORY_DAYS),
+                           appr_ad_ous=appr.get('ad_ous', []),
+                           appr_ad_groups=appr.get('ad_groups', []),
+                           # Events
+                           ev_rows=ev_rows, ev_counts=ev_counts)
 
 
 # ── Knowledge Agent — semantic search + RAG over ISMS/system docs ────────────────

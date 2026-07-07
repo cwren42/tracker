@@ -50,22 +50,10 @@
            href="{{ url_for('dashboard.index') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Dashboard">
             <i class="bi bi-house-door-fill"></i><span class="link-label">Dashboard</span>
         </a>
-        <a class="sidebar-link {% if request.endpoint == 'dashboard.action_center' %}active{% endif %}"
-           href="{{ url_for('dashboard.action_center') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Action Center">
-            <i class="bi bi-bullseye"></i><span class="link-label">Action Center</span>
-        </a>
         {% if current_user.role == 'admin' %}
-        <a class="sidebar-link {% if request.endpoint == 'dashboard.mission_control' %}active{% endif %}"
+        <a class="sidebar-link {% if request.endpoint in ['dashboard.mission_control','dashboard.action_center','dashboard.approvals','dashboard.events'] %}active{% endif %}"
            href="{{ url_for('dashboard.mission_control') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Mission Control">
             <i class="bi bi-grid-1x2-fill"></i><span class="link-label">Mission Control</span>
-        </a>
-        <a class="sidebar-link {% if request.endpoint == 'dashboard.approvals' %}active{% endif %}"
-           href="{{ url_for('dashboard.approvals') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Approvals">
-            <i class="bi bi-shield-check"></i><span class="link-label">Approvals</span>
-        </a>
-        <a class="sidebar-link {% if request.endpoint == 'dashboard.events' %}active{% endif %}"
-           href="{{ url_for('dashboard.events') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Event Bus">
-            <i class="bi bi-broadcast-pin"></i><span class="link-label">Event Bus</span>
         </a>
         <a class="sidebar-link {% if request.endpoint == 'dashboard.knowledge' %}active{% endif %}"
            href="{{ url_for('dashboard.knowledge') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Knowledge Agent">

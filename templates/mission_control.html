@@ -7,190 +7,724 @@
   <div>
     <h1 class="h4 mb-0"><i class="bi bi-grid-1x2-fill me-2" style="color:var(--accent)"></i>Mission Control
       <span class="text-muted fw-normal fs-6">— the agentic OS at a glance</span></h1>
-    <div class="small text-muted">World model · approvals · command ledger · event bus · workflows</div>
-  </div>
-  <div class="d-flex gap-2">
-    <a href="{{ url_for('dashboard.approvals') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-shield-check me-1"></i>Approvals</a>
-    <a href="{{ url_for('dashboard.events') }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-broadcast-pin me-1"></i>Events</a>
+    <div class="small text-muted">World model · action center · approvals · event bus</div>
   </div>
 </div>
 
-{% if pending_n %}
-<a href="{{ url_for('dashboard.approvals') }}" class="text-decoration-none">
-<div class="alert d-flex align-items-center gap-2 mb-3" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
-  <i class="bi bi-shield-exclamation fs-5"></i>
-  <div><strong>{{ pending_n }} action{{ 's' if pending_n != 1 }} waiting for your approval.</strong> The brain has parked them — nothing runs until you sign off.</div>
-</div>
-</a>
-{% endif %}
+<!-- ── Hub tabs ── -->
+<ul class="nav nav-tabs mb-3" id="mcTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link {% if active_tab == 'overview' %}active{% endif %}" id="mc-overview-tab"
+            data-bs-toggle="tab" data-bs-target="#mc-overview" data-tab="overview" type="button" role="tab">
+      <i class="bi bi-grid-1x2 me-1"></i>Overview
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link {% if active_tab == 'action-center' %}active{% endif %}" id="mc-action-center-tab"
+            data-bs-toggle="tab" data-bs-target="#mc-action-center" data-tab="action-center" type="button" role="tab">
+      <i class="bi bi-bullseye me-1"></i>Action Center
+      {% if groups %}<span class="badge rounded-pill ms-1" style="background:var(--surface-2);color:var(--muted);">{{ groups|length }}</span>{% endif %}
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link {% if active_tab == 'approvals' %}active{% endif %}" id="mc-approvals-tab"
+            data-bs-toggle="tab" data-bs-target="#mc-approvals" data-tab="approvals" type="button" role="tab">
+      <i class="bi bi-shield-check me-1"></i>Approvals
+      {% if appr_pending %}<span class="badge rounded-pill ms-1" style="background:var(--accent-weak);color:var(--accent);">{{ appr_pending|length }}</span>{% endif %}
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link {% if active_tab == 'events' %}active{% endif %}" id="mc-events-tab"
+            data-bs-toggle="tab" data-bs-target="#mc-events" data-tab="events" type="button" role="tab">
+      <i class="bi bi-broadcast-pin me-1"></i>Event Bus
+    </button>
+  </li>
+</ul>
 
-{% if timeline %}
-<div class="card mb-3"><div class="card-body">
-  <h2 class="h6 mb-3"><i class="bi bi-activity me-2 text-muted"></i>Brain activity</h2>
-  <ul class="list-unstyled mb-0 small">
-    {% for t in timeline %}
-    <li class="d-flex align-items-center gap-2 py-1" style="border-bottom:1px solid var(--border);">
-      <i class="bi {{ t.icon }}" style="color:var(--accent);width:1rem;"></i>
-      <span class="text-muted" style="width:auto;min-width:2.8rem;font-size:.72rem;">{{ t.kind }}</span>
-      <span class="flex-grow-1">{% if t.link %}<a href="{{ t.link }}" class="text-decoration-none">{{ t.text }}</a>{% else %}{{ t.text }}{% endif %}</span>
-      {% if t.status %}<span class="small" style="color:{{ st_color.get(t.status,'var(--muted)') }}">{{ t.status }}</span>{% endif %}
-      <span class="text-muted" style="font-size:.72rem;min-width:5.5rem;text-align:right;">{{ t.ts.strftime('%b %d %H:%M:%S') if t.ts else '' }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-</div></div>
-{% endif %}
+<div class="tab-content" id="mcTabContent">
 
-<div class="row g-3">
+  <!-- ═══════════════ OVERVIEW ═══════════════ -->
+  <div class="tab-pane fade {% if active_tab == 'overview' %}show active{% endif %}" id="mc-overview" role="tabpanel" aria-labelledby="mc-overview-tab">
+  {% if mc_errors.get('overview') %}
+    <div class="alert d-flex align-items-center gap-2" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);">
+      <i class="bi bi-exclamation-triangle fs-5"></i><div>Could not load the Overview data right now. The other tabs still work.</div>
+    </div>
+  {% else %}
 
-  <!-- World model -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <h2 class="h6 mb-3"><i class="bi bi-diagram-3-fill me-2 text-muted"></i>World model <span class="text-muted fw-normal small">(Track B coverage)</span></h2>
-      <div class="row g-2 text-center mb-3">
-        <div class="col"><div class="h4 mb-0">{{ world.employees }}</div><div class="small text-muted">employees</div></div>
-        <div class="col"><div class="h4 mb-0">{{ world.assets }}</div><div class="small text-muted">assets</div></div>
-        <div class="col"><div class="h4 mb-0">{{ world.m365_total }}</div><div class="small text-muted">identities</div></div>
-        <div class="col"><div class="h4 mb-0">{{ world.intune_total }}</div><div class="small text-muted">devices</div></div>
+  {% if pending_n %}
+  <button type="button" class="btn p-0 border-0 bg-transparent text-start w-100 mc-goto" data-tab="approvals">
+  <div class="alert d-flex align-items-center gap-2 mb-3" style="background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning);">
+    <i class="bi bi-shield-exclamation fs-5"></i>
+    <div><strong>{{ pending_n }} action{{ 's' if pending_n != 1 }} waiting for your approval.</strong> The brain has parked them — nothing runs until you sign off.</div>
+  </div>
+  </button>
+  {% endif %}
+
+  {% if timeline %}
+  <div class="card mb-3"><div class="card-body">
+    <h2 class="h6 mb-3"><i class="bi bi-activity me-2 text-muted"></i>Brain activity</h2>
+    <ul class="list-unstyled mb-0 small">
+      {% for t in timeline %}
+      <li class="d-flex align-items-center gap-2 py-1" style="border-bottom:1px solid var(--border);">
+        <i class="bi {{ t.icon }}" style="color:var(--accent);width:1rem;"></i>
+        <span class="text-muted" style="width:auto;min-width:2.8rem;font-size:.72rem;">{{ t.kind }}</span>
+        <span class="flex-grow-1">{% if t.link %}<a href="{{ t.link }}" class="text-decoration-none">{{ t.text }}</a>{% else %}{{ t.text }}{% endif %}</span>
+        {% if t.status %}<span class="small" style="color:{{ st_color.get(t.status,'var(--muted)') }}">{{ t.status }}</span>{% endif %}
+        <span class="text-muted" style="font-size:.72rem;min-width:5.5rem;text-align:right;">{{ t.ts.strftime('%b %d %H:%M:%S') if t.ts else '' }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div></div>
+  {% endif %}
+
+  <div class="row g-3">
+
+    <!-- World model -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <h2 class="h6 mb-3"><i class="bi bi-diagram-3-fill me-2 text-muted"></i>World model <span class="text-muted fw-normal small">(Track B coverage)</span></h2>
+        <div class="row g-2 text-center mb-3">
+          <div class="col"><div class="h4 mb-0">{{ world.employees }}</div><div class="small text-muted">employees</div></div>
+          <div class="col"><div class="h4 mb-0">{{ world.assets }}</div><div class="small text-muted">assets</div></div>
+          <div class="col"><div class="h4 mb-0">{{ world.m365_total }}</div><div class="small text-muted">identities</div></div>
+          <div class="col"><div class="h4 mb-0">{{ world.intune_total }}</div><div class="small text-muted">devices</div></div>
+        </div>
+        {% for label, linked, total, pct in [
+            ('Identities linked to employees', world.m365_linked, world.m365_total, world.m365_pct),
+            ('Devices linked to assets', world.intune_linked, world.intune_total, world.intune_pct)] %}
+        <div class="small d-flex justify-content-between"><span class="text-muted">{{ label }}</span><span>{{ linked }}/{{ total }} · {{ pct }}%</span></div>
+        <div class="progress mb-2" style="height:6px;background:var(--surface-2);">
+          <div class="progress-bar" role="progressbar" style="width:{{ pct }}%;background:var(--accent);"></div>
+        </div>
+        {% endfor %}
+      </div></div>
+    </div>
+
+    <!-- Workflows -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <h2 class="h6 mb-3"><i class="bi bi-diagram-2 me-2 text-muted"></i>Workflows</h2>
+        <div class="d-flex gap-4 mb-3">
+          <div><div class="h4 mb-0">{{ wf_enabled }}</div><div class="small text-muted">enabled</div></div>
+          <div><div class="h4 mb-0">{{ run_counts.values()|sum }}</div><div class="small text-muted">total runs</div></div>
+        </div>
+        {% if run_counts %}
+        <div class="mb-2">
+          {% for s, n in run_counts.items() %}
+          <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
+          {% endfor %}
+        </div>{% endif %}
+        <div class="small text-muted mb-1">Recent runs</div>
+        <ul class="list-unstyled small mb-0">
+          {% for r in recent_runs %}
+          <li class="d-flex justify-content-between"><span>{{ r.name or 'Workflow' }} <span class="text-muted">#{{ r.id }}</span></span>
+            <span style="color:{{ st_color.get(r.status,'var(--muted)') }}">{{ r.status }}</span></li>
+          {% else %}<li class="text-muted">No runs yet.</li>{% endfor %}
+        </ul>
+      </div></div>
+    </div>
+
+    <!-- Approval queue -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h6 mb-0"><i class="bi bi-shield-check me-2 text-muted"></i>Approval queue</h2>
+          <button type="button" class="btn btn-link btn-sm p-0 mc-goto" data-tab="approvals">Open →</button>
+        </div>
+        {% if pending %}
+        <ul class="list-unstyled small mb-0">
+          {% for row in pending %}
+          <li class="d-flex justify-content-between mb-1">
+            <span><span style="color:{{ st_color.get(row.risk_tier,'var(--muted)') }}">●</span> {{ row.action_type.replace('_',' ') }}{% if row.object_id %} <span class="text-muted">→ {{ row.object_id }}</span>{% endif %}</span>
+            <span class="text-muted">{{ row.risk_tier }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}<div class="text-muted small"><i class="bi bi-check2-circle me-1" style="color:var(--success)"></i>Nothing waiting. All clear.</div>{% endif %}
+      </div></div>
+    </div>
+
+    <!-- Event bus -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h6 mb-0"><i class="bi bi-broadcast-pin me-2 text-muted"></i>Event bus</h2>
+          <button type="button" class="btn btn-link btn-sm p-0 mc-goto" data-tab="events">Open →</button>
+        </div>
+        <div class="mb-2">
+          {% for s in ['pending','dispatched','error'] %}
+          <span class="badge me-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ event_counts.get(s,0) }} {{ s }}</span>
+          {% endfor %}
+        </div>
+        <ul class="list-unstyled small mb-0">
+          {% for e in recent_events %}
+          <li class="d-flex justify-content-between"><code style="color:var(--accent)">{{ e.event_type }}</code>
+            <span style="color:{{ st_color.get(e.status,'var(--muted)') }}">{{ e.status }}</span></li>
+          {% else %}<li class="text-muted">No events yet.</li>{% endfor %}
+        </ul>
+      </div></div>
+    </div>
+
+    <!-- Wired automations -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <h2 class="h6 mb-3"><i class="bi bi-robot me-2 text-muted"></i>Wired automations</h2>
+        <ul class="list-unstyled small mb-0">
+          {% for a in automations %}
+          <li class="d-flex justify-content-between align-items-center mb-1">
+            <span>{{ a.name }} <code class="text-muted">{{ a.trigger_type }}</code></span>
+            {% if a.enabled %}<span class="badge" style="background:var(--success-bg,#1f3d2b);color:var(--success);">enabled</span>
+            {% else %}<span class="badge" style="background:var(--surface-2);color:var(--muted);">disabled</span>{% endif %}
+          </li>
+          {% else %}<li class="text-muted">No workflows defined.</li>{% endfor %}
+        </ul>
+      </div></div>
+    </div>
+
+    <!-- Knowledge base -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h6 mb-0"><i class="bi bi-journal-richtext me-2 text-muted"></i>Knowledge base</h2>
+          <a href="{{ url_for('dashboard.knowledge') }}" class="small">Open →</a>
+        </div>
+        <div class="row g-2 text-center">
+          <div class="col"><div class="h4 mb-0">{{ kb.total }}</div><div class="small text-muted">indexed chunks</div></div>
+          <div class="col"><div class="h4 mb-0" style="color:var(--warning)">{{ kb.runbook }}</div><div class="small text-muted">learned runbooks</div></div>
+          <div class="col"><div class="h4 mb-0" style="color:var(--accent)">{{ kb.manual }}</div><div class="small text-muted">authored notes</div></div>
+        </div>
+        <div class="small text-muted mt-2"><i class="bi bi-arrow-repeat me-1"></i>Grows from resolved tickets + notes you add.</div>
+      </div></div>
+    </div>
+
+    <!-- Command ledger -->
+    <div class="col-12">
+      <div class="card"><div class="card-body">
+        <h2 class="h6 mb-3"><i class="bi bi-journal-text me-2 text-muted"></i>Command ledger <span class="text-muted fw-normal small">— every action the brain takes</span></h2>
+        <div class="mb-2">
+          {% for s, n in ledger_counts.items() %}
+          <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
+          {% else %}<span class="text-muted small">No actions recorded yet.</span>{% endfor %}
+        </div>
+        {% if recent_actions %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr class="small text-muted"><th>#</th><th>Action</th><th>Object</th><th>Risk</th><th>Approval</th><th>Status</th></tr></thead>
+            <tbody>
+              {% for a in recent_actions %}
+              <tr>
+                <td class="small"><a href="{{ url_for('dashboard.ledger_detail', row_id=a.id) }}">{{ a.id }}</a></td>
+                <td class="small">{{ a.action_type.replace('_',' ') }}</td>
+                <td class="small text-muted">{{ (a.object_type ~ ' ' ~ a.object_id) if a.object_id else (a.object_type or '—') }}</td>
+                <td class="small" style="color:{{ st_color.get(a.risk_tier,'var(--muted)') }}">{{ a.risk_tier }}</td>
+                <td class="small text-muted">{{ a.approval_status }}</td>
+                <td class="small" style="color:{{ st_color.get(a.status,'var(--muted)') }}">{{ a.status }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div></div>
+    </div>
+
+  </div>
+  {% endif %}
+  </div>
+
+  <!-- ═══════════════ ACTION CENTER ═══════════════ -->
+  <div class="tab-pane fade {% if active_tab == 'action-center' %}show active{% endif %}" id="mc-action-center" role="tabpanel" aria-labelledby="mc-action-center-tab">
+    <p class="text-muted small mb-3">Everything that needs attention, across modules — most urgent first.</p>
+    {% if mc_errors.get('action-center') %}
+      <div class="alert d-flex align-items-center gap-2" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);">
+        <i class="bi bi-exclamation-triangle fs-5"></i><div>Could not load the Action Center data right now. The other tabs still work.</div>
       </div>
-      {% for label, linked, total, pct in [
-          ('Identities linked to employees', world.m365_linked, world.m365_total, world.m365_pct),
-          ('Devices linked to assets', world.intune_linked, world.intune_total, world.intune_pct)] %}
-      <div class="small d-flex justify-content-between"><span class="text-muted">{{ label }}</span><span>{{ linked }}/{{ total }} · {{ pct }}%</span></div>
-      <div class="progress mb-2" style="height:6px;background:var(--surface-2);">
-        <div class="progress-bar" role="progressbar" style="width:{{ pct }}%;background:var(--accent);"></div>
+    {% elif not groups %}
+      <div class="alert alert-success d-flex align-items-center">
+        <i class="bi bi-check-circle-fill me-2"></i> All clear — nothing needs attention right now.
+      </div>
+    {% else %}
+    <div class="row g-3">
+      {% for g in groups %}
+      <div class="col-md-6 col-lg-4">
+        <a href="{{ g.link }}" class="text-decoration-none">
+          <div class="card h-100 shadow-sm" style="border-left:4px solid var(--bs-{{ g.severity }});">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-start">
+                <div>
+                  <div class="text-muted small text-uppercase" style="letter-spacing:.02em;">{{ g.title }}</div>
+                  <div class="h3 mb-0 text-{{ g.severity }}">{{ g.count }}</div>
+                </div>
+                <i class="bi {{ g.icon }} text-{{ g.severity }}" style="font-size:1.6rem;opacity:.55;"></i>
+              </div>
+              {% if g.sample %}
+              <ul class="list-unstyled small text-muted mb-0 mt-2">
+                {% for s in g.sample %}<li class="text-truncate" title="{{ s }}">• {{ s }}</li>{% endfor %}
+                {% if g.count > g.sample|length %}<li class="fst-italic">…and {{ g.count - g.sample|length }} more</li>{% endif %}
+              </ul>
+              {% endif %}
+            </div>
+          </div>
+        </a>
       </div>
       {% endfor %}
-    </div></div>
+    </div>
+    {% endif %}
   </div>
 
-  <!-- Workflows -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <h2 class="h6 mb-3"><i class="bi bi-diagram-2 me-2 text-muted"></i>Workflows</h2>
-      <div class="d-flex gap-4 mb-3">
-        <div><div class="h4 mb-0">{{ wf_enabled }}</div><div class="small text-muted">enabled</div></div>
-        <div><div class="h4 mb-0">{{ run_counts.values()|sum }}</div><div class="small text-muted">total runs</div></div>
-      </div>
-      {% if run_counts %}
-      <div class="mb-2">
-        {% for s, n in run_counts.items() %}
-        <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
-        {% endfor %}
-      </div>{% endif %}
-      <div class="small text-muted mb-1">Recent runs</div>
-      <ul class="list-unstyled small mb-0">
-        {% for r in recent_runs %}
-        <li class="d-flex justify-content-between"><span>{{ r.name or 'Workflow' }} <span class="text-muted">#{{ r.id }}</span></span>
-          <span style="color:{{ st_color.get(r.status,'var(--muted)') }}">{{ r.status }}</span></li>
-        {% else %}<li class="text-muted">No runs yet.</li>{% endfor %}
-      </ul>
-    </div></div>
+  <!-- ═══════════════ APPROVALS ═══════════════ -->
+  <div class="tab-pane fade {% if active_tab == 'approvals' %}show active{% endif %}" id="mc-approvals" role="tabpanel" aria-labelledby="mc-approvals-tab">
+  {% if mc_errors.get('approvals') %}
+    <div class="alert d-flex align-items-center gap-2" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);">
+      <i class="bi bi-exclamation-triangle fs-5"></i><div>Could not load the Approvals data right now. The other tabs still work.</div>
+    </div>
+  {% else %}
+  <style>
+    .appr-toolbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:.75rem;}
+    .appr-toolbar .form-select,.appr-toolbar .form-control{font-size:.82rem;padding:.3rem .55rem;height:auto;width:auto;}
+    .appr-group{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+                margin:.4rem .15rem .5rem;display:flex;justify-content:space-between;align-items:center;}
+    .appr-age{font-size:.7rem;padding:.08rem .4rem;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap;}
+    .appr-age.warn{background:var(--warning-bg);color:var(--warning);}
+    .appr-age.crit{background:var(--danger-bg);color:var(--danger);}
+    .appr-bulkbar{display:flex;gap:.45rem;align-items:center;background:var(--accent-weak);border:1px solid var(--accent);
+                  border-radius:var(--radius);padding:.45rem .6rem;margin-bottom:.75rem;font-size:.85rem;}
+    /* small, contained history table */
+    .hist-wrap{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);}
+    .hist-wrap table{margin:0;font-size:.82rem;}
+    .hist-wrap thead th{position:sticky;top:0;z-index:1;background:var(--surface-2);border-bottom:1px solid var(--border);
+                        font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);white-space:nowrap;}
+    .hist-wrap td,.hist-wrap th{padding:.45rem .7rem;vertical-align:middle;}
+    .hist-wrap td.sum{color:var(--muted);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .hist-wrap td.nowrap{white-space:nowrap;}
+    .appr-effect{font-size:.82rem;margin-bottom:.5rem;padding:.4rem .6rem;border-radius:var(--radius);
+      background:var(--surface-2);border:1px solid var(--border);}
+    .appr-effect strong{color:var(--text);}
+    .appr-listitem{display:flex;flex-direction:column;gap:.4rem;background:var(--surface-1);
+      border:1px solid var(--border);border-radius:var(--radius);padding:.55rem .7rem;}
+    .appr-li-main{display:flex;align-items:flex-start;gap:.55rem;}
+    .appr-li-main>i{font-size:1rem;color:var(--muted);margin-top:.15rem;}
+    .appr-li-text{min-width:0;flex:1;}
+    .appr-li-text .appr-effect-li{margin-top:.1rem;line-height:1.35;}
+  </style>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+    <div class="small text-muted">Risk-scored agent actions waiting on a human. Low-risk runs automatically; medium &amp; high are held here.</div>
+    <span class="badge rounded-pill" id="pending-count"
+          style="background:var(--accent-weak);color:var(--accent);font-size:.85rem;">0 pending</span>
   </div>
 
-  <!-- Approval queue -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h6 mb-0"><i class="bi bi-shield-check me-2 text-muted"></i>Approval queue</h2>
-        <a href="{{ url_for('dashboard.approvals') }}" class="small">Open →</a>
-      </div>
-      {% if pending %}
-      <ul class="list-unstyled small mb-0">
-        {% for row in pending %}
-        <li class="d-flex justify-content-between mb-1">
-          <span><span style="color:{{ st_color.get(row.risk_tier,'var(--muted)') }}">●</span> {{ row.action_type.replace('_',' ') }}{% if row.object_id %} <span class="text-muted">→ {{ row.object_id }}</span>{% endif %}</span>
-          <span class="text-muted">{{ row.risk_tier }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}<div class="text-muted small"><i class="bi bi-check2-circle me-1" style="color:var(--success)"></i>Nothing waiting. All clear.</div>{% endif %}
-    </div></div>
+  <!-- ── PENDING (top) ── -->
+  <div class="appr-toolbar">
+    <input type="search" id="f-q" class="form-control" placeholder="Filter pending…" style="flex:1 1 160px;max-width:260px;">
+    <select id="f-type" class="form-select"><option value="">All types</option></select>
+    <select id="f-risk" class="form-select"><option value="">All risk</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+    <select id="f-device" class="form-select"><option value="">All devices</option></select>
+    <div class="btn-group btn-group-sm ms-auto" role="group" aria-label="View">
+      <button type="button" class="btn btn-outline-secondary" id="view-list" title="Compact list"><i class="bi bi-list-ul"></i></button>
+      <button type="button" class="btn btn-outline-secondary" id="view-cards" title="Cards"><i class="bi bi-grid-3x3-gap"></i></button>
+    </div>
+  </div>
+  <div id="bulkbar"></div>
+  <div id="pending-body" class="row g-2 mb-2"></div>
+
+  <!-- ── HISTORY (small, bottom) ── -->
+  <div class="d-flex justify-content-between align-items-center mt-4 mb-2">
+    <h2 class="h6 text-muted mb-0"><i class="bi bi-clock-history me-1"></i>Recently resolved <span class="text-muted" style="font-weight:400;font-size:.8rem;">· last {{ appr_history_days }} days</span></h2>
+    <input type="search" id="h-q" class="form-control form-control-sm" placeholder="Search history…" style="max-width:220px;font-size:.8rem;">
+  </div>
+  <div class="hist-wrap">
+    <table class="table table-hover align-middle">
+      <thead><tr>
+        <th>#</th><th>Action</th><th>Target</th><th>Risk</th><th>Decision</th><th>Result</th><th>Verify</th><th>When</th>
+      </tr></thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+  <div class="text-center mt-2" id="history-more"></div>
+
+  <script>
+  const TIER_COLOR={high:'var(--danger)',medium:'var(--warning)',low:'var(--muted)',critical:'var(--danger)'};
+  const TIER_BG={high:'var(--danger-bg)',medium:'var(--warning-bg)',low:'var(--surface-2)',critical:'var(--danger-bg)'};
+  const ICON={release_quarantine:'bi-envelope-exclamation',install_local_tool:'bi-box-seam',apply_fix:'bi-tools',unlock_account:'bi-unlock',
+    offboard_employee:'bi-person-dash',disable_ad_user:'bi-person-x',delete_ad_user:'bi-person-x-fill',enable_ad_user:'bi-person-check',reset_password:'bi-key',
+    add_to_group:'bi-people',remove_from_group:'bi-people',create_user:'bi-person-plus',reboot_device:'bi-arrow-clockwise',
+    shutdown_device:'bi-power',lock_device:'bi-lock',apply_gpo:'bi-shield-lock',run_script:'bi-terminal',azure_sync:'bi-cloud-arrow-up',
+    install_patches:'bi-patch-check',deploy_patch:'bi-patch-check'};
+  const S={
+    pending: {{ appr_pending|tojson }}, resolved: {{ appr_resolved|tojson }}, hasMore: {{ appr_has_more|tojson }},
+    types: {{ appr_types|tojson }}, devices: {{ appr_devices|tojson }}, historyDays: {{ appr_history_days|tojson }},
+    adOus: {{ appr_ad_ous|tojson }}, adGroups: {{ appr_ad_groups|tojson }},
+    selected:new Set(), filters:{type:'',risk:'',device:'',q:''}, hq:'', offset: {{ appr_resolved|length }},
+    view: (localStorage.getItem('apprView')||'list')
+  };
+  function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':s);return d.innerHTML;}
+  function titleCase(s){return (s||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+  function iconFor(t){return ICON[t]||'bi-lightning-charge';}
+  function findItem(id){return S.pending.find(i=>i.id===id)||S.resolved.find(i=>i.id===id)||null;}
+  function ageBadge(iso){ if(!iso)return''; var ms=Date.now()-new Date(iso).getTime(),h=ms/3.6e6;
+    var l=h<1?Math.max(1,Math.round(ms/6e4))+'m':(h<48?Math.round(h)+'h':Math.round(h/24)+'d');
+    var c=h>=24?'crit':(h>=1?'warn':''); return '<span class="appr-age '+c+'">'+l+'</span>'; }
+  function whenStr(iso){ if(!iso)return''; var d=new Date(iso); return d.toLocaleDateString(undefined,{month:'short',day:'2-digit'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}); }
+  function passClient(it){ var f=S.filters;
+    if(f.type&&it.action_type!==f.type)return false;
+    if(f.risk&&it.risk_tier!==f.risk)return false;
+    if(f.device&&(it.device||'').toLowerCase().indexOf(f.device.toLowerCase())<0)return false;
+    if(f.q){var q=f.q.toLowerCase(); if((it.summary||'').toLowerCase().indexOf(q)<0&&(it.device||'').toLowerCase().indexOf(q)<0&&(it.label||'').toLowerCase().indexOf(q)<0&&(it.requested_by||'').toLowerCase().indexOf(q)<0&&String(it.id)!==q)return false;}
+    return true; }
+
+  // ── per-type detail block (inline in card) ──
+  function detailBlock(it){
+    if(it.action_type==='release_quarantine'){
+      var h='<div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">'
+        +'<div><i class="bi bi-envelope me-1"></i><strong>'+esc(it.summary)+'</strong></div>'
+        +'<div class="text-muted">From <strong>'+esc(it.sender||'unknown')+'</strong> &rarr; '+esc(it.recipient||'unknown')+'</div>';
+      if(it.ai){var rec=(it.ai.recommended||'').toLowerCase(),ok=(rec==='release'||rec==='none');
+        h+='<div class="mt-1 pt-1" style="border-top:1px dashed var(--border);"><i class="bi bi-cpu me-1"></i><span class="text-muted">Brain recommends </span><strong style="text-transform:uppercase;color:'+(ok?'var(--success)':'var(--danger)')+'">'+esc(it.ai.recommended)+'</strong>'+(it.ai.confidence!=null?' <span class="text-muted">('+Math.round(it.ai.confidence*100)+'%)</span>':'')+(it.ai.rationale?'<div class="text-muted fst-italic mt-1">'+esc(it.ai.rationale)+'</div>':'')+'</div>';}
+      if(it.release_status||it.justification){h+='<div class="mt-1 pt-1" style="border-top:1px dashed var(--border);">'+(it.release_status?'<span class="badge" style="background:var(--surface-1);border:1px solid var(--border);color:var(--text);">'+esc(it.release_status)+'</span>':'')+(it.justification?' <span class="text-muted"><i class="bi bi-chat-quote me-1"></i>'+esc(it.justification)+'</span>':'')+'</div>';}
+      if(it.message_id){h+='<a class="d-inline-block mt-1" href="/quarantine/'+encodeURIComponent(it.message_id)+'" target="_blank">Review the message &rarr;</a>';}
+      return h+'</div>';
+    }
+    if(it.action_type==='install_local_tool'){
+      return '<div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">'
+        +'<div><i class="bi bi-box-seam me-1"></i><strong>C:\\ITTOOLS\\'+esc(it.summary)+'</strong>'+(it.args?' <span class="text-muted">args: '+esc(it.args)+'</span>':'')+'</div>'
+        +'<div class="text-muted"><i class="bi bi-pc-display me-1"></i>'+esc(it.device)+' · runs as SYSTEM</div>'
+        +(it.sha256?'<div class="text-muted" style="font-family:monospace;font-size:.72rem;word-break:break-all;"><i class="bi bi-fingerprint me-1"></i>'+esc(it.sha256)+'</div>':'')
+        +(it.justification?'<div class="mt-1 pt-1 text-muted" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i>'+esc(it.justification)+'</div>':'')
+        +'<div class="form-text mt-1">Hash-locked: runs an unsigned installer as SYSTEM; fails if the file changed after the request.</div></div>';
+    }
+    if(it.action_type==='apply_fix'){
+      return '<div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">'
+        +'<div><i class="bi bi-tools me-1"></i><strong>'+esc(it.summary)+'</strong></div>'
+        +'<div class="text-muted"><i class="bi bi-pc-display me-1"></i>'+esc(it.device)+' · runs as SYSTEM</div>'
+        +'<div class="form-text mt-1">Runs a vetted library fix as SYSTEM. Approving closes the linked ticket on success.</div></div>';
+    }
+    if(it.is_onboard){
+      var o=it.onboard||{};
+      var rows=[['Email',o.email],['sAMAccountName',o.sam],['Department',o.dept],['Job title',o.title],
+                ['Manager',o.manager],['Start date',o.start],['Work type',o.work_type],['Phone',o.phone]];
+      var hr='<div class="small mb-2 p-2" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);">'
+        +'<div class="mb-1"><i class="bi bi-person-badge me-1"></i><strong>'+esc(o.name||it.summary)+'</strong> <span class="text-muted">(HR-submitted)</span></div>';
+      rows.forEach(function(r){ if(r[1]) hr+='<div class="text-muted">'+esc(r[0])+': <span style="color:var(--text)">'+esc(r[1])+'</span></div>'; });
+      if(o.notes) hr+='<div class="mt-1 pt-1 text-muted" style="border-top:1px dashed var(--border);"><i class="bi bi-chat-quote me-1"></i>'+esc(o.notes)+'</div>';
+      hr+='</div>';
+      // IT-supplied provisioning inputs
+      var ouOpts='<option value="">— select target OU (under CirqueUsers) —</option>';
+      (S.adOus||[]).forEach(function(ou){
+        var indent=new Array((ou.depth||0)+1).join('    ');
+        var arrow=(ou.depth||0)>0?'└─ ':'';
+        ouOpts+='<option value="'+esc(ou.dn)+'" title="'+esc(ou.path||ou.name)+'">'+indent+arrow+esc(ou.name)+'</option>';
+      });
+      var grpOpts='';
+      ['Standard','Privileged','Other'].forEach(function(cat){
+        var inCat=(S.adGroups||[]).filter(function(g){ return (g.category||'Other')===cat; });
+        if(!inCat.length) return;
+        grpOpts+='<optgroup label="'+esc(cat)+' ('+inCat.length+')">';
+        inCat.forEach(function(g){ grpOpts+='<option value="'+esc(g.dn)+'">'+esc(g.name)+'</option>'; });
+        grpOpts+='</optgroup>';
+      });
+      var noAd=(!(S.adOus||[]).length || !(S.adGroups||[]).length);
+      var prov='<div class="small mb-2 p-2" style="background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);">'
+        +'<div class="fw-semibold mb-1"><i class="bi bi-diagram-3 me-1"></i>IT: choose AD placement</div>';
+      if(noAd){
+        prov+='<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Directory unreachable or empty — OU/group lists could not load. Check AD settings, then reload.</div>';
+      } else {
+        prov+='<div class="mb-2"><label class="form-label mb-1">Target OU</label>'
+          +'<select class="form-select form-select-sm" id="onboard-ou-'+it.id+'">'+ouOpts+'</select></div>'
+          +'<div class="mb-1"><label class="form-label mb-1">Security groups (Ctrl/Cmd-click for multiple)</label>'
+          +'<select multiple size="6" class="form-select form-select-sm" id="onboard-groups-'+it.id+'">'+grpOpts+'</select></div>';
+      }
+      prov+='<div class="form-text mt-1"><i class="bi bi-list-check me-1"></i>IT: assign + provision asset (manual)</div></div>';
+      return hr+prov;
+    }
+    return '';
+  }
+  function paramsBlock(it){
+    if(!it.params||!Object.keys(it.params).length) return '';
+    var p=Object.keys(it.params).map(k=>k+': '+it.params[k]).join('\n');
+    return '<details class="mb-2"><summary class="small text-muted" style="cursor:pointer;">View planned parameters</summary><pre class="mt-2 p-2 mb-0" style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);max-height:200px;overflow:auto;font-size:.78rem;"><code>'+esc(p)+'</code></pre></details>';
+  }
+  function actionsBlock(it){
+    var h='<div class="d-flex flex-wrap gap-2 align-items-center" id="appr-actions-'+it.id+'">';
+    if(it.is_email){
+      if(it.is_quarantined) h+='<button class="btn btn-sm btn-success" onclick="resolveEmailOne('+it.id+",'release')\"><i class=\"bi bi-inbox me-1\"></i>Release message</button>";
+      h+='<button class="btn btn-sm btn-primary" onclick="resolveEmailOne('+it.id+",'whitelist_domain')\"><i class=\"bi bi-shield-check me-1\"></i>Whitelist domain</button>";
+      h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm" style="max-width:170px;" placeholder="Reason (optional)">';
+    } else if(it.is_onboard){
+      h+='<button class="btn btn-sm btn-primary" onclick="approveOnboard('+it.id+')"><i class="bi bi-person-check me-1"></i>Approve &amp; provision</button>';
+      h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm flex-grow-1" placeholder="Reason (optional)">';
+    } else {
+      h+='<button class="btn btn-sm btn-primary" onclick="approveOne('+it.id+',\''+esc(it.risk_tier)+'\')"><i class="bi bi-check-lg me-1"></i>Approve &amp; run</button>';
+      h+='<input type="text" id="deny-reason-'+it.id+'" class="form-control form-control-sm flex-grow-1" placeholder="Reason (optional)">';
+    }
+    h+='<button class="btn btn-sm btn-outline-secondary" onclick="denyOne('+it.id+')"><i class="bi bi-x-lg me-1"></i>Deny</button></div>';
+    return h+'<div id="appr-result-'+it.id+'" class="small mt-2"></div>';
+  }
+  function cardHtml(it){
+    return '<div class="col-12 col-lg-6 col-xl-4" id="appr-'+it.id+'"><div class="card h-100" style="border-left:4px solid '+(TIER_COLOR[it.risk_tier]||'var(--muted)')+';"><div class="card-body">'
+      +'<div class="d-flex justify-content-between align-items-start mb-2"><div class="d-flex align-items-start gap-2">'
+      +'<input type="checkbox" class="form-check-input chk mt-1" data-id="'+it.id+'"'+(S.selected.has(it.id)?' checked':'')+'>'
+      +'<div><span class="badge" style="background:'+(TIER_BG[it.risk_tier]||'var(--surface-2)')+';color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+';text-transform:uppercase;letter-spacing:.04em;">'+esc(it.risk_tier)+' risk</span>'
+      +' <span class="fw-semibold ms-1"><i class="bi '+iconFor(it.action_type)+' me-1"></i>'+esc(it.label)+'</span></div></div>'
+      +'<span class="small text-muted">#'+it.id+' · '+ageBadge(it.created_at)+'</span></div>'
+      +(it.device?'<div class="small text-muted mb-2"><i class="bi bi-pc-display me-1"></i>'+esc(it.device)+(it.correlation_id?' · <i class="bi bi-diagram-2 me-1"></i>'+esc(it.correlation_id):'')+'</div>':'')
+      +(it.effect?'<div class="appr-effect"><i class="bi bi-arrow-return-right me-1"></i><strong>If approved:</strong> '+esc(it.effect)+'</div>':'')
+      +detailBlock(it)
+      +(it.policy?'<div class="small mb-2" style="color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+'"><i class="bi bi-shield-exclamation me-1"></i>'+esc(it.policy)+'</div>':'')
+      +'<div class="small text-muted mb-2">Requested by '+esc(it.requested_by)+'</div>'
+      +paramsBlock(it)+actionsBlock(it)
+      +'</div></div></div>';
+  }
+
+  // ── compact single-line list item (denser alternative to cards) ──
+  function listRowHtml(it){
+    return '<div class="col-12" id="appr-'+it.id+'"><div class="appr-listitem" style="border-left:4px solid '+(TIER_COLOR[it.risk_tier]||'var(--muted)')+';">'
+      +'<div class="appr-li-main">'
+      +'<input type="checkbox" class="form-check-input chk mt-1" data-id="'+it.id+'"'+(S.selected.has(it.id)?' checked':'')+'>'
+      +'<i class="bi '+iconFor(it.action_type)+'"></i>'
+      +'<div class="appr-li-text">'
+      +'<div class="d-flex flex-wrap align-items-center gap-2">'
+      +'<span class="fw-semibold">'+esc(it.label)+'</span>'
+      +(it.device?'<span class="text-muted small">· '+esc(it.device)+'</span>':'')
+      +'<span class="badge" style="background:'+(TIER_BG[it.risk_tier]||'var(--surface-2)')+';color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+';text-transform:uppercase;letter-spacing:.04em;font-size:.62rem;">'+esc(it.risk_tier)+'</span>'
+      +'<span class="small text-muted">#'+it.id+' · '+ageBadge(it.created_at)+'</span></div>'
+      +(it.effect?'<div class="appr-effect-li small text-muted"><strong style="color:var(--text)">If approved:</strong> '+esc(it.effect)+'</div>':'')
+      +(it.policy?'<div class="small" style="color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+'"><i class="bi bi-shield-exclamation me-1"></i>'+esc(it.policy)+'</div>':'')
+      +(it.is_onboard?detailBlock(it):'')
+      +'</div></div>'
+      +actionsBlock(it)
+      +'</div></div>';
+  }
+  function renderPending(){
+    var pend=S.pending.filter(passClient), html='';
+    if(pend.length){
+      ['high','medium','low'].forEach(function(tier){
+        var g=pend.filter(i=>i.risk_tier===tier||(tier==='high'&&i.risk_tier==='critical'));
+        if(!g.length)return;
+        html+='<div class="col-12"><div class="appr-group"><span>'+tier+' risk ('+g.length+')</span></div></div>';
+        g.forEach(function(i){ html += (S.view==='list'?listRowHtml(i):cardHtml(i)); });
+      });
+    } else {
+      html='<div class="col-12"><div class="card"><div class="card-body text-center text-muted py-4"><i class="bi bi-check2-circle d-block mb-2" style="font-size:1.8rem;color:var(--success)"></i>Nothing waiting for approval.</div></div></div>';
+    }
+    document.getElementById('pending-body').innerHTML=html;
+    document.getElementById('pending-count').textContent=S.pending.length+' pending';
+    renderBulkbar();
+  }
+  function renderBulkbar(){
+    var n=S.selected.size, el=document.getElementById('bulkbar');
+    if(!n){ el.innerHTML=''; return; }
+    var sel=[...S.selected].map(findItem).filter(Boolean), anyEmail=sel.some(i=>i.is_email||i.is_onboard||i.is_delete);
+    el.innerHTML='<div class="appr-bulkbar"><span><strong>'+n+'</strong> selected</span>'
+      +'<button class="btn btn-sm btn-primary"'+(anyEmail?' disabled title="Some selected items need an individual confirm — handle each"':'')+' onclick="bulkAction(\'approve\')"><i class="bi bi-check-lg me-1"></i>Approve</button>'
+      +'<button class="btn btn-sm btn-outline-secondary" onclick="bulkAction(\'deny\')"><i class="bi bi-x-lg me-1"></i>Deny</button>'
+      +'<button class="btn btn-sm btn-link text-muted ms-auto p-0" onclick="clearSel()">clear</button></div>'
+      +(anyEmail?'<div class="text-muted small mb-2" style="font-size:.72rem;">Email approvals, onboards, and AD deletions are excluded from bulk-approve (each needs an individual confirm). Bulk-deny works on all.</div>':'');
+  }
+  function resultCell(it){
+    if(it.status==='succeeded')return '<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Succeeded</span>';
+    if(it.status==='denied')return '<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied</span>';
+    return '<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>Failed</span>';
+  }
+  function histRow(it){
+    return '<tr>'
+      +'<td class="nowrap"><a href="'+it.ledger_url+'" class="text-muted">#'+it.id+'</a></td>'
+      +'<td class="nowrap"><i class="bi '+iconFor(it.action_type)+' me-1" style="color:var(--muted)"></i>'+esc(it.label)
+        +(it.summary?'<div class="sum">'+esc(it.summary)+'</div>':'')+'</td>'
+      +'<td class="nowrap">'+esc(it.device||'—')+'</td>'
+      +'<td class="nowrap"><span style="color:'+(TIER_COLOR[it.risk_tier]||'var(--muted)')+'">'+esc(it.risk_tier)+'</span></td>'
+      +'<td class="nowrap text-muted">'+esc(it.approval_status||'—')+'</td>'
+      +'<td class="nowrap">'+resultCell(it)+'</td>'
+      +'<td class="nowrap text-muted">'+esc(it.verification_status||'—')+'</td>'
+      +'<td class="nowrap text-muted">'+esc(whenStr(it.completed_at||it.created_at))+'</td>'
+      +'</tr>';
+  }
+  function renderHistory(){
+    var rows=S.resolved, q=S.hq.toLowerCase();
+    if(q) rows=rows.filter(i=>(i.summary||'').toLowerCase().indexOf(q)>=0||(i.device||'').toLowerCase().indexOf(q)>=0||(i.label||'').toLowerCase().indexOf(q)>=0||(i.requested_by||'').toLowerCase().indexOf(q)>=0||String(i.id)===q);
+    document.getElementById('history-body').innerHTML = rows.length? rows.map(histRow).join('') : '<tr><td colspan="8" class="text-muted text-center py-3">No resolved actions match.</td></tr>';
+    document.getElementById('history-more').innerHTML = (S.hasMore && !q)? '<button class="btn btn-sm btn-outline-secondary" onclick="loadMore()">Load older</button>' : '';
+  }
+
+  // ── selection ──
+  function clearSel(){ S.selected.clear(); renderPending(); }
+  document.getElementById('pending-body').addEventListener('change',function(e){
+    var c=e.target.closest('input.chk'); if(!c)return;
+    var id=parseInt(c.dataset.id,10); if(c.checked)S.selected.add(id); else S.selected.delete(id); renderBulkbar();
+  });
+
+  // ── filters ──
+  function onFilter(){ S.filters.q=document.getElementById('f-q').value.trim(); S.filters.type=document.getElementById('f-type').value;
+    S.filters.risk=document.getElementById('f-risk').value; S.filters.device=document.getElementById('f-device').value; renderPending(); }
+  ['f-type','f-risk','f-device'].forEach(id=>document.getElementById(id).addEventListener('change',onFilter));
+  var _qt; document.getElementById('f-q').addEventListener('input',function(){clearTimeout(_qt);_qt=setTimeout(onFilter,200);});
+
+  // ── view toggle (cards vs compact list) ──
+  function setView(v){ S.view=v; try{localStorage.setItem('apprView',v);}catch(e){}
+    var l=document.getElementById('view-list'), c=document.getElementById('view-cards');
+    if(l)l.classList.toggle('active',v==='list'); if(c)c.classList.toggle('active',v==='cards');
+    renderPending(); }
+  document.getElementById('view-list').addEventListener('click',function(){setView('list');});
+  document.getElementById('view-cards').addEventListener('click',function(){setView('cards');});
+  var _hqt; document.getElementById('h-q').addEventListener('input',function(){clearTimeout(_hqt);var v=this.value.trim();_hqt=setTimeout(function(){S.hq=v;renderHistory();},250);});
+
+  function fetchResolved(reset){
+    var qs=new URLSearchParams({scope:'resolved',days:S.historyDays,offset:reset?0:S.offset,limit:50});
+    fetch('/api/approvals/list?'+qs).then(r=>r.json()).then(function(d){
+      if(reset){S.resolved=d.items;S.offset=d.items.length;}else{S.resolved=S.resolved.concat(d.items);S.offset+=d.items.length;}
+      S.hasMore=d.has_more; renderHistory();
+    });
+  }
+  function loadMore(){ fetchResolved(false); }
+
+  // ── move resolved pending item into history ──
+  function resolveLocally(id){
+    var i=S.pending.findIndex(p=>p.id===id); if(i<0)return;
+    var it=S.pending.splice(i,1)[0]; S.selected.delete(id);
+    fetch('/api/approvals/'+id+'/status').then(r=>r.json()).then(function(s){
+      it.status=s.status;it.approval_status=s.approval_status;it.verification_status=s.verification_status;it.completed_at=new Date().toISOString();
+      S.resolved.unshift(it); renderPending(); renderHistory();
+    }).catch(function(){ renderPending(); });
+  }
+  function _res(id){return document.getElementById('appr-result-'+id);}
+  function _busy(id,m){var r=_res(id);if(r)r.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>'+m;var a=document.getElementById('appr-actions-'+id);if(a)a.querySelectorAll('button,input').forEach(e=>e.disabled=true);}
+  function _fail(id,m){var r=_res(id);if(r)r.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>'+esc(m)+'</span>';var a=document.getElementById('appr-actions-'+id);if(a)a.querySelectorAll('button,input').forEach(e=>e.disabled=false);}
+
+  function approveOne(id,tier){ if(!confirm('Approve and run this '+tier+'-risk action on the endpoint?'))return; _busy(id,'Running…');
+    fetch('/approvals/'+id+'/approve',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not approve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
+  function approveOnboard(id){
+    var ou=(document.getElementById('onboard-ou-'+id)||{}).value||'';
+    var gsel=document.getElementById('onboard-groups-'+id);
+    var groups=gsel?[...gsel.selectedOptions].map(o=>o.value):[];
+    if(!ou){_fail(id,'Select a target OU first.');return;}
+    if(!groups.length){_fail(id,'Select at least one security group first.');return;}
+    if(!confirm('Approve & provision this new hire in AD? This creates the account and grants '+groups.length+' group(s).'))return;
+    _busy(id,'Provisioning…');
+    fetch('/approvals/'+id+'/approve-onboard',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:JSON.stringify({ou_dn:ou,group_dns:groups})}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not approve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
+  function resolveEmailOne(id,mode){ var lbl={release:'release this message to the inbox',whitelist_domain:'whitelist the sender domain (live Exchange change)'}; if(!confirm('Confirm: '+(lbl[mode]||mode)+'?'))return; _busy(id,'Working…');
+    fetch('/approvals/'+id+'/resolve-email',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:JSON.stringify({mode:mode})}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not resolve');return;} pollOne(id,0); }).catch(e=>_fail(id,''+e)); }
+  function denyOne(id){ var reason=(document.getElementById('deny-reason-'+id)||{}).value||''; _busy(id,'Denying…');
+    fetch('/approvals/'+id+'/deny',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(r=>r.json()).then(function(d){ if(!d.ok){_fail(id,d.error||'Could not deny');return;} resolveLocally(id); }).catch(e=>_fail(id,''+e)); }
+  function pollOne(id,tries){ fetch('/api/approvals/'+id+'/status').then(r=>r.json()).then(function(d){
+      if(['succeeded','completed','failed','denied'].indexOf(d.status)>=0){ var r=_res(id);
+        if(r)r.innerHTML=(d.status==='succeeded'||d.status==='completed')?'<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Succeeded'+(d.verification_status?' · '+esc(d.verification_status):'')+'</span>':d.status==='denied'?'<span class="text-muted"><i class="bi bi-slash-circle me-1"></i>Denied</span>':'<span style="color:var(--danger)"><i class="bi bi-x-circle-fill me-1"></i>Failed'+(d.verification_detail?' — '+esc(d.verification_detail):'')+'</span>';
+        resolveLocally(id);
+      } else if(tries>40){ var r2=_res(id); if(r2)r2.innerHTML='<span class="text-muted">Still running… see history shortly.</span>'; resolveLocally(id); }
+      else setTimeout(()=>pollOne(id,tries+1),1500);
+    }).catch(()=>setTimeout(()=>pollOne(id,tries+1),2000)); }
+  function bulkAction(action){ var ids=[...S.selected].map(findItem).filter(Boolean);
+    if(action==='approve')ids=ids.filter(i=>!i.is_email&&!i.is_onboard&&!i.is_delete); ids=ids.map(i=>i.id);
+    if(!ids.length){alert('Nothing applicable selected.');return;}
+    var reason=''; if(action==='deny'){reason=prompt('Deny '+ids.length+' item(s) — reason (optional):','')||'';} else if(!confirm('Approve & run '+ids.length+' action(s)?'))return;
+    fetch('/approvals/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,action:action,reason:reason})}).then(r=>r.json()).then(function(d){
+      var okIds=(d.results||[]).filter(r=>r.ok).map(r=>r.id), failN=(d.results||[]).filter(r=>!r.ok).length;
+      S.pending=S.pending.filter(p=>okIds.indexOf(p.id)<0); S.selected.clear(); renderPending();
+      setTimeout(()=>fetchResolved(true), action==='approve'?2500:600);
+      if(failN)alert(okIds.length+' done, '+failN+' could not be processed.');
+    }).catch(e=>alert('Bulk failed: '+e)); }
+
+  // ── init ──
+  (function(){ var ts=document.getElementById('f-type'); (S.types||[]).forEach(t=>{var o=document.createElement('option');o.value=t;o.textContent=titleCase(t);ts.appendChild(o);});
+    var ds=document.getElementById('f-device'); (S.devices||[]).forEach(t=>{var o=document.createElement('option');o.value=t;o.textContent=t;ds.appendChild(o);});
+    setView(S.view); renderHistory(); })();
+  </script>
+  {% endif %}
   </div>
 
-  <!-- Event bus -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h6 mb-0"><i class="bi bi-broadcast-pin me-2 text-muted"></i>Event bus</h2>
-        <a href="{{ url_for('dashboard.events') }}" class="small">Open →</a>
-      </div>
-      <div class="mb-2">
+  <!-- ═══════════════ EVENT BUS ═══════════════ -->
+  <div class="tab-pane fade {% if active_tab == 'events' %}show active{% endif %}" id="mc-events" role="tabpanel" aria-labelledby="mc-events-tab">
+  {% set ev_st_color = {'pending':'var(--warning)','dispatched':'var(--success)','error':'var(--danger)'} %}
+  {% if mc_errors.get('events') %}
+    <div class="alert d-flex align-items-center gap-2" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);">
+      <i class="bi bi-exclamation-triangle fs-5"></i><div>Could not load the Event Bus data right now. The other tabs still work.</div>
+    </div>
+  {% else %}
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+      <div class="small text-muted">The brain's nervous system — subsystems publish events; a single leader worker dispatches them to workflow triggers.</div>
+      <div class="d-flex gap-3 align-items-center small">
         {% for s in ['pending','dispatched','error'] %}
-        <span class="badge me-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ event_counts.get(s,0) }} {{ s }}</span>
+        <span><span class="legend-dot" style="background:{{ ev_st_color[s] }}"></span>{{ ev_counts.get(s, 0) }} {{ s }}</span>
         {% endfor %}
       </div>
-      <ul class="list-unstyled small mb-0">
-        {% for e in recent_events %}
-        <li class="d-flex justify-content-between"><code style="color:var(--accent)">{{ e.event_type }}</code>
-          <span style="color:{{ st_color.get(e.status,'var(--muted)') }}">{{ e.status }}</span></li>
-        {% else %}<li class="text-muted">No events yet.</li>{% endfor %}
-      </ul>
-    </div></div>
-  </div>
+    </div>
 
-  <!-- Wired automations -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <h2 class="h6 mb-3"><i class="bi bi-robot me-2 text-muted"></i>Wired automations</h2>
-      <ul class="list-unstyled small mb-0">
-        {% for a in automations %}
-        <li class="d-flex justify-content-between align-items-center mb-1">
-          <span>{{ a.name }} <code class="text-muted">{{ a.trigger_type }}</code></span>
-          {% if a.enabled %}<span class="badge" style="background:var(--success-bg,#1f3d2b);color:var(--success);">enabled</span>
-          {% else %}<span class="badge" style="background:var(--surface-2);color:var(--muted);">disabled</span>{% endif %}
-        </li>
-        {% else %}<li class="text-muted">No workflows defined.</li>{% endfor %}
-      </ul>
-    </div></div>
-  </div>
-
-  <!-- Knowledge base -->
-  <div class="col-12 col-lg-6">
-    <div class="card h-100"><div class="card-body">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h6 mb-0"><i class="bi bi-journal-richtext me-2 text-muted"></i>Knowledge base</h2>
-        <a href="{{ url_for('dashboard.knowledge') }}" class="small">Open →</a>
-      </div>
-      <div class="row g-2 text-center">
-        <div class="col"><div class="h4 mb-0">{{ kb.total }}</div><div class="small text-muted">indexed chunks</div></div>
-        <div class="col"><div class="h4 mb-0" style="color:var(--warning)">{{ kb.runbook }}</div><div class="small text-muted">learned runbooks</div></div>
-        <div class="col"><div class="h4 mb-0" style="color:var(--accent)">{{ kb.manual }}</div><div class="small text-muted">authored notes</div></div>
-      </div>
-      <div class="small text-muted mt-2"><i class="bi bi-arrow-repeat me-1"></i>Grows from resolved tickets + notes you add.</div>
-    </div></div>
-  </div>
-
-  <!-- Command ledger -->
-  <div class="col-12">
-    <div class="card"><div class="card-body">
-      <h2 class="h6 mb-3"><i class="bi bi-journal-text me-2 text-muted"></i>Command ledger <span class="text-muted fw-normal small">— every action the brain takes</span></h2>
-      <div class="mb-2">
-        {% for s, n in ledger_counts.items() %}
-        <span class="badge me-1 mb-1" style="background:var(--surface-2);color:{{ st_color.get(s,'var(--muted)') }};">{{ s }} · {{ n }}</span>
-        {% else %}<span class="text-muted small">No actions recorded yet.</span>{% endfor %}
-      </div>
-      {% if recent_actions %}
+    <div class="card">
       <div class="table-responsive">
         <table class="table table-sm align-middle mb-0">
-          <thead><tr class="small text-muted"><th>#</th><th>Action</th><th>Object</th><th>Risk</th><th>Approval</th><th>Status</th></tr></thead>
+          <thead><tr class="small text-muted">
+            <th>#</th><th>Event</th><th>Source</th><th>Status</th><th>Tries</th><th>Created</th><th>Dispatched</th><th></th>
+          </tr></thead>
           <tbody>
-            {% for a in recent_actions %}
+            {% for r in ev_rows %}
             <tr>
-              <td class="small"><a href="{{ url_for('dashboard.ledger_detail', row_id=a.id) }}">{{ a.id }}</a></td>
-              <td class="small">{{ a.action_type.replace('_',' ') }}</td>
-              <td class="small text-muted">{{ (a.object_type ~ ' ' ~ a.object_id) if a.object_id else (a.object_type or '—') }}</td>
-              <td class="small" style="color:{{ st_color.get(a.risk_tier,'var(--muted)') }}">{{ a.risk_tier }}</td>
-              <td class="small text-muted">{{ a.approval_status }}</td>
-              <td class="small" style="color:{{ st_color.get(a.status,'var(--muted)') }}">{{ a.status }}</td>
+              <td class="small text-muted">{{ r.id }}</td>
+              <td><code style="color:var(--accent)">{{ r.event_type }}</code></td>
+              <td class="small text-muted">{{ r.source or '—' }}</td>
+              <td>
+                <span class="small" style="color:{{ ev_st_color.get(r.status, 'var(--muted)') }}">
+                  {% if r.status == 'dispatched' %}<i class="bi bi-check-circle-fill me-1"></i>
+                  {% elif r.status == 'error' %}<i class="bi bi-x-circle-fill me-1"></i>
+                  {% else %}<i class="bi bi-hourglass-split me-1"></i>{% endif %}{{ r.status }}
+                </span>
+                {% if r.last_error %}<i class="bi bi-info-circle ms-1 text-muted" title="{{ r.last_error }}"></i>{% endif %}
+              </td>
+              <td class="small text-muted">{{ r.attempts }}</td>
+              <td class="small text-muted">{{ r.created_at.strftime('%b %d %H:%M:%S') if r.created_at else '' }}</td>
+              <td class="small text-muted">{{ r.dispatched_at.strftime('%b %d %H:%M:%S') if r.dispatched_at else '—' }}</td>
+              <td>
+                {% if r.status == 'error' %}
+                <form method="post" action="{{ url_for('dashboard.event_requeue', event_id=r.id) }}" class="d-inline">
+                  <button class="btn btn-sm btn-outline-secondary py-0 px-2" title="Retry this event"><i class="bi bi-arrow-clockwise"></i></button>
+                </form>
+                {% endif %}
+              </td>
             </tr>
+            {% else %}
+            <tr><td colspan="8" class="text-center text-muted py-5">
+              <i class="bi bi-broadcast d-block mb-2" style="font-size:1.6rem;"></i>
+              No events yet. They'll appear here as subsystems publish (e.g. a new ticket emits <code>ticket.created</code>).
+            </td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-      {% endif %}
-    </div></div>
+    </div>
+    <style>.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}</style>
+  {% endif %}
   </div>
 
 </div>
+
+<script>
+// ── Tab deep-linking: keep the URL (?tab= + #hash) in sync with the active tab so
+// tabs are bookmarkable/shareable and browser back/forward works. Overview-card
+// "Open →" buttons (.mc-goto) switch tabs client-side.
+(function(){
+  var tabEls = document.querySelectorAll('#mcTabs button[data-bs-toggle="tab"]');
+  function showTab(name){
+    var btn = document.querySelector('#mcTabs button[data-tab="'+name+'"]');
+    if(btn){ try{ bootstrap.Tab.getOrCreateInstance(btn).show(); }catch(e){ btn.click(); } }
+  }
+  // Sync URL when a tab is shown.
+  tabEls.forEach(function(btn){
+    btn.addEventListener('shown.bs.tab', function(){
+      var name = btn.getAttribute('data-tab');
+      try{
+        var u = new URL(window.location);
+        u.searchParams.set('tab', name);
+        u.hash = name;
+        history.replaceState(null, '', u);
+      }catch(e){}
+    });
+  });
+  // Overview-card shortcuts.
+  document.querySelectorAll('.mc-goto').forEach(function(el){
+    el.addEventListener('click', function(){ showTab(el.getAttribute('data-tab')); });
+  });
+  // Hash on load takes precedence over server-side active_tab (deep-link via #tab).
+  var h = (window.location.hash||'').replace('#','');
+  var valid = ['overview','action-center','approvals','events'];
+  if(h && valid.indexOf(h)>=0){ showTab(h); }
+})();
+</script>
 {% endblock %}

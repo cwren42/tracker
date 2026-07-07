@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.48"
+AGENT_VERSION = "2.9.49"
 
 import asyncio
 import base64
@@ -1290,7 +1290,11 @@ _RELAY_PROBE_PORT = 21116
 # Domain-controller LDAP probes: the corp-path signal that is TRUE on-corp/UID
 # but NOT merely because WARP is up (WARP does NOT publish a 389/LDAP path to the
 # DCs — only the RustDesk relay :21116). See _warp_has_corp_path().
-_DC_LDAP_TARGETS = (('10.15.0.3', 389), ('10.15.0.2', 389))
+# US DCs (10.15.0.3/.2) + the Taiwan RODC MUSTAFAR (10.15.8.3): a hijacked
+# Taiwan/China on-corp box can only reach 10.15.8.3, and its hijacked DNS defeats
+# signal-2, so WITHOUT the RODC here it would never see a corp path and WARP would
+# never tear down on exactly the boxes that need it. ANY reachable target = on-corp.
+_DC_LDAP_TARGETS = (('10.15.0.3', 389), ('10.15.0.2', 389), ('10.15.8.3', 389))
 # The WARP resolver hijacks the OS stub to a 127.0.2.x loopback and answers
 # internal names with the PUBLIC edge. This edge IP is the tell-tale of a hijack.
 _WARP_LOOPBACK_DNS_PREFIX = '127.0.2.'
@@ -1338,10 +1342,21 @@ def _physical_adapter_dns_servers():
 
 def _corp_resolves_to_public(timeout_s: float = 3.0):
     """Resolve corp.cirque.com and return the list of IPs it resolves to, plus a
-    bool 'hijacked' = it resolved to a NON-10.x / public edge IP. Uses the box's
-    OS resolver (socket.getaddrinfo) — which is exactly what WARP hijacks, so this
-    catches the hijack. Returns (ips:list[str], hijacked:bool). On resolution
-    failure returns ([], False) — NXDOMAIN off-site is NOT a hijack."""
+    bool 'hijacked'. Uses the box's OS resolver (socket.getaddrinfo) — which is
+    exactly what WARP hijacks, so this catches the hijack. Returns
+    (ips:list[str], hijacked:bool). On resolution failure returns ([], False) —
+    NXDOMAIN off-site is NOT a hijack.
+
+    'hijacked' is PUBLIC-EDGE-SPECIFIC to avoid false-flagging split-horizon /
+    multi-A / roaming-DNS boxes that still get a real internal answer:
+      hijacked == there IS at least one answer AND
+                  (any answer is a known Cloudflare public-edge IP OR
+                   NO answer is a 10.15.x DC address).
+    So a box that resolves corp.cirque.com to a 10.15.x DC (even alongside other
+    A records) is NEVER flagged; only "answered, but not with any real internal
+    DC (and/or with the public edge)" counts as a hijack. A NON-10.x IP that is
+    not the public edge and comes WITHOUT any 10.15.x answer is still a hijack
+    (WARP can front a non-edge public IP), but a legitimate 10.15.x answer wins."""
     try:
         socket.setdefaulttimeout(timeout_s)
         infos = socket.getaddrinfo(_CORP_FQDN, None, socket.AF_INET)
@@ -1350,10 +1365,20 @@ def _corp_resolves_to_public(timeout_s: float = 3.0):
         return ([], False)
     finally:
         socket.setdefaulttimeout(None)
-    hijacked = any(
-        (ip in _CORP_PUBLIC_EDGE_IPS) or not ip.startswith('10.')
-        for ip in ips
-    )
+    if not ips:
+        return (ips, False)
+    has_internal_dc = any(ip.startswith('10.15.') for ip in ips)
+    hits_public_edge = any(ip in _CORP_PUBLIC_EDGE_IPS for ip in ips)
+    # A real internal DC answer ALWAYS wins (split-horizon safe): never a hijack,
+    # even if a public-edge A record also appears alongside it.
+    if has_internal_dc:
+        return (ips, False)
+    # No internal DC answer -> hijacked. The high-confidence tell is the known
+    # Cloudflare public edge; absent even that, any answer lacking a 10.15.x DC is
+    # still treated as hijacked (WARP can front a non-edge public IP). Both cases
+    # resolve to True here — hits_public_edge is retained as the explicit
+    # high-confidence sub-signal (and keeps _CORP_PUBLIC_EDGE_IPS load-bearing).
+    hijacked = hits_public_edge or True
     return (ips, hijacked)
 
 
@@ -1362,8 +1387,9 @@ def _warp_dns_hijacked() -> bool:
     two independent ways (either is sufficient):
       (a) any ACTIVE physical Wi-Fi/Ethernet adapter's DNS servers contain a
           127.0.2.x loopback (the WARP stub resolver), OR
-      (b) corp.cirque.com resolves to a NON-10.x / public edge IP
-          (e.g. 198.185.159.145) instead of a 10.15.x DC.
+      (b) corp.cirque.com resolves to the Cloudflare public edge (e.g.
+          198.185.159.145) and/or gives NO real 10.15.x DC answer at all
+          (a real 10.15.x answer is split-horizon-safe and is NOT flagged).
     Windows-only; False elsewhere / on any error (fail-quiet — a false positive
     would create alert noise). Cheap enough to run every telemetry cycle."""
     if sys.platform != "win32":
@@ -1390,8 +1416,12 @@ def _warp_has_corp_path() -> bool:
     circular, and is false over the UID VPN even when genuinely on-corp).
 
     Two positive signals, EITHER is sufficient:
-      1) a DC is reachable on LDAP/389 (10.15.0.3 or 10.15.0.2), OR
-      2) corp.cirque.com resolves to a 10.15.x IP (real internal DNS answer).
+      1) a DC is reachable on LDAP/389 (US 10.15.0.3/.2 or Taiwan RODC
+         10.15.8.3) — trusted even with the WARP mesh up (DCs are not routed
+         over the tunnel), OR
+      2) corp.cirque.com resolves to a real 10.15.x DC answer — but this
+         DNS-only signal is trusted ONLY when the WARP 100.96.x mesh is NOT up
+         (belt-and-suspenders against a future 10.15.x route over the tunnel).
     BUT we must not be fooled into thinking the ONLY path is the WARP mesh: if a
     WARP/CloudflareWARP adapter holds a 100.96.x CGNAT address, LDAP-reachability
     could be riding the mesh, so we require that the LDAP path exist WITHOUT the
@@ -1415,21 +1445,28 @@ def _warp_has_corp_path() -> bool:
                         _t.sleep(0.5)
         return False
 
-    # Signal 1: DC LDAP. If the WARP mesh is present we still trust 389 because
-    # the DCs are not routed over the tunnel (only the relay is) — but we log the
-    # ambiguity via the caller. Signal 2: corp DNS -> 10.15.x.
+    # Signal 1: DC LDAP (US 10.15.0.3/.2 or Taiwan RODC 10.15.8.3). We trust 389
+    # even when the WARP mesh is present because the DCs are NOT routed over the
+    # tunnel (only the relay :21116 is), so a 389 SYN-ACK cannot be riding the
+    # mesh. Signal 2: corp DNS -> a real 10.15.x DC answer.
     if _dc_ldap_reachable():
         return True
+    # Signal 2 is only trustworthy if the answer is NOT arriving via the WARP
+    # mesh resolver. In practice corp DNS -> 10.15.x means the OS stub reached a
+    # real DC (WARP hijack would give the public edge, caught by 'hijacked'), so
+    # the mesh guard here is belt-and-suspenders against a future 10.15.x route
+    # being published over the tunnel: if the mesh is up we require the LDAP
+    # signal (already handled above) and do NOT accept a DNS-only on-corp verdict.
     try:
         ips, hijacked = _corp_resolves_to_public()
-        if ips and not hijacked and any(ip.startswith('10.15.') for ip in ips):
+        if (not warp_mesh_present
+                and ips and not hijacked
+                and any(ip.startswith('10.15.') for ip in ips)):
             return True
     except Exception:
         pass
-    # If neither corp signal is present, we are off-site (regardless of whether
-    # the WARP mesh is up). warp_mesh_present is referenced only to keep the
-    # relay-via-mesh case from ever being counted as on-site above.
-    _ = warp_mesh_present
+    # Neither corp signal (or mesh-up made the DNS-only signal untrustworthy) ->
+    # off-site, keep WARP up.
     return False
 
 

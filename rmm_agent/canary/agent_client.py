@@ -4695,26 +4695,39 @@ _ee_helper_hproc: "ctypes.wintypes.HANDLE | None" = None   # process handle
 # default multi-thread executor -- can never double-spawn the helper into a session.
 _ee_helper_lock = threading.Lock()
 _EE_OUT_DIR      = r"C:\ProgramData\CirqueRMM"
-_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
-_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
-_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.exe"
+# NOTE: the on-disk binary/output are named CirqueInputMonitor* (a NEUTRAL name), NOT
+# "Eagle*". This in-session helper measures only interactive-input idle + lock state
+# and is now used by the ALWAYS-ON HR work-hours meter (fleet-wide, independent of
+# Eagle Eyes), so it must not carry the Eagle surveillance brand. The internal Python
+# symbol names keep the historical _EE_/_ee_ prefixes to avoid churn; only the on-disk
+# names the fleet sees changed.
+_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueInputState.json"
+_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueInputMonitor.cs"
+_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\CirqueInputMonitor.exe"
 # csc.exe ships with every .NET 4.x install (present on all modern Windows)
 _EE_CSC          = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+# Old Eagle-branded names from pre-2.9.47 builds — cleaned up on upgrade so no box is
+# left running/holding an "Eagle"-named binary for this HR feature (see _ee_cleanup_old).
+_EE_OLD_HELPER_EXE = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.exe"
+_EE_OLD_HELPER_CS  = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
+_EE_OLD_OUT_FILE   = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
+_EE_OLD_DIAG_FILE  = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper_diag.txt"
 
-# C# source for CirqueEagleHelper.exe -- compiled once via csc.exe on the Windows host.
-# Runs as the interactive user (CreateProcessAsUserW), loops every 10 s.
-# Uses GetForegroundWindow() -- the correct Win32 API for active window detection.
+# C# source for CirqueInputMonitor.exe -- compiled once via csc.exe on the Windows host.
+# Runs as the interactive user (CreateProcessAsUserW), loops every 10 s. Reports only
+# idle-seconds + lock state (via GetLastInputInfo / GetForegroundWindow).
 #
 # Why a small compiled C# helper (rather than the SYSTEM service polling directly):
-#   GetForegroundWindow() only returns a meaningful result from the interactive user's
-#   desktop session, which the SYSTEM-context service cannot query itself. A tiny native
-#   helper launched into that session is lighter and steadier for a 10 s poll loop than
-#   re-spawning a script each tick. The helper is deliberately named CirqueEagleHelper.exe
-#   and documented so Defender/EDR and any admin can recognise and allow-list it -- this
-#   is a sanctioned monitoring tool and is not concealed from endpoint security.
+#   GetLastInputInfo() only sees the CALLING session's input, and GetForegroundWindow()
+#   only returns a meaningful result from the interactive user's desktop session, which
+#   the SYSTEM-context service cannot query itself. A tiny native helper launched into
+#   that session is lighter and steadier for a 10 s poll loop than re-spawning a script
+#   each tick. The helper is deliberately named CirqueInputMonitor.exe and documented so
+#   Defender/EDR and any admin can recognise and allow-list it -- this is a sanctioned
+#   monitoring tool and is not concealed from endpoint security.
 #
 # Diagnostic output:
-#   CirqueEagleHelper_diag.txt -- written on start + each iteration for troubleshooting.
+#   CirqueInputMonitor_diag.txt -- written on start + each iteration for troubleshooting.
 _EE_HELPER_CS_SRC = r"""
 using System;
 using System.IO;
@@ -4723,9 +4736,9 @@ using System.Text;
 using System.Diagnostics;
 using System.Threading;
 
-class EagleEyes {
-    const string OutFile  = @"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json";
-    const string DiagFile = @"C:\ProgramData\CirqueRMM\CirqueEagleHelper_diag.txt";
+class InputMonitor {
+    const string OutFile  = @"C:\ProgramData\CirqueRMM\CirqueInputState.json";
+    const string DiagFile = @"C:\ProgramData\CirqueRMM\CirqueInputMonitor_diag.txt";
     const int    Interval = 10000; // ms
 
     [DllImport("user32.dll")]
@@ -4869,6 +4882,38 @@ def _ee_find_active_session() -> int:
     return found
 
 
+_ee_old_cleanup_done = False
+
+
+def _ee_cleanup_old_helper() -> None:
+    """Remove the pre-2.9.47 Eagle-branded helper from disk (one-time, best-effort).
+
+    The idle/lock helper was renamed CirqueEagleHelper.exe -> CirqueInputMonitor.exe
+    when the always-on HR work-hours meter began using it fleet-wide; we must not leave
+    an "Eagle"-named surveillance binary sitting on every box for that HR feature. On an
+    upgraded box: kill any still-running old helper, then delete the old exe/cs/json/diag.
+    Non-Windows and missing files are no-ops. Runs under _ee_helper_lock.
+    """
+    if sys.platform != "win32":
+        return
+    # Kill a lingering old-named process (the pre-upgrade agent may have spawned it).
+    try:
+        import subprocess as _sp
+        _sp.run(
+            ["taskkill", "/F", "/IM", "CirqueEagleHelper.exe"],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
+    for _p in (_EE_OLD_HELPER_EXE, _EE_OLD_HELPER_CS, _EE_OLD_OUT_FILE, _EE_OLD_DIAG_FILE):
+        try:
+            if os.path.exists(_p):
+                os.remove(_p)
+                _ee_log(f"removed stale Eagle-branded file {_p}")
+        except Exception:
+            pass  # in-use / perms: harmless orphan, retried on the next agent run
+
+
 def _ee_ensure_helper() -> bool:
     """Ensure the in-session helper is running (thread-safe wrapper).
 
@@ -4876,7 +4921,11 @@ def _ee_ensure_helper() -> bool:
     toggle-gated Eagle loop, both dispatched via the multi-thread executor) can
     never race the liveness-check-through-spawn and launch two helpers.
     """
+    global _ee_old_cleanup_done
     with _ee_helper_lock:
+        if not _ee_old_cleanup_done:
+            _ee_old_cleanup_done = True
+            _ee_cleanup_old_helper()
         return _ee_ensure_helper_locked()
 
 
@@ -4952,20 +5001,21 @@ def _ee_ensure_helper_locked() -> bool:
         return False
 
     # Write C# source and compile to exe (one-time; reused on subsequent calls).
-    # A small compiled helper is simply the cleanest way to query the interactive
-    # session's foreground window on a steady loop; the binary is named and documented
-    # (CirqueEagleHelper.exe) so endpoint security and admins can identify/allow-list it.
+    # A small compiled helper is simply the cleanest way to read the interactive
+    # session's input-idle + lock state on a steady loop; the binary is named and
+    # documented (CirqueInputMonitor.exe) so endpoint security and admins can
+    # identify/allow-list it.
     import subprocess as _sp
     try:
         with open(_EE_HELPER_CS, "w", encoding="utf-8") as _f:
             _f.write(_EE_HELPER_CS_SRC)
     except Exception as _e:
         kernel32.CloseHandle(dup_token)
-        _ee_log(f"write CirqueEagleHelper.cs failed: {_e}")
+        _ee_log(f"write CirqueInputMonitor.cs failed: {_e}")
         return False
 
     if not os.path.exists(_EE_HELPER_EXE):
-        _ee_log("compiling CirqueEagleHelper.cs ...")
+        _ee_log("compiling CirqueInputMonitor.cs ...")
         r = _sp.run(
             [_EE_CSC, '/nologo', '/target:exe', f'/out:{_EE_HELPER_EXE}', _EE_HELPER_CS],
             capture_output=True, text=True, timeout=30,
@@ -5112,7 +5162,7 @@ def _read_idle_state() -> "Optional[dict]":
 
     This is the always-on work-hours meter's sole window into the interactive
     session. It reads idle_s (GetLastInputInfo measured in-session) and the lock
-    flag written by CirqueEagleHelper.exe every 10s. It deliberately IGNORES the
+    flag written by CirqueInputMonitor.exe every 10s. It deliberately IGNORES the
     app/window (p/t) fields — no app, window-title, or screenshot data is read
     here. It shares the same helper process as the (toggle-gated) Eagle loop via
     _ee_ensure_helper(), so enabling this meter never double-spawns the helper.

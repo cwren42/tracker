@@ -358,6 +358,13 @@ def settings_eagleeye():
     except Exception:
         context['workhours_viewers'] = ''
 
+    # Work-Hours device exclusion (glob patterns; lab/build/test/kiosk/prod boxes).
+    try:
+        from utils import workhours_excluded_patterns
+        context['workhours_excluded_devices'] = ', '.join(workhours_excluded_patterns())
+    except Exception:
+        context['workhours_excluded_devices'] = ''
+
     return render_template('settings_eagleeye.html', **context)
 
 
@@ -397,6 +404,48 @@ def settings_workhours_access():
     except Exception as e:
         db.session.rollback()
         flash(f'Error saving Work-Hours access list: {e}', 'danger')
+    return redirect(url_for('settings.settings_eagleeye'))
+
+
+@bp.route('/settings/workhours-excluded-devices', methods=['POST'])
+@login_required
+@admin_required
+def settings_workhours_excluded_devices():
+    """Save the Work-Hours device-exclusion list (comma/newline-separated globs).
+
+    Patterns are fnmatch-style ('*', '?', '[1-5]') matched whole-string,
+    case-insensitively, against the device name (asset.name else agent_id). These are
+    lab/build/test/kiosk/prod boxes hidden from the report — layered on top of the
+    server-class exclusion and the viewer allowlist/manager scoping."""
+    raw = request.form.get('workhours_excluded_devices', '')
+    # Normalize: split on comma/newline (NOT spaces — patterns have no spaces but keep it
+    # simple/forgiving), dedupe case-insensitively, preserve order.
+    seen = set()
+    cleaned = []
+    for tok in raw.replace('\n', ',').split(','):
+        t = tok.strip()
+        if not t:
+            continue
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(t)
+    value = ', '.join(cleaned)
+    try:
+        s = Setting.query.filter_by(key='workhours_excluded_devices').first()
+        if not s:
+            s = Setting(key='workhours_excluded_devices')
+            db.session.add(s)
+        s.value = value
+        s.updated_by = current_user.username
+        s.updated_at = datetime.utcnow()
+        _log_audit('setting', 0, 'workhours.excluded_devices_update', {'patterns': value})
+        db.session.commit()
+        flash('Work-Hours device exclusion list updated.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error saving Work-Hours device exclusion list: {e}', 'danger')
     return redirect(url_for('settings.settings_eagleeye'))
 
 

@@ -84,6 +84,25 @@
                 </div>
                 <button type="submit" class="btn btn-primary"><i class="bi bi-cloud-check me-1"></i>Save Access List</button>
             </form>
+
+            <hr class="my-4">
+
+            <p class="small text-muted mb-3">
+                <strong>Excluded devices.</strong> Machines hidden from the Work-Hours report
+                (lab / build / test / kiosk / production boxes, not employee workstations).
+                Enter device-name patterns separated by commas. Patterns support <code>*</code>
+                (any characters) and <code>[1-5]</code> (character ranges) and match the
+                <strong>whole</strong> name, case-insensitively — e.g. <code>DESKTOP*</code>
+                matches <code>DESKTOP-ABC</code> but not <code>CHRIS-DESKTOP</code>.
+            </p>
+            <form method="POST" action="{{ url_for('settings.settings_workhours_excluded_devices') }}">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold" for="workhours_excluded_devices">Excluded device patterns</label>
+                    <textarea class="form-control form-control-sm" id="workhours_excluded_devices" name="workhours_excluded_devices"
+                        rows="3" placeholder="ARM2, CAPEX[1-5], CPC*, DESKTOP*, GEARS, IT-TOWNHALL, PARKCITY*, SNOWBIRD*, HLK*, PROD-SHIP-OLD, PROD1, SENSEL-SERVER-1, TW-PTP2">{{ workhours_excluded_devices }}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-cloud-check me-1"></i>Save Excluded Devices</button>
+            </form>
         </div>
     </div>
 </div>

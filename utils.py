@@ -136,6 +136,17 @@ WORKHOURS_VIEWERS_SETTING       = 'workhours_viewers'          # CSV allowlist (
 WORKHOURS_MANAGER_MAP_SETTING   = 'workhours_manager_map'      # JSON {username: [employee_id,...]}
 WORKHOURS_VIEWERS_SEED          = 'cjwren,ethans,Hannah.Hermansen,bdm'
 
+# Device-name exclusion for the Work-Hours report. These are lab/build/test/kiosk/prod
+# boxes, NOT employee workstations we track. Stored as a comma/newline-separated list of
+# fnmatch-style GLOB patterns ('*' wildcard + '[1-5]' char-range) matched WHOLE-STRING,
+# case-insensitive, against the device name (asset.name, else agent_id). Seeded here so
+# the filter is live even before the Setting row exists.
+WORKHOURS_EXCLUDED_DEVICES_SETTING = 'workhours_excluded_devices'
+WORKHOURS_EXCLUDED_DEVICES_SEED    = (
+    'ARM2, CAPEX[1-5], CPC*, DESKTOP*, GEARS, IT-TOWNHALL, PARKCITY*, '
+    'SNOWBIRD*, HLK*, PROD-SHIP-OLD, PROD1, SENSEL-SERVER-1, TW-PTP2'
+)
+
 
 def _setting_value(key, default=None):
     """Read a Setting.value by key (no request context assumptions). Best-effort."""
@@ -153,6 +164,76 @@ def workhours_viewers_list():
     if raw is None:
         raw = WORKHOURS_VIEWERS_SEED
     return [u.strip().lower() for u in raw.split(',') if u.strip()]
+
+
+def workhours_excluded_patterns():
+    """List of glob patterns for devices excluded from the Work-Hours report.
+
+    Reads the workhours_excluded_devices Setting (comma/newline separated), falling
+    back to WORKHOURS_EXCLUDED_DEVICES_SEED so the filter is live before the row exists.
+    Patterns are fnmatch-style globs ('*', '?', '[1-5]') matched whole-string,
+    case-insensitively, against the device name."""
+    raw = _setting_value(WORKHOURS_EXCLUDED_DEVICES_SETTING)
+    if raw is None:
+        raw = WORKHOURS_EXCLUDED_DEVICES_SEED
+    out = []
+    for tok in raw.replace('\n', ',').split(','):
+        t = tok.strip()
+        if t:
+            out.append(t)
+    return out
+
+
+def _glob_to_posix_ere(glob):
+    """Translate one fnmatch-style glob to a PostgreSQL POSIX-ERE fragment (no anchors).
+
+    Supports '*' (=> '.*'), '?' (=> '.'), and '[...]'/'[!...]' character classes.
+    All other ERE metacharacters are escaped so they match literally. NOTE: this is
+    deliberately NOT re.fnmatch.translate() — that emits Python-only syntax ((?s:..)\\Z)
+    which PostgreSQL's POSIX engine does not understand."""
+    out = []
+    i, n = 0, len(glob)
+    while i < n:
+        c = glob[i]
+        if c == '*':
+            out.append('.*')
+        elif c == '?':
+            out.append('.')
+        elif c == '[':
+            j = i + 1
+            if j < n and glob[j] in ('!', '^'):
+                j += 1
+            if j < n and glob[j] == ']':
+                j += 1
+            while j < n and glob[j] != ']':
+                j += 1
+            if j >= n:
+                out.append('\\[')          # unterminated class -> literal '['
+            else:
+                inner = glob[i + 1:j]
+                if inner.startswith('!'):
+                    inner = '^' + inner[1:]  # POSIX negation uses '^'
+                out.append('[' + inner + ']')
+                i = j
+        elif c in '.^$+{}()|\\':
+            out.append('\\' + c)
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def workhours_excluded_regex():
+    """Combined anchored POSIX-ERE for the excluded-device globs, or None if empty.
+
+    Feed to a case-insensitive negated match in SQL, e.g.:
+        AND COALESCE(a.name, w.agent_id) !~* :excl_regex
+    Anchored at both ends (^(...)$) => whole-string match, so 'DESKTOP*' matches
+    'DESKTOP-ABC' but not 'CHRIS-DESKTOP'."""
+    pats = workhours_excluded_patterns()
+    if not pats:
+        return None
+    return '^(' + '|'.join(_glob_to_posix_ere(p) for p in pats) + ')$'
 
 
 def workhours_manager_map():

@@ -14,7 +14,11 @@ from sqlalchemy import text
 
 from extensions import db
 from models import _log_audit
-from utils import workhours_access_required, workhours_scope_employee_ids
+from utils import (
+    workhours_access_required,
+    workhours_scope_employee_ids,
+    workhours_excluded_regex,
+)
 
 from blueprints.rmm import bp
 
@@ -79,6 +83,20 @@ def rmm_work_hours():
             scope_clause = "AND COALESCE(w.employee_id, a.employee_id) = ANY(:scope_ids)"
             params['scope_ids'] = list(scope_ids)
 
+        # Device-name exclusion (lab/build/test/kiosk/prod boxes, not employee
+        # workstations). Whole-string, case-insensitive glob match against the device
+        # name (asset.name else agent_id). Applied INSIDE the single detail query so the
+        # Python-side summary aggregation (built from these rows) stays consistent.
+        excl_clause = ""
+        excl_regex = workhours_excluded_regex()
+        if excl_regex:
+            # COALESCE(..., '') so a NULL device name never yields NULL (which would be
+            # dropped by the AND) — mirrors the server-class filter's NULL-safe guard. An
+            # empty string never matches an anchored ^(...)$ glob, so a NULL-named row is
+            # KEPT, not silently excluded.
+            excl_clause = "AND COALESCE(a.name, w.agent_id, '') !~* :excl_regex"
+            params['excl_regex'] = excl_regex
+
         sql = text(f"""
             SELECT
                 COALESCE(w.employee_id, a.employee_id)                 AS emp_id,
@@ -98,6 +116,7 @@ def rmm_work_hours():
             -- only positively-identified servers are dropped.
             AND NOT (COALESCE(a.device_type ILIKE '%server%', FALSE)
                      OR COALESCE(a.category = 'Server', FALSE))
+            {excl_clause}
             {scope_clause}
             ORDER BY emp_name ASC, device_name ASC, w.local_date ASC
         """)

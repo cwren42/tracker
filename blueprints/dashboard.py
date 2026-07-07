@@ -1108,7 +1108,7 @@ def approve_action(row_id):
         flash(info['error'], 'warning')
     else:
         flash(f"Approved — {info.get('action_type', 'action')} is running.", 'success')
-    return redirect(url_for('dashboard.approvals'))
+    return redirect(url_for('dashboard.mission_control', tab='approvals'))
 
 
 @bp.route('/approvals/<int:row_id>/deny', methods=['POST'])
@@ -1125,7 +1125,7 @@ def deny_action(row_id):
                 else (jsonify({'ok': False, 'error': output.get('error', 'Could not deny.')}), 409))
     flash("Action denied — it will not run." if success else (output.get('error') or 'Could not deny.'),
           'info' if success else 'warning')
-    return redirect(url_for('dashboard.approvals'))
+    return redirect(url_for('dashboard.mission_control', tab='approvals'))
 
 
 @bp.route('/approvals/<int:row_id>/resolve-email', methods=['POST'])
@@ -1146,7 +1146,7 @@ def resolve_email(row_id):
             return jsonify({'ok': False, 'error': info.get('error', 'Could not resolve.')}), 409
         return jsonify({'ok': True, 'running': True, 'mode': info.get('mode')})
     flash(info.get('error') or f"Resolving ({mode})…", 'warning' if not claimed else 'success')
-    return redirect(url_for('dashboard.approvals'))
+    return redirect(url_for('dashboard.mission_control', tab='approvals'))
 
 
 @bp.route('/approvals/<int:row_id>/approve-onboard', methods=['POST'])
@@ -1172,7 +1172,7 @@ def approve_onboard(row_id):
         return jsonify({'ok': True, 'running': True})
     flash(info.get('error') or 'Provisioning the new hire…',
           'warning' if (not claimed or info.get('error')) else 'success')
-    return redirect(url_for('dashboard.approvals'))
+    return redirect(url_for('dashboard.mission_control', tab='approvals'))
 
 
 @bp.route('/api/approvals/<int:row_id>/status')
@@ -1310,7 +1310,7 @@ def ledger_rollback(row_id):
     new_id = workflow_engine.create_rollback(row_id, actor)
     if new_id:
         flash(f'Rollback queued for approval (ledger #{new_id}) — approve it to execute the reverse.', 'success')
-        return redirect(url_for('dashboard.approvals'))
+        return redirect(url_for('dashboard.mission_control', tab='approvals'))
     flash('This action cannot be rolled back automatically.', 'warning')
     return redirect(url_for('dashboard.ledger_detail', row_id=row_id))
 

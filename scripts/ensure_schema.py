@@ -147,6 +147,11 @@ def ensure_schema():
                 # services collected by the agent (2.9.40); lights up the
                 # service_down incident signal. Nullable; gateway COALESCEs it.
                 ('services_down',      'TEXT'),
+                # warp_dns_hijacked (2.9.48) = agent-computed bool: a physical NIC's
+                # DNS is a 127.0.2.x WARP stub OR corp.cirque.com resolves to a
+                # public/non-10.x IP. Feeds alert_type=warp_dns_hijack. Nullable
+                # (NULL = pre-2.9.48 agent, unknown); gateway COALESCEs it.
+                ('warp_dns_hijacked',  'BOOLEAN'),
             ]
             for col, typedef in new_telemetry_cols:
                 if not _col_exists("rmm_telemetry", col):

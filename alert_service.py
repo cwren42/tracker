@@ -52,7 +52,7 @@ _AUTO_RESOLVE_TYPES = frozenset({
     'battery_low', 'battery_not_chg',
     'av_disabled', 'firewall_off', 'pending_reboot',
     'failed_logins', 'not_seen', 'cve_unpatched',
-    'clock_skew',
+    'clock_skew', 'warp_dns_hijack',
 })
 
 # Alert types that must DEDUP (track an alert_state row + reuse the open ticket
@@ -941,7 +941,8 @@ def _eval_agent_alerts(con, rules_by_type):
         """SELECT a.agent_id, a.asset_id, t.hostname,
                   t.cpu_percent, t.ram_percent, t.battery_percent,
                   t.battery_present, t.battery_charging,
-                  t.disk_json, t.security_json, t.clock_skew_seconds, a.last_seen_at
+                  t.disk_json, t.security_json, t.clock_skew_seconds,
+                  t.warp_dns_hijacked, a.last_seen_at
            FROM rmm_agent a
            LEFT JOIN rmm_telemetry t ON t.agent_id = a.agent_id
            WHERE a.enabled = true"""
@@ -981,6 +982,24 @@ def _eval_agent_alerts(con, rules_by_type):
                             f'(threshold {int(thresh)}s) — Kerberos/domain auth at risk; '
                             f'check the Windows Time (w32time) service.',
                             agent_id=aid, asset_id=asset_id, hostname=host)
+
+        # ── WARP DNS hijack (internal AD/DNS guard) ──────────────────────────
+        # Agent-computed bool (2.9.48+): a physical NIC's DNS is a 127.0.2.x WARP
+        # stub OR corp.cirque.com resolves to a public/non-10.x IP. This is the
+        # self-inflicted "flaky AD" root cause — a roaming box left WARP up on-corp
+        # and Cloudflare hijacked internal resolution (14/96 boxes 2026-07-07).
+        # Fires Alert-Center only (auto_ticket=false), auto-resolves when the box
+        # reports clear. Checked BEFORE the cpu-null guard so coverage is
+        # independent of CPU telemetry. NULL (pre-2.9.48 agent) => skip.
+        rule = rules_by_type.get('warp_dns_hijack')
+        if rule and rule['enabled'] and ag['warp_dns_hijacked']:
+            _fire_alert(con, rule,
+                        f'{host} has Cloudflare WARP hijacking internal DNS '
+                        f'(physical NIC on 127.0.2.x and/or corp.cirque.com '
+                        f'resolving to the public edge). Internal name resolution / '
+                        f'AD / domain auth is at risk — the agent teardown should '
+                        f'self-heal on the next connect; verify WARP is torn down.',
+                        agent_id=aid, asset_id=asset_id, hostname=host)
 
         # Skip telemetry checks if no data
         if ag['cpu_percent'] is None:

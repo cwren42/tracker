@@ -337,6 +337,14 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
         batt_health  = data.get("battery_health_pct")
         batt_cycles  = data.get("battery_cycles")
         tz_str       = _s("timezone")
+        # warp_dns_hijacked (2.9.48): agent-computed bool — physical NIC DNS on a
+        # 127.0.2.x WARP stub OR corp.cirque.com -> public/non-10.x IP. NULL for
+        # pre-2.9.48 agents (unknown). Persisted here + COALESCE'd below or it is
+        # SILENTLY DROPPED (telemetry-field gateway gotcha). Feeds the
+        # warp_dns_hijack alert. Preserve False (an explicit "not hijacked") — so
+        # gate on "is None", not truthiness.
+        _wdh = data.get("warp_dns_hijacked")
+        warp_dns_hijacked = None if _wdh is None else bool(_wdh)
 
         cur.execute(
             """
@@ -352,11 +360,11 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 gpu_json, sound_card, os_edition, security_json, sysinfo_json,
                 wifi_adapter, battery_model, battery_serial, battery_health_pct,
                 battery_cycles, battery_chemistry, timezone, public_ip,
-                services_down, clock_utc, clock_skew_seconds
+                services_down, clock_utc, clock_skew_seconds, warp_dns_hijacked
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                       %s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s,%s)
+                      %s,%s,%s,%s)
             ON CONFLICT (agent_id) DO UPDATE SET
                 asset_id=EXCLUDED.asset_id,
                 hostname=EXCLUDED.hostname,
@@ -394,6 +402,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 services_down=COALESCE(EXCLUDED.services_down, rmm_telemetry.services_down),
                 clock_utc=COALESCE(EXCLUDED.clock_utc, rmm_telemetry.clock_utc),
                 clock_skew_seconds=COALESCE(EXCLUDED.clock_skew_seconds, rmm_telemetry.clock_skew_seconds),
+                warp_dns_hijacked=COALESCE(EXCLUDED.warp_dns_hijacked, rmm_telemetry.warp_dns_hijacked),
                 -- last_seen was DEFAULT now() but never refreshed on upsert, so it froze at each
                 -- row's first insert (misreported live boxes as offline/dead). Refresh it every
                 -- telemetry so it actually tracks last check-in.
@@ -433,6 +442,7 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                 services_j,
                 clock_utc,
                 clock_skew_seconds,
+                warp_dns_hijacked,
             ),
         )
         # Also refresh last_seen_at and asset online_state on each telemetry update

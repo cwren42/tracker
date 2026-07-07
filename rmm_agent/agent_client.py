@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.49"
+AGENT_VERSION = "2.9.50"
 
 import asyncio
 import base64
@@ -1383,27 +1383,45 @@ def _corp_resolves_to_public(timeout_s: float = 3.0):
 
 
 def _warp_dns_hijacked() -> bool:
-    """Layer-3 SIGNAL. TRUE if WARP has hijacked corp DNS on this box, detected
-    two independent ways (either is sufficient):
-      (a) any ACTIVE physical Wi-Fi/Ethernet adapter's DNS servers contain a
-          127.0.2.x loopback (the WARP stub resolver), OR
-      (b) corp.cirque.com resolves to the Cloudflare public edge (e.g.
-          198.185.159.145) and/or gives NO real 10.15.x DC answer at all
-          (a real 10.15.x answer is split-horizon-safe and is NOT flagged).
+    """Layer-3 SIGNAL. TRUE only when WARP is hijacking corp DNS in the HARMFUL
+    sense — i.e. it is breaking internal AD/DNS on a box that should be resolving
+    internally (on-corp / has a corp path). The whole signal is GATED on
+    _warp_has_corp_path(): a box with NO corp path is off-site, where WARP being
+    up (and corp.cirque.com resolving to its PUBLIC A record 198.185.159.145 via
+    a normal public resolver, or to nothing) is expected and NOT a hijack — those
+    boxes must report False so they don't false-alert / never-auto-resolve.
+
+    corp.cirque.com HAS a public A record (198.185.159.145 = the Cloudflare
+    edge), so "resolves to the public edge" is NOT by itself a hijack — every
+    off-site box resolves it that way over public DNS. It is only a hijack when
+    the box ALSO has a corp path (on-corp: 389 LDAP to a DC still works even under
+    a WARP DNS hijack, since WARP does not route/block 389 to the DCs — so
+    _warp_has_corp_path stays True and distinguishes a real on-corp hijack from
+    plain off-site public resolution).
+
+    With a corp path present, EITHER of these is a hijack:
+      (a) corp.cirque.com resolves to the public edge / gives no real 10.15.x DC
+          answer (WARP redirected internal resolution off the DCs), OR
+      (b) a physical Wi-Fi/Ethernet adapter's DNS servers contain a 127.0.2.x
+          WARP stub resolver (WARP owns the box's resolver).
+    Both are exactly the on-corp condition Layer 2 tears down.
+
     Windows-only; False elsewhere / on any error (fail-quiet — a false positive
     would create alert noise). Cheap enough to run every telemetry cycle."""
     if sys.platform != "win32":
         return False
     try:
+        # GATE: no corp path => off-site => WARP up is expected, never a hijack.
+        if not _warp_has_corp_path():
+            return False
+        # On-corp. (a) corp DNS redirected off the DCs (public edge / no 10.15.x).
+        _ips, resolves_public = _corp_resolves_to_public()
+        if resolves_public:
+            return True
+        # (b) a physical NIC's resolver is the 127.0.2.x WARP stub.
         for servers in _physical_adapter_dns_servers().values():
             if any(s.startswith(_WARP_LOOPBACK_DNS_PREFIX) for s in servers):
                 return True
-    except Exception:
-        pass
-    try:
-        _ips, hijacked = _corp_resolves_to_public()
-        if hijacked:
-            return True
     except Exception:
         pass
     return False

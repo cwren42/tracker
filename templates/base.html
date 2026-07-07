@@ -103,6 +103,13 @@
         </a>
         {% endif %}
 
+        {% if workhours_can_view() %}
+        <a class="sidebar-link {% if request.endpoint == 'rmm.rmm_work_hours' %}active{% endif %}"
+           href="{{ url_for('rmm.rmm_work_hours') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Work Hours">
+            <i class="bi bi-clock-history"></i><span class="link-label">Work Hours</span>
+        </a>
+        {% endif %}
+
         {% if current_user.role not in ['eagle_eyes', 'base_user', 'viewer'] %}
         <div class="nav-section-label">IT Management</div>
 

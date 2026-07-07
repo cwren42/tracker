@@ -1485,4 +1485,4 @@ def _eagle_report_scheduler(app):
             logger.warning(f'Eagle report scheduler error: {_sched_err}')
 
 # ── Route groups split into sibling modules (registered on bp above) ──
-from blueprints import rmm_terminal, rmm_eagle, rmm_agent_data, rmm_agent_install, rmm_agent_ingest  # noqa: E402,F401
+from blueprints import rmm_terminal, rmm_eagle, rmm_workhours, rmm_agent_data, rmm_agent_install, rmm_agent_ingest  # noqa: E402,F401

@@ -350,8 +350,54 @@ def settings_eagleeye():
         }
     except Exception as e:
         context = {'ee_all_agents': [], 'ee_active_agents': [], 'ee_excluded_agents': [], 'ee_error': str(e)}
-    
+
+    # Work-Hours report access allowlist (admins always implicitly allowed).
+    try:
+        from utils import workhours_viewers_list
+        context['workhours_viewers'] = ', '.join(workhours_viewers_list())
+    except Exception:
+        context['workhours_viewers'] = ''
+
     return render_template('settings_eagleeye.html', **context)
+
+
+@bp.route('/settings/workhours-access', methods=['POST'])
+@login_required
+@admin_required
+def settings_workhours_access():
+    """Save the Work-Hours report access allowlist (CSV of usernames).
+
+    Admins are always implicitly allowed and need not be listed. Manager-scoping
+    (workhours_manager_map) is pure data entry and is not edited here."""
+    raw = request.form.get('workhours_viewers', '')
+    # Normalize: split on comma/whitespace, dedupe (case-insensitive), keep order.
+    seen = set()
+    cleaned = []
+    for tok in raw.replace('\n', ',').replace(' ', ',').split(','):
+        t = tok.strip()
+        if not t:
+            continue
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(t)
+    value = ','.join(cleaned)
+    try:
+        s = Setting.query.filter_by(key='workhours_viewers').first()
+        if not s:
+            s = Setting(key='workhours_viewers')
+            db.session.add(s)
+        s.value = value
+        s.updated_by = current_user.username
+        s.updated_at = datetime.utcnow()
+        _log_audit('setting', 0, 'workhours.allowlist_update', {'viewers': value})
+        db.session.commit()
+        flash('Work-Hours access list updated.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error saving Work-Hours access list: {e}', 'danger')
+    return redirect(url_for('settings.settings_eagleeye'))
 
 
 @bp.route('/settings/unifi', methods=['GET', 'POST'])

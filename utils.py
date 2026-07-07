@@ -128,6 +128,107 @@ def eagle_eyes_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# ── HR Work-Hours access model ────────────────────────────────────────────────
+# Compliance data (PC on-time / active time per employee). Access is gated by an
+# explicit allowlist Setting plus a manager->employees map, NOT by role, so HR can
+# grant a named person visibility without minting a new role. Admins always pass.
+WORKHOURS_VIEWERS_SETTING       = 'workhours_viewers'          # CSV allowlist (case-insensitive)
+WORKHOURS_MANAGER_MAP_SETTING   = 'workhours_manager_map'      # JSON {username: [employee_id,...]}
+WORKHOURS_VIEWERS_SEED          = 'cjwren,ethans,Hannah.Hermansen,bdm'
+
+
+def _setting_value(key, default=None):
+    """Read a Setting.value by key (no request context assumptions). Best-effort."""
+    try:
+        from models import Setting
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+    except Exception:
+        return default
+
+
+def workhours_viewers_list():
+    """Lowercased list of usernames on the work-hours allowlist (falls back to the seed)."""
+    raw = _setting_value(WORKHOURS_VIEWERS_SETTING)
+    if raw is None:
+        raw = WORKHOURS_VIEWERS_SEED
+    return [u.strip().lower() for u in raw.split(',') if u.strip()]
+
+
+def workhours_manager_map():
+    """Parse the manager->employee_ids map Setting. Returns {username_lower: [int,...]}.
+
+    Empty/absent/invalid => {} (no managers mapped). Adding a manager is pure data
+    entry into this Setting; no code change required."""
+    import json as _json
+    raw = _setting_value(WORKHOURS_MANAGER_MAP_SETTING)
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for uname, ids in data.items():
+            if not isinstance(ids, (list, tuple)):
+                continue
+            clean = []
+            for i in ids:
+                try:
+                    clean.append(int(i))
+                except (TypeError, ValueError):
+                    continue
+            out[str(uname).strip().lower()] = clean
+        return out
+    except Exception:
+        return {}
+
+
+def workhours_can_view(user=None):
+    """True if the given user (default current_user) may open the work-hours report."""
+    u = user or current_user
+    if not getattr(u, 'is_authenticated', False):
+        return False
+    if getattr(u, 'role', None) == 'admin':
+        return True
+    uname = (getattr(u, 'username', '') or '').lower()
+    if not uname:
+        return False
+    return uname in workhours_viewers_list() or uname in workhours_manager_map()
+
+
+def workhours_scope_employee_ids(user=None):
+    """Row-scoping for the report query.
+
+    Returns None  => see ALL employees (admins + allowlist users).
+    Returns [ids] => see ONLY these employee_ids (a user present ONLY in the manager map).
+    Callers must have already passed workhours_access_required, so a return of [] means
+    'mapped manager with no employees yet' (see nothing), which is intentional."""
+    u = user or current_user
+    if getattr(u, 'role', None) == 'admin':
+        return None
+    uname = (getattr(u, 'username', '') or '').lower()
+    if uname in workhours_viewers_list():
+        return None
+    return workhours_manager_map().get(uname, [])
+
+
+def workhours_access_required(f):
+    """Require work-hours visibility: admin OR allowlist member OR mapped manager."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            flash('Please log in.', 'warning')
+            return redirect(url_for('auth.login'))
+        if not workhours_can_view():
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify(error='Access denied'), 403
+            flash('Access denied. Work-hours report access is restricted.', 'danger')
+            return redirect(url_for('dashboard.index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def email_access_required(f):
     """Allow any authenticated user to access email security pages.
     Admins see all mail; everyone else sees only their own."""

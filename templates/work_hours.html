@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Work Hours — HR Report{% endblock %}
+
+{% block content %}
+<div class="py-3">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div>
+      <h5 class="mb-0 fw-bold"><i class="bi bi-clock-history me-1 text-primary"></i>Work Hours</h5>
+      <small class="text-muted">
+        PC on-time and logged-in / active time per employee, per day
+        {% if scoped %}<span class="badge text-bg-secondary ms-1">Scoped to your team</span>{% endif %}
+      </small>
+    </div>
+    <form method="get" class="d-flex align-items-end gap-2 flex-wrap">
+      <div>
+        <label class="form-label small text-muted mb-1" for="wh-from">From</label>
+        <input type="date" class="form-control form-control-sm" id="wh-from" name="from" value="{{ d_from }}">
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1" for="wh-to">To</label>
+        <input type="date" class="form-control form-control-sm" id="wh-to" name="to" value="{{ d_to }}">
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">
+        <i class="bi bi-funnel me-1"></i>Apply
+      </button>
+    </form>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-warning py-2 small">
+    <i class="bi bi-exclamation-triangle me-1"></i>Could not load work-hours data: {{ error }}
+  </div>
+  {% endif %}
+
+  <!-- Summary cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="card shadow-sm h-100">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-people me-1"></i>Employees</div>
+          <div class="fw-bold fs-3">{{ summary.employees }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card shadow-sm h-100">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-calendar3 me-1"></i>Day Records</div>
+          <div class="fw-bold fs-3">{{ summary.days }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card shadow-sm h-100">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-pc-display me-1"></i>Total PC On-Time</div>
+          <div class="fw-bold fs-3 text-info">{{ summary.on_hm }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card shadow-sm h-100">
+        <div class="card-body py-3">
+          <div class="small text-muted mb-1"><i class="bi bi-keyboard me-1"></i>Total Active Time</div>
+          <div class="fw-bold fs-3 text-primary">{{ summary.active_hm }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <div class="p-3 border-bottom d-flex align-items-center gap-3">
+        <i class="bi bi-search text-muted"></i>
+        <input type="search" id="wh-search" class="form-control form-control-sm"
+          placeholder="Filter by employee…" style="max-width:280px;" oninput="whFilter()">
+        <span class="ms-auto text-muted small">{{ d_from }} &rarr; {{ d_to }}</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="wh-table">
+          <thead>
+            <tr>
+              <th class="ps-3">Employee</th>
+              <th>Date</th>
+              <th class="text-end">PC On-Time</th>
+              <th class="text-end pe-3">Logged-in / Active</th>
+            </tr>
+          </thead>
+          <tbody id="wh-tbody">
+            {% for r in rows %}
+            <tr data-emp="{{ r.emp_name|lower }}">
+              <td class="ps-3">{{ r.emp_name }}</td>
+              <td class="text-muted">{{ r.date }}</td>
+              <td class="text-end"><span class="text-info">{{ r.on_hm }}</span></td>
+              <td class="text-end pe-3"><span class="text-primary">{{ r.active_hm }}</span></td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" class="text-center text-muted py-5">
+                <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+                No work-hours data for this range yet.
+                <div class="small mt-1">Devices report daily once the agent is reporting.</div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function whFilter() {
+  var q = (document.getElementById('wh-search').value || '').toLowerCase();
+  document.querySelectorAll('#wh-tbody tr[data-emp]').forEach(function (tr) {
+    tr.style.display = tr.getAttribute('data-emp').indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

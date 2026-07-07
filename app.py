@@ -123,6 +123,12 @@ except Exception:
 def inject_asset_version():
     return {'asset_version': _ASSET_VERSION}
 
+@app.context_processor
+def inject_workhours_access():
+    """Expose the work-hours visibility check to templates (nav gating)."""
+    from utils import workhours_can_view
+    return {'workhours_can_view': workhours_can_view}
+
 # ── Security headers ──────────────────────────────────────────────────────
 @app.after_request
 def add_security_headers(response):

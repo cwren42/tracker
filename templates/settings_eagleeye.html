@@ -65,6 +65,27 @@
             <button type="button" class="btn btn-primary" onclick="eeSaveExclusions()"><i class="bi bi-cloud-check me-1"></i>Save Changes</button>
         </div>
     </div>
+
+    <!-- Work-Hours report access -->
+    <div class="card shadow-sm mt-4">
+        <div class="card-header bg-primary text-white"><h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Work-Hours Report Access</h5></div>
+        <div class="card-body">
+            <p class="small text-muted mb-3">
+                Users allowed to open the <strong>Work Hours</strong> HR report (PC on-time / active time per employee).
+                Enter usernames separated by commas. <strong>Administrators always have access</strong> and need not be listed.
+                Manager-level scoping (limiting a viewer to only their team) is configured in the
+                <code>workhours_manager_map</code> setting.
+            </p>
+            <form method="POST" action="{{ url_for('settings.settings_workhours_access') }}">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold" for="workhours_viewers">Allowed usernames</label>
+                    <textarea class="form-control form-control-sm" id="workhours_viewers" name="workhours_viewers"
+                        rows="2" placeholder="cjwren, ethans, Hannah.Hermansen, bdm">{{ workhours_viewers }}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-cloud-check me-1"></i>Save Access List</button>
+            </form>
+        </div>
+    </div>
 </div>
 
 <script>

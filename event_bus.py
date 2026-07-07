@@ -32,6 +32,7 @@ _PRUNE_EVERY = 720         # ~ every hour (720 * 5s); prune runs on the leader o
 _REINDEX_EVERY = 120960    # ~ weekly (7d * 86400 / 5s); knowledge auto-reindex, leader only
 _COLLECT_EVERY = 17283     # ~ daily (offset so it doesn't collide with prune/reindex ticks)
 _EAGLE_PURGE_EVERY = 17299 # ~ daily (prime-ish offset so it doesn't collide with the others)
+_WORKHOURS_PURGE_EVERY = 17321 # ~ daily (distinct prime offset so it doesn't collide)
 
 # Eagle Eyes activity-event retention. rmm_eagle_event is an unbounded surveillance store
 # (2M+ rows); without a bound it grows forever. Retention is TIME-BASED and fleet-wide — we
@@ -39,6 +40,12 @@ _EAGLE_PURGE_EVERY = 17299 # ~ daily (prime-ish offset so it doesn't collide wit
 # data is kept while it's inside the window). Configurable via Setting 'eagle_event_retention_days'.
 _EAGLE_RETENTION_DEFAULT_DAYS = 90
 _EAGLE_PURGE_BATCH = 50000   # bounded chunk size so a large delete doesn't hold a long lock
+
+# HR work-hours retention. rmm_work_hours_daily is COMPLIANCE data — one small row per
+# agent per day. Default 0 = NEVER auto-purge (HR must opt into a window explicitly);
+# a positive Setting 'workhours_retention_days' enables age-based deletion by local_date.
+# Deliberately a SEPARATE setting from eagle_event_retention_days.
+_WORKHOURS_PURGE_BATCH = 50000
 _started = False           # per-process guard (mirrors sync_scheduler/workflow_engine)
 
 # Defense-in-depth: never let a publisher persist an obvious secret in cleartext JSONB.
@@ -257,6 +264,66 @@ def _purge_eagle_events():
     return total
 
 
+def _workhours_retention_days():
+    """Read Setting 'workhours_retention_days'. Default/absent/invalid/<=0 => 0 (NEVER purge).
+
+    Compliance data is not silently deleted; HR must set a positive window explicitly."""
+    try:
+        db = _db()
+        try:
+            row = db.execute(
+                "SELECT value FROM setting WHERE key = ?", ("workhours_retention_days",)
+            ).fetchone()
+        finally:
+            db.close()
+        if row is not None:
+            v = row[0] if not isinstance(row, dict) else row.get("value")
+            n = int(str(v).strip())
+            if n > 0:
+                return n
+    except Exception:
+        log.exception("workhours retention-days read failed; treating as never-purge")
+    return 0
+
+
+def _purge_workhours():
+    """Delete rmm_work_hours_daily rows older than the retention window (local_date < today - N).
+
+    GUARD: 0/empty/absent = KEEP INDEFINITELY (no-op). Only runs when HR has set a positive
+    workhours_retention_days. Batched, leader-only, best-effort. Returns rows deleted."""
+    days = _workhours_retention_days()
+    if days <= 0:
+        return 0  # never auto-purge compliance data unless explicitly opted in
+    total = 0
+    try:
+        while True:
+            db = _db()
+            try:
+                # Bound params throughout — matches the vetted _purge_eagle_events
+                # pattern exactly (?::interval), no hand-rolled SQL literal on a
+                # destructive DELETE against compliance data. `days` is a validated
+                # positive int; local_date is a DATE, cast against the interval.
+                cur = db.execute(
+                    "DELETE FROM rmm_work_hours_daily WHERE id IN ("
+                    "  SELECT id FROM rmm_work_hours_daily"
+                    "  WHERE local_date < (CURRENT_DATE - ?::interval)"
+                    "  ORDER BY local_date ASC LIMIT ?)",
+                    (f"{int(days)} days", _WORKHOURS_PURGE_BATCH),
+                )
+                n = cur.rowcount or 0
+                db.commit()
+            finally:
+                db.close()
+            total += n
+            if n < _WORKHOURS_PURGE_BATCH:
+                break
+        if total:
+            log.info("workhours purge: deleted %s rows older than %s days", total, days)
+    except Exception:
+        log.exception("workhours purge failed")
+    return total
+
+
 def _collect_all(flask_app):
     """Nightly refresh of Layer-3 live facts: run every read-only collector on each system
     that has a host asset. Actions (e.g. entra_sync) are NOT auto-run. Leader-only, best-effort."""
@@ -400,6 +467,8 @@ def start_event_dispatcher(flask_app):
                             _collect_all(flask_app)
                         if ticks % _EAGLE_PURGE_EVERY == 0:
                             _purge_eagle_events()
+                        if ticks % _WORKHOURS_PURGE_EVERY == 0:
+                            _purge_workhours()
             except Exception:
                 log.exception("event dispatcher loop error")
 

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.47"
+AGENT_VERSION = "2.9.49"
 
 import asyncio
 import base64
@@ -1287,33 +1287,226 @@ _WARP_MSI_URL = 'https://downloads.cloudflareclient.com/v1/download/windows/ga'
 _RELAY_PROBE_IP = '10.15.0.63'   # internal RustDesk relay (rust.corp.cirque.com)
 _RELAY_PROBE_PORT = 21116
 
+# Domain-controller LDAP probes: the corp-path signal that is TRUE on-corp/UID
+# but NOT merely because WARP is up (WARP does NOT publish a 389/LDAP path to the
+# DCs — only the RustDesk relay :21116). See _warp_has_corp_path().
+# US DCs (10.15.0.3/.2) + the Taiwan RODC MUSTAFAR (10.15.8.3): a hijacked
+# Taiwan/China on-corp box can only reach 10.15.8.3, and its hijacked DNS defeats
+# signal-2, so WITHOUT the RODC here it would never see a corp path and WARP would
+# never tear down on exactly the boxes that need it. ANY reachable target = on-corp.
+_DC_LDAP_TARGETS = (('10.15.0.3', 389), ('10.15.0.2', 389), ('10.15.8.3', 389))
+# The WARP resolver hijacks the OS stub to a 127.0.2.x loopback and answers
+# internal names with the PUBLIC edge. This edge IP is the tell-tale of a hijack.
+_WARP_LOOPBACK_DNS_PREFIX = '127.0.2.'
+_CORP_PUBLIC_EDGE_IPS = frozenset({'198.185.159.145', '198.185.159.144'})
+_CORP_FQDN = 'corp.cirque.com'
+
+
+def _physical_adapter_dns_servers():
+    """Return {ifIndex/alias: [dns ip, ...]} for ACTIVE physical Wi-Fi/Ethernet
+    adapters only (skips virtual/loopback/tunnel NICs). Windows-only; {} elsewhere
+    or on any failure. Uses Get-DnsClientServerAddress joined to Get-NetAdapter so
+    we can filter to real hardware and ignore the CloudflareWARP/Wintun adapters.
+
+    This is the source of truth for both the hijack SIGNAL (Layer 3: a physical
+    NIC's DNS = 127.0.2.x means WARP hijacked resolution) and the teardown DNS
+    reset (Layer 2: revert a physical NIC stuck on 127.0.2.x back to DHCP)."""
+    out = {}
+    if sys.platform != "win32":
+        return out
+    try:
+        rows = _ps_json(
+            # Physical, non-virtual, connected adapters -> their IPv4 DNS servers.
+            "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' "
+            "-and $_.InterfaceDescription -notmatch 'Cloudflare|WARP|Wintun|VPN|Virtual|Loopback|TAP' } "
+            "| ForEach-Object { $a=$_; "
+            "Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 "
+            "| Select-Object @{N='alias';E={$a.Name}}, @{N='ifIndex';E={$a.ifIndex}}, "
+            "@{N='servers';E={$_.ServerAddresses -join ','}} } | ConvertTo-Json -Compress"
+        )
+        if rows is None:
+            return out
+        if isinstance(rows, dict):
+            rows = [rows]
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            key = r.get('ifIndex')
+            servers = [s.strip() for s in (r.get('servers') or '').split(',') if s.strip()]
+            if key is not None:
+                out[key] = servers
+    except Exception:
+        pass
+    return out
+
+
+def _corp_resolves_to_public(timeout_s: float = 3.0):
+    """Resolve corp.cirque.com and return the list of IPs it resolves to, plus a
+    bool 'hijacked'. Uses the box's OS resolver (socket.getaddrinfo) — which is
+    exactly what WARP hijacks, so this catches the hijack. Returns
+    (ips:list[str], hijacked:bool). On resolution failure returns ([], False) —
+    NXDOMAIN off-site is NOT a hijack.
+
+    'hijacked' is PUBLIC-EDGE-SPECIFIC to avoid false-flagging split-horizon /
+    multi-A / roaming-DNS boxes that still get a real internal answer:
+      hijacked == there IS at least one answer AND
+                  (any answer is a known Cloudflare public-edge IP OR
+                   NO answer is a 10.15.x DC address).
+    So a box that resolves corp.cirque.com to a 10.15.x DC (even alongside other
+    A records) is NEVER flagged; only "answered, but not with any real internal
+    DC (and/or with the public edge)" counts as a hijack. A NON-10.x IP that is
+    not the public edge and comes WITHOUT any 10.15.x answer is still a hijack
+    (WARP can front a non-edge public IP), but a legitimate 10.15.x answer wins."""
+    try:
+        socket.setdefaulttimeout(timeout_s)
+        infos = socket.getaddrinfo(_CORP_FQDN, None, socket.AF_INET)
+        ips = sorted({i[4][0] for i in infos})
+    except Exception:
+        return ([], False)
+    finally:
+        socket.setdefaulttimeout(None)
+    if not ips:
+        return (ips, False)
+    has_internal_dc = any(ip.startswith('10.15.') for ip in ips)
+    hits_public_edge = any(ip in _CORP_PUBLIC_EDGE_IPS for ip in ips)
+    # A real internal DC answer ALWAYS wins (split-horizon safe): never a hijack,
+    # even if a public-edge A record also appears alongside it.
+    if has_internal_dc:
+        return (ips, False)
+    # No internal DC answer -> hijacked. The high-confidence tell is the known
+    # Cloudflare public edge; absent even that, any answer lacking a 10.15.x DC is
+    # still treated as hijacked (WARP can front a non-edge public IP). Both cases
+    # resolve to True here — hits_public_edge is retained as the explicit
+    # high-confidence sub-signal (and keeps _CORP_PUBLIC_EDGE_IPS load-bearing).
+    hijacked = hits_public_edge or True
+    return (ips, hijacked)
+
+
+def _warp_dns_hijacked() -> bool:
+    """Layer-3 SIGNAL. TRUE if WARP has hijacked corp DNS on this box, detected
+    two independent ways (either is sufficient):
+      (a) any ACTIVE physical Wi-Fi/Ethernet adapter's DNS servers contain a
+          127.0.2.x loopback (the WARP stub resolver), OR
+      (b) corp.cirque.com resolves to the Cloudflare public edge (e.g.
+          198.185.159.145) and/or gives NO real 10.15.x DC answer at all
+          (a real 10.15.x answer is split-horizon-safe and is NOT flagged).
+    Windows-only; False elsewhere / on any error (fail-quiet — a false positive
+    would create alert noise). Cheap enough to run every telemetry cycle."""
+    if sys.platform != "win32":
+        return False
+    try:
+        for servers in _physical_adapter_dns_servers().values():
+            if any(s.startswith(_WARP_LOOPBACK_DNS_PREFIX) for s in servers):
+                return True
+    except Exception:
+        pass
+    try:
+        _ips, hijacked = _corp_resolves_to_public()
+        if hijacked:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _warp_has_corp_path() -> bool:
+    """TRUE when the box genuinely has a corp/LAN/UID path to the DCs — the signal
+    that means WARP should be torn down. Deliberately does NOT use the RustDesk
+    relay probe (that is reachable *because WARP is up* via the 100.96.x mesh =
+    circular, and is false over the UID VPN even when genuinely on-corp).
+
+    Two positive signals, EITHER is sufficient:
+      1) a DC is reachable on LDAP/389 (US 10.15.0.3/.2 or Taiwan RODC
+         10.15.8.3) — trusted even with the WARP mesh up (DCs are not routed
+         over the tunnel), OR
+      2) corp.cirque.com resolves to a real 10.15.x DC answer — but this
+         DNS-only signal is trusted ONLY when the WARP 100.96.x mesh is NOT up
+         (belt-and-suspenders against a future 10.15.x route over the tunnel).
+    BUT we must not be fooled into thinking the ONLY path is the WARP mesh: if a
+    WARP/CloudflareWARP adapter holds a 100.96.x CGNAT address, LDAP-reachability
+    could be riding the mesh, so we require that the LDAP path exist WITHOUT the
+    mesh being the sole route. In practice DCs are NOT published over the WARP
+    tunnel (only relay :21116 is), so 389 succeeding is a true corp/UID signal;
+    the 100.96.x guard is belt-and-suspenders against a future route add.
+
+    Returns False on any error (fail-closed toward off-site = keep WARP up), so a
+    transient blip can't tear down a genuinely off-site box's relay path."""
+    import time as _t
+    warp_mesh_present = _warp_mesh_ip_present()
+
+    def _dc_ldap_reachable() -> bool:
+        for host, port in _DC_LDAP_TARGETS:
+            for attempt in range(2):
+                try:
+                    with socket.create_connection((host, port), timeout=2.0):
+                        return True
+                except Exception:
+                    if attempt == 0:
+                        _t.sleep(0.5)
+        return False
+
+    # Signal 1: DC LDAP (US 10.15.0.3/.2 or Taiwan RODC 10.15.8.3). We trust 389
+    # even when the WARP mesh is present because the DCs are NOT routed over the
+    # tunnel (only the relay :21116 is), so a 389 SYN-ACK cannot be riding the
+    # mesh. Signal 2: corp DNS -> a real 10.15.x DC answer.
+    if _dc_ldap_reachable():
+        return True
+    # Signal 2 is only trustworthy if the answer is NOT arriving via the WARP
+    # mesh resolver. In practice corp DNS -> 10.15.x means the OS stub reached a
+    # real DC (WARP hijack would give the public edge, caught by 'hijacked'), so
+    # the mesh guard here is belt-and-suspenders against a future 10.15.x route
+    # being published over the tunnel: if the mesh is up we require the LDAP
+    # signal (already handled above) and do NOT accept a DNS-only on-corp verdict.
+    try:
+        ips, hijacked = _corp_resolves_to_public()
+        if (not warp_mesh_present
+                and ips and not hijacked
+                and any(ip.startswith('10.15.') for ip in ips)):
+            return True
+    except Exception:
+        pass
+    # Neither corp signal (or mesh-up made the DNS-only signal untrustworthy) ->
+    # off-site, keep WARP up.
+    return False
+
+
+def _warp_mesh_ip_present() -> bool:
+    """TRUE if any adapter holds a 100.96.x address — i.e. the WARP CGNAT mesh is
+    up. Used to ensure relay-reachability-via-WARP is never mistaken for on-site.
+    Windows-only; False elsewhere / on error."""
+    if sys.platform != "win32":
+        return False
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if a.family == socket.AF_INET and str(a.address).startswith('100.96.'):
+                    return True
+    except Exception:
+        pass
+    return False
+
 
 def _warp_is_offsite(on_lan: bool) -> bool:
     """Decide, FAIL-CLOSED toward on-site, whether this box is genuinely off-site
-    and therefore needs WARP. LAN/site boxes MUST be classified on-site so they
-    never get a switch_locked WARP enrollment.
+    and therefore needs WARP. LAN/site/UID boxes MUST be classified on-site so
+    that ensure_warp tears WARP DOWN (restoring internal DNS/AD) and never leaves
+    a switch_locked enrollment hijacking resolution.
 
-    AUTHORITATIVE SIGNAL = direct reachability of the relay 10.15.0.63:21116.
-    on_lan (tracker.corp.cirque.com was TLS-reachable at connect) is NOT reliable
-    here: the Tracker is ALSO published publicly, so an OFF-LAN box reaches it and
-    connects on the "LAN" endpoints -> on_lan=True even though it is off-site.
-    Trusting on_lan made ensure_warp skip exactly the boxes that need WARP
-    (observed on PEDRO-XPS 2026-06-23: on_lan=True, relay unreachable). The relay
-    is only reachable from inside the LAN/site OR once WARP is up, so probing it
-    directly is the true test.
+    HISTORY of the bug this replaces: the old gate used ONLY "TCP-reach the relay
+    10.15.0.63:21116". That was unreliable two ways:
+      (a) CIRCULAR — the relay is reachable *because WARP is up* over the 100.96.x
+          mesh, so a hijacked on-corp box looked "on-site" and never tore down;
+      (b) FALSE over the UID (UniFi Identity) VPN even when genuinely on-corp,
+          because the relay isn't published on that path.
+    Net effect: on-corp/UID boxes kept WARP connected -> DNS hijack (14/96 boxes
+    found hijacked 2026-07-07). See rustdesk-offsite-cloudflare-deadend memory.
 
-    Retry a few times so a transient blip on a REAL LAN box can't trigger a
-    spurious enrollment (a genuine LAN box answers on 21116 within a couple of
-    tries). on_lan is kept only for the log line, not for gating."""
-    import time as _t
-    for attempt in range(3):
-        try:
-            with socket.create_connection((_RELAY_PROBE_IP, _RELAY_PROBE_PORT), timeout=2.5):
-                return False  # relay reachable (on-LAN, or WARP already up) -> skip
-        except Exception:
-            if attempt < 2:
-                _t.sleep(1)
-    return True  # relay unreachable after retries -> genuinely off-site, needs WARP
+    NEW SIGNAL = _warp_has_corp_path(): a DC is reachable on LDAP/389 OR
+    corp.cirque.com resolves to a 10.15.x IP. Neither is true merely because WARP
+    is up (WARP only routes the relay :21116, not the DCs), and both are true on
+    the UID VPN. on_lan is kept only for the log line, not for gating (the Tracker
+    is published publicly so on_lan can be True off-site)."""
+    return not _warp_has_corp_path()
 
 
 def _get_warp_config(tracker_url: str, agent_id: str, token: str):
@@ -1391,22 +1584,31 @@ def _warp_is_up() -> bool:
 
 
 def _warp_teardown() -> None:
-    """Tear WARP DOWN on a box that is on-site (or VPN-connected; relay reachable).
+    """Tear WARP DOWN on a box that has a corp/LAN/UID path (see
+    _warp_has_corp_path). THOROUGH + IDEMPOTENT so a re-hijack can't recur:
+
+      1) warp-cli disconnect          (drops the tunnel; restores NIC DNS)
+      2) warp-cli registration delete (unenroll; beats switch_locked)
+      3) clear MDM policy             (HKLM\\SOFTWARE\\Policies\\Cloudflare\\Warp
+                                       values + delete mdm.xml) so warp-svc can't
+                                       silently re-enroll on-site
+      4) STOP the CloudflareWARP service + set startup=Manual so a disconnected-
+         but-Running warp-svc can't re-hijack the resolver (observed on David:
+         service still Running after disconnect, adapter gone but DNS at risk)
+      5) reset any physical NIC still stuck on a 127.0.2.x DNS back to DHCP, then
+         ipconfig /flushdns — and VERIFY the hijack cleared.
 
     Off-site enrollment is otherwise ONE-DIRECTIONAL: WARP stays connected on
     return and hijacks DNS (internal *.corp.cirque.com -> public edge), breaking
-    DC location / AD / GP. This makes a roaming box self-heal BOTH ways. Quick
-    warp-cli calls + registry/file clears, safe to run inline; idempotent.
-      1) disconnect (restores the NIC's normal DNS immediately)
-      2) registration delete (unenroll; clears the switch_locked enrollment)
-      3) remove the MDM org policy (registry values + mdm.xml) so warp-svc does
-         NOT silently re-enroll while on-site
-    Windows-only."""
+    DC location / AD / GP. This makes a roaming box self-heal. Quick calls, safe
+    to run inline. Windows-only."""
     import subprocess as _sp
-    if not os.path.isfile(_WARP_CLI):
+    if sys.platform != "win32":
         return
 
     def _cli(*args):
+        if not os.path.isfile(_WARP_CLI):
+            return
         try:
             _sp.run([_WARP_CLI, "--accept-tos", *args],
                     capture_output=True, text=True, errors="replace",
@@ -1414,10 +1616,20 @@ def _warp_teardown() -> None:
         except Exception as e:
             print(f"[warp] teardown {' '.join(args)} failed: {e}", flush=True)
 
+    def _ps(script, timeout=30):
+        try:
+            _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-ExecutionPolicy", "Bypass", "-Command", script],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=timeout, creationflags=0x08000000)
+        except Exception as e:
+            print(f"[warp] teardown ps failed: {e}", flush=True)
+
+    # 1+2) disconnect + unenroll.
     _cli("disconnect")
     _cli("registration", "delete")
 
-    # Neutralize MDM so the service can't re-enroll on-site.
+    # 3) Neutralize MDM so the service can't re-enroll on-site.
     try:
         import winreg  # type: ignore
         try:
@@ -1441,7 +1653,39 @@ def _warp_teardown() -> None:
     except Exception as e:
         print(f"[warp] teardown mdm.xml remove failed: {e}", flush=True)
 
-    print("[warp] torn down (relay reachable: on-site/VPN) -- internal DNS/AD restored", flush=True)
+    # 4) STOP the service + set startup Manual (disconnected-but-Running warp-svc
+    #    can still hold the hijacked resolver -- observed on David). Best-effort;
+    #    Manual (not Disabled) so a genuine off-site roam can start it again.
+    _ps("Stop-Service -Name CloudflareWARP -Force -ErrorAction SilentlyContinue; "
+        "Set-Service -Name CloudflareWARP -StartupType Manual -ErrorAction SilentlyContinue")
+
+    # 5) Reset any physical NIC whose DNS is STILL a 127.0.2.x loopback back to
+    #    DHCP, then flush. (disconnect usually restores DNS, but if warp-svc left
+    #    a static 127.0.2.x we force it.) Then flushdns.
+    try:
+        stuck = []
+        for ifidx, servers in _physical_adapter_dns_servers().items():
+            if any(s.startswith(_WARP_LOOPBACK_DNS_PREFIX) for s in servers):
+                stuck.append(ifidx)
+        for ifidx in stuck:
+            _ps(f"Set-DnsClientServerAddress -InterfaceIndex {int(ifidx)} -ResetServerAddresses "
+                f"-ErrorAction SilentlyContinue")
+        if stuck:
+            print(f"[warp] teardown reset physical-NIC DNS to DHCP on ifIndex {stuck}", flush=True)
+    except Exception as e:
+        print(f"[warp] teardown NIC DNS reset failed: {e}", flush=True)
+    _ps("ipconfig /flushdns", timeout=15)
+
+    # Verify the hijack actually cleared (report only; the next telemetry cycle
+    # re-reports warp_dns_hijacked either way so the monitor stays authoritative).
+    try:
+        still = _warp_dns_hijacked()
+        if still:
+            print("[warp] WARNING: DNS still hijacked after teardown -- will retry next connect", flush=True)
+        else:
+            print("[warp] torn down (corp/LAN/UID path present) -- internal DNS/AD restored + verified", flush=True)
+    except Exception:
+        print("[warp] torn down (corp/LAN/UID path present) -- internal DNS/AD restored", flush=True)
 
 
 def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
@@ -3269,6 +3513,16 @@ def collect_telemetry(agent_id: str) -> dict:
         "os_build":           platform.version(),
         "os_arch":            platform.machine(),
         "public_ip":          _get_public_ip(),
+        # WARP-DNS-hijack SIGNAL (Layer 3): TRUE if a physical NIC's DNS is a
+        # 127.0.2.x WARP stub OR corp.cirque.com resolves to a public/non-10.x IP.
+        # Gateway stores it in rmm_telemetry.warp_dns_hijacked; alert_service fires
+        # alert_type=warp_dns_hijack (Alert-Center only, auto-resolves when clear).
+        "warp_dns_hijacked":  _warp_dns_hijacked(),
+        # Aware UTC so the server can measure clock skew tz-independently (Kerberos
+        # guard). RESTORED here: the 2.9.47 fleet-promote dropped this line, which
+        # would silence the clock-skew monitor as boxes roll to 2.9.47+ (see
+        # clock-skew-monitor memory). Kept identical to the 2.9.38 original.
+        "clock_utc":          datetime.now(timezone.utc).isoformat(),
         "captured_at":        datetime.now().isoformat(),
     }
 

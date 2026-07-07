@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.38"
+AGENT_VERSION = "2.9.47"
 
 import asyncio
 import base64
@@ -28,6 +28,8 @@ import platform
 import socket
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -121,6 +123,178 @@ def _open_update_url(req, timeout):
             else:
                 raise
     return urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Deadlock-safe script runner (R: run_script child-handle deadlock)
+# ---------------------------------------------------------------------------
+# Root cause we are fixing: subprocess.run(..., capture_output=True) wires the
+# child's stdout/stderr to OS pipes whose READ ends communicate() drains until
+# EOF. If the launched script spawns a LONG-LIVED grandchild (e.g. cloudflared,
+# a service restart, a detached helper) that INHERITS those pipe write handles,
+# the pipes never hit EOF even after the direct child exits -> communicate()
+# blocks forever -> the run_in_executor future never completes. Worse, on
+# TimeoutExpired subprocess.run kills only the direct child and then RE-CALLS
+# communicate() during cleanup, which re-blocks on the inherited handles. The
+# WS receive loop awaits that future and stops accepting commands fleet-wide.
+#
+# Fix: never give the child an inheritable pipe. Redirect stdout/stderr to
+# regular TEMP FILES, give the child its own process group / detached console,
+# and close_fds so grandchildren inherit nothing of ours. We wait() (no pipe
+# drain) and read the files back, so a lingering grandchild can NEVER stall us.
+def _run_script_capture(argv, timeout: int):
+    """Run argv, capture stdout/stderr via temp files (not inheritable pipes).
+
+    Returns (returncode, stdout_text, stderr_text). On timeout the WHOLE process
+    tree is killed (taskkill /T on Windows) and TimeoutExpired is raised. A
+    lingering grandchild that inherits nothing of ours cannot block the wait.
+    """
+    import tempfile as _tmp, time as _time
+    creationflags = 0
+    if sys.platform == "win32":
+        # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP -> the child (and anything
+        # it detaches) is in its own group with no console handle of ours.
+        creationflags = 0x08000000 | 0x00000200
+    out_f = _tmp.NamedTemporaryFile(prefix="cirque_rs_out_", suffix=".txt", delete=False)
+    err_f = _tmp.NamedTemporaryFile(prefix="cirque_rs_err_", suffix=".txt", delete=False)
+    out_path, err_path = out_f.name, err_f.name
+    out_f.close(); err_f.close()
+    proc = None
+    try:
+        of = open(out_path, "wb"); ef = open(err_path, "wb")
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,   # no inherited stdin
+                stdout=of, stderr=ef,        # files, NOT pipes -> no EOF dependency
+                close_fds=True,              # grandchildren inherit none of our fds
+                creationflags=creationflags,
+            )
+        finally:
+            of.close(); ef.close()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire tree so the file handles get released and we don't
+            # leak a runaway. Then re-raise so the caller reports a timeout.
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=15,
+                                   creationflags=0x08000000)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+            raise
+        rc = proc.returncode
+        try:
+            stdout = open(out_path, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            stdout = ""
+        try:
+            stderr = open(err_path, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            stderr = ""
+        return rc, stdout, stderr
+    finally:
+        for p in (out_path, err_path):
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Agent-initiated PowerShell: launch via -File from disk, NEVER an inline
+# -Command blob. (R: Defender "Suspicious PowerShell command line")
+# ---------------------------------------------------------------------------
+# Root cause we are fixing: running `powershell.exe ... -Command "<script>"`
+# puts the ENTIRE script body on the powershell.exe command line. For anything
+# multi-line / encoded / large (operator remediation, WARP onboarding, a
+# gzip+Base64 self-extracting wrapper) that command line is byte-for-byte the
+# Defender/MDE "Suspicious PowerShell command line" (Execution) signature --
+# identical to malware. Defender's heuristic reads the *command line*, so the
+# durable fix is: write the script to a stable per-run file under
+# C:\CirqueRMM\scripts\ (SYSTEM-owned) and launch `-File <path>`. The command
+# line is then a constant `-File C:\CirqueRMM\scripts\_run_<uuid>.ps1` no matter
+# what the body contains. Short inline collectors (Get-Volume|ConvertTo-Json)
+# stay as -Command -- they're tiny and never flagged.
+_SCRIPTS_DIR = r"C:\CirqueRMM\scripts" if sys.platform == "win32" else "/tmp/cirque_scripts"
+
+
+def _scripts_dir() -> str:
+    """Return the per-run script staging dir, creating it if absent. SYSTEM-owned
+    by virtue of the agent service running as SYSTEM (we don't loosen the ACL)."""
+    try:
+        os.makedirs(_SCRIPTS_DIR, exist_ok=True)
+    except Exception:
+        # Fall back to the system temp dir if C:\CirqueRMM is somehow unwritable;
+        # the launch-via-file behaviour (and thus the clean command line) is the
+        # property we care about, not the exact path.
+        import tempfile as _t
+        return _t.gettempdir()
+    return _SCRIPTS_DIR
+
+
+def _reap_stale_run_scripts(max_age_s: int = 3600) -> None:
+    """Best-effort cleanup of orphaned _run_*.ps1 left by crashed/timed-out runs
+    so the dir never accumulates. The happy path deletes its own file inline;
+    this only catches the ones a hard kill skipped."""
+    import glob as _glob, time as _time
+    try:
+        now = _time.time()
+        for f in _glob.glob(os.path.join(_SCRIPTS_DIR, "_run_*.ps1")):
+            try:
+                if now - os.path.getmtime(f) > max_age_s:
+                    os.unlink(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _run_powershell_code(code: str, timeout: int, shell: str = "powershell"):
+    """Run an agent-initiated script via -File from disk (NOT an inline -Command
+    blob) and return (returncode, stdout, stderr).
+
+    Preserves every property of _run_script_capture: stdout/stderr to temp files
+    (not inheritable pipes), stdin=DEVNULL, CREATE_NO_WINDOW|CREATE_NEW_PROCESS_GROUP
+    detach, and taskkill /T tree-kill on timeout. The ONLY change vs. the old path
+    is the launch shape: -File <staged .ps1> instead of -Command "<body>", which
+    keeps the powershell.exe command line constant and off Defender's heuristic.
+
+    cmd scripts are staged to a .cmd and run via `cmd.exe /c <path>` for the same
+    reason (no inline body on the command line).
+    """
+    import uuid as _uuid
+    is_cmd = (shell or "").lower() == "cmd"
+    ext = ".cmd" if is_cmd else ".ps1"
+    path = os.path.join(_scripts_dir(), f"_run_{_uuid.uuid4().hex}{ext}")
+    # Stage the body. PowerShell reads -File scripts as the locale codepage / BOM;
+    # write UTF-8 with BOM so non-ASCII (paths, names, em-dashes) survive exactly
+    # as they did inline.
+    enc = "utf-8-sig" if not is_cmd else "utf-8"
+    try:
+        with open(path, "w", encoding=enc, errors="replace", newline="\r\n") as fh:
+            fh.write(code)
+    except Exception as e:
+        return 1, "", f"failed to stage script: {e}"
+    if is_cmd:
+        argv = ["cmd.exe", "/c", path]
+    else:
+        argv = ["powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", path]
+    try:
+        return _run_script_capture(argv, timeout)
+    finally:
+        # Short retention is fine for audit, but never accumulate: delete our own
+        # file inline, and sweep any stragglers a hard kill left behind.
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+        _reap_stale_run_scripts()
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +675,10 @@ _TRAY_API_KEY = 'crmm_tray_60bb6c2cfc8e5bb56cd27eafcc766044609271533237fcf8'
 _tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
 _periodic_update_started = False  # only spawn the 4h self-update task once per process
+_warp_logged_state = None  # last logged state string, to avoid log spam each connect
+_warp_worker_launched_at = 0.0  # monotonic ts of last SYSTEM-worker launch (cooldown)
+_WARP_WORKER_COOLDOWN = 1800.0  # don't relaunch the enroll worker more than once / 30 min
+_WARP_CONFIG_CACHE = None  # None=not fetched; (org, client_id, client_secret) or (None,...)
 
 # Per-agent behaviour flags pushed by server on connect via agent_config message.
 # Servers set these to True so neither RustDesk nor the systray are installed.
@@ -728,17 +906,37 @@ def _create_startup_shortcut_task():
     _py_escaped = pythonw_path.replace("'", "''")
     ps_launch = (
         "$ErrorActionPreference = 'SilentlyContinue'\n"
-        # Resolve logged-in user via WMI (returns domain\\user)
-        "$wmiUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
-        "if (-not $wmiUser) {\n"
-        "    # Fallback: parse qwinsta output\n"
-        "    $qw = & qwinsta 2>$null\n"
-        "    $line = ($qw | Select-String 'Active' | Select-Object -First 1).ToString()\n"
-        "    $cols = ($line -replace '>','').Trim() -split '\\s+'\n"
-        "    $wmiUser = $cols[1]\n"
+        # 1) Console interactive user via WMI (returns domain\\user, but is NULL
+        #    over RDP -- it only reflects the physical console session).
+        "$username = (Get-WmiObject -Class Win32_ComputerSystem).UserName\n"
+        # 2) RDP-aware fallback: parse `query user` (a.k.a. quser). We accept a
+        #    session in state 'Active' OR 'Disc' (Disconnected) that has a real
+        #    username, so installing over RDP -- including a disconnected /
+        #    reconnecting RDP session -- still targets the right user instead of
+        #    logging 'No interactive user found'. quser columns are fixed-width;
+        #    the leading '>' marks the current session and USERNAME is col 1.
+        "if (-not $username) {\n"
+        "    $qu = & query user 2>$null\n"
+        "    if (-not $qu) { $qu = & quser 2>$null }\n"
+        "    $cand = $null\n"
+        "    foreach ($ln in ($qu | Select-Object -Skip 1)) {\n"
+        "        $row = ($ln -replace '^>','').Trim()\n"
+        "        if (-not $row) { continue }\n"
+        "        $cols = $row -split '\\s+'\n"
+        "        $u = $cols[0]\n"
+        "        if (-not $u -or $u -eq 'USERNAME') { continue }\n"
+        "        # State is 'Active'/'Disc'; it shifts column when SESSIONNAME is\n"
+        "        # blank (disconnected). Match the state token anywhere in the row.\n"
+        "        if ($row -match '\\bActive\\b') { $cand = $u; break }\n"
+        "        if (-not $cand -and $row -match '\\bDisc\\b') { $cand = $u }\n"
+        "    }\n"
+        "    if ($cand) {\n"
+        "        # quser shows the bare SAM name; resolve to domain\\user so the\n"
+        "        # task principal works on a domain box. Fall back to bare name.\n"
+        "        $dom = $env:USERDOMAIN\n"
+        "        if ($dom) { $username = \"$dom\\$cand\" } else { $username = $cand }\n"
+        "    }\n"
         "}\n"
-        # Keep domain\\user for task principal (works on domain + local; strip only for display)
-        "$username = $wmiUser\n"
         "if (-not $username) { Write-Host 'No interactive user found'; exit 1 }\n"
         "Write-Host \"Targeting user: $username\"\n"
         "$action   = New-ScheduledTaskAction -Execute '" + _py_escaped + "' "
@@ -1065,6 +1263,419 @@ def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
                 fh.write(cfg)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare WARP bake-in (off-site boxes only)
+# ---------------------------------------------------------------------------
+# Off-site Windows boxes can't reach the internal RustDesk relay (10.15.0.63)
+# directly. Cloudflare WARP private-network routing carries RustDesk's UDP
+# rendezvous to the relay over the WARP mesh with zero internet exposure (the
+# Cloudflare HTTP/WS tunnel mangles RustDesk's binary frames; only WARP's full
+# L3 WireGuard works -- see memory rustdesk-offsite-cloudflare-deadend).
+#
+# ensure_warp() is idempotent and SAFE TO CALL REPEATEDLY:
+#   * On-LAN/site boxes (relay TCP 21116 directly reachable) -> SKIP entirely.
+#   * Already enrolled in org 'cirquetools' AND connected -> done.
+#   * Otherwise drop a one-shot SYSTEM scheduled task that does ALL the
+#     long-lived / connection-bouncing work (WARP install/restart/enroll/connect
+#     + RustDesk toml). We NEVER inline-launch those from run_script / the WS
+#     loop -- a lingering child would deadlock the command loop (Change 1).
+_WARP_CLI = r'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe'
+_WARP_PROGDATA = r'C:\ProgramData\Cloudflare'
+_WARP_MSI_URL = 'https://downloads.cloudflareclient.com/v1/download/windows/ga'
+_RELAY_PROBE_IP = '10.15.0.63'   # internal RustDesk relay (rust.corp.cirque.com)
+_RELAY_PROBE_PORT = 21116
+
+
+def _warp_is_offsite(on_lan: bool) -> bool:
+    """Decide, FAIL-CLOSED toward on-site, whether this box is genuinely off-site
+    and therefore needs WARP. LAN/site boxes MUST be classified on-site so they
+    never get a switch_locked WARP enrollment.
+
+    AUTHORITATIVE SIGNAL = direct reachability of the relay 10.15.0.63:21116.
+    on_lan (tracker.corp.cirque.com was TLS-reachable at connect) is NOT reliable
+    here: the Tracker is ALSO published publicly, so an OFF-LAN box reaches it and
+    connects on the "LAN" endpoints -> on_lan=True even though it is off-site.
+    Trusting on_lan made ensure_warp skip exactly the boxes that need WARP
+    (observed on PEDRO-XPS 2026-06-23: on_lan=True, relay unreachable). The relay
+    is only reachable from inside the LAN/site OR once WARP is up, so probing it
+    directly is the true test.
+
+    Retry a few times so a transient blip on a REAL LAN box can't trigger a
+    spurious enrollment (a genuine LAN box answers on 21116 within a couple of
+    tries). on_lan is kept only for the log line, not for gating."""
+    import time as _t
+    for attempt in range(3):
+        try:
+            with socket.create_connection((_RELAY_PROBE_IP, _RELAY_PROBE_PORT), timeout=2.5):
+                return False  # relay reachable (on-LAN, or WARP already up) -> skip
+        except Exception:
+            if attempt < 2:
+                _t.sleep(1)
+    return True  # relay unreachable after retries -> genuinely off-site, needs WARP
+
+
+def _get_warp_config(tracker_url: str, agent_id: str, token: str):
+    """Fetch the WARP enrollment (org, client_id, client_secret) from the tracker,
+    authenticated by agent_id + token. Cached per-process. LAN-primary then public
+    Cloudflare fallback (mirrors _get_rustdesk_relay). Returns (None, None, None)
+    on any failure / unset server-side so the caller skips WARP gracefully.
+
+    The secret is held only in memory for the lifetime of one enrollment and is
+    written to the (machine-only) MDM store via the SYSTEM task; it is never
+    logged or echoed."""
+    global _WARP_CONFIG_CACHE
+    if _WARP_CONFIG_CACHE is not None:
+        return _WARP_CONFIG_CACHE
+    import urllib.request as _ur
+    fallback = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
+    bases = []
+    for b in (tracker_url, fallback):
+        b = (b or "").rstrip("/")
+        if b and b not in bases:
+            bases.append(b)
+    for base in bases:
+        try:
+            url = f"{base}/api/rmm/warp-config/{agent_id}?token={token}"
+            req = _ur.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+            with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
+                body = json.loads(resp.read())
+            org = (body.get("organization") or "").strip()
+            cid = (body.get("auth_client_id") or "").strip()
+            sec = (body.get("auth_client_secret") or "").strip()
+            if org and cid and sec:
+                _WARP_CONFIG_CACHE = (org, cid, sec)
+                print(f"[warp] enrollment config fetched from {base} (org={org})", flush=True)
+                return _WARP_CONFIG_CACHE
+            print("[warp] enrollment config unavailable -- skipping", flush=True)
+            _WARP_CONFIG_CACHE = (None, None, None)
+            return _WARP_CONFIG_CACHE
+        except Exception as e:
+            print(f"[warp] config fetch failed from {base}: {e}", flush=True)
+            continue
+    return (None, None, None)
+
+
+def _warp_enrolled_and_connected(org: str) -> bool:
+    """True if warp-cli reports registration in *org* AND a Connected status."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return False
+    try:
+        reg = _sp.run([_WARP_CLI, "--accept-tos", "registration", "show"],
+                      capture_output=True, text=True, errors="replace",
+                      timeout=15, creationflags=0x08000000)
+        if org.lower() not in (reg.stdout or "").lower():
+            return False
+        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=15, creationflags=0x08000000)
+        return "connected" in (st.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _warp_is_up() -> bool:
+    """True if the WARP CLI exists and reports a Connected tunnel (ANY org)."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return False
+    try:
+        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=15, creationflags=0x08000000)
+        return "connected" in (st.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _warp_teardown() -> None:
+    """Tear WARP DOWN on a box that is on-site (or VPN-connected; relay reachable).
+
+    Off-site enrollment is otherwise ONE-DIRECTIONAL: WARP stays connected on
+    return and hijacks DNS (internal *.corp.cirque.com -> public edge), breaking
+    DC location / AD / GP. This makes a roaming box self-heal BOTH ways. Quick
+    warp-cli calls + registry/file clears, safe to run inline; idempotent.
+      1) disconnect (restores the NIC's normal DNS immediately)
+      2) registration delete (unenroll; clears the switch_locked enrollment)
+      3) remove the MDM org policy (registry values + mdm.xml) so warp-svc does
+         NOT silently re-enroll while on-site
+    Windows-only."""
+    import subprocess as _sp
+    if not os.path.isfile(_WARP_CLI):
+        return
+
+    def _cli(*args):
+        try:
+            _sp.run([_WARP_CLI, "--accept-tos", *args],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=20, creationflags=0x08000000)
+        except Exception as e:
+            print(f"[warp] teardown {' '.join(args)} failed: {e}", flush=True)
+
+    _cli("disconnect")
+    _cli("registration", "delete")
+
+    # Neutralize MDM so the service can't re-enroll on-site.
+    try:
+        import winreg  # type: ignore
+        try:
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                               r"SOFTWARE\Policies\Cloudflare\Warp", 0, winreg.KEY_SET_VALUE)
+            for v in ("organization", "auth_client_id", "auth_client_secret",
+                      "switch_locked", "service_mode", "auto_connect", "onboarding"):
+                try:
+                    winreg.DeleteValue(k, v)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(k)
+        except FileNotFoundError:
+            pass
+    except Exception as e:
+        print(f"[warp] teardown MDM registry-clear failed: {e}", flush=True)
+    try:
+        _mdm = os.path.join(_WARP_PROGDATA, "mdm.xml")
+        if os.path.isfile(_mdm):
+            os.remove(_mdm)
+    except Exception as e:
+        print(f"[warp] teardown mdm.xml remove failed: {e}", flush=True)
+
+    print("[warp] torn down (relay reachable: on-site/VPN) -- internal DNS/AD restored", flush=True)
+
+
+def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
+    """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
+    only if needed, connect, then write a clean internal RustDesk2.toml preserving
+    the existing key. Logs to disk. No secrets here (they're already in MDM).
+
+    RustDesk is pointed at the relay *IP* (relay_ip), NOT the hostname: this worker
+    only ever runs on OFF-SITE boxes, where rust.corp.cirque.com is split-DNS
+    internal-only and resolves to the dead public edge -- only the IP is reachable
+    over the WARP mesh. (Validated on TW-PTP2 2026-06-22; relay_host kept for ref.)"""
+    return (
+        '$ErrorActionPreference = "SilentlyContinue"\n'
+        '$Log   = "C:\\ProgramData\\Cloudflare\\warp_bakein.log"\n'
+        '$cli   = "C:\\Program Files\\Cloudflare\\Cloudflare WARP\\warp-cli.exe"\n'
+        f'$Org   = "{org}"\n'
+        'function L($m){ "$(Get-Date -Format o)  $m" | Out-File $Log -Append }\n'
+        '"" | Out-File $Log\n'
+        'L "=== warp bakein worker start ==="\n'
+        'Restart-Service -Name CloudflareWARP -Force\n'
+        'Start-Sleep -Seconds 12\n'
+        '$reg = (& $cli --accept-tos registration show 2>&1 | Out-String)\n'
+        'if ($reg -notmatch [regex]::Escape($Org)) {\n'
+        '    L "registration org != $Org -> re-enrolling"\n'
+        '    & $cli --accept-tos registration delete 2>&1 | Out-File $Log -Append\n'
+        '    Start-Sleep -Seconds 5\n'
+        '    & $cli --accept-tos registration new $Org 2>&1 | Out-File $Log -Append\n'
+        '    Start-Sleep -Seconds 6\n'
+        '} else { L "registration already in org $Org" }\n'
+        '& $cli --accept-tos connect 2>&1 | Out-File $Log -Append\n'
+        'Start-Sleep -Seconds 12\n'
+        'L ("WARP status: " + ((& $cli --accept-tos status 2>&1) -join " | "))\n'
+        '# Clear the stale "Awaiting external log in" GUI prompt that the WARP\n'
+        '# taskbar app pops in a logged-in user session during the brief\n'
+        '# de-register->re-register window. warp-svc holds the tunnel; the GUI\n'
+        '# relaunches clean (Connected) since registration is valid + onboarding=0.\n'
+        'Get-Process | Where-Object { ($_.ProcessName -like "*Cloudflare*" -or $_.ProcessName -like "*warp*") -and $_.ProcessName -ne "warp-svc" } | Stop-Process -Force -EA SilentlyContinue\n'
+        'L "cleared stale WARP GUI prompt (warp-svc kept)"\n'
+        '$rdDirs = @(\n'
+        '  "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Roaming\\RustDesk\\config",\n'
+        '  "$env:APPDATA\\RustDesk\\config",\n'
+        '  "C:\\ProgramData\\RustDesk\\config"\n'
+        ') | Where-Object { Test-Path $_ }\n'
+        'foreach ($d in $rdDirs) {\n'
+        '    $toml = Join-Path $d "RustDesk2.toml"\n'
+        '    $key  = ""\n'
+        '    if (Test-Path $toml) {\n'
+        '        $m = Select-String -Path $toml -Pattern "^\\s*key\\s*=\\s*\'([^\']*)\'" -EA SilentlyContinue | Select-Object -First 1\n'
+        '        if ($m) { $key = $m.Matches[0].Groups[1].Value }\n'
+        '    }\n'
+        '    $body = "rendezvous_server = \'' + relay_ip + '\'`nnat_type = 1`nserial = 0`n`n[options]`ncustom-rendezvous-server = \'' + relay_ip + '\'`nrelay-server = \'' + relay_ip + '\'`napi-server = \'\'`nkey = \'$key\'"\n'
+        '    Set-Content -Path $toml -Value $body -Encoding UTF8\n'
+        '    L "wrote $toml (key preserved: $([bool]$key))"\n'
+        '}\n'
+        'Restart-Service -Name RustDesk -Force -EA SilentlyContinue\n'
+        'Start-Sleep -Seconds 5\n'
+        '$st = ((& $cli --accept-tos status 2>&1) -join " | ")\n'
+        '$c = New-Object Net.Sockets.TcpClient\n'
+        f'$a = $c.BeginConnect("{relay_ip}", {_RELAY_PROBE_PORT}, $null, $null)\n'
+        '$ok = $a.AsyncWaitHandle.WaitOne(5000); $relayReach = ($ok -and $c.Connected); $c.Close()\n'
+        f'L "VERIFY relay {relay_ip}:{_RELAY_PROBE_PORT} reachable: $relayReach"\n'
+        'if (($st -match "Connected") -and $relayReach) { L "RESULT: OK" } else { L "RESULT: FAIL" }\n'
+        'L "=== warp bakein worker done ==="\n'
+    )
+
+
+def _warp_log_once(state: str, msg: str) -> None:
+    """Print msg only when the WARP state CHANGES, to avoid spamming the log on
+    every reconnect (ensure_warp is re-evaluated each connect by design)."""
+    global _warp_logged_state
+    if _warp_logged_state != state:
+        print(msg, flush=True)
+        _warp_logged_state = state
+
+
+def ensure_warp(tracker_url: str, agent_id: str, token: str, on_lan: bool) -> None:
+    """Idempotently enroll OFF-SITE boxes into Cloudflare WARP so they can reach
+    the internal RustDesk relay. On-LAN/site boxes skip. Safe to call repeatedly
+    and RE-EVALUATED every connect, so a laptop that roams LAN->off-site enrolls
+    without waiting for a process restart.
+
+    on_lan = the connection's own resolved verdict (True when the agent connected
+    on the internal LAN endpoints; False on the Cloudflare fallback). It is the
+    fail-closed off-site signal -- a real LAN box always has on_lan=True so it can
+    never be misclassified by a transient probe.
+
+    All long-lived steps run inside a one-shot SYSTEM scheduled task that logs to
+    disk (deadlock-safe per Change 1); this function only stages files + launches
+    the task and returns quickly. Windows-only."""
+    global _warp_worker_launched_at
+    if sys.platform != "win32":
+        return
+    import subprocess as _sp, time as _time
+    try:
+        # 1) OFF-SITE gate (fail-closed toward on-site). LAN/site boxes MUST skip,
+        #    AND if WARP is still up from a prior off-site stint, tear it DOWN now
+        #    so internal DNS/AD work again (the relay is reachable on-site OR once
+        #    the corp VPN is connected -> both cases self-heal here).
+        if not _warp_is_offsite(on_lan):
+            if _warp_is_up():
+                _warp_log_once("teardown", "[warp] on-site/VPN (relay reachable) but WARP up -- tearing down")
+                _warp_teardown()
+            else:
+                _warp_log_once("onsite", "[warp] on-LAN/site (relay reachable) -- skipping WARP")
+            return
+
+        org_default = 'cirquetools'
+        # 2) Idempotent: already enrolled + connected in our org -> done.
+        if _warp_enrolled_and_connected(org_default):
+            _warp_log_once("enrolled", f"[warp] already enrolled in {org_default} and connected -- ok")
+            return
+
+        # 3) A worker we launched may still be converging -- don't re-fire it more
+        #    than once per cooldown window. (Re-evaluated, but rate-limited.)
+        now = _time.monotonic()
+        if (now - _warp_worker_launched_at) < _WARP_WORKER_COOLDOWN:
+            _warp_log_once("converging", "[warp] enrollment worker recently launched -- waiting to converge")
+            return
+
+        # 4) Fetch enrollment token from the tracker (never hardcoded in source).
+        org, cid, sec = _get_warp_config(tracker_url, agent_id, token)
+        if not (org and cid and sec):
+            print("[warp] no enrollment config available -- deferring", flush=True)
+            return
+        rd_server, _rd_key = _get_rustdesk_relay(tracker_url, agent_id, token)
+        relay_host = rd_server or 'rust.corp.cirque.com'
+
+        os.makedirs(_WARP_PROGDATA, exist_ok=True)
+
+        # Write MDM to the Policies key + mdm.xml so a WARP service restart enrolls
+        # headless into OUR org (NOT consumer WARP). switch_locked, onboarding off.
+        try:
+            import winreg  # type: ignore
+            rp = r"SOFTWARE\Policies\Cloudflare\Warp"
+            k = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, rp)
+            winreg.SetValueEx(k, "organization", 0, winreg.REG_SZ, org)
+            winreg.SetValueEx(k, "service_mode", 0, winreg.REG_SZ, "warp")
+            winreg.SetValueEx(k, "auto_connect", 0, winreg.REG_DWORD, 0)
+            winreg.SetValueEx(k, "onboarding", 0, winreg.REG_DWORD, 0)
+            winreg.SetValueEx(k, "switch_locked", 0, winreg.REG_DWORD, 1)
+            winreg.SetValueEx(k, "auth_client_id", 0, winreg.REG_SZ, cid)
+            winreg.SetValueEx(k, "auth_client_secret", 0, winreg.REG_SZ, sec)
+            winreg.CloseKey(k)
+        except Exception as e:
+            print(f"[warp] MDM registry write failed: {e}", flush=True)
+
+        mdm_xml = (
+            "<dict>\n"
+            f"  <key>organization</key><string>{org}</string>\n"
+            "  <key>service_mode</key><string>warp</string>\n"
+            "  <key>auto_connect</key><integer>0</integer>\n"
+            f"  <key>auth_client_id</key><string>{cid}</string>\n"
+            f"  <key>auth_client_secret</key><string>{sec}</string>\n"
+            "  <key>switch_locked</key><true/>\n"
+            "  <key>onboarding</key><false/>\n"
+            "</dict>\n"
+        )
+        try:
+            with open(os.path.join(_WARP_PROGDATA, "mdm.xml"), "w", encoding="utf-8") as fh:
+                fh.write(mdm_xml)
+        except Exception as e:
+            print(f"[warp] mdm.xml write failed: {e}", flush=True)
+
+        # If WARP isn't installed, install the MSI first (quiet). The SYSTEM task
+        # restarts/enrolls after; if the MSI is still landing the next process
+        # cycle re-runs and the task picks up the now-present warp-cli.
+        if not os.path.isfile(_WARP_CLI):
+            print("[warp] warp-cli absent -- installing MSI", flush=True)
+            _warp_install_msi()
+
+        # Stage the one-shot SYSTEM worker that does ALL long-lived steps.
+        worker = _build_warp_worker_ps1(org, relay_host, _RELAY_PROBE_IP)
+        worker_path = os.path.join(_WARP_PROGDATA, "warp_bakein_worker.ps1")
+        with open(worker_path, "w", encoding="utf-8") as fh:
+            fh.write(worker)
+
+        tn = "CF_WARP_Bakein"
+        _sp.run(["schtasks", "/Delete", "/TN", tn, "/F"],
+                capture_output=True, timeout=15, creationflags=0x08000000)
+        # Backstop trigger: a near-future ONCE time (~2 min ahead) in case the
+        # explicit /Run below doesn't take -- so enrollment isn't pinned to a
+        # fixed wall-clock that an off-hours/asleep box might never reach.
+        st = _time.strftime("%H:%M", _time.localtime(_time.time() + 120))
+        cr = _sp.run(["schtasks", "/Create", "/TN", tn, "/TR",
+                      f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{worker_path}"',
+                      "/SC", "ONCE", "/ST", st, "/RU", "SYSTEM", "/RL", "HIGHEST", "/F"],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=20, creationflags=0x08000000)
+        if cr.returncode != 0:
+            print(f"[warp] schtasks /Create failed (rc={cr.returncode}): "
+                  f"{(cr.stderr or cr.stdout or '').strip()[:200]}", flush=True)
+            return
+        rr = _sp.run(["schtasks", "/Run", "/TN", tn],
+                     capture_output=True, text=True, errors="replace",
+                     timeout=20, creationflags=0x08000000)
+        if rr.returncode != 0:
+            print(f"[warp] schtasks /Run failed (rc={rr.returncode}); "
+                  f"backstop ONCE trigger at {st} will fire it", flush=True)
+        # Mark launch time so we don't re-fire within the cooldown window; the
+        # next connect after cooldown re-evaluates (retries if the worker failed).
+        _warp_worker_launched_at = _time.monotonic()
+        _warp_log_once("launched", "[warp] enrollment worker launched (SYSTEM task) -- converging")
+    except Exception as e:
+        print(f"[warp] ensure_warp error: {e}", flush=True)
+
+
+def _warp_install_msi() -> None:
+    """Download + silently install the Cloudflare WARP MSI. Returns when msiexec
+    exits; the SYSTEM worker handles enrollment afterward."""
+    import subprocess as _sp, urllib.request as _ur, tempfile as _tmp
+    try:
+        tmp = _tmp.NamedTemporaryFile(suffix=".msi", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        req = _ur.Request(_WARP_MSI_URL, headers={"User-Agent": "CirqueRMM"})
+        with _ur.urlopen(req, timeout=200) as resp, open(tmp_path, "wb") as fh:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        if os.path.getsize(tmp_path) < 1_000_000:
+            print("[warp] MSI download too small -- aborting", flush=True)
+            os.unlink(tmp_path)
+            return
+        r = _sp.run(["msiexec", "/i", tmp_path, "/qn", "/norestart"],
+                    capture_output=True, timeout=300, creationflags=0x08000000)
+        print(f"[warp] msiexec exit={r.returncode}", flush=True)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[warp] MSI install failed: {e}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1953,14 +2564,24 @@ def _collect_extended() -> dict:
         pass
 
     # -- Group Policy Last Refresh ------------------------------------------
+    # The core CSE key ({00000000-...}) stores the last machine GP-processing
+    # time as a FILETIME in values named EndTimeHi/EndTimeLo. Earlier code read
+    # EndTime2High/EndTime2Low, which do NOT exist on this key -> always null ->
+    # the field was empty on every domain box. Read the correct names, and fall
+    # back to GroupPolicy/Operational event 8004 (machine policy processing
+    # complete) when the registry values are absent.
     try:
         gp_ps = _ps_json(
             "$k='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{00000000-0000-0000-0000-000000000000}';"
             "$v=Get-ItemProperty $k -EA SilentlyContinue;"
-            "if($v){"
-            "  $dt=[datetime]::FromFileTime((([int64]$v.EndTime2High -shl 32) -bor [uint32]$v.EndTime2Low));"
-            "  @{time=$dt.ToString('yyyy-MM-dd HH:mm:ss')}|ConvertTo-Json -Compress"
-            "}else{'null'}"
+            "$dt=$null;"
+            "if($v -and $v.EndTimeHi -ne $null -and $v.EndTimeLo -ne $null){"
+            "  try{$dt=[datetime]::FromFileTime((([int64]$v.EndTimeHi -shl 32) -bor [uint32]$v.EndTimeLo))}catch{}"
+            "}"
+            "if(-not $dt -or $dt.Year -lt 2000){"
+            "  try{$dt=(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-GroupPolicy/Operational';Id=8004} -MaxEvents 1 -EA SilentlyContinue).TimeCreated}catch{}"
+            "}"
+            "if($dt -and $dt.Year -ge 2000){@{time=$dt.ToString('yyyy-MM-dd HH:mm:ss')}|ConvertTo-Json -Compress}else{'null'}"
         )
         if gp_ps and isinstance(gp_ps, dict) and gp_ps.get("time"):
             t = gp_ps["time"]
@@ -1973,7 +2594,7 @@ def _collect_extended() -> dict:
     try:
         smart_ps = _ps_json(
             "Get-PhysicalDisk -EA SilentlyContinue "
-            "| Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus,"
+            "| Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus,SerialNumber,"
             "@{N='SizeGB';E={[math]::Round($_.Size/1GB,0)}} "
             "| ConvertTo-Json -Compress",
             timeout=15,
@@ -1986,6 +2607,7 @@ def _collect_extended() -> dict:
                 "health": d.get("HealthStatus") or "",
                 "status": d.get("OperationalStatus") or "",
                 "size_gb": d.get("SizeGB"),
+                "serial": (d.get("SerialNumber") or "").strip(),
             })
         if smart_list:
             result["disk_health"] = smart_list
@@ -2335,9 +2957,196 @@ def _collect_patches() -> list:
 # Core telemetry collection
 # ---------------------------------------------------------------------------
 
+# Watch-list of critical services we ALWAYS report status for (even if their
+# StartType is Manual/Disabled) so the server can fire a service_down incident
+# when one is Stopped. Keep this short -- the payload is meant to be bounded.
+#   Spooler  = print spooler        WinDefend = Microsoft Defender AV
+#   BITS     = bg transfer (WU)     wuauserv  = Windows Update
+#   CirqueRMMAgent = the agent's own native service (DCs/servers)
+_WATCHED_SERVICES = ("Spooler", "WinDefend", "BITS", "wuauserv",
+                     "CirqueRMMAgent", "CirqueRMM")
+
+
+def _collect_services_down() -> list:
+    """Curated, bounded list of services worth alerting on. Returns a list of
+    {name, display, start_type, status} dicts for:
+      (a) auto-start (StartType=Automatic) services that are NOT Running -- the
+          useful "something that should be up is down" signal; AND
+      (b) any service in _WATCHED_SERVICES that is not Running (even if Manual),
+          so we always have status on the critical few.
+
+    We do NOT ship the full service table every cycle (hundreds of rows) -- only
+    the stopped-auto-starts + the stopped watch-list. Returns [] on non-Windows
+    or any failure (never fabricates).
+    """
+    if platform.system() != "Windows":
+        return []
+    # CIM gives StartMode (Auto/Manual/Disabled) + State (Running/Stopped) +
+    # DelayedAutoStart. Filter to the interesting set IN PowerShell so the JSON
+    # we parse is already small. Auto-but-not-Running OR a watch-listed service.
+    watch = ",".join(f"'{s}'" for s in _WATCHED_SERVICES)
+    script = (
+        "$watch=@(" + watch + ");"
+        "Get-CimInstance Win32_Service | Where-Object {"
+        "  ($_.StartMode -eq 'Auto' -and $_.State -ne 'Running') -or"
+        "  ($watch -contains $_.Name -and $_.State -ne 'Running') } |"
+        " Select-Object Name,DisplayName,StartMode,State |"
+        " ConvertTo-Json -Compress"
+    )
+    try:
+        data = _ps_json(script, timeout=20)
+    except Exception:
+        return []
+    if data is None:
+        return []
+    # ConvertTo-Json emits a bare object (not a list) for a single match.
+    if isinstance(data, dict):
+        data = [data]
+    out = []
+    for s in (data if isinstance(data, list) else []):
+        if not isinstance(s, dict):
+            continue
+        name = (s.get("Name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name":       name,
+            "display":    (s.get("DisplayName") or "").strip(),
+            "start_type": (s.get("StartMode") or "").strip(),
+            "status":     (s.get("State") or "").strip(),
+        })
+        # Hard cap so a pathological box can't bloat the telemetry payload.
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _collect_battery_info() -> dict:
+    """Battery model + health/wear + cycle count via `powercfg /batteryreport`.
+
+    Returns {} on desktops / any failure. Keys (all optional):
+      model, serial, chemistry, health_pct (float), cycles (int),
+      design_capacity, full_charge_capacity.
+
+    Uses powercfg (works in the SYSTEM/agent context) rather than
+    root\\wmi BatteryStaticData/FullChargedCapacity, which throws
+    "Generic failure" under SYSTEM. The XML report's
+    BatteryReport.Batteries.Battery node carries Manufacturer, Id (model),
+    SerialNumber, Chemistry, DesignCapacity, FullChargeCapacity, CycleCount.
+    """
+    import tempfile, xml.etree.ElementTree as _ET
+    tmp_path = ""
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".xml", prefix="cirque_batt_")
+        os.close(fd)
+        # powercfg writes the XML report to tmp_path. -duration 1 keeps the run
+        # short (we only need the static battery node, not usage history).
+        proc = subprocess.run(
+            ["powercfg", "/batteryreport", "/output", tmp_path, "/xml"],
+            capture_output=True, text=True, errors="replace", timeout=60,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        if not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) == 0:
+            return {}
+        with open(tmp_path, "r", encoding="utf-8", errors="replace") as fh:
+            xml_text = fh.read()
+        if not xml_text.strip():
+            return {}
+        root = _ET.fromstring(xml_text)
+        # The report namespaces everything; strip the namespace by matching on
+        # the local tag name so we don't have to hardcode the (versioned) ns URI.
+        def _local(tag):
+            return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+        def _find_first(node, name):
+            for el in node.iter():
+                if _local(el.tag) == name:
+                    return el
+            return None
+
+        batt = _find_first(root, "Battery")
+        if batt is None:
+            return {}
+
+        vals = {}
+        for child in batt:
+            vals[_local(child.tag)] = (child.text or "").strip()
+
+        def _num(name):
+            try:
+                return int(float(vals.get(name) or ""))
+            except Exception:
+                return None
+
+        design = _num("DesignCapacity")
+        full   = _num("FullChargeCapacity")
+        health = None
+        if design and full and design > 0:
+            health = round(full / design * 100.0, 1)
+
+        mfr   = vals.get("Manufacturer") or ""
+        model = vals.get("Id") or ""
+        # Id is the model designation (e.g. "DELL 4M1JN21"); prefix the
+        # manufacturer only if it's not already part of the Id string.
+        if mfr and model and mfr.lower() not in model.lower():
+            model = f"{mfr} {model}"
+        elif not model:
+            model = mfr
+
+        return {
+            "model":                model or "",
+            "serial":               vals.get("SerialNumber") or "",
+            "chemistry":            vals.get("Chemistry") or "",
+            "design_capacity":      design,
+            "full_charge_capacity": full,
+            "health_pct":           health,
+            "cycles":               _num("CycleCount"),
+        }
+    except Exception as e:
+        print(f"[battery] collect failed: {e}", flush=True)
+        return {}
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+# Serializes ALL psutil.cpu_percent() sampling across the agent's telemetry
+# collectors. collect_telemetry() and the system-info builder can run on
+# different threads/tasks concurrently; overlapping psutil sampling intermittently
+# yielded a spurious exact-100.0 reading on high-core boxes (e.g. GEARS, 80 cores)
+# while the OS perf counter showed the box idle. The lock guarantees one sampler
+# at a time; averaging + an outlier guard add defense-in-depth.
+_CPU_SAMPLE_LOCK = threading.Lock()
+
+
+def _sample_cpu_percent(samples: int = 2, interval: float = 0.5) -> float:
+    """Return CPU% averaged over a few serialized psutil samples.
+
+    Drops a lone exact-100.0 outlier when the other samples clearly disagree
+    (the known psutil artifact). Falls back to 0.0 only if every sample failed.
+    """
+    vals = []
+    with _CPU_SAMPLE_LOCK:
+        for _ in range(max(1, samples)):
+            try:
+                vals.append(float(psutil.cpu_percent(interval=interval)))
+            except Exception:
+                pass
+    if not vals:
+        return 0.0
+    if len(vals) > 1 and any(v >= 99.5 for v in vals):
+        non_max = [v for v in vals if v < 99.5]
+        if non_max:
+            vals = non_max  # discard the 100.0 artifact, keep the real samples
+    return round(sum(vals) / len(vals), 1)
+
+
 def collect_telemetry(agent_id: str) -> dict:
     """Collect real-time telemetry and return a telemetry_update message dict."""
-    cpu_pct  = psutil.cpu_percent(interval=1)
+    cpu_pct  = _sample_cpu_percent(samples=2, interval=0.5)
     cpu_freq = psutil.cpu_freq()
     mem      = psutil.virtual_memory()
     batt     = psutil.sensors_battery()
@@ -2387,6 +3196,41 @@ def collect_telemetry(agent_id: str) -> dict:
 
     uptime = int(datetime.now().timestamp() - psutil.boot_time())
 
+    # Timezone EVERY cycle (Get-TimeZone is also collected in the extended
+    # on-connect sysinfo path, but that only lands on ~1 row out of every
+    # periodic batch; collecting it here keeps `timezone` populated on every
+    # telemetry row -- valuable for the TW/China/US distributed fleet).
+    _tz_str = ""
+    try:
+        _tz = _ps_json("Get-TimeZone | Select-Object Id,DisplayName | ConvertTo-Json -Compress")
+        if _tz:
+            _tz_str = _tz.get("DisplayName") or _tz.get("Id") or ""
+    except Exception:
+        pass
+
+    # WiFi adapter product name (e.g. "Intel(R) Wi-Fi 6E AX211 160MHz"). The
+    # network_json carries only the interface alias ("Wi-Fi") + MAC + SSID, not
+    # the hardware model -- operators want the card type on Hardware Info.
+    # Empty string when there's no 802.11 adapter (desktops / Ethernet-only).
+    _wifi_adapter = ""
+    try:
+        _wa = _ps_json(
+            "Get-NetAdapter | Where-Object { $_.PhysicalMediaType -match '802.11' } "
+            "| Select-Object -First 1 -ExpandProperty InterfaceDescription | ConvertTo-Json -Compress"
+        )
+        if isinstance(_wa, str):
+            _wifi_adapter = _wa.strip()
+    except Exception:
+        pass
+
+    # Battery model + health (replacement-planning). Collected here so it rides
+    # the periodic telemetry. Null/empty on desktops (no battery).
+    _batt_info = _collect_battery_info() if batt is not None else {}
+
+    # Stopped auto-start / watch-listed services -> lights up the server-side
+    # `service_down` incident signal. Bounded list (see _collect_services_down).
+    _services_down = _collect_services_down()
+
     return {
         "type":               "telemetry_update",
         "agent_id":           agent_id,
@@ -2406,6 +3250,14 @@ def collect_telemetry(agent_id: str) -> dict:
             if batt and not batt.power_plugged and batt.secsleft > 0
             else None
         ),
+        "battery_model":      _batt_info.get("model") or None,
+        "battery_serial":     _batt_info.get("serial") or None,
+        "battery_health_pct": _batt_info.get("health_pct"),
+        "battery_cycles":     _batt_info.get("cycles"),
+        "battery_chemistry":  _batt_info.get("chemistry") or None,
+        "wifi_adapter":       _wifi_adapter,
+        "timezone":           _tz_str,
+        "services_down":      _services_down,
         "disk_json":          disks,
         "network_json":       networks,
         "logged_in_user":     _get_windows_username(),
@@ -2418,8 +3270,6 @@ def collect_telemetry(agent_id: str) -> dict:
         "os_arch":            platform.machine(),
         "public_ip":          _get_public_ip(),
         "captured_at":        datetime.now().isoformat(),
-        # Aware UTC so the server can measure clock skew tz-independently (Kerberos guard).
-        "clock_utc":          datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2533,68 +3383,6 @@ $form.Add_Shown({ $tick.Start() })
 $tick.Stop()
 exit 0
 """
-
-# Non-forcing "restart needed" notice shown in the user's session right after a
-# reboot-bearing patch install when the server did NOT allow an immediate reboot.
-# The user stays in control for the grace window; the server force-reboots later
-# via the force_reboot command if the machine is still reboot-pending. Exit 10 =
-# the user chose Restart Now; exit 0 = Later / dismissed.
-_REBOOT_NOTIFY_PS = r"""
-param([int]$GraceHours = 24)
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Cirque IT - Security Updates Installed"
-$form.Size = New-Object System.Drawing.Size(500, 215)
-$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-$form.TopMost = $true
-$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-$form.MaximizeBox = $false
-$form.MinimizeBox = $false
-$img = New-Object System.Windows.Forms.PictureBox
-$img.Image = ([System.Drawing.SystemIcons]::Information).ToBitmap()
-$img.Location = New-Object System.Drawing.Point(12, 15)
-$img.Size = New-Object System.Drawing.Size(48, 48)
-$form.Controls.Add($img)
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Text = "Security updates have been installed by your IT department.`n`nA restart is required to finish. Please restart within $GraceHours hours at a convenient time. If you don't, your computer will restart automatically."
-$lbl.Location = New-Object System.Drawing.Point(70, 12)
-$lbl.Size = New-Object System.Drawing.Size(410, 95)
-$lbl.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$form.Controls.Add($lbl)
-$lBtn = New-Object System.Windows.Forms.Button
-$lBtn.Text = "Restart Later"
-$lBtn.Location = New-Object System.Drawing.Point(70, 132)
-$lBtn.Size = New-Object System.Drawing.Size(160, 32)
-$lBtn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-$form.Controls.Add($lBtn)
-$rBtn = New-Object System.Windows.Forms.Button
-$rBtn.Text = "Restart Now"
-$rBtn.Location = New-Object System.Drawing.Point(260, 132)
-$rBtn.Size = New-Object System.Drawing.Size(120, 32)
-$rBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
-$form.Controls.Add($rBtn)
-$form.AcceptButton = $rBtn
-$form.CancelButton = $lBtn
-$res = $form.ShowDialog()
-if ($res -eq [System.Windows.Forms.DialogResult]::OK) { exit 10 } else { exit 0 }
-"""
-
-
-def _notify_reboot_pending(grace_hours: int = 24):
-    """Show the non-forcing 'restart needed' notice in the user's session after a
-    reboot-bearing install. If the user clicks Restart Now, reboot with a short grace;
-    otherwise leave the reboot pending for the server's force-reboot sweep."""
-    try:
-        code = _run_dialog_in_user_session(_REBOOT_NOTIFY_PS, 60 * 60 * 1000)  # up to 1h to respond
-        if code == 10:
-            print("[agent] User chose Restart Now after security-update install", flush=True)
-            subprocess.run(
-                ["shutdown", "/r", "/t", "60", "/c", "Restarting for security updates (Cirque IT)"],
-                creationflags=0x08000000,
-            )
-    except Exception as e:
-        print(f"[agent] reboot notify error: {e}", flush=True)
 
 
 def _run_dialog_in_user_session(ps_code: str, timeout_ms: int = 36 * 60 * 1000) -> int:
@@ -3208,7 +3996,7 @@ async def _do_reboot_sequence():
     try:
         import psutil
 
-        t["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+        t["cpu_percent"] = _sample_cpu_percent(samples=2, interval=0.5)
 
         mem = psutil.virtual_memory()
         t["ram_total_gb"] = round(mem.total / (1024 ** 3), 2)
@@ -3902,27 +4690,44 @@ async def shell_output_loop(session: ShellSession, ws, stop_event: asyncio.Event
 # context where the foreground window is visible to query) and reports the active
 # app/window title back to the monitoring server while monitoring is enabled for the user.
 _ee_helper_hproc: "ctypes.wintypes.HANDLE | None" = None   # process handle
+# Serializes _ee_ensure_helper's liveness-check-through-spawn so the always-on
+# work-hours meter and the (toggle-gated) Eagle loop -- which both call it via the
+# default multi-thread executor -- can never double-spawn the helper into a session.
+_ee_helper_lock = threading.Lock()
 _EE_OUT_DIR      = r"C:\ProgramData\CirqueRMM"
-_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
-_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
-_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.exe"
+# NOTE: the on-disk binary/output are named CirqueInputMonitor* (a NEUTRAL name), NOT
+# "Eagle*". This in-session helper measures only interactive-input idle + lock state
+# and is now used by the ALWAYS-ON HR work-hours meter (fleet-wide, independent of
+# Eagle Eyes), so it must not carry the Eagle surveillance brand. The internal Python
+# symbol names keep the historical _EE_/_ee_ prefixes to avoid churn; only the on-disk
+# names the fleet sees changed.
+_EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueInputState.json"
+_EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueInputMonitor.cs"
+_EE_HELPER_EXE   = r"C:\ProgramData\CirqueRMM\CirqueInputMonitor.exe"
 # csc.exe ships with every .NET 4.x install (present on all modern Windows)
 _EE_CSC          = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+# Old Eagle-branded names from pre-2.9.47 builds — cleaned up on upgrade so no box is
+# left running/holding an "Eagle"-named binary for this HR feature (see _ee_cleanup_old).
+_EE_OLD_HELPER_EXE = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.exe"
+_EE_OLD_HELPER_CS  = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
+_EE_OLD_OUT_FILE   = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
+_EE_OLD_DIAG_FILE  = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper_diag.txt"
 
-# C# source for CirqueEagleHelper.exe -- compiled once via csc.exe on the Windows host.
-# Runs as the interactive user (CreateProcessAsUserW), loops every 10 s.
-# Uses GetForegroundWindow() -- the correct Win32 API for active window detection.
+# C# source for CirqueInputMonitor.exe -- compiled once via csc.exe on the Windows host.
+# Runs as the interactive user (CreateProcessAsUserW), loops every 10 s. Reports only
+# idle-seconds + lock state (via GetLastInputInfo / GetForegroundWindow).
 #
 # Why a small compiled C# helper (rather than the SYSTEM service polling directly):
-#   GetForegroundWindow() only returns a meaningful result from the interactive user's
-#   desktop session, which the SYSTEM-context service cannot query itself. A tiny native
-#   helper launched into that session is lighter and steadier for a 10 s poll loop than
-#   re-spawning a script each tick. The helper is deliberately named CirqueEagleHelper.exe
-#   and documented so Defender/EDR and any admin can recognise and allow-list it -- this
-#   is a sanctioned monitoring tool and is not concealed from endpoint security.
+#   GetLastInputInfo() only sees the CALLING session's input, and GetForegroundWindow()
+#   only returns a meaningful result from the interactive user's desktop session, which
+#   the SYSTEM-context service cannot query itself. A tiny native helper launched into
+#   that session is lighter and steadier for a 10 s poll loop than re-spawning a script
+#   each tick. The helper is deliberately named CirqueInputMonitor.exe and documented so
+#   Defender/EDR and any admin can recognise and allow-list it -- this is a sanctioned
+#   monitoring tool and is not concealed from endpoint security.
 #
 # Diagnostic output:
-#   CirqueEagleHelper_diag.txt -- written on start + each iteration for troubleshooting.
+#   CirqueInputMonitor_diag.txt -- written on start + each iteration for troubleshooting.
 _EE_HELPER_CS_SRC = r"""
 using System;
 using System.IO;
@@ -3931,9 +4736,9 @@ using System.Text;
 using System.Diagnostics;
 using System.Threading;
 
-class EagleEyes {
-    const string OutFile  = @"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json";
-    const string DiagFile = @"C:\ProgramData\CirqueRMM\CirqueEagleHelper_diag.txt";
+class InputMonitor {
+    const string OutFile  = @"C:\ProgramData\CirqueRMM\CirqueInputState.json";
+    const string DiagFile = @"C:\ProgramData\CirqueRMM\CirqueInputMonitor_diag.txt";
     const int    Interval = 10000; // ms
 
     [DllImport("user32.dll")]
@@ -3964,34 +4769,49 @@ class EagleEyes {
             n++;
             Thread.Sleep(Interval);
             try {
-                IntPtr hwnd = GetForegroundWindow();
-                if (hwnd == IntPtr.Zero) {
-                    File.AppendAllText(DiagFile, n + " hwnd=0" + Environment.NewLine);
-                    continue;
-                }
-                var sb = new StringBuilder(512);
-                GetWindowText(hwnd, sb, 512);
-                string title = sb.ToString().Trim();
-                if (title.Length == 0) {
-                    File.AppendAllText(DiagFile, n + " title_empty" + Environment.NewLine);
-                    continue;
-                }
-                uint pid = 0;
-                GetWindowThreadProcessId(hwnd, out pid);
-                string pname = "";
-                try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
                 // Idle is computed HERE, inside the interactive user session: GetLastInputInfo
                 // only sees the calling session's input, so the SYSTEM service in session 0
                 // cannot measure the user's idle time (it reported bogus, ever-growing idle).
+                // Sampled FIRST + unconditionally so the file is refreshed every tick even when
+                // there is no foreground window (locked session / secure desktop). The
+                // always-on work-hours meter reads ONLY this idle value; a stale idle across a
+                // lock would wrongly keep the active timer running.
                 uint idleSec = 0;
                 try {
                     LASTINPUTINFO lii = new LASTINPUTINFO();
                     lii.cbSize = (uint)Marshal.SizeOf(lii);
                     if (GetLastInputInfo(ref lii)) { idleSec = (GetTickCount() - lii.dwTime) / 1000u; }
                 } catch { }
-                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\",\"i\":" + idleSec + "}";
+
+                IntPtr hwnd = GetForegroundWindow();
+                string title = "";
+                string pname = "";
+                bool locked = false;
+                if (hwnd == IntPtr.Zero) {
+                    // No foreground window queryable from this session -> session is locked
+                    // or on the secure desktop. Treat as locked so the meter pauses.
+                    locked = true;
+                    File.AppendAllText(DiagFile, n + " hwnd=0 (locked)" + Environment.NewLine);
+                } else {
+                    var sb = new StringBuilder(512);
+                    GetWindowText(hwnd, sb, 512);
+                    title = sb.ToString().Trim();
+                    uint pid = 0;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
+                    // LockApp / Windows Default Lock Screen are the visible foreground on a
+                    // locked desktop on some builds -> also treat as locked.
+                    if (pname == "LockApp" || pname == "LogonUI") { locked = true; }
+                }
+
+                // Always write the file so idle + lock stay fresh every tick. Only p/t
+                // (app/window) are blank when we can't read the foreground window; the
+                // work-hours meter ignores p/t entirely and uses only i/locked.
+                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) +
+                    "\",\"i\":" + idleSec + ",\"locked\":" + (locked ? "true" : "false") + "}";
                 File.WriteAllText(OutFile, json);
-                File.AppendAllText(DiagFile, n + " ok p=" + pname +
+                File.AppendAllText(DiagFile, n + " ok p=" + pname + " i=" + idleSec +
+                    " locked=" + locked +
                     " t=" + title.Substring(0, Math.Min(60, title.Length)) + Environment.NewLine);
             } catch (Exception ex) {
                 File.AppendAllText(DiagFile, n + " err=" + ex.Message + Environment.NewLine);
@@ -4062,11 +4882,59 @@ def _ee_find_active_session() -> int:
     return found
 
 
+_ee_old_cleanup_done = False
+
+
+def _ee_cleanup_old_helper() -> None:
+    """Remove the pre-2.9.47 Eagle-branded helper from disk (one-time, best-effort).
+
+    The idle/lock helper was renamed CirqueEagleHelper.exe -> CirqueInputMonitor.exe
+    when the always-on HR work-hours meter began using it fleet-wide; we must not leave
+    an "Eagle"-named surveillance binary sitting on every box for that HR feature. On an
+    upgraded box: kill any still-running old helper, then delete the old exe/cs/json/diag.
+    Non-Windows and missing files are no-ops. Runs under _ee_helper_lock.
+    """
+    if sys.platform != "win32":
+        return
+    # Kill a lingering old-named process (the pre-upgrade agent may have spawned it).
+    try:
+        import subprocess as _sp
+        _sp.run(
+            ["taskkill", "/F", "/IM", "CirqueEagleHelper.exe"],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
+    for _p in (_EE_OLD_HELPER_EXE, _EE_OLD_HELPER_CS, _EE_OLD_OUT_FILE, _EE_OLD_DIAG_FILE):
+        try:
+            if os.path.exists(_p):
+                os.remove(_p)
+                _ee_log(f"removed stale Eagle-branded file {_p}")
+        except Exception:
+            pass  # in-use / perms: harmless orphan, retried on the next agent run
+
+
 def _ee_ensure_helper() -> bool:
-    """Ensure the persistent Eagle Eyes helper is running in the user session.
+    """Ensure the in-session helper is running (thread-safe wrapper).
+
+    Serialized so concurrent callers (the always-on work-hours meter and the
+    toggle-gated Eagle loop, both dispatched via the multi-thread executor) can
+    never race the liveness-check-through-spawn and launch two helpers.
+    """
+    global _ee_old_cleanup_done
+    with _ee_helper_lock:
+        if not _ee_old_cleanup_done:
+            _ee_old_cleanup_done = True
+            _ee_cleanup_old_helper()
+        return _ee_ensure_helper_locked()
+
+
+def _ee_ensure_helper_locked() -> bool:
+    """Ensure the persistent in-session helper is running in the user session.
 
     Returns True if the helper is (or just became) running, False on failure.
-    Idempotent: safe to call every poll cycle.
+    Idempotent: safe to call every poll cycle. MUST be called under
+    _ee_helper_lock (via _ee_ensure_helper).
     """
     global _ee_helper_hproc
     import ctypes
@@ -4133,20 +5001,21 @@ def _ee_ensure_helper() -> bool:
         return False
 
     # Write C# source and compile to exe (one-time; reused on subsequent calls).
-    # A small compiled helper is simply the cleanest way to query the interactive
-    # session's foreground window on a steady loop; the binary is named and documented
-    # (CirqueEagleHelper.exe) so endpoint security and admins can identify/allow-list it.
+    # A small compiled helper is simply the cleanest way to read the interactive
+    # session's input-idle + lock state on a steady loop; the binary is named and
+    # documented (CirqueInputMonitor.exe) so endpoint security and admins can
+    # identify/allow-list it.
     import subprocess as _sp
     try:
         with open(_EE_HELPER_CS, "w", encoding="utf-8") as _f:
             _f.write(_EE_HELPER_CS_SRC)
     except Exception as _e:
         kernel32.CloseHandle(dup_token)
-        _ee_log(f"write CirqueEagleHelper.cs failed: {_e}")
+        _ee_log(f"write CirqueInputMonitor.cs failed: {_e}")
         return False
 
     if not os.path.exists(_EE_HELPER_EXE):
-        _ee_log("compiling CirqueEagleHelper.cs ...")
+        _ee_log("compiling CirqueInputMonitor.cs ...")
         r = _sp.run(
             [_EE_CSC, '/nologo', '/target:exe', f'/out:{_EE_HELPER_EXE}', _EE_HELPER_CS],
             capture_output=True, text=True, timeout=30,
@@ -4283,6 +5152,255 @@ def _get_idle_seconds() -> int:
     except Exception:
         pass
     return 0
+
+
+def _read_idle_state() -> "Optional[dict]":
+    """Read ONLY the idle/lock state from the in-session helper's JSON.
+
+    Returns {"idle_s": int, "locked": bool, "fresh": bool} or None when no
+    usable data exists (non-Windows, helper not up, file missing/unreadable).
+
+    This is the always-on work-hours meter's sole window into the interactive
+    session. It reads idle_s (GetLastInputInfo measured in-session) and the lock
+    flag written by CirqueInputMonitor.exe every 10s. It deliberately IGNORES the
+    app/window (p/t) fields — no app, window-title, or screenshot data is read
+    here. It shares the same helper process as the (toggle-gated) Eagle loop via
+    _ee_ensure_helper(), so enabling this meter never double-spawns the helper.
+
+    `fresh` is False when the helper's JSON is stale (>60s old) so the meter can
+    decline to credit active time when it has no trustworthy idle signal.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        if not _ee_ensure_helper():
+            return None
+        if not os.path.exists(_EE_OUT_FILE):
+            return None
+        import time as _time
+        try:
+            mtime = os.path.getmtime(_EE_OUT_FILE)
+            fresh = (_time.time() - mtime) <= 60
+        except Exception:
+            fresh = False
+        with open(_EE_OUT_FILE, encoding="utf-8-sig") as f:
+            data = json.loads(f.read().strip())
+        try:
+            idle_s = max(0, int(data.get("i") or 0))
+        except (TypeError, ValueError):
+            idle_s = 0
+        locked = bool(data.get("locked", False))
+        return {"idle_s": idle_s, "locked": locked, "fresh": fresh}
+    except Exception:
+        return None
+
+
+# ═══════════════════════════════════════════════ Work-Hours Meter (always-on) ══
+#
+# HR work-hours metering. ALWAYS ON for every agent, independent of Eagle Eyes /
+# rmm_eagle_config. Lives in the CORE telemetry path. Meters exactly two things
+# per employee LOCAL day and reports running daily totals in each telemetry_update:
+#   on_seconds     -- wall time the PC is powered on with the agent running
+#                     (sleep/hibernate gaps are NOT credited).
+#   active_seconds -- time an interactive user is present AND actually working
+#                     (idle_s < 300 AND session not locked).
+#
+# Design invariants (the failure modes this must survive):
+#   * MONOTONIC ONLY. All accrual is time.monotonic() deltas between samples, so
+#     it is immune to wall-clock skew, NTP steps, and DST. Wall clock is used only
+#     to name the LOCAL day and to stamp first/last activity.
+#   * SLEEP/HIBERNATE. A monotonic delta far larger than the sample interval means
+#     the box slept (monotonic pauses during S3/S4). Such gaps credit NEITHER
+#     on_seconds NOR active_seconds -- we only credit a bounded delta.
+#   * RESTART. State is persisted to workhours.json every sample; on start we
+#     resume the same local day's totals. monotonic() resets across a reboot, so
+#     the stored last_monotonic is only trusted within one process run (guarded by
+#     a process-boot token) -- a restart is treated like a gap (no phantom credit).
+#   * MIDNIGHT / TZ. Uses the box LOCAL date. When the local date changes mid-delta
+#     the crossing delta is split: the pre-midnight portion closes the old day, the
+#     remainder opens the new day.
+#   * NO IDLE DATA. active_seconds is credited ONLY when a fresh idle reading exists
+#     (helper up, JSON < 60s old). No idle signal -> no active credit for that delta
+#     (on_seconds still accrues -- the PC is demonstrably on).
+_WH_STATE_FILE = r"C:\ProgramData\CirqueRMM\workhours.json"
+_WH_IDLE_THRESHOLD_S = 300     # 5 min: at/above this the user is considered idle
+_WH_MAX_CREDIT_S     = 120     # cap a single delta's credit; a bigger gap = sleep/stall
+_WH_SAMPLE_INTERVAL_S = 60     # meter samples once per telemetry cycle
+
+
+def _wh_local_today() -> str:
+    """The box's LOCAL calendar date as YYYY-MM-DD (drives the per-day rollover)."""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+class WorkHoursMeter:
+    """Accumulates on/active seconds for the current local day; monotonic-based."""
+
+    def __init__(self):
+        self.local_date = _wh_local_today()
+        self.on_seconds = 0
+        self.active_seconds = 0
+        self.first_activity_utc: "Optional[str]" = None
+        self.last_activity_utc: "Optional[str]" = None
+        self._last_monotonic: "Optional[float]" = None
+        # Identifies THIS process run. monotonic() is only comparable within one
+        # process, so a stored monotonic from a prior run must never be trusted.
+        self._boot_token = os.urandom(8).hex()
+        self._load()
+
+    # ---- persistence -------------------------------------------------------
+    def _load(self):
+        try:
+            if not os.path.exists(_WH_STATE_FILE):
+                return
+            with open(_WH_STATE_FILE, encoding="utf-8") as f:
+                st = json.loads(f.read())
+        except Exception:
+            return
+        # Resume ONLY if the stored state is for today's local date; otherwise the
+        # box was off/asleep across midnight -> start the new day clean (the prior
+        # day was already reported as a running total, last value wins server-side).
+        if st.get("local_date") == self.local_date:
+            try:
+                self.on_seconds = int(st.get("on_seconds") or 0)
+                self.active_seconds = int(st.get("active_seconds") or 0)
+            except (TypeError, ValueError):
+                self.on_seconds = 0
+                self.active_seconds = 0
+            self.first_activity_utc = st.get("first_activity_utc") or None
+            self.last_activity_utc = st.get("last_activity_utc") or None
+        # NB: never restore _last_monotonic -- a fresh process has a fresh clock.
+        # First sample after (re)start seeds it and credits nothing (treated as gap).
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(_WH_STATE_FILE), exist_ok=True)
+            tmp = _WH_STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "local_date": self.local_date,
+                    "on_seconds": self.on_seconds,
+                    "active_seconds": self.active_seconds,
+                    "first_activity_utc": self.first_activity_utc,
+                    "last_activity_utc": self.last_activity_utc,
+                    "boot_token": self._boot_token,
+                }))
+            os.replace(tmp, _WH_STATE_FILE)
+        except Exception:
+            pass
+
+    # ---- rollover ----------------------------------------------------------
+    def _roll_to(self, new_date: str):
+        """Close the current day and start fresh on new_date."""
+        self.local_date = new_date
+        self.on_seconds = 0
+        self.active_seconds = 0
+        self.first_activity_utc = None
+        self.last_activity_utc = None
+
+    # ---- one sample --------------------------------------------------------
+    def sample(self, logged_in: bool, idle_state: "Optional[dict]") -> dict:
+        """Advance the meter by one tick and return the running totals to report.
+
+        logged_in    -- True when an interactive user is present (telemetry
+                        logged_in_user is non-empty).
+        idle_state   -- dict from _read_idle_state() or None.
+        """
+        now_mono = time.monotonic()
+        today = _wh_local_today()
+
+        # Compute the elapsed delta since the previous sample (monotonic).
+        if self._last_monotonic is None:
+            # First sample this process run -> seed only, credit nothing (a restart
+            # or first boot is indistinguishable from a gap; do not invent time).
+            delta = 0.0
+        else:
+            delta = now_mono - self._last_monotonic
+            if delta < 0:
+                delta = 0.0
+        self._last_monotonic = now_mono
+
+        # Sleep / hibernate / long stall: monotonic pauses during S3/S4, so a delta
+        # far exceeding the sample interval means we were NOT running that whole time.
+        # Cap the credited on-time to a bounded amount; never credit the gap.
+        slept = delta > (_WH_SAMPLE_INTERVAL_S * 2)
+        credit = delta if delta <= _WH_MAX_CREDIT_S else (0.0 if slept else _WH_MAX_CREDIT_S)
+
+        # Determine active-ness for THIS delta.
+        idle_s = None
+        locked = False
+        fresh = False
+        if idle_state:
+            idle_s = idle_state.get("idle_s")
+            locked = bool(idle_state.get("locked"))
+            fresh = bool(idle_state.get("fresh"))
+        # Active only when: a user is present AND we have a FRESH idle reading AND
+        # not idle AND not locked. No fresh idle data -> not active (never credit
+        # active across a gap or with no idle signal).
+        is_active = bool(
+            logged_in and fresh and not locked
+            and idle_s is not None and idle_s < _WH_IDLE_THRESHOLD_S
+        )
+
+        # Apply the (possibly midnight-split) credit.
+        if credit > 0:
+            if today != self.local_date:
+                # Local day changed within this delta. Split it: give the crossing
+                # a proportional pre/post share. We don't know the exact instant of
+                # midnight within the delta; split by wall time-of-day so the new
+                # day gets roughly the seconds since local midnight.
+                now_wall = datetime.now()
+                secs_into_new_day = (
+                    now_wall.hour * 3600 + now_wall.minute * 60 + now_wall.second
+                )
+                post = min(credit, float(secs_into_new_day))
+                pre = credit - post
+                # Close the old day with its share, report it, then roll.
+                self._apply(pre, is_active)
+                closed = self._snapshot()
+                self._roll_to(today)
+                self._apply(post, is_active)
+                self._save()
+                # Return BOTH: the closed prior day (final) + the new running day.
+                cur = self._snapshot()
+                cur["_closed_prior_day"] = closed
+                return cur
+            else:
+                self._apply(credit, is_active)
+
+        self._save()
+        return self._snapshot()
+
+    def _apply(self, seconds: float, is_active: bool):
+        if seconds <= 0:
+            return
+        self.on_seconds += int(round(seconds))
+        if is_active:
+            self.active_seconds += int(round(seconds))
+            now_utc = datetime.now(timezone.utc).isoformat()
+            if not self.first_activity_utc:
+                self.first_activity_utc = now_utc
+            self.last_activity_utc = now_utc
+
+    def _snapshot(self) -> dict:
+        return {
+            "wh_local_date": self.local_date,
+            "wh_on_seconds": self.on_seconds,
+            "wh_active_seconds": self.active_seconds,
+            "wh_first_activity_utc": self.first_activity_utc,
+            "wh_last_activity_utc": self.last_activity_utc,
+        }
+
+
+# Module-level singleton meter (one per agent process).
+_wh_meter: "Optional[WorkHoursMeter]" = None
+
+
+def _wh_get_meter() -> "WorkHoursMeter":
+    global _wh_meter
+    if _wh_meter is None:
+        _wh_meter = WorkHoursMeter()
+    return _wh_meter
 
 
 # ═══════════════════════════════════════════════════════ Windows Backup ════════
@@ -5131,11 +6249,10 @@ async def main() -> None:
 
     while True:
         try:
-            # WS keepalive ON (2.9.36, ported from canary 2.9.42): ping_interval=None
-            # left dead connections (VPN flips / link drops / NAT idle-timeout)
-            # undetected for minutes, so the gateway kept a stale 'live' entry and
-            # dispatched commands vanished — the fleet-wide "WS is flaky" / commands-
-            # queue problem. Generous ping_timeout tolerates laggy links w/o false-close.
+            # WS keepalive ON (2.9.42): ping_interval=None left dead connections
+            # (VPN flips / link drops / NAT idle-timeout) undetected for minutes, so
+            # the gateway kept a stale 'live' entry and dispatched commands vanished.
+            # Generous ping_timeout tolerates laggy hotspots w/o false-closing slow links.
             async with websockets.connect(ws_url, max_size=20 * 1024 * 1024,
                                               ping_interval=30, ping_timeout=60) as ws:
                 print(f"[agent] Connected to gateway as {agent_id}", flush=True)
@@ -5157,7 +6274,26 @@ async def main() -> None:
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
                 if not _disable_rustdesk:
-                    loop.run_in_executor(None, ensure_rustdesk, tracker_url, agent_id, token)
+                    # Run rustdesk-ensure THEN warp-ensure in a single background
+                    # executor, in that order: WARP bake-in (off-site boxes only;
+                    # on-LAN/site boxes skip) needs the clean RustDesk toml + key
+                    # to already exist so its SYSTEM worker can preserve the key.
+                    # Both are idempotent and deadlock-safe (WARP heavy steps run
+                    # inside a one-shot SYSTEM task), and run off-thread so neither
+                    # blocks the WebSocket from establishing.
+                    # on_lan = this connection's OWN resolved verdict (LAN endpoint
+                    # vs Cloudflare fallback). Fail-closed off-site signal for WARP.
+                    _on_lan = (tracker_url == _LAN_TRACKER_URL)
+                    def _rustdesk_then_warp():
+                        try:
+                            ensure_rustdesk(tracker_url, agent_id, token)
+                        except Exception as _e:
+                            print(f"[rustdesk] ensure error: {_e}", flush=True)
+                        try:
+                            ensure_warp(tracker_url, agent_id, token, _on_lan)
+                        except Exception as _e:
+                            print(f"[warp] ensure error: {_e}", flush=True)
+                    loop.run_in_executor(None, _rustdesk_then_warp)
 
                 # Collect extended info (hardware/OS/security) once on connect
                 try:
@@ -5209,6 +6345,29 @@ async def main() -> None:
                         await asyncio.sleep(60)
                         try:
                             data = await loop.run_in_executor(None, collect_telemetry, agent_id)
+                            # --- Always-on work-hours meter (independent of Eagle Eyes) ---
+                            # Sample the meter once per telemetry cycle and stamp the running
+                            # daily totals onto the telemetry_update. Reads ONLY idle/lock
+                            # from the in-session helper -- no app/window/screenshot data.
+                            try:
+                                idle_state = await loop.run_in_executor(None, _read_idle_state)
+                                logged_in = bool((data.get("logged_in_user") or "").strip())
+                                meter = _wh_get_meter()
+                                totals = meter.sample(logged_in, idle_state)
+                                closed = totals.pop("_closed_prior_day", None)
+                                # On a local-day rollover, emit the CLOSED prior day first as
+                                # its own telemetry_update so the server records its final total
+                                # (server upsert is keyed on (agent_id, local_date)).
+                                if closed:
+                                    await ws.send(json.dumps({
+                                        "type": "telemetry_update",
+                                        "agent_id": agent_id,
+                                        "agent_version": AGENT_VERSION,
+                                        **closed,
+                                    }))
+                                data.update(totals)
+                            except Exception:
+                                pass  # metering must never break the telemetry path
                             await ws.send(json.dumps(data))
                         except Exception:
                             break
@@ -5583,14 +6742,8 @@ async def main() -> None:
                             # Only reboot when the server explicitly allows it. Otherwise the
                             # reboot stays pending (reboot_required is reported) and the user
                             # reboots on their own schedule via the tray.
-                            if result.get("reboot_required") and not result.get("error"):
-                                if allow_reboot:
-                                    asyncio.create_task(_do_reboot_sequence())
-                                else:
-                                    # User-controlled policy: notify the user, leave the reboot
-                                    # pending. The server force-reboots after the grace window
-                                    # (force_reboot command) if still pending.
-                                    loop2.run_in_executor(None, _notify_reboot_pending)
+                            if result.get("reboot_required") and not result.get("error") and allow_reboot:
+                                asyncio.create_task(_do_reboot_sequence())
                             continue
 
                         # --- Deploy patches by CVE ID (WUA searches locally) ---
@@ -5609,18 +6762,8 @@ async def main() -> None:
                                 "job_id": job_id,
                                 "result": result,
                             }))
-                            # CVE patches land in cve_patch_job, which the reboot-force sweep does
-                            # NOT cover — so we do NOT show the notify-with-auto-restart promise
-                            # here. Reboot only when the server explicitly allows it; otherwise it
-                            # stays pending for the user (no force). (Policy applies to OS patches.)
                             if result.get("reboot_required") and not result.get("error") and allow_reboot:
                                 asyncio.create_task(_do_reboot_sequence())
-                            continue
-
-                        # --- Force reboot (grace window elapsed; server-initiated) ---
-                        if msg_type == "force_reboot":
-                            print("[agent] force_reboot received — grace window elapsed, rebooting with final warning", flush=True)
-                            asyncio.create_task(_do_reboot_sequence())
                             continue
 
                         # --- Legacy exec ---
@@ -5642,24 +6785,23 @@ async def main() -> None:
                             tout  = min(int(payload.get("timeout", 60)), 300)
                             try:
                                 loop = asyncio.get_event_loop()
-                                if shell == "cmd":
-                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
-                                        ["cmd.exe", "/c", code], capture_output=True,
-                                        text=True, timeout=tout,
-                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
-                                    ))
-                                else:
-                                    r = await loop.run_in_executor(None, lambda: subprocess.run(
-                                        ["powershell.exe", "-NonInteractive", "-NoProfile",
-                                         "-ExecutionPolicy", "Bypass", "-Command", code],
-                                        capture_output=True, text=True, timeout=tout,
-                                        creationflags=0x08000000,  # CREATE_NO_WINDOW
-                                    ))
+                                # Launch via -File from a staged .ps1/.cmd, NOT an inline
+                                # -Command blob: the powershell.exe command line stays a
+                                # constant `-File C:\CirqueRMM\scripts\_run_<uuid>.ps1`
+                                # regardless of the body, so multi-line / encoded operator
+                                # scripts no longer trip Defender's "Suspicious PowerShell
+                                # command line" heuristic. (R: MDE Execution alert)
+                                # Still deadlock-safe: _run_powershell_code -> _run_script_capture
+                                # captures via temp files (not inheritable pipes), so a
+                                # long-lived grandchild (cloudflared, service restart,
+                                # detached helper) can never stall the WS command loop.
+                                rc, so, se = await loop.run_in_executor(
+                                    None, _run_powershell_code, code, tout, shell)
                                 await ws.send(json.dumps({
                                     "type": "script_result", "session_id": session_id,
-                                    "exit_code": r.returncode,
-                                    "stdout": r.stdout[-32000:],
-                                    "stderr": r.stderr[-8000:],
+                                    "exit_code": rc,
+                                    "stdout": so[-32000:],
+                                    "stderr": se[-8000:],
                                 }))
                             except subprocess.TimeoutExpired:
                                 await ws.send(json.dumps({

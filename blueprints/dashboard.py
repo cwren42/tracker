@@ -233,8 +233,10 @@ def _action_center_groups():
 
 @bp.route('/action-center')
 @login_required
+@admin_required
 def action_center():
-    """Deterministic cross-module 'needs attention' view with drill-downs."""
+    """Deterministic cross-module 'needs attention' view with drill-downs. Admin-only
+    (IT-operational tooling) — consistent with mission_control/approvals/events."""
     groups = _action_center_groups()
     return render_template('action_center.html', groups=groups)
 

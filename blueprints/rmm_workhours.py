@@ -51,6 +51,7 @@ def _parse_range():
     return d_from, d_to
 
 
+@bp.route('/rmm/workhours')  # no-hyphen alias (404-guard); canonical is /rmm/work-hours below
 @bp.route('/rmm/work-hours')
 @login_required
 @workhours_access_required
@@ -89,6 +90,13 @@ def rmm_work_hours():
             LEFT JOIN asset a    ON a.id = w.asset_id
             LEFT JOIN employee e ON e.id = COALESCE(w.employee_id, a.employee_id)
             WHERE w.local_date >= :d_from AND w.local_date <= :d_to
+            -- Work-hours is workstations-only: exclude server-class assets.
+            -- Same criteria Eagle Eyes uses to hide servers (_server_class_agent_ids):
+            -- asset.device_type ILIKE '%server%' OR asset.category = 'Server'.
+            -- COALESCE keeps LEFT-JOIN rows with no/unmatched asset (NULLs) visible —
+            -- only positively-identified servers are dropped.
+            AND NOT (COALESCE(a.device_type ILIKE '%server%', FALSE)
+                     OR COALESCE(a.category = 'Server', FALSE))
             {scope_clause}
             ORDER BY emp_name ASC, w.local_date ASC
         """)

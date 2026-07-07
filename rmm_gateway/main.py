@@ -24,6 +24,7 @@ from .db import (
     store_screenshot,
     store_software,
     store_telemetry,
+    store_work_hours,
     validate_agent,
     validate_api_key,
     validate_session_token,
@@ -835,10 +836,29 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
 
             # --- Store telemetry ---
             if msg_type in ("agent_info", "telemetry_update"):
-                try:
-                    store_telemetry(agent_id, asset_id, payload)
-                except Exception as e:
-                    print(f"[gw] store_telemetry error: {e}", flush=True)
+                # Always-on HR work-hours meter (independent of Eagle Eyes). The agent
+                # stamps wh_* running daily totals onto every telemetry_update; a
+                # local-day rollover also sends a work-hours-ONLY packet (no core
+                # telemetry) to record the closed prior day's final total. Detect that
+                # so we don't clobber the rich rmm_telemetry row with an empty payload.
+                if msg_type == "telemetry_update" and payload.get("wh_local_date"):
+                    try:
+                        store_work_hours(agent_id, asset_id, payload)
+                    except Exception as e:
+                        print(f"[gw] store_work_hours error: {e}", flush=True)
+                # A work-hours-only rollover packet carries no core telemetry (no
+                # hostname/cpu) — skip the telemetry upsert for it.
+                wh_only = (
+                    msg_type == "telemetry_update"
+                    and payload.get("wh_local_date")
+                    and payload.get("cpu_percent") is None
+                    and not payload.get("hostname")
+                )
+                if not wh_only:
+                    try:
+                        store_telemetry(agent_id, asset_id, payload)
+                    except Exception as e:
+                        print(f"[gw] store_telemetry error: {e}", flush=True)
                 continue
 
             # --- Eagle Eyes: window focus event ---

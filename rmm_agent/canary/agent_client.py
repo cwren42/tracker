@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.46"
+AGENT_VERSION = "2.9.47"
 
 import asyncio
 import base64
@@ -29,6 +29,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -4689,6 +4690,10 @@ async def shell_output_loop(session: ShellSession, ws, stop_event: asyncio.Event
 # context where the foreground window is visible to query) and reports the active
 # app/window title back to the monitoring server while monitoring is enabled for the user.
 _ee_helper_hproc: "ctypes.wintypes.HANDLE | None" = None   # process handle
+# Serializes _ee_ensure_helper's liveness-check-through-spawn so the always-on
+# work-hours meter and the (toggle-gated) Eagle loop -- which both call it via the
+# default multi-thread executor -- can never double-spawn the helper into a session.
+_ee_helper_lock = threading.Lock()
 _EE_OUT_DIR      = r"C:\ProgramData\CirqueRMM"
 _EE_OUT_FILE     = r"C:\ProgramData\CirqueRMM\CirqueEagleWindow.json"
 _EE_HELPER_CS    = r"C:\ProgramData\CirqueRMM\CirqueEagleHelper.cs"
@@ -4751,34 +4756,49 @@ class EagleEyes {
             n++;
             Thread.Sleep(Interval);
             try {
-                IntPtr hwnd = GetForegroundWindow();
-                if (hwnd == IntPtr.Zero) {
-                    File.AppendAllText(DiagFile, n + " hwnd=0" + Environment.NewLine);
-                    continue;
-                }
-                var sb = new StringBuilder(512);
-                GetWindowText(hwnd, sb, 512);
-                string title = sb.ToString().Trim();
-                if (title.Length == 0) {
-                    File.AppendAllText(DiagFile, n + " title_empty" + Environment.NewLine);
-                    continue;
-                }
-                uint pid = 0;
-                GetWindowThreadProcessId(hwnd, out pid);
-                string pname = "";
-                try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
                 // Idle is computed HERE, inside the interactive user session: GetLastInputInfo
                 // only sees the calling session's input, so the SYSTEM service in session 0
                 // cannot measure the user's idle time (it reported bogus, ever-growing idle).
+                // Sampled FIRST + unconditionally so the file is refreshed every tick even when
+                // there is no foreground window (locked session / secure desktop). The
+                // always-on work-hours meter reads ONLY this idle value; a stale idle across a
+                // lock would wrongly keep the active timer running.
                 uint idleSec = 0;
                 try {
                     LASTINPUTINFO lii = new LASTINPUTINFO();
                     lii.cbSize = (uint)Marshal.SizeOf(lii);
                     if (GetLastInputInfo(ref lii)) { idleSec = (GetTickCount() - lii.dwTime) / 1000u; }
                 } catch { }
-                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) + "\",\"i\":" + idleSec + "}";
+
+                IntPtr hwnd = GetForegroundWindow();
+                string title = "";
+                string pname = "";
+                bool locked = false;
+                if (hwnd == IntPtr.Zero) {
+                    // No foreground window queryable from this session -> session is locked
+                    // or on the secure desktop. Treat as locked so the meter pauses.
+                    locked = true;
+                    File.AppendAllText(DiagFile, n + " hwnd=0 (locked)" + Environment.NewLine);
+                } else {
+                    var sb = new StringBuilder(512);
+                    GetWindowText(hwnd, sb, 512);
+                    title = sb.ToString().Trim();
+                    uint pid = 0;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    try { pname = Process.GetProcessById((int)pid).ProcessName; } catch { }
+                    // LockApp / Windows Default Lock Screen are the visible foreground on a
+                    // locked desktop on some builds -> also treat as locked.
+                    if (pname == "LockApp" || pname == "LogonUI") { locked = true; }
+                }
+
+                // Always write the file so idle + lock stay fresh every tick. Only p/t
+                // (app/window) are blank when we can't read the foreground window; the
+                // work-hours meter ignores p/t entirely and uses only i/locked.
+                string json = "{\"p\":\"" + J(pname) + "\",\"t\":\"" + J(title) +
+                    "\",\"i\":" + idleSec + ",\"locked\":" + (locked ? "true" : "false") + "}";
                 File.WriteAllText(OutFile, json);
-                File.AppendAllText(DiagFile, n + " ok p=" + pname +
+                File.AppendAllText(DiagFile, n + " ok p=" + pname + " i=" + idleSec +
+                    " locked=" + locked +
                     " t=" + title.Substring(0, Math.Min(60, title.Length)) + Environment.NewLine);
             } catch (Exception ex) {
                 File.AppendAllText(DiagFile, n + " err=" + ex.Message + Environment.NewLine);
@@ -4850,10 +4870,22 @@ def _ee_find_active_session() -> int:
 
 
 def _ee_ensure_helper() -> bool:
-    """Ensure the persistent Eagle Eyes helper is running in the user session.
+    """Ensure the in-session helper is running (thread-safe wrapper).
+
+    Serialized so concurrent callers (the always-on work-hours meter and the
+    toggle-gated Eagle loop, both dispatched via the multi-thread executor) can
+    never race the liveness-check-through-spawn and launch two helpers.
+    """
+    with _ee_helper_lock:
+        return _ee_ensure_helper_locked()
+
+
+def _ee_ensure_helper_locked() -> bool:
+    """Ensure the persistent in-session helper is running in the user session.
 
     Returns True if the helper is (or just became) running, False on failure.
-    Idempotent: safe to call every poll cycle.
+    Idempotent: safe to call every poll cycle. MUST be called under
+    _ee_helper_lock (via _ee_ensure_helper).
     """
     global _ee_helper_hproc
     import ctypes
@@ -5070,6 +5102,255 @@ def _get_idle_seconds() -> int:
     except Exception:
         pass
     return 0
+
+
+def _read_idle_state() -> "Optional[dict]":
+    """Read ONLY the idle/lock state from the in-session helper's JSON.
+
+    Returns {"idle_s": int, "locked": bool, "fresh": bool} or None when no
+    usable data exists (non-Windows, helper not up, file missing/unreadable).
+
+    This is the always-on work-hours meter's sole window into the interactive
+    session. It reads idle_s (GetLastInputInfo measured in-session) and the lock
+    flag written by CirqueEagleHelper.exe every 10s. It deliberately IGNORES the
+    app/window (p/t) fields — no app, window-title, or screenshot data is read
+    here. It shares the same helper process as the (toggle-gated) Eagle loop via
+    _ee_ensure_helper(), so enabling this meter never double-spawns the helper.
+
+    `fresh` is False when the helper's JSON is stale (>60s old) so the meter can
+    decline to credit active time when it has no trustworthy idle signal.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        if not _ee_ensure_helper():
+            return None
+        if not os.path.exists(_EE_OUT_FILE):
+            return None
+        import time as _time
+        try:
+            mtime = os.path.getmtime(_EE_OUT_FILE)
+            fresh = (_time.time() - mtime) <= 60
+        except Exception:
+            fresh = False
+        with open(_EE_OUT_FILE, encoding="utf-8-sig") as f:
+            data = json.loads(f.read().strip())
+        try:
+            idle_s = max(0, int(data.get("i") or 0))
+        except (TypeError, ValueError):
+            idle_s = 0
+        locked = bool(data.get("locked", False))
+        return {"idle_s": idle_s, "locked": locked, "fresh": fresh}
+    except Exception:
+        return None
+
+
+# ═══════════════════════════════════════════════ Work-Hours Meter (always-on) ══
+#
+# HR work-hours metering. ALWAYS ON for every agent, independent of Eagle Eyes /
+# rmm_eagle_config. Lives in the CORE telemetry path. Meters exactly two things
+# per employee LOCAL day and reports running daily totals in each telemetry_update:
+#   on_seconds     -- wall time the PC is powered on with the agent running
+#                     (sleep/hibernate gaps are NOT credited).
+#   active_seconds -- time an interactive user is present AND actually working
+#                     (idle_s < 300 AND session not locked).
+#
+# Design invariants (the failure modes this must survive):
+#   * MONOTONIC ONLY. All accrual is time.monotonic() deltas between samples, so
+#     it is immune to wall-clock skew, NTP steps, and DST. Wall clock is used only
+#     to name the LOCAL day and to stamp first/last activity.
+#   * SLEEP/HIBERNATE. A monotonic delta far larger than the sample interval means
+#     the box slept (monotonic pauses during S3/S4). Such gaps credit NEITHER
+#     on_seconds NOR active_seconds -- we only credit a bounded delta.
+#   * RESTART. State is persisted to workhours.json every sample; on start we
+#     resume the same local day's totals. monotonic() resets across a reboot, so
+#     the stored last_monotonic is only trusted within one process run (guarded by
+#     a process-boot token) -- a restart is treated like a gap (no phantom credit).
+#   * MIDNIGHT / TZ. Uses the box LOCAL date. When the local date changes mid-delta
+#     the crossing delta is split: the pre-midnight portion closes the old day, the
+#     remainder opens the new day.
+#   * NO IDLE DATA. active_seconds is credited ONLY when a fresh idle reading exists
+#     (helper up, JSON < 60s old). No idle signal -> no active credit for that delta
+#     (on_seconds still accrues -- the PC is demonstrably on).
+_WH_STATE_FILE = r"C:\ProgramData\CirqueRMM\workhours.json"
+_WH_IDLE_THRESHOLD_S = 300     # 5 min: at/above this the user is considered idle
+_WH_MAX_CREDIT_S     = 120     # cap a single delta's credit; a bigger gap = sleep/stall
+_WH_SAMPLE_INTERVAL_S = 60     # meter samples once per telemetry cycle
+
+
+def _wh_local_today() -> str:
+    """The box's LOCAL calendar date as YYYY-MM-DD (drives the per-day rollover)."""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+class WorkHoursMeter:
+    """Accumulates on/active seconds for the current local day; monotonic-based."""
+
+    def __init__(self):
+        self.local_date = _wh_local_today()
+        self.on_seconds = 0
+        self.active_seconds = 0
+        self.first_activity_utc: "Optional[str]" = None
+        self.last_activity_utc: "Optional[str]" = None
+        self._last_monotonic: "Optional[float]" = None
+        # Identifies THIS process run. monotonic() is only comparable within one
+        # process, so a stored monotonic from a prior run must never be trusted.
+        self._boot_token = os.urandom(8).hex()
+        self._load()
+
+    # ---- persistence -------------------------------------------------------
+    def _load(self):
+        try:
+            if not os.path.exists(_WH_STATE_FILE):
+                return
+            with open(_WH_STATE_FILE, encoding="utf-8") as f:
+                st = json.loads(f.read())
+        except Exception:
+            return
+        # Resume ONLY if the stored state is for today's local date; otherwise the
+        # box was off/asleep across midnight -> start the new day clean (the prior
+        # day was already reported as a running total, last value wins server-side).
+        if st.get("local_date") == self.local_date:
+            try:
+                self.on_seconds = int(st.get("on_seconds") or 0)
+                self.active_seconds = int(st.get("active_seconds") or 0)
+            except (TypeError, ValueError):
+                self.on_seconds = 0
+                self.active_seconds = 0
+            self.first_activity_utc = st.get("first_activity_utc") or None
+            self.last_activity_utc = st.get("last_activity_utc") or None
+        # NB: never restore _last_monotonic -- a fresh process has a fresh clock.
+        # First sample after (re)start seeds it and credits nothing (treated as gap).
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(_WH_STATE_FILE), exist_ok=True)
+            tmp = _WH_STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "local_date": self.local_date,
+                    "on_seconds": self.on_seconds,
+                    "active_seconds": self.active_seconds,
+                    "first_activity_utc": self.first_activity_utc,
+                    "last_activity_utc": self.last_activity_utc,
+                    "boot_token": self._boot_token,
+                }))
+            os.replace(tmp, _WH_STATE_FILE)
+        except Exception:
+            pass
+
+    # ---- rollover ----------------------------------------------------------
+    def _roll_to(self, new_date: str):
+        """Close the current day and start fresh on new_date."""
+        self.local_date = new_date
+        self.on_seconds = 0
+        self.active_seconds = 0
+        self.first_activity_utc = None
+        self.last_activity_utc = None
+
+    # ---- one sample --------------------------------------------------------
+    def sample(self, logged_in: bool, idle_state: "Optional[dict]") -> dict:
+        """Advance the meter by one tick and return the running totals to report.
+
+        logged_in    -- True when an interactive user is present (telemetry
+                        logged_in_user is non-empty).
+        idle_state   -- dict from _read_idle_state() or None.
+        """
+        now_mono = time.monotonic()
+        today = _wh_local_today()
+
+        # Compute the elapsed delta since the previous sample (monotonic).
+        if self._last_monotonic is None:
+            # First sample this process run -> seed only, credit nothing (a restart
+            # or first boot is indistinguishable from a gap; do not invent time).
+            delta = 0.0
+        else:
+            delta = now_mono - self._last_monotonic
+            if delta < 0:
+                delta = 0.0
+        self._last_monotonic = now_mono
+
+        # Sleep / hibernate / long stall: monotonic pauses during S3/S4, so a delta
+        # far exceeding the sample interval means we were NOT running that whole time.
+        # Cap the credited on-time to a bounded amount; never credit the gap.
+        slept = delta > (_WH_SAMPLE_INTERVAL_S * 2)
+        credit = delta if delta <= _WH_MAX_CREDIT_S else (0.0 if slept else _WH_MAX_CREDIT_S)
+
+        # Determine active-ness for THIS delta.
+        idle_s = None
+        locked = False
+        fresh = False
+        if idle_state:
+            idle_s = idle_state.get("idle_s")
+            locked = bool(idle_state.get("locked"))
+            fresh = bool(idle_state.get("fresh"))
+        # Active only when: a user is present AND we have a FRESH idle reading AND
+        # not idle AND not locked. No fresh idle data -> not active (never credit
+        # active across a gap or with no idle signal).
+        is_active = bool(
+            logged_in and fresh and not locked
+            and idle_s is not None and idle_s < _WH_IDLE_THRESHOLD_S
+        )
+
+        # Apply the (possibly midnight-split) credit.
+        if credit > 0:
+            if today != self.local_date:
+                # Local day changed within this delta. Split it: give the crossing
+                # a proportional pre/post share. We don't know the exact instant of
+                # midnight within the delta; split by wall time-of-day so the new
+                # day gets roughly the seconds since local midnight.
+                now_wall = datetime.now()
+                secs_into_new_day = (
+                    now_wall.hour * 3600 + now_wall.minute * 60 + now_wall.second
+                )
+                post = min(credit, float(secs_into_new_day))
+                pre = credit - post
+                # Close the old day with its share, report it, then roll.
+                self._apply(pre, is_active)
+                closed = self._snapshot()
+                self._roll_to(today)
+                self._apply(post, is_active)
+                self._save()
+                # Return BOTH: the closed prior day (final) + the new running day.
+                cur = self._snapshot()
+                cur["_closed_prior_day"] = closed
+                return cur
+            else:
+                self._apply(credit, is_active)
+
+        self._save()
+        return self._snapshot()
+
+    def _apply(self, seconds: float, is_active: bool):
+        if seconds <= 0:
+            return
+        self.on_seconds += int(round(seconds))
+        if is_active:
+            self.active_seconds += int(round(seconds))
+            now_utc = datetime.now(timezone.utc).isoformat()
+            if not self.first_activity_utc:
+                self.first_activity_utc = now_utc
+            self.last_activity_utc = now_utc
+
+    def _snapshot(self) -> dict:
+        return {
+            "wh_local_date": self.local_date,
+            "wh_on_seconds": self.on_seconds,
+            "wh_active_seconds": self.active_seconds,
+            "wh_first_activity_utc": self.first_activity_utc,
+            "wh_last_activity_utc": self.last_activity_utc,
+        }
+
+
+# Module-level singleton meter (one per agent process).
+_wh_meter: "Optional[WorkHoursMeter]" = None
+
+
+def _wh_get_meter() -> "WorkHoursMeter":
+    global _wh_meter
+    if _wh_meter is None:
+        _wh_meter = WorkHoursMeter()
+    return _wh_meter
 
 
 # ═══════════════════════════════════════════════════════ Windows Backup ════════
@@ -6014,6 +6295,29 @@ async def main() -> None:
                         await asyncio.sleep(60)
                         try:
                             data = await loop.run_in_executor(None, collect_telemetry, agent_id)
+                            # --- Always-on work-hours meter (independent of Eagle Eyes) ---
+                            # Sample the meter once per telemetry cycle and stamp the running
+                            # daily totals onto the telemetry_update. Reads ONLY idle/lock
+                            # from the in-session helper -- no app/window/screenshot data.
+                            try:
+                                idle_state = await loop.run_in_executor(None, _read_idle_state)
+                                logged_in = bool((data.get("logged_in_user") or "").strip())
+                                meter = _wh_get_meter()
+                                totals = meter.sample(logged_in, idle_state)
+                                closed = totals.pop("_closed_prior_day", None)
+                                # On a local-day rollover, emit the CLOSED prior day first as
+                                # its own telemetry_update so the server records its final total
+                                # (server upsert is keyed on (agent_id, local_date)).
+                                if closed:
+                                    await ws.send(json.dumps({
+                                        "type": "telemetry_update",
+                                        "agent_id": agent_id,
+                                        "agent_version": AGENT_VERSION,
+                                        **closed,
+                                    }))
+                                data.update(totals)
+                            except Exception:
+                                pass  # metering must never break the telemetry path
                             await ws.send(json.dumps(data))
                         except Exception:
                             break

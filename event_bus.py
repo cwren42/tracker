@@ -88,6 +88,33 @@ def ensure_schema():
                 "CREATE INDEX IF NOT EXISTS ix_event_outbox_pending "
                 "ON event_outbox (status, id) WHERE status='pending'"
             )
+            # HR work-hours daily meter (always-on per-agent PC on-time + active time).
+            # Additive + idempotent. Populated by the RMM gateway from telemetry_update
+            # wh_* fields; keyed on (agent_id, local_date) with latest running total
+            # winning. asset_id/employee_id resolved at ingest when available (else NULL,
+            # resolved in the Phase-2 report join). Decoupled from Eagle Eyes entirely.
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS rmm_work_hours_daily ("
+                " id SERIAL PRIMARY KEY,"
+                " agent_id TEXT NOT NULL,"
+                " asset_id INTEGER,"
+                " employee_id INTEGER,"
+                " local_date DATE NOT NULL,"
+                " on_seconds INTEGER NOT NULL DEFAULT 0,"
+                " active_seconds INTEGER NOT NULL DEFAULT 0,"
+                " first_activity_utc TIMESTAMPTZ,"
+                " last_activity_utc TIMESTAMPTZ,"
+                " updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
+                " UNIQUE (agent_id, local_date))"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_rmm_work_hours_local_date "
+                "ON rmm_work_hours_daily (local_date)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_rmm_work_hours_emp_date "
+                "ON rmm_work_hours_daily (employee_id, local_date)"
+            )
             db.commit()
         finally:
             db.close()

@@ -506,6 +506,92 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
         conn.close()
 
 
+def store_work_hours(agent_id: str, asset_id: Optional[int], data: Dict[str, Any]) -> None:
+    """Upsert the always-on HR work-hours daily meter from a telemetry_update.
+
+    Reads the agent's wh_* running totals and UPSERTs into rmm_work_hours_daily
+    keyed on (agent_id, local_date). LATEST running total wins — the agent sends
+    monotonic cumulative daily totals, so the newest value is authoritative (never
+    additive). This path is ALWAYS ON: it never consults rmm_eagle_config.
+
+    employee_id is resolved from the asset's assigned person when available; left
+    NULL otherwise (the Phase-2 report resolves it via join). No app/window data.
+    """
+    local_date = (data.get("wh_local_date") or "").strip()
+    if not local_date:
+        return  # pre-work-hours agent (no wh_* fields) — nothing to record
+
+    try:
+        on_seconds = int(data.get("wh_on_seconds") or 0)
+    except (TypeError, ValueError):
+        on_seconds = 0
+    try:
+        active_seconds = int(data.get("wh_active_seconds") or 0)
+    except (TypeError, ValueError):
+        active_seconds = 0
+    first_utc = data.get("wh_first_activity_utc") or None
+    last_utc = data.get("wh_last_activity_utc") or None
+
+    conn = get_conn()
+    cur = get_cursor(conn)
+    try:
+        # Resolve employee_id from the asset's assigned person (best-effort).
+        employee_id = None
+        if asset_id:
+            try:
+                cur.execute("SELECT employee_id FROM asset WHERE id = %s", (asset_id,))
+                r = cur.fetchone()
+                if r and r.get("employee_id"):
+                    employee_id = int(r["employee_id"])
+            except Exception:
+                employee_id = None
+                # If the SELECT aborted the transaction, clear it so the UPSERT below
+                # still runs (otherwise this packet's work-hours would be dropped —
+                # cumulative totals self-heal, but this avoids the needless miss).
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+
+        cur.execute(
+            """
+            INSERT INTO rmm_work_hours_daily (
+                agent_id, asset_id, employee_id, local_date,
+                on_seconds, active_seconds, first_activity_utc, last_activity_utc,
+                updated_at
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now())
+            ON CONFLICT (agent_id, local_date) DO UPDATE SET
+                -- Latest running total wins (agent totals are cumulative + monotonic
+                -- within a day). GREATEST guards against an out-of-order/older packet
+                -- ever regressing a day's count.
+                on_seconds     = GREATEST(rmm_work_hours_daily.on_seconds, EXCLUDED.on_seconds),
+                active_seconds = GREATEST(rmm_work_hours_daily.active_seconds, EXCLUDED.active_seconds),
+                asset_id       = COALESCE(EXCLUDED.asset_id, rmm_work_hours_daily.asset_id),
+                employee_id    = COALESCE(EXCLUDED.employee_id, rmm_work_hours_daily.employee_id),
+                first_activity_utc = LEAST(
+                    COALESCE(rmm_work_hours_daily.first_activity_utc, EXCLUDED.first_activity_utc),
+                    COALESCE(EXCLUDED.first_activity_utc, rmm_work_hours_daily.first_activity_utc)),
+                last_activity_utc = GREATEST(
+                    COALESCE(rmm_work_hours_daily.last_activity_utc, EXCLUDED.last_activity_utc),
+                    COALESCE(EXCLUDED.last_activity_utc, rmm_work_hours_daily.last_activity_utc)),
+                updated_at = now()
+            """,
+            (
+                agent_id,
+                asset_id if asset_id else None,
+                employee_id,
+                local_date,
+                on_seconds,
+                active_seconds,
+                first_utc,
+                last_utc,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # Eagle (periodic) screenshots kept for 3 days; manually triggered kept for 30 days
 SCREENSHOT_RETENTION_EAGLE_DAYS = 3
 SCREENSHOT_RETENTION_MANUAL_DAYS = 30

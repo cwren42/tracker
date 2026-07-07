@@ -76,7 +76,7 @@
       <div class="p-3 border-bottom d-flex align-items-center gap-3">
         <i class="bi bi-search text-muted"></i>
         <input type="search" id="wh-search" class="form-control form-control-sm"
-          placeholder="Filter by employee…" style="max-width:280px;" oninput="whFilter()">
+          placeholder="Filter by employee or device…" style="max-width:280px;" oninput="whFilter()">
         <span class="ms-auto text-muted small">{{ d_from }} &rarr; {{ d_to }}</span>
       </div>
       <div class="table-responsive">
@@ -84,6 +84,7 @@
           <thead>
             <tr>
               <th class="ps-3">Employee</th>
+              <th>Device</th>
               <th>Date</th>
               <th class="text-end">PC On-Time</th>
               <th class="text-end pe-3">Logged-in / Active</th>
@@ -91,15 +92,16 @@
           </thead>
           <tbody id="wh-tbody">
             {% for r in rows %}
-            <tr data-emp="{{ r.emp_name|lower }}">
+            <tr data-emp="{{ r.emp_name|lower }}" data-device="{{ r.device_name|lower }}">
               <td class="ps-3">{{ r.emp_name }}</td>
+              <td><i class="bi bi-pc-display-horizontal me-1 text-muted"></i>{{ r.device_name }}</td>
               <td class="text-muted">{{ r.date }}</td>
               <td class="text-end"><span class="text-info">{{ r.on_hm }}</span></td>
               <td class="text-end pe-3"><span class="text-primary">{{ r.active_hm }}</span></td>
             </tr>
             {% else %}
             <tr>
-              <td colspan="4" class="text-center text-muted py-5">
+              <td colspan="5" class="text-center text-muted py-5">
                 <i class="bi bi-inbox fs-3 d-block mb-2"></i>
                 No work-hours data for this range yet.
                 <div class="small mt-1">Devices report daily once the agent is reporting.</div>
@@ -118,7 +120,9 @@
 function whFilter() {
   var q = (document.getElementById('wh-search').value || '').toLowerCase();
   document.querySelectorAll('#wh-tbody tr[data-emp]').forEach(function (tr) {
-    tr.style.display = tr.getAttribute('data-emp').indexOf(q) !== -1 ? '' : 'none';
+    var emp = tr.getAttribute('data-emp') || '';
+    var dev = tr.getAttribute('data-device') || '';
+    tr.style.display = (emp.indexOf(q) !== -1 || dev.indexOf(q) !== -1) ? '' : 'none';
   });
 }
 </script>

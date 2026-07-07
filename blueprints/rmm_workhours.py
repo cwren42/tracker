@@ -83,6 +83,7 @@ def rmm_work_hours():
             SELECT
                 COALESCE(w.employee_id, a.employee_id)                 AS emp_id,
                 COALESCE(e.name, a.name, w.agent_id)                   AS emp_name,
+                COALESCE(a.name, w.agent_id)                           AS device_name,
                 w.local_date                                            AS local_date,
                 w.on_seconds                                            AS on_seconds,
                 w.active_seconds                                        AS active_seconds
@@ -98,7 +99,7 @@ def rmm_work_hours():
             AND NOT (COALESCE(a.device_type ILIKE '%server%', FALSE)
                      OR COALESCE(a.category = 'Server', FALSE))
             {scope_clause}
-            ORDER BY emp_name ASC, w.local_date ASC
+            ORDER BY emp_name ASC, device_name ASC, w.local_date ASC
         """)
         try:
             result = db.session.execute(sql, params).mappings().fetchall()
@@ -107,6 +108,7 @@ def rmm_work_hours():
                 rows.append({
                     'emp_id':      r['emp_id'],
                     'emp_name':    r['emp_name'] or '(unknown)',
+                    'device_name': r['device_name'] or '(unknown)',
                     'date':        r['local_date'].isoformat() if r['local_date'] else '',
                     'on_seconds':  int(r['on_seconds'] or 0),
                     'active_seconds': int(r['active_seconds'] or 0),

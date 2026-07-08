@@ -196,13 +196,27 @@ def validate_agent(agent_id: str, token: str) -> Dict[str, Any]:
 
 
 def mark_agent_offline(agent_id: str) -> None:
-    """Called when an agent WebSocket disconnects."""
+    """Called when an agent WebSocket disconnects.
+
+    Guard against WS flaps false-Offlining a live box: only mark Offline when
+    the agent's last_seen_at is stale (>5 min) or unknown. A box can keep its
+    pull-based heartbeat (/api/rmm/agent/heartbeat) fresh even while its
+    WebSocket drops (common for Taiwan/remote boxes) — in that case it is still
+    Online and a disconnect must NOT down it. Genuinely-dead boxes (last_seen
+    aged out) still flip to Offline here, and the periodic reconcile in
+    sync_scheduler.reconcile_agent_online_state catches any that slip through.
+    """
     conn = get_conn()
     cur = get_cursor(conn)
     try:
         cur.execute(
             """UPDATE asset SET online_state = 'Offline'
-               WHERE id = (SELECT asset_id FROM rmm_agent WHERE agent_id = %s)""",
+               WHERE id = (
+                   SELECT asset_id FROM rmm_agent
+                   WHERE agent_id = %s
+                     AND (last_seen_at IS NULL
+                          OR last_seen_at < NOW() - interval '5 minutes')
+               )""",
             (agent_id,),
         )
         conn.commit()

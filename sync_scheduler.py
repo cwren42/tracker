@@ -71,6 +71,14 @@ PROXMOX_SYNC_LOCK_PATH = os.environ.get('TRACKER_PROXMOX_SYNC_LOCK_PATH', '/tmp/
 PROXMOX_SYNC_INTERVAL_MINUTES = int(os.environ.get('PROXMOX_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_PROXMOX_SYNC = os.environ.get('DISABLE_PROXMOX_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# Agent online-state reconcile: make asset.online_state a reliable mirror of the
+# real live signal (rmm_agent.last_seen_at within 5 min = Online, else Offline),
+# so WS flaps can't false-Offline a live box AND genuinely-stale boxes still go
+# Offline. Agent-backed assets ONLY — never touches UniFi/Intune-only assets.
+AGENT_ONLINE_RECONCILE_LOCK_PATH = os.environ.get('TRACKER_AGENT_ONLINE_RECONCILE_LOCK_PATH', '/tmp/tracker_agent_online_reconcile.lock')
+AGENT_ONLINE_RECONCILE_INTERVAL_SECONDS = int(os.environ.get('AGENT_ONLINE_RECONCILE_INTERVAL_SECONDS', '60'))
+DISABLE_AGENT_ONLINE_RECONCILE = os.environ.get('DISABLE_AGENT_ONLINE_RECONCILE', '').strip() in ('1', 'true', 'yes', 'on')
+
 BACKUP_SCHEDULER_LOCK_PATH = os.environ.get('TRACKER_BACKUP_SCHEDULER_LOCK_PATH', '/tmp/tracker_backup_scheduler.lock')
 BACKUP_SCHEDULER_INTERVAL_MINUTES = int(os.environ.get('BACKUP_SCHEDULER_INTERVAL_MINUTES', '60'))
 BACKUP_INCREMENTAL_INTERVAL_HOURS = int(os.environ.get('BACKUP_INCREMENTAL_INTERVAL_HOURS', '24'))
@@ -337,6 +345,19 @@ def start_sync_scheduler(flask_app):
         misfire_grace_time=120,
     )
 
+    if not DISABLE_AGENT_ONLINE_RECONCILE:
+        _scheduler.add_job(
+            func=lambda: run_agent_online_reconcile_job(flask_app),
+            trigger='interval',
+            seconds=max(AGENT_ONLINE_RECONCILE_INTERVAL_SECONDS, 15),
+            id='agent_online_reconcile',
+            name='Reconcile asset.online_state from rmm_agent.last_seen_at (agent-backed)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=30,
+        )
+
     # Proactive AI Remediation: detect -> diagnose -> propose/auto-handle ->
     # verify. Fully fail-safe (incident_service.scan swallows its own errors), so
     # a bad pass can never wedge the scheduler. 10-min cadence (telemetry is
@@ -409,6 +430,57 @@ def run_metrics_snapshot_job(flask_app):
             except Exception as exc:
                 db.session.rollback()
                 logger.error(f'Metrics snapshot error: {exc}')
+
+
+def run_agent_online_reconcile_job(flask_app):
+    """Self-correct asset.online_state for AGENT-BACKED assets off the real live
+    signal (rmm_agent.last_seen_at, the same 5-min window the fleet view uses).
+
+    Why this exists: offline-marking used to be purely event-driven on WebSocket
+    disconnect (rmm_gateway.db.mark_agent_offline), so a flappy WS on a live,
+    still-heartbeating box left online_state stuck 'Offline'. Guarding that path
+    stops the false-Offline, but then a genuinely-dead box needs *something* to
+    flip it Offline once its heartbeat ages out — this periodic pass is that
+    something. As boxes come online / go offline the column self-corrects.
+
+    Scope: agent-backed assets only (assets joined to an enabled rmm_agent). It
+    NEVER touches UniFi/Intune-only assets, and only ever writes the connectivity
+    values 'Online'/'Offline' — respecting the online_state-vs-compliance rule.
+    """
+    with _file_lock(AGENT_ONLINE_RECONCILE_LOCK_PATH) as acquired:
+        if not acquired:
+            return
+        with flask_app.app_context():
+            from extensions import db
+            from sqlalchemy import text
+            try:
+                # Live: enabled agent seen within 5 min -> Online
+                up = db.session.execute(text("""
+                    UPDATE asset a SET online_state = 'Online'
+                    FROM rmm_agent ag
+                    WHERE ag.asset_id = a.id
+                      AND ag.enabled = TRUE
+                      AND ag.last_seen_at > NOW() - interval '5 minutes'
+                      AND a.online_state IS DISTINCT FROM 'Online'
+                """)).rowcount
+                # Stale: enabled agent not seen for 5 min -> Offline. Scoped to
+                # agent-backed assets (the FROM join), so UniFi/Intune-only assets
+                # are untouched even if they were never agent-managed.
+                down = db.session.execute(text("""
+                    UPDATE asset a SET online_state = 'Offline'
+                    FROM rmm_agent ag
+                    WHERE ag.asset_id = a.id
+                      AND ag.enabled = TRUE
+                      AND (ag.last_seen_at IS NULL
+                           OR ag.last_seen_at <= NOW() - interval '5 minutes')
+                      AND a.online_state IS DISTINCT FROM 'Offline'
+                """)).rowcount
+                db.session.commit()
+                if up or down:
+                    logger.info(f'Agent online-state reconcile: +{up} Online, +{down} Offline')
+            except Exception as exc:
+                db.session.rollback()
+                logger.error(f'Agent online-state reconcile error: {exc}')
 
 
 def run_auto_approve_patches_job(flask_app):

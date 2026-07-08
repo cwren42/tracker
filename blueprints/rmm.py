@@ -643,6 +643,14 @@ def rmm_agent_heartbeat():
             text("UPDATE rmm_telemetry SET last_seen = NOW() WHERE agent_id = :aid"),
             {'aid': agent_id}
         )
+        # A heartbeating box is Online even if its WebSocket is down — mirror the
+        # live signal onto the asset so a WS flap can't leave it stuck Offline.
+        db.session.execute(
+            text("""UPDATE asset SET online_state = 'Online', last_seen = NOW()
+                    WHERE id = (SELECT asset_id FROM rmm_agent WHERE agent_id = :aid)
+                      AND online_state IS DISTINCT FROM 'Online'"""),
+            {'aid': agent_id}
+        )
         db.session.commit()
     except Exception:
         db.session.rollback()

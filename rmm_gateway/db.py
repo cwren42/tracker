@@ -214,6 +214,7 @@ def mark_agent_offline(agent_id: str) -> None:
                WHERE id = (
                    SELECT asset_id FROM rmm_agent
                    WHERE agent_id = %s
+                     AND enabled IS NOT FALSE
                      AND (last_seen_at IS NULL
                           OR last_seen_at < NOW() - interval '5 minutes')
                )""",

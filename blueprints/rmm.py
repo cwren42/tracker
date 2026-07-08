@@ -647,7 +647,8 @@ def rmm_agent_heartbeat():
         # live signal onto the asset so a WS flap can't leave it stuck Offline.
         db.session.execute(
             text("""UPDATE asset SET online_state = 'Online', last_seen = NOW()
-                    WHERE id = (SELECT asset_id FROM rmm_agent WHERE agent_id = :aid)
+                    WHERE id = (SELECT asset_id FROM rmm_agent
+                                WHERE agent_id = :aid AND enabled IS NOT FALSE)
                       AND online_state IS DISTINCT FROM 'Online'"""),
             {'aid': agent_id}
         )

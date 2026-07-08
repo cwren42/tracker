@@ -97,14 +97,22 @@ def rmm_work_hours():
             excl_clause = "AND COALESCE(a.name, w.agent_id, '') !~* :excl_regex"
             params['excl_regex'] = excl_regex
 
+        # AGGREGATE over the selected range, one row per (employee, device):
+        #   Days   = COUNT(DISTINCT local_date) that this (emp, device) has data
+        #   Total  = SUM(on_seconds)/SUM(active_seconds) across the range
+        # Avg-per-day is computed Python-side (Total / days-with-data) so we divide
+        # by days-WITH-DATA — weekends/off-days never appear as rows, so they don't
+        # dilute the "average workday". The server-class + device-glob + scope filters
+        # stay in the WHERE (unchanged grain of the filter), only the projection is
+        # grouped now, so no per-day duplication remains.
         sql = text(f"""
             SELECT
                 COALESCE(w.employee_id, a.employee_id)                 AS emp_id,
                 COALESCE(e.name, a.name, w.agent_id)                   AS emp_name,
                 COALESCE(a.name, w.agent_id)                           AS device_name,
-                w.local_date                                            AS local_date,
-                w.on_seconds                                            AS on_seconds,
-                w.active_seconds                                        AS active_seconds
+                COUNT(DISTINCT w.local_date)                           AS days,
+                COALESCE(SUM(w.on_seconds), 0)                         AS on_seconds,
+                COALESCE(SUM(w.active_seconds), 0)                     AS active_seconds
             FROM rmm_work_hours_daily w
             LEFT JOIN asset a    ON a.id = w.asset_id
             LEFT JOIN employee e ON e.id = COALESCE(w.employee_id, a.employee_id)
@@ -118,30 +126,42 @@ def rmm_work_hours():
                      OR COALESCE(a.category = 'Server', FALSE))
             {excl_clause}
             {scope_clause}
-            ORDER BY emp_name ASC, device_name ASC, w.local_date ASC
+            GROUP BY
+                COALESCE(w.employee_id, a.employee_id),
+                COALESCE(e.name, a.name, w.agent_id),
+                COALESCE(a.name, w.agent_id)
+            ORDER BY emp_name ASC, device_name ASC
         """)
         try:
             result = db.session.execute(sql, params).mappings().fetchall()
             seen_emps = set()
             for r in result:
+                on_s = int(r['on_seconds'] or 0)
+                act_s = int(r['active_seconds'] or 0)
+                days = int(r['days'] or 0)
+                # Guard divide-by-zero: a grouped row always has days >= 1, but be safe.
+                avg_on = on_s // days if days else 0
+                avg_act = act_s // days if days else 0
                 rows.append({
                     'emp_id':      r['emp_id'],
                     'emp_name':    r['emp_name'] or '(unknown)',
                     'device_name': r['device_name'] or '(unknown)',
-                    'date':        r['local_date'].isoformat() if r['local_date'] else '',
-                    'on_seconds':  int(r['on_seconds'] or 0),
-                    'active_seconds': int(r['active_seconds'] or 0),
-                    'on_hm':       _fmt_hm(r['on_seconds']),
-                    'active_hm':   _fmt_hm(r['active_seconds']),
+                    'days':        days,
+                    'on_seconds':  on_s,
+                    'active_seconds': act_s,
+                    'on_hm':       _fmt_hm(on_s),
+                    'active_hm':   _fmt_hm(act_s),
+                    'avg_on_hm':   _fmt_hm(avg_on),
+                    'avg_active_hm': _fmt_hm(avg_act),
                 })
                 if r['emp_id'] is not None:
                     seen_emps.add(r['emp_id'])
                 else:
                     seen_emps.add(('name', r['emp_name']))
-                summary['on_seconds'] += int(r['on_seconds'] or 0)
-                summary['active_seconds'] += int(r['active_seconds'] or 0)
+                summary['on_seconds'] += on_s
+                summary['active_seconds'] += act_s
+                summary['days'] += days
             summary['employees'] = len(seen_emps)
-            summary['days'] = len(rows)
         except Exception as e:
             error = str(e)
 

@@ -9,7 +9,7 @@
     <div>
       <h5 class="mb-0 fw-bold"><i class="bi bi-clock-history me-1 text-primary"></i>Work Hours</h5>
       <small class="text-muted">
-        PC on-time and logged-in / active time per employee, per day
+        PC on-time and logged-in / active time per employee, totaled over the selected range
         {% if scoped %}<span class="badge text-bg-secondary ms-1">Scoped to your team</span>{% endif %}
       </small>
     </div>
@@ -85,9 +85,11 @@
             <tr>
               <th class="ps-3">Employee</th>
               <th>Device</th>
-              <th>Date</th>
-              <th class="text-end">PC On-Time</th>
-              <th class="text-end pe-3">Logged-in / Active</th>
+              <th class="text-end">Days</th>
+              <th class="text-end">Total PC On-Time</th>
+              <th class="text-end">Total Active</th>
+              <th class="text-end">Avg On/Day</th>
+              <th class="text-end pe-3">Avg Active/Day</th>
             </tr>
           </thead>
           <tbody id="wh-tbody">
@@ -95,13 +97,15 @@
             <tr data-emp="{{ r.emp_name|lower }}" data-device="{{ r.device_name|lower }}">
               <td class="ps-3">{{ r.emp_name }}</td>
               <td><i class="bi bi-pc-display-horizontal me-1 text-muted"></i>{{ r.device_name }}</td>
-              <td class="text-muted">{{ r.date }}</td>
+              <td class="text-end text-muted">{{ r.days }}</td>
               <td class="text-end"><span class="text-info">{{ r.on_hm }}</span></td>
-              <td class="text-end pe-3"><span class="text-primary">{{ r.active_hm }}</span></td>
+              <td class="text-end"><span class="text-primary">{{ r.active_hm }}</span></td>
+              <td class="text-end text-muted">{{ r.avg_on_hm }}</td>
+              <td class="text-end pe-3 text-muted">{{ r.avg_active_hm }}</td>
             </tr>
             {% else %}
             <tr>
-              <td colspan="5" class="text-center text-muted py-5">
+              <td colspan="7" class="text-center text-muted py-5">
                 <i class="bi bi-inbox fs-3 d-block mb-2"></i>
                 No work-hours data for this range yet.
                 <div class="small mt-1">Devices report daily once the agent is reporting.</div>

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.50"
+AGENT_VERSION = "2.9.51"
 
 import asyncio
 import base64
@@ -1676,6 +1676,80 @@ def _warp_teardown() -> None:
     #    Manual (not Disabled) so a genuine off-site roam can start it again.
     _ps("Stop-Service -Name CloudflareWARP -Force -ErrorAction SilentlyContinue; "
         "Set-Service -Name CloudflareWARP -StartupType Manual -ErrorAction SilentlyContinue")
+
+    # 4b) SUPPRESS the orphaned tray GUI. Stopping the service leaves the WARP
+    #     MSI's own login auto-launch (HKLM ...\Run "CloudflareWARP") + any running
+    #     "Cloudflare WARP" tray process pointed at a now-dead/unconfigured service
+    #     -> the tray pops "Unable to Connect / Initializing tunnel interface" at
+    #     next login, which looks exactly like WARP re-triggering (reported on
+    #     PAULV-MSI 2026-07-08). Kill the running tray, strip the login auto-launch
+    #     (HKLM + WOW6432 + every loaded HKU hive + Startup shortcuts), and drop our
+    #     CF_WARP_Bakein task. All corp-path-only (this fn never runs off-site), and
+    #     ensure_warp re-creates CF_WARP_Bakein if the box later roams off-site.
+    #     Our WARP is headless (service_mode/auto_connect via MDM) so the tray is
+    #     cosmetic -- losing it costs nothing.
+    try:
+        import winreg  # type: ignore
+        _run_paths = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
+        ]
+        # Per-user Run hives that are currently loaded under HKEY_USERS.
+        try:
+            hu = winreg.OpenKey(winreg.HKEY_USERS, "")
+            i = 0
+            while True:
+                try:
+                    sid = winreg.EnumKey(hu, i); i += 1
+                except OSError:
+                    break
+                if sid.endswith("_Classes"):
+                    continue
+                _run_paths.append((winreg.HKEY_USERS, sid + r"\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"))
+            winreg.CloseKey(hu)
+        except OSError:
+            pass
+        for hive, path in _run_paths:
+            try:
+                k = winreg.OpenKey(hive, path, 0, winreg.KEY_ALL_ACCESS)
+            except OSError:
+                continue
+            names = []
+            try:
+                j = 0
+                while True:
+                    try:
+                        nm, _v, _t = winreg.EnumValue(k, j); j += 1
+                    except OSError:
+                        break
+                    if ("cloudflare" in nm.lower()) or ("warp" in nm.lower()):
+                        names.append(nm)
+            except OSError:
+                pass
+            for nm in names:
+                try:
+                    winreg.DeleteValue(k, nm)
+                    print(f"[warp] teardown removed tray auto-launch {path}\\{nm}", flush=True)
+                except OSError:
+                    pass
+            winreg.CloseKey(k)
+    except Exception as e:
+        print(f"[warp] teardown Run-key strip failed: {e}", flush=True)
+    # Kill the running tray GUI (NOT warp-svc, which is the service handled above).
+    _ps("Get-Process -ErrorAction SilentlyContinue | Where-Object { "
+        "($_.ProcessName -like '*Cloudflare*' -or $_.ProcessName -like '*warp*') "
+        "-and $_.ProcessName -ne 'warp-svc' } | Stop-Process -Force -ErrorAction SilentlyContinue")
+    # Remove Startup-folder shortcuts + drop our bake-in task (recreated if off-site).
+    _ps(r"$sp=@('C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'); "
+        r"Get-ChildItem 'C:\Users' -Directory -EA SilentlyContinue | ForEach-Object { "
+        r"$sp += (Join-Path $_.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup') }; "
+        r"foreach($d in $sp){ Get-ChildItem $d -Filter '*Cloudflare*' -EA SilentlyContinue | "
+        r"Remove-Item -Force -EA SilentlyContinue }")
+    try:
+        _sp.run(["schtasks", "/Delete", "/TN", "CF_WARP_Bakein", "/F"],
+                capture_output=True, timeout=15, creationflags=0x08000000)
+    except Exception:
+        pass
 
     # 5) Reset any physical NIC whose DNS is STILL a 127.0.2.x loopback back to
     #    DHCP, then flush. (disconnect usually restores DNS, but if warp-svc left

@@ -194,9 +194,19 @@ def rmm_work_hours():
                     'dow':       dr['d'].strftime('%a') if dr['d'] else '',
                     'on_hm':     _fmt_hm(on_s),
                     'active_hm': _fmt_hm(act_s),
+                    '_on':       on_s,
+                    '_active':   act_s,
                 })
             for row in rows:
-                row['daily'] = daily_map.get((row['emp_name'], row['device_name']), [])
+                days = daily_map.get((row['emp_name'], row['device_name']), [])
+                # Bar widths are relative to this device's busiest on-time day, so the
+                # longest bar fills the track and the rest scale against it. Within each
+                # bar, the solid part is Active and the faded part is idle (on - active).
+                scale = max((d['_on'] for d in days), default=0) or 1
+                for d in days:
+                    d['active_pct'] = round(100.0 * d['_active'] / scale, 1)
+                    d['idle_pct'] = round(100.0 * max(d['_on'] - d['_active'], 0) / scale, 1)
+                row['daily'] = days
         except Exception as e:
             error = str(e)
 

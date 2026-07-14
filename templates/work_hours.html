@@ -94,14 +94,48 @@
           </thead>
           <tbody id="wh-tbody">
             {% for r in rows %}
-            <tr data-emp="{{ r.emp_name|lower }}" data-device="{{ r.device_name|lower }}">
-              <td class="ps-3">{{ r.emp_name }}</td>
+            <tr class="wh-row" data-emp="{{ r.emp_name|lower }}" data-device="{{ r.device_name|lower }}"
+                role="button" style="cursor:pointer" title="Click for per-day breakdown"
+                onclick="whToggle(this)">
+              <td class="ps-3">
+                <i class="bi bi-chevron-right wh-caret me-1 text-muted small"></i>{{ r.emp_name }}
+              </td>
               <td><i class="bi bi-pc-display-horizontal me-1 text-muted"></i>{{ r.device_name }}</td>
               <td class="text-end text-muted">{{ r.days }}</td>
               <td class="text-end"><span class="text-info">{{ r.on_hm }}</span></td>
               <td class="text-end"><span class="text-primary">{{ r.active_hm }}</span></td>
               <td class="text-end text-muted">{{ r.avg_on_hm }}</td>
               <td class="text-end pe-3 text-muted">{{ r.avg_active_hm }}</td>
+            </tr>
+            <tr class="wh-detail d-none">
+              <td colspan="7" class="p-0">
+                <div class="bg-body-secondary px-3 py-2 border-start border-3 border-primary">
+                  <div class="small text-muted mb-2">
+                    <i class="bi bi-calendar-week me-1"></i>Per-day breakdown —
+                    <strong>{{ r.emp_name }}</strong> · {{ r.device_name }}
+                  </div>
+                  <table class="table table-sm table-borderless mb-0" style="max-width:520px;">
+                    <thead>
+                      <tr class="small text-muted">
+                        <th class="fw-normal">Date</th>
+                        <th class="text-end fw-normal">PC On-Time</th>
+                        <th class="text-end fw-normal">Active</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for d in r.daily %}
+                      <tr>
+                        <td>{{ d.date }} <span class="text-muted small">{{ d.dow }}</span></td>
+                        <td class="text-end"><span class="text-info">{{ d.on_hm }}</span></td>
+                        <td class="text-end"><span class="text-primary">{{ d.active_hm }}</span></td>
+                      </tr>
+                      {% else %}
+                      <tr><td colspan="3" class="text-muted small">No per-day records in range.</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </td>
             </tr>
             {% else %}
             <tr>
@@ -121,12 +155,23 @@
 </div>
 
 <script>
+function whToggle(row) {
+  var d = row.nextElementSibling;
+  if (!d || !d.classList.contains('wh-detail')) return;
+  d.classList.toggle('d-none');
+  var c = row.querySelector('.wh-caret');
+  if (c) { c.classList.toggle('bi-chevron-right'); c.classList.toggle('bi-chevron-down'); }
+}
 function whFilter() {
   var q = (document.getElementById('wh-search').value || '').toLowerCase();
-  document.querySelectorAll('#wh-tbody tr[data-emp]').forEach(function (tr) {
+  document.querySelectorAll('#wh-tbody tr.wh-row').forEach(function (tr) {
     var emp = tr.getAttribute('data-emp') || '';
     var dev = tr.getAttribute('data-device') || '';
-    tr.style.display = (emp.indexOf(q) !== -1 || dev.indexOf(q) !== -1) ? '' : 'none';
+    var show = (emp.indexOf(q) !== -1 || dev.indexOf(q) !== -1);
+    tr.style.display = show ? '' : 'none';
+    // Keep each row's per-day detail row in lockstep with its parent when filtering.
+    var d = tr.nextElementSibling;
+    if (d && d.classList.contains('wh-detail')) { d.style.display = show ? '' : 'none'; }
   });
 }
 </script>

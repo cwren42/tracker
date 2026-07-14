@@ -36,9 +36,9 @@ def _fmt_hm(seconds):
 
 
 def _parse_range():
-    """Resolve the from/to date filter. Default = last 7 days (inclusive)."""
+    """Resolve the from/to date filter. Default = last 14 days (inclusive)."""
     today = date.today()
-    default_from = today - timedelta(days=6)
+    default_from = today - timedelta(days=13)
 
     def _pd(val, fallback):
         if not val:
@@ -162,6 +162,41 @@ def rmm_work_hours():
                 summary['active_seconds'] += act_s
                 summary['days'] += days
             summary['employees'] = len(seen_emps)
+
+            # Per-day breakdown for the row drill-in. Same filters/scope/exclusions
+            # as the aggregate; rmm_work_hours_daily is already one row per
+            # (agent, local_date), so these are the raw daily records. Keyed by the
+            # displayed (employee, device) so each aggregate row can attach its days.
+            daily_sql = text(f"""
+                SELECT
+                    COALESCE(e.name, a.name, w.agent_id)                  AS emp_name,
+                    COALESCE(a.name, w.agent_id)                          AS device_name,
+                    w.local_date                                          AS d,
+                    COALESCE(w.on_seconds, 0)                             AS on_seconds,
+                    COALESCE(w.active_seconds, 0)                         AS active_seconds
+                FROM rmm_work_hours_daily w
+                LEFT JOIN asset a    ON a.id = w.asset_id
+                LEFT JOIN employee e ON e.id = COALESCE(w.employee_id, a.employee_id)
+                WHERE w.local_date >= :d_from AND w.local_date <= :d_to
+                AND NOT (COALESCE(a.device_type ILIKE '%server%', FALSE)
+                         OR COALESCE(a.category = 'Server', FALSE))
+                {excl_clause}
+                {scope_clause}
+                ORDER BY w.local_date ASC
+            """)
+            daily_map = {}
+            for dr in db.session.execute(daily_sql, params).mappings().fetchall():
+                key = (dr['emp_name'] or '(unknown)', dr['device_name'] or '(unknown)')
+                on_s = int(dr['on_seconds'] or 0)
+                act_s = int(dr['active_seconds'] or 0)
+                daily_map.setdefault(key, []).append({
+                    'date':      dr['d'].isoformat() if dr['d'] else '',
+                    'dow':       dr['d'].strftime('%a') if dr['d'] else '',
+                    'on_hm':     _fmt_hm(on_s),
+                    'active_hm': _fmt_hm(act_s),
+                })
+            for row in rows:
+                row['daily'] = daily_map.get((row['emp_name'], row['device_name']), [])
         except Exception as e:
             error = str(e)
 

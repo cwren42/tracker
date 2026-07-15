@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.51"
+AGENT_VERSION = "2.9.52"
 
 import asyncio
 import base64
@@ -1647,21 +1647,25 @@ def _warp_teardown() -> None:
     _cli("disconnect")
     _cli("registration", "delete")
 
-    # 3) Neutralize MDM so the service can't re-enroll on-site.
+    # 3) Neutralize ENROLLMENT so the service can't re-enroll on-site -- but KEEP the
+    #    client MUZZLED (onboarding=false + switch_locked). Deleting onboarding=false
+    #    is what let a dormant/installed on-corp client fall back to the mode-picker
+    #    ("Private browsing vs Cloudflare One") -- observed on CHU-MSI 2026-07-15.
+    #    Clear only the org/auth/connect bits; SET onboarding=0 + switch_locked=1 so a
+    #    dormant client stays silent. (Re-enroll off-site rewrites org/auth/token.)
     try:
         import winreg  # type: ignore
-        try:
-            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                               r"SOFTWARE\Policies\Cloudflare\Warp", 0, winreg.KEY_SET_VALUE)
-            for v in ("organization", "auth_client_id", "auth_client_secret",
-                      "switch_locked", "service_mode", "auto_connect", "onboarding"):
-                try:
-                    winreg.DeleteValue(k, v)
-                except FileNotFoundError:
-                    pass
-            winreg.CloseKey(k)
-        except FileNotFoundError:
-            pass
+        k = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Cloudflare\Warp")
+        for v in ("organization", "auth_client_id", "auth_client_secret",
+                  "service_mode", "auto_connect"):
+            try:
+                winreg.DeleteValue(k, v)
+            except FileNotFoundError:
+                pass
+        # MUZZLE (keep, do not delete): no onboarding UI, switch stays locked.
+        winreg.SetValueEx(k, "onboarding", 0, winreg.REG_DWORD, 0)
+        winreg.SetValueEx(k, "switch_locked", 0, winreg.REG_DWORD, 1)
+        winreg.CloseKey(k)
     except Exception as e:
         print(f"[warp] teardown MDM registry-clear failed: {e}", flush=True)
     try:
@@ -1780,6 +1784,67 @@ def _warp_teardown() -> None:
         print("[warp] torn down (corp/LAN/UID path present) -- internal DNS/AD restored", flush=True)
 
 
+def _warp_muzzle_dormant() -> None:
+    """Silence an INSTALLED-but-dormant WARP client on an on-site box so it never
+    shows the onboarding mode-picker or a stray tray. Does NOT uninstall (the box may
+    roam off-site and need to re-enroll) and does NOT touch a connected client. Sets
+    the MDM muzzle (onboarding=false + switch_locked), kills any picker/tray process,
+    strips the login auto-launch, and stops the (unenrolled) service. Windows-only."""
+    import subprocess as _sp
+    if sys.platform != "win32":
+        return
+    # 1) MDM muzzle: never prompt, switch stays locked (idempotent).
+    try:
+        import winreg  # type: ignore
+        k = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Cloudflare\Warp")
+        winreg.SetValueEx(k, "onboarding", 0, winreg.REG_DWORD, 0)
+        winreg.SetValueEx(k, "switch_locked", 0, winreg.REG_DWORD, 1)
+        winreg.CloseKey(k)
+    except Exception as e:
+        print(f"[warp] muzzle MDM write failed: {e}", flush=True)
+
+    def _ps(script, timeout=25):
+        try:
+            _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                     "Bypass", "-Command", script], capture_output=True, text=True,
+                    errors="replace", timeout=timeout, creationflags=0x08000000)
+        except Exception:
+            pass
+
+    # 2) Kill any picker/tray process (NOT warp-svc) + strip the login auto-launch so
+    #    it can't relaunch the picker; stop the dormant (unenrolled) service.
+    _ps("Get-Process 'Cloudflare WARP','Cloudflare One' -EA SilentlyContinue | "
+        "Stop-Process -Force -EA SilentlyContinue")
+    try:
+        import winreg  # type: ignore
+        for hive, path in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+                           (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run")):
+            try:
+                r = winreg.OpenKey(hive, path, 0, winreg.KEY_ALL_ACCESS)
+            except OSError:
+                continue
+            names = []
+            i = 0
+            while True:
+                try:
+                    nm, _v, _t = winreg.EnumValue(r, i); i += 1
+                except OSError:
+                    break
+                if "cloudflare" in nm.lower() or "warp" in nm.lower():
+                    names.append(nm)
+            for nm in names:
+                try:
+                    winreg.DeleteValue(r, nm)
+                except OSError:
+                    pass
+            winreg.CloseKey(r)
+    except Exception as e:
+        print(f"[warp] muzzle run-key strip failed: {e}", flush=True)
+    # Stop the dormant service (Manual so a genuine off-site roam can start it again).
+    _ps("Stop-Service -Name CloudflareWARP -Force -ErrorAction SilentlyContinue; "
+        "Set-Service -Name CloudflareWARP -StartupType Manual -ErrorAction SilentlyContinue")
+
+
 def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
     """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
     only if needed, connect, then write a clean internal RustDesk2.toml preserving
@@ -1881,7 +1946,17 @@ def ensure_warp(tracker_url: str, agent_id: str, token: str, on_lan: bool) -> No
                 _warp_log_once("teardown", "[warp] on-site/VPN (relay reachable) but WARP up -- tearing down")
                 _warp_teardown()
             else:
-                _warp_log_once("onsite", "[warp] on-LAN/site (relay reachable) -- skipping WARP")
+                # On-site and WARP not "up" (connected). It may still be INSTALLED and
+                # sitting there unenrolled/dormant -- which shows the onboarding mode-
+                # picker if the MDM muzzle is missing (CHU-MSI 2026-07-15). Teardown
+                # never fires here (it gates on _warp_is_up), so muzzle explicitly:
+                # keep the client silent + dormant without uninstalling (so it can
+                # still re-enroll when the box roams off-site).
+                if os.path.isfile(_WARP_CLI):
+                    _warp_muzzle_dormant()
+                    _warp_log_once("onsite", "[warp] on-LAN/site -- WARP muzzled dormant (no onboarding prompt)")
+                else:
+                    _warp_log_once("onsite", "[warp] on-LAN/site, WARP not installed -- skip")
             return
 
         org_default = 'cirquetools'

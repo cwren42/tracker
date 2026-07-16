@@ -465,9 +465,9 @@
                         </td>
                         <td class="mobile-hide">
                             {% if asset.rustdesk_id %}
-                                <a href="rustdesk://{{ asset.rustdesk_id }}" class="btn btn-sm btn-outline-primary" title="Connect via RustDesk" data-bs-toggle="tooltip">
+                                <button type="button" class="btn btn-sm btn-outline-primary" title="Connect via RustDesk" data-bs-toggle="tooltip" onclick="startRustDeskSession({{ asset.id }})">
                                     <i class="bi bi-display"></i>
-                                </a>
+                                </button>
                             {% else %}
                                 <span class="text-muted">—</span>
                             {% endif %}
@@ -910,5 +910,49 @@ document.querySelectorAll('.local-time[data-utc]').forEach(el => {
     el.textContent = formatted;
     el.title = d.toLocaleString(undefined, {dateStyle:'full', timeStyle:'short'}) + ' (your local time)';
 });
+
+// RustDesk connect from the assets LIST — same audited flow as the asset detail page:
+// POST (with a reason for the audit log) -> get id + permanent password -> copy pw to
+// clipboard + launch rustdesk:// WITH the password so IT isn't prompted. (Fixes the old
+// list button that used a bare rustdesk://<id> with no password.)
+async function startRustDeskSession(assetId) {
+    const reason = prompt('Reason for remote session (required for audit log):');
+    if (!reason || !reason.trim()) { alert('A reason is required.'); return; }
+    let data = {};
+    try {
+        const resp = await fetch(`/assets/${assetId}/remote/rustdesk/start`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({reason: reason.trim()})
+        });
+        data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.success) { alert(data.error || 'Failed to start session'); return; }
+    } catch (e) { alert('Failed to start session: ' + e); return; }
+    const id = (data.rustdesk_id || '').trim();
+    const pw = (data.rustdesk_password || '').trim();
+    if (pw) {
+        try { await navigator.clipboard.writeText(pw); showRustDeskToast('Password copied to clipboard ✓'); }
+        catch (_) { showRustDeskToast('Password: ' + pw, 8000); }
+    }
+    if (id) {
+        setTimeout(() => {
+            window.location.href = pw
+                ? `rustdesk://${encodeURIComponent(id)}?password=${encodeURIComponent(pw)}&fullscreen=1`
+                : `rustdesk://${encodeURIComponent(id)}?fullscreen=1`;
+        }, 600);
+    }
+}
+function showRustDeskToast(msg, ms = 3500) {
+    let t = document.getElementById('rdToast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'rdToast';
+        t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:#198754;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .4s';
+        document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    clearTimeout(t._hide);
+    t._hide = setTimeout(() => { t.style.opacity = '0'; }, ms);
+}
 </script>
 {% endblock %}

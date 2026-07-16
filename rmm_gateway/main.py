@@ -612,6 +612,44 @@ async def enqueue_remediation(agent_id: str, request: Request):
     # note (e.g. the disk-space diagnostic attaches its output to the disk ticket).
     ticket_id = body.get("ticket_id")
 
+    # 0) Canonicalize agent_id. The {agent_id} URL segment is whatever the caller
+    #    passed — often the asset NAME or hostname, or wrong case. Renamed/repurposed
+    #    boxes keep their original enrollment agent_id while the asset name changed
+    #    (e.g. asset "Ken-Lenovo" -> agent_id "KEN-DELL"; "ChrisHome" -> "CHRISHOME").
+    #    Both the INSERT and the live-push (agents.get) match agent_id EXACTLY, so a
+    #    mismatched identifier silently strands the command as an undeliverable
+    #    'queued' orphan that looks like a dead command channel. Resolve the TRUE
+    #    rmm_agent.agent_id — prefer the asset_id in the body, else a case-insensitive
+    #    match on the passed value — so mis-addressing can't happen again.
+    try:
+        _c = get_conn(); _cu = get_cursor(_c)
+        _canon = None
+        if asset_id is not None:
+            _cu.execute(
+                "SELECT agent_id FROM rmm_agent WHERE asset_id=%s "
+                "ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
+                (asset_id,),
+            )
+            _r = _cu.fetchone()
+            if _r:
+                _canon = _r["agent_id"]
+        if _canon is None and agent_id:
+            _cu.execute(
+                "SELECT agent_id FROM rmm_agent WHERE lower(agent_id)=lower(%s) LIMIT 1",
+                (agent_id,),
+            )
+            _r = _cu.fetchone()
+            if _r:
+                _canon = _r["agent_id"]
+        _cu.close(); _c.close()
+        if _canon and _canon != agent_id:
+            print(f"[gw] enqueue: canonicalized agent_id {agent_id!r} -> {_canon!r} "
+                  f"(asset_id={asset_id})", flush=True)
+            agent_id = _canon
+    except Exception as _e:
+        print(f"[gw] enqueue: agent_id canonicalize failed for {agent_id!r} "
+              f"(asset_id={asset_id}): {_e}", flush=True)
+
     # 1) Persist as queued (durable — survives if the agent is offline).
     try:
         conn = get_conn(); cur = get_cursor(conn)

@@ -713,12 +713,12 @@ def _enqueue_browser_remediation(agent_id, asset_id, browser, created_by):
     try:
         existing = con.execute(
             """SELECT id, status FROM rmm_remediation_queue
-               WHERE agent_id = %s
+               WHERE asset_id = %s
                  AND action_type = 'run_script'
                  AND status IN ('queued', 'deploying')
                  AND payload LIKE %s
                ORDER BY id DESC LIMIT 1""",
-            (agent_id, f'%rmm-remediate:{browser}%')
+            (asset_id, f'%rmm-remediate:{browser}%')
         ).fetchone()
     finally:
         con.close()

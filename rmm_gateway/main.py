@@ -58,9 +58,12 @@ def _invalidate_eagle_cache(agent_id: str) -> None:
     _eagle_cfg_cache.pop(agent_id, None)
 
 
-async def _dispatch_next_product(websocket, agent_id: str) -> bool:
+async def _dispatch_next_product(websocket, agent_id: str, asset_id: int) -> bool:
     """Dispatch the next queued product (fewest CVEs first) to the agent.
-    Returns True if a product was dispatched, False if nothing queued."""
+    Returns True if a product was dispatched, False if nothing queued.
+
+    Keyed on the STABLE asset_id (not the drift-prone agent_id string) so renamed /
+    re-enrolled / mis-cased boxes still receive their queued jobs."""
     try:
         conn = get_conn()
         cur  = get_cursor(conn)
@@ -71,11 +74,11 @@ async def _dispatch_next_product(websocket, agent_id: str) -> bool:
                FROM cve_patch_job j
                LEFT JOIN device_vulnerability dv
                       ON dv.cve_id = j.cve_id AND dv.asset_id = j.asset_id
-               WHERE j.agent_id=%s AND j.status='queued'
+               WHERE j.asset_id=%s AND j.status='queued'
                GROUP BY COALESCE(dv.product_name,''), j.asset_id
                ORDER BY COUNT(*) ASC
                LIMIT 1""",
-            (agent_id,)
+            (asset_id,)
         )
         row = cur.fetchone()
         if not row:
@@ -88,18 +91,18 @@ async def _dispatch_next_product(websocket, agent_id: str) -> bool:
         if product_name:
             cur.execute(
                 """SELECT j.id, j.cve_id FROM cve_patch_job j
-                   WHERE j.agent_id=%s AND j.status='queued'
+                   WHERE j.asset_id=%s AND j.status='queued'
                      AND j.cve_id IN (
                          SELECT cve_id FROM device_vulnerability
                          WHERE product_name=%s AND asset_id=%s
                      )""",
-                (agent_id, product_name, asset_id_j)
+                (asset_id, product_name, asset_id_j)
             )
         else:
             cur.execute(
                 """SELECT id, cve_id FROM cve_patch_job
-                   WHERE agent_id=%s AND status='queued' AND id=%s""",
-                (agent_id, rep_id)
+                   WHERE asset_id=%s AND status='queued' AND id=%s""",
+                (asset_id, rep_id)
             )
         sibling_rows = cur.fetchall()
         all_cves    = list({r["cve_id"] for r in sibling_rows})
@@ -173,7 +176,7 @@ def _get_flush_semaphore() -> asyncio.Semaphore:
     return _flush_semaphore
 
 
-async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
+async def _flush_os_patch_jobs(websocket, agent_id: str, asset_id: int) -> int:
     """Deliver queued OS Windows-Update jobs (rmm_patch_job, status='queued') to a
     just-connected agent. Marks each 'deploying' ONLY after a confirmed send.
     Idempotent: never touches terminal rows (completed/no_op/failed).
@@ -190,13 +193,16 @@ async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
     try:
         conn = get_conn()
         cur = get_cursor(conn)
+        # Dual-read: prefer the stable asset_id, but still deliver in-flight rows that
+        # predate the asset_id backfill (asset_id IS NULL) by their agent_id.
         cur.execute(
             """SELECT id, update_ids, kb_ids, titles, COALESCE(attempts, 0) AS attempts
                  FROM rmm_patch_job
-                WHERE agent_id=%s AND status='queued'
+                WHERE (asset_id=%s OR (asset_id IS NULL AND agent_id=%s))
+                  AND status='queued'
                 ORDER BY id ASC
                 LIMIT %s""",
-            (agent_id, _REMEDIATION_FLUSH_BATCH),
+            (asset_id, agent_id, _REMEDIATION_FLUSH_BATCH),
         )
         rows = cur.fetchall()
         cur.close()
@@ -265,7 +271,7 @@ async def _flush_os_patch_jobs(websocket, agent_id: str) -> int:
     return dispatched
 
 
-async def _flush_remediation_queue(websocket, agent_id: str) -> int:
+async def _flush_remediation_queue(websocket, agent_id: str, asset_id: int) -> int:
     """Deliver queued general remediation actions (rmm_remediation_queue,
     status='queued') to a just-connected agent. Stamps a unique correlation
     session_id into the payload (the agent echoes it back in script_result, which
@@ -283,10 +289,10 @@ async def _flush_remediation_queue(websocket, agent_id: str) -> int:
         cur.execute(
             """SELECT id, action_type, payload, COALESCE(attempts, 0) AS attempts
                  FROM rmm_remediation_queue
-                WHERE agent_id=%s AND status='queued'
+                WHERE asset_id=%s AND status='queued'
                 ORDER BY id ASC
                 LIMIT %s""",
-            (agent_id, _REMEDIATION_FLUSH_BATCH),
+            (asset_id, _REMEDIATION_FLUSH_BATCH),
         )
         rows = cur.fetchall()
         cur.close()
@@ -335,7 +341,7 @@ async def _flush_remediation_queue(websocket, agent_id: str) -> int:
     return dispatched
 
 
-async def _flush_queued_work(websocket, agent_id: str) -> None:
+async def _flush_queued_work(websocket, agent_id: str, asset_id: int) -> None:
     """Single entry point for the reconnect flush. Debounced per agent so a flaky
     WS that reconnects rapidly doesn't trigger repeated bursts. Flushes OS patch
     jobs and general remediation actions, each capped to a small batch per connect."""
@@ -352,8 +358,8 @@ async def _flush_queued_work(websocket, agent_id: str) -> None:
     # we don't fan a wall of installs to all agents at once (thundering herd).
     await asyncio.sleep(random.uniform(0, _FLUSH_JITTER_MAX_S))
     async with _get_flush_semaphore():
-        await _flush_os_patch_jobs(websocket, agent_id)
-        await _flush_remediation_queue(websocket, agent_id)
+        await _flush_os_patch_jobs(websocket, agent_id, asset_id)
+        await _flush_remediation_queue(websocket, agent_id, asset_id)
 
 
 async def _stale_job_reset_loop():
@@ -366,6 +372,8 @@ async def _stale_job_reset_loop():
             # Only reset deploying jobs for agents that are no longer online.
             # Skip agents seen in the last 10 min so active long-running WUA installs
             # are not interrupted.
+            # NOTE: this is a fleet-wide status sweep (the "is it offline?" filter),
+            # NOT the per-agent dispatch match — it remains agent_id-filtered by design.
             cur.execute(
                 "UPDATE cve_patch_job SET status='queued', updated_at=NOW() "
                 "WHERE status='deploying' AND updated_at < NOW() - INTERVAL '40 minutes' "
@@ -378,6 +386,8 @@ async def _stale_job_reset_loop():
             # never returned a script_result (agent slept mid-run / gateway restart)
             # goes BACK TO 'queued' so the next reconnect re-delivers it. NEVER touch
             # 'queued' rows here — they are waiting on the reconnect flush by design.
+            # NOTE: fleet-wide offline sweep — remains agent_id-filtered by design (not
+            # the per-agent dispatch match, which is re-keyed to asset_id).
             cur.execute(
                 "UPDATE rmm_remediation_queue SET status='queued', session_id=NULL, "
                 "deployed_at=NULL, updated_at=NOW() "
@@ -415,6 +425,8 @@ async def _failed_job_retry_loop():
         try:
             conn = get_conn()
             cur = get_cursor(conn)
+            # NOTE: fleet-wide "online agents" status sweep — remains agent_id-filtered
+            # by design (not the per-agent dispatch match, which is re-keyed to asset_id).
             cur.execute(
                 """UPDATE cve_patch_job SET status='queued', updated_at=NOW()
                    WHERE status='failed'
@@ -430,9 +442,11 @@ async def _failed_job_retry_loop():
                 print(f"[gw] failed-retry: reset {n} failed jobs to queued for {len(connected)} online agents", flush=True)
                 for aid in connected:
                     ws = agents.get(aid)
-                    if ws:
+                    # Dispatch keys on asset_id — resolve it for this connected agent_id.
+                    aid_asset = agent_asset_ids.get(aid)
+                    if ws and aid_asset:
                         try:
-                            await _dispatch_next_product(ws, aid)
+                            await _dispatch_next_product(ws, aid, aid_asset)
                         except Exception as _de:
                             print(f"[gw] failed-retry dispatch error for {aid}: {_de}", flush=True)
         except Exception as _e:
@@ -477,9 +491,11 @@ async def _new_vuln_dispatch_loop():
                     # Dispatch to each agent that now has queued jobs
                     for aid in connected:
                         ws = agents.get(aid)
-                        if ws:
+                        # Dispatch keys on asset_id — resolve it for this connected agent_id.
+                        aid_asset = agent_asset_ids.get(aid)
+                        if ws and aid_asset:
                             try:
-                                await _dispatch_next_product(ws, aid)
+                                await _dispatch_next_product(ws, aid, aid_asset)
                             except Exception as _de:
                                 print(f"[gw] new-vuln-loop dispatch error for {aid}: {_de}", flush=True)
             except Exception as _e:
@@ -503,9 +519,21 @@ app = FastAPI(title="Tracker RMM Gateway", lifespan=lifespan)
 # In-memory connection maps
 agents: Dict[str, WebSocket] = {}
 agent_asset_ids: Dict[str, int] = {}
+# Reverse of agent_asset_ids: asset_id -> agent_id for the live connection. Command
+# dispatch keys on the STABLE asset_id (renamed/re-enrolled/mis-cased boxes drift
+# their agent_id string), so this lets us find the live WS for an asset_id.
+asset_agents: Dict[int, str] = {}
 tech_sessions: Dict[int, WebSocket] = {}
 # pending screenshot requests: session_id -> tech WebSocket
 screenshot_pending: Dict[int, WebSocket] = {}
+
+
+def _live_ws_for_asset(asset_id):
+    """Return the live agent WebSocket for a given asset_id, or None if the asset_id
+    is falsy or no agent for it is currently connected."""
+    if not asset_id:
+        return None
+    return agents.get(asset_agents.get(asset_id))
 
 
 @app.get("/health")
@@ -650,6 +678,25 @@ async def enqueue_remediation(agent_id: str, request: Request):
         print(f"[gw] enqueue: agent_id canonicalize failed for {agent_id!r} "
               f"(asset_id={asset_id}): {_e}", flush=True)
 
+    # 0b) Resolve the STABLE asset_id. Dispatch keys on asset_id (not the drift-prone
+    #     agent_id string), so an unresolved asset_id would strand the command. If the
+    #     body didn't carry one, derive it from the (canonicalized) agent_id.
+    if asset_id is None and agent_id:
+        try:
+            _c = get_conn(); _cu = get_cursor(_c)
+            _cu.execute(
+                "SELECT asset_id FROM rmm_agent WHERE agent_id=%s LIMIT 1",
+                (agent_id,),
+            )
+            _r = _cu.fetchone()
+            _cu.close(); _c.close()
+            if _r:
+                asset_id = _r["asset_id"]
+        except Exception as _e:
+            print(f"[gw] enqueue: asset_id resolve failed for agent_id={agent_id!r}: {_e}", flush=True)
+    if asset_id is None:
+        return JSONResponse({"ok": False, "error": "unresolved asset_id"}, status_code=400)
+
     # 1) Persist as queued (durable — survives if the agent is offline).
     try:
         conn = get_conn(); cur = get_cursor(conn)
@@ -666,8 +713,9 @@ async def enqueue_remediation(agent_id: str, request: Request):
         return JSONResponse({"ok": False, "error": f"enqueue failed: {e}"}, status_code=500)
 
     # 2) Live-ness is determined by the in-memory connection map (a real open WS),
-    #    NOT rmm_agent.last_seen_at. If not live, leave it queued for reconnect flush.
-    agent_ws = agents.get(agent_id)
+    #    NOT rmm_agent.last_seen_at. Key on the STABLE asset_id so a drifted agent_id
+    #    can't miss its live connection. If not live, leave it queued for reconnect flush.
+    agent_ws = _live_ws_for_asset(asset_id)
     if not agent_ws:
         return JSONResponse({"ok": True, "id": rq_id, "status": "queued", "delivered": False})
 
@@ -727,6 +775,9 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
     agents[agent_id] = websocket
     asset_id = int(validation["asset_id"]) if validation.get("asset_id") is not None else 0
     agent_asset_ids[agent_id] = asset_id
+    # Reverse map for asset_id-keyed dispatch (only when we have a real asset_id).
+    if asset_id:
+        asset_agents[asset_id] = agent_id
 
     try:
         await websocket.send_text(json.dumps({"type": "hello", "agent_id": agent_id}))
@@ -767,8 +818,8 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
             # disconnected or the gateway restarted.
             _cur.execute(
                 "UPDATE cve_patch_job SET status='queued', updated_at=NOW() "
-                "WHERE agent_id=%s AND status='deploying'",
-                (agent_id,)
+                "WHERE asset_id=%s AND status='deploying'",
+                (asset_id,)
             )
             _stale_n = _cur.rowcount
             if _stale_n:
@@ -786,10 +837,11 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
             # never picks up an over-cap row.
             _cur.execute(
                 "UPDATE rmm_patch_job SET status='abandoned', updated_at=NOW() "
-                "WHERE agent_id=%s AND status='deploying' AND completed_at IS NULL "
+                "WHERE (asset_id=%s OR (asset_id IS NULL AND agent_id=%s)) "
+                "AND status='deploying' AND completed_at IS NULL "
                 "AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '5 minutes') "
                 "AND COALESCE(attempts,0) >= %s",
-                (agent_id, _REMEDIATION_MAX_ATTEMPTS)
+                (asset_id, agent_id, _REMEDIATION_MAX_ATTEMPTS)
             )
             _abandoned_os = _cur.rowcount
             if _abandoned_os:
@@ -797,10 +849,11 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                       f"{agent_id} (>= {_REMEDIATION_MAX_ATTEMPTS} attempts)", flush=True)
             _cur.execute(
                 "UPDATE rmm_patch_job SET status='queued', updated_at=NOW() "
-                "WHERE agent_id=%s AND status='deploying' AND completed_at IS NULL "
+                "WHERE (asset_id=%s OR (asset_id IS NULL AND agent_id=%s)) "
+                "AND status='deploying' AND completed_at IS NULL "
                 "AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '5 minutes') "
                 "AND COALESCE(attempts,0) < %s",
-                (agent_id, _REMEDIATION_MAX_ATTEMPTS)
+                (asset_id, agent_id, _REMEDIATION_MAX_ATTEMPTS)
             )
             _stale_os = _cur.rowcount
             if _stale_os:
@@ -847,7 +900,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
         try:
             # Dispatch ONE product at a time (fewest CVEs first) to prevent
             # the agent from being overwhelmed with concurrent WUA/winget runs.
-            await _dispatch_next_product(websocket, agent_id)
+            await _dispatch_next_product(websocket, agent_id, asset_id)
         except Exception as _e:
             print(f"[gw] queued-job dispatch error for {agent_id}: {_e}", flush=True)
 
@@ -857,7 +910,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
         # marked 'deploying' only on a confirmed send; terminal status comes back
         # via patch_install_result / script_result.
         try:
-            await _flush_queued_work(websocket, agent_id)
+            await _flush_queued_work(websocket, agent_id, asset_id)
         except Exception as _e:
             print(f"[gw] reconnect flush error for {agent_id}: {_e}", flush=True)
 
@@ -1060,7 +1113,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                                     """UPDATE cve_patch_job
                                        SET status=%s, result_json=%s, reboot_required=%s,
                                            updates_found=%s, completed_at=NOW(), updated_at=NOW()
-                                       WHERE agent_id=%s AND asset_id=%s
+                                       WHERE asset_id=%s
                                          AND status IN ('deploying','queued')
                                          AND id != %s
                                          AND cve_id IN (
@@ -1070,7 +1123,7 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                                     (new_status, json.dumps(result),
                                      bool(result.get("reboot_required")),
                                      result.get("installed", 0),
-                                     agent_id, j_asset_b, job_id,
+                                     j_asset_b, job_id,
                                      product_name_j, j_asset_b)
                                 )
                                 bulk_n = cur.rowcount
@@ -1082,19 +1135,19 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
                                     """UPDATE cve_patch_job
                                        SET status=%s, result_json=%s, reboot_required=%s,
                                            updates_found=%s, completed_at=NOW(), updated_at=NOW()
-                                       WHERE agent_id=%s AND asset_id=%s AND cve_id=%s
+                                       WHERE asset_id=%s AND cve_id=%s
                                          AND status IN ('deploying','queued') AND id != %s""",
                                     (new_status, json.dumps(result),
                                      bool(result.get("reboot_required")),
                                      result.get("installed", 0),
-                                     agent_id, j_asset_b, job_row["cve_id"], job_id)
+                                     j_asset_b, job_row["cve_id"], job_id)
                                 )
                         conn.commit()
                         cur.close()
                         conn.close()
                         print(f"[gw] cve_patch_result job={job_id} status={new_status}", flush=True)
                         # Serial dispatch: send next queued product now that this one finished
-                        await _dispatch_next_product(websocket, agent_id)
+                        await _dispatch_next_product(websocket, agent_id, asset_id)
                     except Exception as e:
                         print(f"[gw] cve_patch_result DB error: {e}", flush=True)
                 continue
@@ -1298,6 +1351,11 @@ async def ws_agent(websocket: WebSocket, agent_id: str, token: str):
         # best effort cleanup
         if agents.get(agent_id) is websocket:
             agents.pop(agent_id, None)
+        # Identity-guarded reverse-map clear: only drop asset_agents[asset_id] if it
+        # still points at THIS agent_id (a reconnect under a new agent_id may have
+        # already re-claimed the asset_id).
+        if asset_id and asset_agents.get(asset_id) == agent_id:
+            asset_agents.pop(asset_id, None)
         agent_asset_ids.pop(agent_id, None)
         try:
             mark_agent_offline(agent_id)

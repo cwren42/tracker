@@ -608,12 +608,12 @@ def _enqueue_remediation(agent_id, asset_id, action_type, payload,
         try:
             existing = con.execute(
                 """SELECT id, status FROM rmm_remediation_queue
-                   WHERE agent_id = %s
+                   WHERE asset_id = %s
                      AND action_type = 'run_script'
                      AND status IN ('queued', 'deploying')
                      AND payload LIKE %s
                    ORDER BY id DESC LIMIT 1""",
-                (agent_id, f'%{dedup_substr}%')
+                (asset_id, f'%{dedup_substr}%')
             ).fetchone()
         except Exception:
             existing = None

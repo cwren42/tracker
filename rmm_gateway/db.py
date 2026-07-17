@@ -509,13 +509,15 @@ def store_telemetry(agent_id: str, asset_id: int, data: Dict[str, Any]) -> None:
                     else:
                         if not eth_mac:
                             eth_mac = mac
-            # Only overwrite fields that are currently empty so manual edits are preserved
+            # ip_address ALWAYS tracks the agent's current primary IP (so a repurposed/
+            # renamed box doesn't keep the prior occupant's stale IP). MACs only fill when
+            # empty — hardware is stable, so preserve any manual edits there.
             if primary_ip or eth_mac or wifi_mac:
                 parts = ["UPDATE asset SET"]
                 sets  = []
                 vals  = []
                 if primary_ip:
-                    sets.append("ip_address = COALESCE(NULLIF(ip_address,''), %s)")
+                    sets.append("ip_address = %s")
                     vals.append(primary_ip)
                 if eth_mac:
                     sets.append("hardware_mac_ethernet = COALESCE(NULLIF(hardware_mac_ethernet,''), %s)")

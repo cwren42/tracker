@@ -100,7 +100,12 @@
             </td>
             <td class="small">{{ r.oui_vendor or '—' }}</td>
             <td class="small"><code>{{ r.ip or '—' }}</code></td>
-            <td class="small">{{ r.vlan if r.vlan is not none else '—' }}{% if r.network_name %} · {{ r.network_name }}{% endif %}</td>
+            <td class="small">
+              {{ r.vlan if r.vlan is not none else '—' }}{% if r.network_name %} · {{ r.network_name }}{% endif %}
+              {% if (r.network_name or '')|lower not in alert_networks %}
+                <span class="badge bg-light text-muted border ms-1" title="Inventoried but does not raise alerts">inventory only</span>
+              {% endif %}
+            </td>
             <td class="small">
               {% if r.is_wired and r.sw_port is not none %}
                 {{ r.ap_name or 'switch' }} · port {{ r.sw_port }}

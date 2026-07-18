@@ -50,6 +50,9 @@ def network_devices():
             """
         ).fetchall()
 
+        from network_scan import _load_alert_networks
+        alert_networks = _load_alert_networks(con)
+
         counts = {'unknown': 0, 'known_vendor': 0, 'acknowledged': 0,
                   'known_asset': 0, 'blocked': 0, 'online': 0, 'total': 0}
         for r in rows:
@@ -59,7 +62,8 @@ def network_devices():
                 counts['online'] += 1
             if r['blocked']:
                 counts['blocked'] += 1
-        return render_template('network_devices.html', rows=rows, counts=counts)
+        return render_template('network_devices.html', rows=rows, counts=counts,
+                               alert_networks=alert_networks)
     finally:
         con.close()
 

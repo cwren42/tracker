@@ -30,6 +30,24 @@ INFRA_VENDOR_HINTS = (
     'ubiquiti', 'owl labs',
 )
 
+# Which UniFi networks raise rogue ALERTS. Everything is still inventoried on the
+# /network page regardless — this only controls what pages you. Guest is noise by
+# design (it exists to hold unknown personal devices); Lab is a sandbox; k8s/CHR/
+# generic are infra. Overridable at runtime via Setting 'network_alert_scope'
+# (comma-separated network names). Matched case-insensitively on network_name.
+DEFAULT_ALERT_NETWORKS = frozenset({
+    'servers', 'workstations', 'workstations wifi', 'it', 'default',
+})
+
+
+def _load_alert_networks(con):
+    """Return the set of lowercased network names that raise alerts."""
+    row = con.execute(
+        "SELECT value FROM setting WHERE key = 'network_alert_scope'").fetchone()
+    if row and (row['value'] or '').strip():
+        return frozenset(n.strip().lower() for n in row['value'].split(',') if n.strip())
+    return DEFAULT_ALERT_NETWORKS
+
 
 # ── Option 2 (fast-follow, NOT yet active): auto-quarantine on sensitive VLANs ──
 # Chris approved building this after option 1 ships. When enabled, a *new* unknown
@@ -135,6 +153,8 @@ def run_scan(flask_app=None):
         acked = {row['mac_norm'] for row in con.execute(
             "SELECT mac_norm FROM network_client WHERE acknowledged = TRUE").fetchall()}
 
+        alert_networks = _load_alert_networks(con)
+
         pre_count = con.execute(
             "SELECT COUNT(*) AS n FROM network_client").fetchone()['n']
         baseline = pre_count == 0
@@ -197,12 +217,16 @@ def run_scan(flask_app=None):
                 continue
 
             seen += 1
-            # Alert on an unknown that has never been alerted (alerted_at IS NULL).
-            # NOT gated on insert-vs-update: a device that failed to alert before,
-            # or was just un-acknowledged (which nulls alerted_at), re-qualifies.
-            # The baseline branch below stamps alerted_at on the initial fleet so
-            # the first populate doesn't flood — only genuinely-new MACs alert after.
-            if classification == 'unknown' and res and res['alerted_at'] is None:
+            # Alert on an unknown that has never been alerted (alerted_at IS NULL)
+            # AND is on an in-scope network. NOT gated on insert-vs-update: a device
+            # that failed to alert before, or was just un-acknowledged (which nulls
+            # alerted_at), re-qualifies. The baseline branch below stamps alerted_at
+            # on the initial fleet so the first populate doesn't flood — only
+            # genuinely-new MACs on monitored networks alert after. Out-of-scope
+            # networks (Guest/Lab/infra) are inventoried on the page but never page.
+            in_scope = (cl['network_name'] or '').strip().lower() in alert_networks
+            if (classification == 'unknown' and res
+                    and res['alerted_at'] is None and in_scope):
                 new_unknowns.append((mn, cl))
 
         # Mark everything not seen this pass as offline (best-effort).

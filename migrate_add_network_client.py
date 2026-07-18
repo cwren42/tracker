@@ -108,6 +108,17 @@ def migrate():
     else:
         print("alert_rule network/rogue_device already present.")
 
+    # Seed the alert-scope Setting (which networks raise alerts). All networks are
+    # still inventoried on /network regardless; this only gates paging. Editable.
+    cur.execute("SELECT 1 FROM setting WHERE key = 'network_alert_scope'")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO setting (key, value) VALUES "
+            "('network_alert_scope', 'Servers,Workstations,Workstations WiFi,IT,Default')")
+        print("Seeded setting network_alert_scope (corporate networks).")
+    else:
+        print("setting network_alert_scope already present.")
+
     conn.commit()
     cur.close()
     conn.close()

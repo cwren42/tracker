@@ -446,6 +446,116 @@ class UnifiService:
         except Exception as exc:
             return {'success': False, 'message': str(exc)}
 
+    # ── Rogue-device NAC: client discovery + enforcement ────────────────────
+    def get_active_clients(self) -> list[dict]:
+        """Fetch ALL active clients from stat/sta (the live LAN device list).
+
+        Returns one normalized dict per client with the fields the rogue-device
+        scan needs: mac, ip, hostname, oui vendor, wired flag, vlan, network,
+        uplink switch mac/port (wired) or AP name (wireless), and the UniFi
+        first_seen / last_seen unix epochs. Unlike get_unas_devices() this keeps
+        every client, not just the UNAS boxes.
+        """
+        from urllib.parse import quote
+        site_encoded = quote(self.site, safe='')
+        try:
+            resp = self._session.get(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/stat/sta',
+                timeout=25,
+            )
+            logger.debug('UniFi stat/sta → HTTP %s', resp.status_code)
+            if resp.status_code != 200:
+                return []
+            clients = resp.json().get('data', [])
+        except Exception as exc:
+            logger.debug('UniFi stat/sta error: %s', exc)
+            return []
+
+        out = []
+        for c in clients:
+            mac = (c.get('mac') or '').strip().lower()
+            if not mac:
+                continue
+            out.append({
+                'mac': mac,
+                'ip': c.get('ip') or c.get('last_ip') or '',
+                'hostname': (c.get('hostname') or c.get('name') or '').strip(),
+                'oui_vendor': (c.get('oui') or '').strip(),
+                'is_wired': bool(c.get('is_wired')),
+                'vlan': c.get('vlan') if c.get('vlan') is not None else c.get('gw_vlan'),
+                'network_name': c.get('network') or c.get('last_connection_network_name') or '',
+                'sw_mac': c.get('sw_mac') or c.get('last_uplink_mac') or '',
+                'sw_port': c.get('sw_port') if c.get('sw_port') is not None else c.get('last_uplink_remote_port'),
+                'ap_name': c.get('last_uplink_name') or '',
+                'first_seen': c.get('first_seen') or 0,
+                'last_seen': c.get('last_seen') or 0,
+            })
+        return out
+
+    def get_known_users(self) -> list[dict]:
+        """Fetch the persistent client roster (rest/user).
+
+        This is the controller's memory of every client it has tracked. A client
+        with a user-assigned `name` (and/or a fixed-IP reservation) is one someone
+        deliberately acknowledged — the natural UniFi-side allowlist. Returns the
+        raw records (mac, name, noted, use_fixedip, blocked, ...).
+        """
+        from urllib.parse import quote
+        site_encoded = quote(self.site, safe='')
+        try:
+            resp = self._session.get(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/rest/user',
+                timeout=25,
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json().get('data', [])
+        except Exception as exc:
+            logger.debug('UniFi rest/user error: %s', exc)
+            return []
+
+    def _stamgr(self, cmd: str, mac: str) -> dict:
+        """POST a station-manager command (block-sta / unblock-sta) for a MAC.
+
+        Enforced at the gateway by MAC, so the device can't hop port/AP/VLAN to
+        evade it. CSRF is refreshed from a GET before the write. Caller is
+        responsible for having obtained approval — this mutates the live network.
+        """
+        from urllib.parse import quote
+        site_encoded = quote(self.site, safe='')
+        mac = (mac or '').strip().lower()
+        if not mac:
+            return {'success': False, 'message': 'no MAC'}
+        try:
+            # Refresh CSRF from a cheap GET before the mutating POST.
+            pre = self._session.get(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/rest/user',
+                timeout=15,
+            )
+            tok = pre.headers.get('X-CSRF-Token') or pre.headers.get('x-csrf-token')
+            if tok:
+                self._session.headers['X-CSRF-Token'] = tok
+            resp = self._session.post(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/cmd/stamgr',
+                json={'cmd': cmd, 'mac': mac},
+                timeout=20,
+            )
+            ok = resp.status_code == 200
+            logger.info('UniFi %s %s → HTTP %s', cmd, mac, resp.status_code)
+            return {'success': ok, 'status': resp.status_code,
+                    'message': 'ok' if ok else resp.text[:300]}
+        except Exception as exc:
+            logger.warning('UniFi %s %s failed: %s', cmd, mac, exc)
+            return {'success': False, 'message': str(exc)}
+
+    def block_client(self, mac: str) -> dict:
+        """Block a client MAC at the gateway (instant L2 kill; reversible)."""
+        return self._stamgr('block-sta', mac)
+
+    def unblock_client(self, mac: str) -> dict:
+        """Reverse block_client — restore the MAC to the network."""
+        return self._stamgr('unblock-sta', mac)
+
 
 def load_unifi_config(Setting) -> dict | None:
     """Load UniFi credentials from the Setting table. Returns None if not configured."""

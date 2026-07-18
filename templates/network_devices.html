@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Network Devices - IT Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+  <div class="row mb-3">
+    <div class="col">
+      <h1 class="h3 mb-0"><i class="bi bi-diagram-3-fill text-primary"></i> Network Devices</h1>
+      <p class="text-muted mb-0">Live view of every device on the network, reconciled against known assets. Unknowns are pinned to the top &mdash; block one instantly if it doesn't belong.</p>
+    </div>
+    <div class="col-auto d-flex align-items-center">
+      <button id="scanBtn" class="btn btn-outline-primary"><i class="bi bi-arrow-repeat"></i> Scan now</button>
+    </div>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md">
+      <div class="card text-center h-100 border-danger"><div class="card-body py-3">
+        <div class="h3 mb-0 text-danger">{{ counts.unknown }}</div>
+        <small class="text-muted">Unknown</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card text-center h-100"><div class="card-body py-3">
+        <div class="h3 mb-0 text-dark">{{ counts.blocked }}</div>
+        <small class="text-muted">Blocked</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card text-center h-100"><div class="card-body py-3">
+        <div class="h3 mb-0 text-secondary">{{ counts.known_vendor }}</div>
+        <small class="text-muted">Known Vendor</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card text-center h-100"><div class="card-body py-3">
+        <div class="h3 mb-0 text-info">{{ counts.acknowledged }}</div>
+        <small class="text-muted">Acknowledged</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card text-center h-100"><div class="card-body py-3">
+        <div class="h3 mb-0 text-success">{{ counts.known_asset }}</div>
+        <small class="text-muted">Known Asset</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="card text-center h-100"><div class="card-body py-3">
+        <div class="h3 mb-0">{{ counts.online }}</div>
+        <small class="text-muted">Online / {{ counts.total }}</small>
+      </div></div>
+    </div>
+  </div>
+
+  <!-- Filter chips -->
+  <div class="mb-3 d-flex flex-wrap gap-2" id="filterBar">
+    <button class="btn btn-sm btn-danger" data-filter="unknown">Unknown</button>
+    <button class="btn btn-sm btn-outline-secondary" data-filter="all">All</button>
+    <button class="btn btn-sm btn-outline-dark" data-filter="blocked">Blocked</button>
+    <button class="btn btn-sm btn-outline-info" data-filter="acknowledged">Acknowledged</button>
+    <button class="btn btn-sm btn-outline-success" data-filter="known_asset">Known Asset</button>
+    <input type="text" id="searchBox" class="form-control form-control-sm ms-auto" style="max-width:260px" placeholder="Search MAC / host / vendor / IP…">
+  </div>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Status</th><th>Device</th><th>Vendor</th><th>IP</th>
+            <th>VLAN / Network</th><th>Location</th><th>First seen</th><th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+          {% set cls = r.classification %}
+          <tr data-class="{{ cls }}" data-blocked="{{ 'y' if r.blocked else 'n' }}"
+              data-search="{{ (r.mac ~ ' ' ~ (r.hostname or '') ~ ' ' ~ (r.oui_vendor or '') ~ ' ' ~ (r.ip or '') ~ ' ' ~ (r.asset_name or '')) | lower }}"
+              class="{% if cls == 'unknown' and not r.blocked %}table-danger{% elif r.blocked %}table-secondary{% endif %}">
+            <td style="white-space:nowrap">
+              {% if r.blocked %}
+                <span class="badge bg-dark"><i class="bi bi-slash-circle"></i> Blocked</span>
+              {% elif cls == 'unknown' %}
+                <span class="badge bg-danger">Unknown</span>
+              {% elif cls == 'known_vendor' %}
+                <span class="badge bg-secondary">Vendor</span>
+              {% elif cls == 'acknowledged' %}
+                <span class="badge bg-info text-dark">Acknowledged</span>
+              {% else %}
+                <span class="badge bg-success">Known</span>
+              {% endif %}
+              {% if r.online %}<span class="badge rounded-pill bg-success-subtle text-success border border-success">●</span>{% else %}<span class="badge rounded-pill bg-light text-muted border">○</span>{% endif %}
+            </td>
+            <td>
+              <div class="fw-semibold">{{ r.asset_name or r.hostname or '—' }}</div>
+              <code class="small text-muted">{{ r.mac }}</code>
+              {% if not r.is_wired %}<span class="badge bg-light text-muted border ms-1"><i class="bi bi-wifi"></i></span>{% else %}<span class="badge bg-light text-muted border ms-1"><i class="bi bi-ethernet"></i></span>{% endif %}
+            </td>
+            <td class="small">{{ r.oui_vendor or '—' }}</td>
+            <td class="small"><code>{{ r.ip or '—' }}</code></td>
+            <td class="small">{{ r.vlan if r.vlan is not none else '—' }}{% if r.network_name %} · {{ r.network_name }}{% endif %}</td>
+            <td class="small">
+              {% if r.is_wired and r.sw_port is not none %}
+                {{ r.ap_name or 'switch' }} · port {{ r.sw_port }}
+              {% elif r.ap_name %}
+                {{ r.ap_name }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="small text-muted">{{ r.first_seen.strftime('%Y-%m-%d') if r.first_seen else '—' }}</td>
+            <td class="text-end" style="white-space:nowrap">
+              {% if r.blocked %}
+                <button class="btn btn-sm btn-outline-success act" data-act="unblock" data-id="{{ r.id }}"><i class="bi bi-arrow-counterclockwise"></i> Unblock</button>
+              {% else %}
+                <button class="btn btn-sm btn-danger act" data-act="block" data-id="{{ r.id }}" data-mac="{{ r.mac }}" data-name="{{ r.hostname or r.mac }}"><i class="bi bi-slash-circle"></i> Block</button>
+                {% if cls != 'known_asset' and cls != 'acknowledged' %}
+                  <button class="btn btn-sm btn-outline-info act" data-act="acknowledge" data-id="{{ r.id }}"><i class="bi bi-check2"></i> OK</button>
+                {% elif cls == 'acknowledged' %}
+                  <button class="btn btn-sm btn-outline-secondary act" data-act="unacknowledge" data-id="{{ r.id }}"><i class="bi bi-x"></i> Un-OK</button>
+                {% endif %}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="netToast" class="toast align-items-center text-white bg-dark border-0" role="alert">
+    <div class="d-flex"><div class="toast-body" id="netToastMsg"></div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>
+  </div>
+</div>
+
+<script>
+const CSRF = "{{ csrf_token() }}";
+function toast(msg, ok=true){
+  const t=document.getElementById('netToast'), b=document.getElementById('netToastMsg');
+  t.classList.toggle('bg-danger',!ok); t.classList.toggle('bg-dark',ok);
+  b.textContent=msg; new bootstrap.Toast(t,{delay:3500}).show();
+}
+async function post(url){
+  const r=await fetch(url,{method:'POST',headers:{'X-CSRFToken':CSRF,'Content-Type':'application/json'},body:'{}'});
+  let d={}; try{d=await r.json()}catch(e){}
+  return {ok:r.ok && d.success!==false, d};
+}
+document.querySelectorAll('.act').forEach(btn=>btn.addEventListener('click',async()=>{
+  const act=btn.dataset.act, id=btn.dataset.id;
+  if(act==='block' && !confirm(`Block ${btn.dataset.name}?\nThis cuts the device off the network immediately (reversible).`)) return;
+  btn.disabled=true; const orig=btn.innerHTML; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+  const {ok,d}=await post(`/network/${id}/${act}`);
+  if(ok){ toast(act==='block'?'Device blocked.':act==='unblock'?'Device unblocked.':act==='acknowledge'?'Device acknowledged.':'Acknowledgement removed.');
+          setTimeout(()=>location.reload(),700); }
+  else{ toast(d.message||'Action failed.',false); btn.disabled=false; btn.innerHTML=orig; }
+}));
+document.getElementById('scanBtn').addEventListener('click',async(e)=>{
+  const b=e.currentTarget; b.disabled=true; const o=b.innerHTML; b.innerHTML='<span class="spinner-border spinner-border-sm"></span> Scanning…';
+  const {ok,d}=await post('/network/scan');
+  if(ok){ const s=d.summary||{}; toast(`Scan done — ${s.clients_seen} clients, ${s.new_unknowns||0} new unknown.`); setTimeout(()=>location.reload(),900); }
+  else{ toast(d.message||'Scan failed.',false); b.disabled=false; b.innerHTML=o; }
+});
+// Filters + search
+let curFilter='unknown';
+function applyFilter(){
+  const q=(document.getElementById('searchBox').value||'').toLowerCase();
+  document.querySelectorAll('tbody tr').forEach(tr=>{
+    const cls=tr.dataset.class, blocked=tr.dataset.blocked==='y';
+    let show = curFilter==='all' || (curFilter==='blocked'?blocked:cls===curFilter);
+    if(show && q) show = (tr.dataset.search||'').includes(q);
+    tr.style.display = show ? '' : 'none';
+  });
+}
+document.querySelectorAll('#filterBar [data-filter]').forEach(b=>b.addEventListener('click',()=>{
+  curFilter=b.dataset.filter;
+  document.querySelectorAll('#filterBar [data-filter]').forEach(x=>{
+    const on=x===b; x.classList.toggle('btn-danger',on&&x.dataset.filter==='unknown');
+    x.className='btn btn-sm '+(on?(x.dataset.filter==='unknown'?'btn-danger':'btn-primary'):'btn-outline-secondary');
+  });
+  applyFilter();
+}));
+document.getElementById('searchBox').addEventListener('input',applyFilter);
+applyFilter();
+</script>
+{% endblock %}

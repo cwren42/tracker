@@ -30,6 +30,12 @@ UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/trac
 UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# Rogue-device scan: poll UniFi active clients, reconcile against known assets +
+# the acknowledged allowlist, alert on new unknown MACs. Fast cadence (few min).
+NETWORK_SCAN_LOCK_PATH = os.environ.get('TRACKER_NETWORK_SCAN_LOCK_PATH', '/tmp/tracker_network_scan.lock')
+NETWORK_SCAN_INTERVAL_MINUTES = int(os.environ.get('NETWORK_SCAN_INTERVAL_MINUTES', '2'))
+DISABLE_NETWORK_SCAN = os.environ.get('DISABLE_NETWORK_SCAN', '').strip() in ('1', 'true', 'yes', 'on')
+
 # On-prem AD computer sync (AD = source of truth for assets). Daily.
 AD_ASSET_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_ASSET_SYNC_LOCK_PATH', '/tmp/tracker_ad_asset_sync.lock')
 AD_ASSET_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_ASSET_SYNC_INTERVAL_HOURS', '24'))
@@ -169,6 +175,19 @@ def start_sync_scheduler(flask_app):
             minutes=max(UNIFI_SYNC_INTERVAL_MINUTES, 1),
             id='unifi_sync',
             name='Periodic UniFi device sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
+    if not DISABLE_NETWORK_SCAN:
+        _scheduler.add_job(
+            func=lambda: run_network_scan_job(flask_app),
+            trigger='interval',
+            minutes=max(NETWORK_SCAN_INTERVAL_MINUTES, 1),
+            id='network_scan',
+            name='Rogue-device scan (UniFi active clients → known/unknown)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -985,6 +1004,21 @@ def run_unifi_sync_job(flask_app_instance):
                     db.session.remove()
                 except Exception:
                     pass
+
+
+def run_network_scan_job(flask_app_instance):
+    """Run the rogue-device scan with a cross-process lock."""
+    with _file_lock(NETWORK_SCAN_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('Network scan already running in another worker — skipping')
+            return
+
+        with flask_app_instance.app_context():
+            try:
+                import network_scan
+                network_scan.run_scan(flask_app_instance)
+            except Exception:
+                logger.exception('Network scan job crashed')
 
 
 def run_proxmox_sync_job(flask_app_instance):

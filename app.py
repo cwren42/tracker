@@ -194,6 +194,7 @@ from blueprints import auth, assets, dashboard, employees, internal_audit, licen
 from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
 from blueprints import backup, quarantine, patch_mgmt, systems, incidents
+from blueprints import network as network_bp
 from blueprints import context as context_bp
 from blueprints import teams_bot as teams_bot_bp
 
@@ -225,6 +226,7 @@ app.register_blueprint(quarantine.bp)
 app.register_blueprint(systems.bp)
 app.register_blueprint(patch_mgmt.bp)
 app.register_blueprint(incidents.bp)
+app.register_blueprint(network_bp.bp)
 app.register_blueprint(context_bp.bp)
 app.register_blueprint(teams_bot_bp.bp)
 

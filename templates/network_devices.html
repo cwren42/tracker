@@ -70,7 +70,7 @@
         <thead class="table-light">
           <tr>
             <th>Status</th><th>Device</th><th>Vendor</th><th>IP</th>
-            <th>VLAN / Network</th><th>Location</th><th>First seen</th><th class="text-end">Actions</th>
+            <th>VLAN / Network</th><th>Location</th><th>First seen</th><th>Last seen</th><th class="text-end">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -109,6 +109,11 @@
               {% else %}—{% endif %}
             </td>
             <td class="small text-muted">{{ r.first_seen.strftime('%Y-%m-%d') if r.first_seen else '—' }}</td>
+            <td class="small">
+              {% if r.online %}<span class="text-success">now</span>
+              {% elif r.last_seen %}<span class="text-muted">{{ r.last_seen.strftime('%Y-%m-%d %H:%M') }}</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
             <td class="text-end" style="white-space:nowrap">
               {% if r.blocked %}
                 <button class="btn btn-sm btn-outline-success act" data-act="unblock" data-id="{{ r.id }}"><i class="bi bi-arrow-counterclockwise"></i> Unblock</button>

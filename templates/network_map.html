@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Network Map - IT Asset Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+  <div class="row mb-3">
+    <div class="col">
+      <h1 class="h3 mb-0"><i class="bi bi-diagram-3-fill text-primary"></i> Network Map</h1>
+      <p class="text-muted mb-0">Live Layer-1/2 topology from UniFi — gateway → switches → access points, with device counts. Click a node to see its clients.</p>
+    </div>
+    <div class="col-auto d-flex align-items-center gap-2">
+      <a href="{{ url_for('network.network_devices') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-list-ul"></i> Device list</a>
+      <button id="refreshBtn" class="btn btn-outline-primary btn-sm"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+    </div>
+  </div>
+
+  <div id="mapStats" class="d-flex flex-wrap gap-3 mb-3 small text-muted"></div>
+
+  <div class="card">
+    <div id="topo" style="height:72vh; background:var(--bs-body-bg,#fff); border-radius:.375rem;"></div>
+    <div class="card-footer d-flex flex-wrap gap-3 small text-muted">
+      <span><span class="legend-dot" style="background:#f5a623;transform:rotate(45deg)"></span> Gateway</span>
+      <span><span class="legend-dot" style="background:#4a90d9;border-radius:3px"></span> Switch</span>
+      <span><span class="legend-dot" style="background:#3ab795"></span> Access Point</span>
+      <span><span class="legend-dot" style="background:#fff;border:3px solid #dc3545"></span> has unknown device(s)</span>
+      <span class="ms-auto" id="mapNote"></span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .legend-dot{display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:4px;border:1px solid #999;}
+</style>
+
+<script src="{{ url_for('static', filename='vendor/vis-network.min.js') }}"></script>
+<script>
+const TOPO_URL = "{{ url_for('network.network_map_json') }}";
+const LIST_URL = "{{ url_for('network.network_devices') }}";
+let network = null;
+
+function nodeStyle(n){
+  const hasUnk = n.unknown > 0;
+  const base = {
+    id: n.id,
+    label: `${n.label}\n${n.sub}`,
+    _name: n.label,
+    shape: n.kind === 'gateway' ? 'diamond' : n.kind === 'switch' ? 'box' : 'dot',
+    size: n.kind === 'gateway' ? 26 : n.kind === 'ap' ? 16 : 20,
+    color: {
+      background: n.kind === 'gateway' ? '#f5a623' : n.kind === 'switch' ? '#4a90d9' : '#3ab795',
+      border: hasUnk ? '#dc3545' : '#2b2b2b',
+      highlight: { background: '#ffd97a', border: '#dc3545' }
+    },
+    borderWidth: hasUnk ? 3 : 1,
+    font: { color: n.kind === 'switch' ? '#fff' : '#1a1a1a', size: 13, multi: false,
+            face: 'system-ui', strokeWidth: n.kind === 'switch' ? 0 : 3, strokeColor: '#fff' },
+    opacity: n.online ? 1.0 : 0.45,
+  };
+  return base;
+}
+
+async function loadMap(){
+  const note = document.getElementById('mapNote');
+  note.textContent = 'loading…';
+  let data;
+  try { data = await (await fetch(TOPO_URL)).json(); }
+  catch(e){ note.textContent = 'failed to load'; return; }
+  if (data.error){ note.textContent = data.error; }
+
+  const nodes = new vis.DataSet(data.nodes.map(nodeStyle));
+  const edges = new vis.DataSet(data.edges.map((e,i)=>({
+    id:'e'+i, from:e.from, to:e.to,
+    label: e.port ? ('p'+e.port) : undefined,
+    font:{size:10, color:'#888', strokeWidth:2, strokeColor:'#fff'},
+    color:{color:'#b8c2cc', highlight:'#4a90d9'}, arrows:{to:{enabled:false}}, smooth:{type:'cubicBezier'}
+  })));
+
+  const s = data.stats || {};
+  document.getElementById('mapStats').innerHTML =
+    `<span><strong>${s.devices||0}</strong> devices</span>`+
+    `<span><strong>${s.switches||0}</strong> switches</span>`+
+    `<span><strong>${s.aps||0}</strong> APs</span>`+
+    `<span class="${(s.total_unknown||0)>0?'text-danger':''}"><strong>${s.total_unknown||0}</strong> unknown clients across the fabric</span>`;
+
+  const container = document.getElementById('topo');
+  const options = {
+    layout:{ hierarchical:{ enabled:true, direction:'UD', sortMethod:'directed',
+             levelSeparation:140, nodeSpacing:130, treeSpacing:200, blockShifting:true, edgeMinimization:true }},
+    physics:false,
+    interaction:{ hover:true, tooltipDelay:120, navigationButtons:true, keyboard:false },
+    nodes:{ shadow:{enabled:true, size:6, x:0, y:2, color:'rgba(0,0,0,.15)'} },
+  };
+  network = new vis.Network(container, {nodes, edges}, options);
+  note.textContent = 'click a node to view its clients';
+
+  network.on('click', (params)=>{
+    if (!params.nodes.length) return;
+    const n = nodes.get(params.nodes[0]);
+    if (n && n._name) window.location = `${LIST_URL}?q=${encodeURIComponent(n._name)}`;
+  });
+}
+
+document.getElementById('refreshBtn').addEventListener('click', loadMap);
+loadMap();
+</script>
+{% endblock %}

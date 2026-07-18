@@ -72,5 +72,6 @@ def test_network_routes_registered_and_admin_gated():
     rules = {r.rule for r in app.url_map.iter_rules()}
     for r in ('/network', '/network/<int:client_id>/block',
               '/network/<int:client_id>/unblock',
-              '/network/<int:client_id>/acknowledge', '/network/scan'):
+              '/network/<int:client_id>/acknowledge', '/network/scan',
+              '/network/map', '/network/map.json'):
         assert r in rules, r

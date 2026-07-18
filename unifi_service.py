@@ -492,6 +492,43 @@ class UnifiService:
             })
         return out
 
+    def get_infra_topology(self) -> list[dict]:
+        """Fetch adopted infrastructure (gateway/switches/APs) + uplink parents.
+
+        Returns the Layer-1 fabric: each device's mac, friendly name, kind
+        (gateway/switch/ap), model, the uplink parent MAC + remote port, and
+        online state. Feeds the topology map (client leaves come from
+        network_client, counted per device MAC/name).
+        """
+        from urllib.parse import quote
+        site_encoded = quote(self.site, safe='')
+        try:
+            resp = self._session.get(
+                f'{self.host}/proxy/network/api/s/{site_encoded}/stat/device',
+                timeout=25,
+            )
+            if resp.status_code != 200:
+                return []
+            devs = resp.json().get('data', [])
+        except Exception as exc:
+            logger.debug('UniFi stat/device error: %s', exc)
+            return []
+
+        kind_map = {'ugw': 'gateway', 'udm': 'gateway', 'usw': 'switch', 'uap': 'ap'}
+        out = []
+        for d in devs:
+            up = d.get('uplink') or {}
+            out.append({
+                'mac': (d.get('mac') or '').lower(),
+                'name': d.get('name') or d.get('model') or d.get('mac') or '?',
+                'kind': kind_map.get(d.get('type'), d.get('type') or 'device'),
+                'model': d.get('model') or '',
+                'uplink_mac': (up.get('uplink_mac') or '').lower(),
+                'uplink_port': up.get('uplink_remote_port'),
+                'online': (d.get('state') == 1),
+            })
+        return out
+
     def get_known_users(self) -> list[dict]:
         """Fetch the persistent client roster (rest/user).
 

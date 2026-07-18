@@ -68,6 +68,81 @@ def network_devices():
         con.close()
 
 
+@bp.route('/network/map')
+@login_required
+@admin_required
+def network_map():
+    return render_template('network_map.html')
+
+
+@bp.route('/network/map.json')
+@login_required
+@admin_required
+def network_map_json():
+    """Topology graph: infra devices (nodes) + uplink parents (edges), with
+    per-device client + unknown counts from network_client."""
+    from models import Setting
+    from unifi_service import load_unifi_config, UnifiService
+
+    cfg = load_unifi_config(Setting)
+    if not cfg:
+        return jsonify({'nodes': [], 'edges': [], 'error': 'UniFi not configured'}), 200
+    svc = UnifiService(**cfg)
+    try:
+        svc.login()
+        devices = svc.get_infra_topology()
+    finally:
+        try:
+            svc.logout()
+        except Exception:
+            pass
+
+    # Per-device client counts (match on uplink switch MAC or AP name).
+    con = pg_connect()
+    try:
+        rows = con.execute(
+            "SELECT LOWER(sw_mac) sw_mac, LOWER(ap_name) ap_name, classification, "
+            "online FROM network_client").fetchall()
+    finally:
+        con.close()
+
+    by_mac = {d['mac']: d for d in devices}
+    name_to_mac = {d['name'].lower(): d['mac'] for d in devices}
+    counts = {d['mac']: {'clients': 0, 'unknown': 0, 'online': 0} for d in devices}
+    for r in rows:
+        mac = r['sw_mac'] if r['sw_mac'] in by_mac else name_to_mac.get(r['ap_name'])
+        if not mac or mac not in counts:
+            continue
+        counts[mac]['clients'] += 1
+        if r['classification'] == 'unknown':
+            counts[mac]['unknown'] += 1
+        if r['online']:
+            counts[mac]['online'] += 1
+
+    nodes, edges = [], []
+    for d in devices:
+        c = counts[d['mac']]
+        label = d['name']
+        sub = f"{c['clients']} clients" + (f" · ⚠ {c['unknown']}" if c['unknown'] else '')
+        nodes.append({
+            'id': d['mac'], 'label': label, 'kind': d['kind'],
+            'model': d['model'], 'clients': c['clients'], 'unknown': c['unknown'],
+            'online': d['online'], 'sub': sub,
+        })
+        if d['uplink_mac'] and d['uplink_mac'] in by_mac:
+            edges.append({'from': d['uplink_mac'], 'to': d['mac'],
+                          'port': d['uplink_port']})
+
+    stats = {
+        'devices': len(devices),
+        'switches': sum(1 for d in devices if d['kind'] == 'switch'),
+        'aps': sum(1 for d in devices if d['kind'] == 'ap'),
+        'gateways': sum(1 for d in devices if d['kind'] == 'gateway'),
+        'total_unknown': sum(c['unknown'] for c in counts.values()),
+    }
+    return jsonify({'nodes': nodes, 'edges': edges, 'stats': stats})
+
+
 def _get_client(con, client_id):
     return con.execute(
         "SELECT * FROM network_client WHERE id = ?", (client_id,)).fetchone()

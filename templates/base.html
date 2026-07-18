@@ -152,7 +152,7 @@
         </a>
 
         {% if current_user.role == 'admin' %}
-        <a class="sidebar-link {% if request.endpoint == 'network.network_devices' %}active{% endif %}"
+        <a class="sidebar-link {% if request.endpoint in ['network.network_devices','network.network_map'] %}active{% endif %}"
            href="{{ url_for('network.network_devices') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Network">
             <i class="bi bi-diagram-3-fill"></i><span class="link-label">Network</span>
         </a>

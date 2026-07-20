@@ -56,6 +56,21 @@ def test_unknown_when_nothing_matches():
     assert aid is None
 
 
+def test_bogus_macs_are_filtered():
+    b = network_scan._is_bogus_mac
+    # non-host / artifact MACs → filtered
+    assert b('0000ffffffff')      # switch-learned phantom (device half all-F)
+    assert b('ffffffffffff')      # broadcast
+    assert b('01005e000001')      # IPv4 multicast
+    assert b('333300000001')      # IPv6 multicast
+    assert b('0180c2000000')      # STP/LLDP reserved
+    assert b('000000000000')      # all zero
+    assert b('00:00')             # malformed length (norm-stripped elsewhere; len!=12)
+    # real unicast host MACs → NOT filtered
+    assert not b('bc2411da667d')  # a real Proxmox VM MAC
+    assert not b('a89c6c80ab51')  # a real switch/host MAC
+
+
 def test_unifi_service_has_discovery_and_enforcement():
     import unifi_service
     for m in ('get_active_clients', 'get_known_users',

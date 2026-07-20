@@ -76,6 +76,26 @@ def _mac_norm(mac: str) -> str:
     return ''.join(c for c in (mac or '').lower() if c in '0123456789abcdef')
 
 
+def _is_bogus_mac(mn: str) -> bool:
+    """True for non-host MACs that must never classify/alert — L2 artifacts, not
+    plugged-in devices. Filters: malformed length; multicast/broadcast (the I/G
+    bit of the first octet, which also catches ff:ff:ff:ff:ff:ff, 01:00:5e:*,
+    33:33:*, 01:80:c2:* STP); all-zero; and a device-half of all-F (e.g. the
+    switch-learned phantom 00:00:ff:ff:ff:ff)."""
+    if not mn or len(mn) != 12:
+        return True
+    try:
+        if int(mn[:2], 16) & 1:          # I/G bit set → multicast/broadcast
+            return True
+    except ValueError:
+        return True
+    if mn == '000000000000':
+        return True
+    if mn[6:] == 'ffffff':               # device portion all-F → bogus
+        return True
+    return False
+
+
 def _epoch_to_ts(epoch):
     """UniFi ships unix epochs; return the int for to_timestamp() or None."""
     if not epoch:
@@ -163,8 +183,8 @@ def run_scan(flask_app=None):
         seen = 0
         for cl in clients:
             mn = _mac_norm(cl['mac'])
-            if not mn:
-                continue
+            if not mn or _is_bogus_mac(mn):
+                continue  # skip broadcast/multicast/all-F L2 artifacts (not hosts)
             classification, asset_id = _classify(
                 mn, cl['oui_vendor'], asset_by_mac, unifi_allow, acked)
 

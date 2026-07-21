@@ -14,9 +14,22 @@ def test_mac_norm_strips_delimiters_and_lowercases():
     assert network_scan._mac_norm(None) == ''
 
 
-def _classify(mac, vendor='', asset=None, allow=None, acked=None):
+def _classify(mac, vendor='', asset=None, allow=None, acked=None, host='', known_hosts=None):
     return network_scan._classify(
-        mac, vendor, asset or {}, allow or set(), acked or set())
+        mac, host, vendor, asset or {}, allow or set(), acked or set(), known_hosts or {})
+
+
+def test_hostname_match_recognizes_known_box_with_drifted_mac():
+    # unknown MAC (new dock/NIC) but hostname matches a known asset -> known_asset
+    cls, aid = _classify('aabbccddeeff', host='ADMIN-CHARITY', known_hosts={'admin-charity': 141})
+    assert cls == 'known_asset' and aid == 141
+    # domain suffix is stripped before matching
+    cls2, aid2 = _classify('aabbccddeef0', host='ADMIN-CHARITY.corp.cirque.com',
+                           known_hosts={'admin-charity': 141})
+    assert cls2 == 'known_asset' and aid2 == 141
+    # unknown MAC + hostname NOT in known set -> still unknown
+    cls3, _ = _classify('aabbccddeef1', host='SOME-RANDOM-LAPTOP', known_hosts={'admin-charity': 141})
+    assert cls3 == 'unknown'
 
 
 def test_acknowledged_wins_over_everything():

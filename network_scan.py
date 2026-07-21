@@ -106,12 +106,25 @@ def _epoch_to_ts(epoch):
         return None
 
 
-def _classify(mac_norm, oui_vendor, asset_by_mac, unifi_allow, acked):
-    """Return (classification, asset_id)."""
+def _host_key(hostname):
+    """Normalize a hostname for matching: lowercase, drop domain suffix."""
+    return (hostname or '').strip().lower().split('.')[0]
+
+
+def _classify(mac_norm, hostname, oui_vendor, asset_by_mac, unifi_allow, acked, known_hosts):
+    """Return (classification, asset_id).
+
+    known_hosts maps a normalized hostname -> asset_id for every known asset name
+    and every live RMM agent. Matching on hostname (not just MAC) means a known
+    box is still recognized when its MAC drifts — a new dock/USB-NIC, a re-image,
+    or a swapped adapter (e.g. ADMIN-CHARITY on a BizLink dock)."""
     if mac_norm in acked:
         return 'acknowledged', asset_by_mac.get(mac_norm)
     if mac_norm in asset_by_mac:
         return 'known_asset', asset_by_mac[mac_norm]
+    hk = _host_key(hostname)
+    if hk and hk in known_hosts:
+        return 'known_asset', known_hosts[hk]
     if mac_norm in unifi_allow:
         return 'acknowledged', None
     vlow = (oui_vendor or '').lower()
@@ -167,6 +180,18 @@ def run_scan(flask_app=None):
                 if mn:
                     asset_by_mac.setdefault(mn, r['id'])
 
+        # Known-hostname -> asset_id map: asset names + live RMM agent hostnames.
+        # Lets us recognize a known box by hostname when its MAC has drifted.
+        known_hosts = {}
+        for r in con.execute("SELECT id, name FROM asset WHERE name IS NOT NULL AND name <> ''").fetchall():
+            hk = _host_key(r['name'])
+            if hk:
+                known_hosts.setdefault(hk, r['id'])
+        for r in con.execute("SELECT agent_id, asset_id FROM rmm_agent WHERE enabled = TRUE AND asset_id IS NOT NULL").fetchall():
+            hk = _host_key(r['agent_id'])
+            if hk:
+                known_hosts.setdefault(hk, r['asset_id'])
+
         # Sticky Tracker-side allowlist we must preserve across scans. (blocked
         # state is orthogonal — a separate column, never re-derived — so it does
         # not feed classification.)
@@ -186,7 +211,7 @@ def run_scan(flask_app=None):
             if not mn or _is_bogus_mac(mn):
                 continue  # skip broadcast/multicast/all-F L2 artifacts (not hosts)
             classification, asset_id = _classify(
-                mn, cl['oui_vendor'], asset_by_mac, unifi_allow, acked)
+                mn, cl['hostname'], cl['oui_vendor'], asset_by_mac, unifi_allow, acked, known_hosts)
 
             # Per-row savepoint: a single malformed UniFi record can't abort the
             # whole scan (an aborted txn would fail every later upsert). Sticky

@@ -1495,6 +1495,53 @@ def detect_cloud_first(query, upn=None):
         return out
 
 
+def _ensure_onboard_license_group(upn, retries=8, delay=15):
+    """Add a freshly-onboarded user to the cloud license-bearing group so
+    group-based licensing grants their M365 license (e.g. Cirque-Users → Business
+    Premium). That group is CLOUD-ONLY, so the on-prem create_user/add_user_to_group
+    path can't reach it — this is a Graph write, and the user must be synced to
+    Entra first, so we retry while the AAD-Connect delta sync (just triggered)
+    catches up. Group id comes from Setting 'onboard_license_group'. Best-effort:
+    never raises into the caller; returns a status dict for the ledger."""
+    import time as _time
+    from models import Setting
+    try:
+        from m365_service import M365Service
+        from m365_config import get_m365_credentials
+    except Exception as e:
+        return {"status": "skipped", "reason": f"m365 unavailable: {e}"}
+    _row = Setting.query.filter_by(key="onboard_license_group").first()
+    gid = (_row.value if _row and _row.value else "").strip()
+    if not gid:
+        return {"status": "skipped", "reason": "onboard_license_group Setting not set"}
+    if not upn:
+        return {"status": "skipped", "reason": "no UPN to license"}
+    try:
+        creds = get_m365_credentials()
+        svc = M365Service(**creds) if isinstance(creds, dict) else M365Service(*creds)
+        user = None
+        for i in range(max(1, retries)):
+            user = svc.find_user(upn)
+            if user:
+                break
+            if i < retries - 1:
+                _time.sleep(delay)
+        if not user:
+            return {"status": "pending_sync", "group": gid,
+                    "reason": f"{upn} not yet in Entra after ~{retries*delay}s; license group not applied — will need a re-run"}
+        uid = user["id"]
+        if not user.get("usageLocation"):
+            svc.ensure_usage_location(uid, "US")   # required for group-based licensing
+        res = svc.add_group_member(gid, uid)
+        if res.get("success"):
+            return {"status": "already_member" if res.get("already") else "added",
+                    "group": gid, "user": upn}
+        return {"status": "error", "group": gid, "error": res.get("error")}
+    except Exception as e:
+        log.exception("license-group assignment failed for %s", upn)
+        return {"status": "error", "error": str(e)}
+
+
 def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
     """Provision a new-hire in Active Directory — invoked when IT approves a parked
     onboard request and supplies the OU + groups (threaded into config as
@@ -1614,6 +1661,12 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
             except Exception as e:
                 entra = f"sync error: {e}"
 
+            # Grant the M365 license via the cloud license group (group-based
+            # licensing). The on-prem group adds above never touch it because it's
+            # a cloud-only group — without this step a greenfield hire lands in AD
+            # with NO 365 license. Best-effort; waits out the delta sync.
+            lic_group = _ensure_onboard_license_group(upn)
+
             # Persist the provisioned identity onto the Employee row. The user IS created
             # (real, must be recorded) even on a partial result — always save sam/ad_dn.
             emp.ad_dn = new_dn
@@ -1636,7 +1689,7 @@ def _action_onboard_employee(config: dict, ctx: dict) -> tuple:
                 "employee": emp.name, "employee_id": emp_id, "sam": sam,
                 "ad_dn": new_dn, "ou_dn": ou_dn, "groups": granted, "created": True,
                 "enabled": account_enabled, "entra_sync": entra,
-                "hard_match": hard_match,
+                "hard_match": hard_match, "license_group": lic_group,
             }
             if group_errors:
                 result["group_errors"] = group_errors

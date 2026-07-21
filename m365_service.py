@@ -115,6 +115,50 @@ class M365Service:
             logger.error(f"Request failed for {endpoint}: {e}")
             raise
 
+    def find_user(self, user_ref):
+        """Look up a user by UPN/email/id. Returns the Graph user dict (id,
+        userPrincipalName, usageLocation, accountEnabled, assignedLicenses) or
+        None if not found (e.g. not yet synced to Entra)."""
+        token = self.get_access_token()
+        url = (f"{self.base_url}/users/{quote(user_ref, safe='')}"
+               "?$select=id,userPrincipalName,usageLocation,accountEnabled,assignedLicenses")
+        try:
+            r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=25)
+            return r.json() if r.status_code == 200 else None
+        except requests.exceptions.RequestException:
+            return None
+
+    def ensure_usage_location(self, user_id, location='US'):
+        """Set usageLocation (required before group-based licensing can apply).
+        Returns True on success."""
+        token = self.get_access_token()
+        url = f"{self.base_url}/users/{quote(user_id, safe='')}"
+        try:
+            r = requests.patch(url, headers={'Authorization': f'Bearer {token}',
+                               'Content-Type': 'application/json'},
+                               json={'usageLocation': location}, timeout=25)
+            return r.status_code in (200, 204)
+        except requests.exceptions.RequestException:
+            return False
+
+    def add_group_member(self, group_id, user_id):
+        """Add a directory user to a group (e.g. the license-bearing group).
+        Idempotent — an 'already exists' 400 is treated as success. Returns
+        {'success': bool, 'already': bool, 'error': str?}."""
+        token = self.get_access_token()
+        url = f"{self.base_url}/groups/{quote(group_id, safe='')}/members/$ref"
+        body = {'@odata.id': f"{self.base_url}/directoryObjects/{user_id}"}
+        try:
+            r = requests.post(url, headers={'Authorization': f'Bearer {token}',
+                              'Content-Type': 'application/json'}, json=body, timeout=25)
+            if r.status_code in (200, 204):
+                return {'success': True, 'already': False}
+            if r.status_code == 400 and 'already exist' in (r.text or '').lower():
+                return {'success': True, 'already': True}
+            return {'success': False, 'error': f"HTTP {r.status_code}: {(r.text or '')[:200]}"}
+        except requests.exceptions.RequestException as e:
+            return {'success': False, 'error': str(e)}
+
     def send_mail(self, mailbox_email, recipients, subject, text_body=None, html_body=None, from_email=None):
         """Send mail through Microsoft Graph using the specified mailbox endpoint."""
         if not mailbox_email:

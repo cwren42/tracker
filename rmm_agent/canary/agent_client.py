@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.52"
+AGENT_VERSION = "2.9.53"
 
 import asyncio
 import base64
@@ -676,9 +676,9 @@ _tray_setup_done     = False  # only run _setup_tray once per agent process
 _rustdesk_setup_done = False  # only do full rustdesk ensure once per process
 _periodic_update_started = False  # only spawn the 4h self-update task once per process
 _warp_logged_state = None  # last logged state string, to avoid log spam each connect
-_warp_worker_launched_at = 0.0  # monotonic ts of last SYSTEM-worker launch (cooldown)
-_WARP_WORKER_COOLDOWN = 1800.0  # don't relaunch the enroll worker more than once / 30 min
-_WARP_CONFIG_CACHE = None  # None=not fetched; (org, client_id, client_secret) or (None,...)
+_warp_eradicate_last_uninstall = None  # monotonic ts of last MSI-uninstall attempt (None=never; rate-limit)
+_WARP_ERADICATE_COOLDOWN = 1800.0  # don't re-attempt the heavy MSI uninstall more than once / 30 min
+_warp_eradicate_lock = threading.Lock()  # only ONE eradicate pass runs at a time (reconnect-storm guard)
 
 # Per-agent behaviour flags pushed by server on connect via agent_config message.
 # Servers set these to True so neither RustDesk nor the systray are installed.
@@ -1266,26 +1266,25 @@ def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cloudflare WARP bake-in (off-site boxes only)
+# Cloudflare WARP ERADICATION (fleet-wide removal)
 # ---------------------------------------------------------------------------
-# Off-site Windows boxes can't reach the internal RustDesk relay (10.15.0.63)
-# directly. Cloudflare WARP private-network routing carries RustDesk's UDP
-# rendezvous to the relay over the WARP mesh with zero internet exposure (the
-# Cloudflare HTTP/WS tunnel mangles RustDesk's binary frames; only WARP's full
-# L3 WireGuard works -- see memory rustdesk-offsite-cloudflare-deadend).
+# WARP was only ever deployed as a CARRIER to reach the OLD internal RustDesk
+# relay (10.15.0.63) from off-site boxes: the Cloudflare HTTP/WS tunnel mangles
+# RustDesk's binary frames, so only WARP's full L3 WireGuard worked. That relay
+# now lives standalone on AWS (rustdesk.cirquetools.com), reachable directly with
+# NO carrier, and WARP destabilizes the MikroTik SSTP VPN (the org's primary user
+# remote-access path). So as of 2.9.53 the agent NO LONGER enrolls/installs WARP
+# under any condition -- the enroll/bake-in path is gone entirely.
 #
-# ensure_warp() is idempotent and SAFE TO CALL REPEATEDLY:
-#   * On-LAN/site boxes (relay TCP 21116 directly reachable) -> SKIP entirely.
-#   * Already enrolled in org 'cirquetools' AND connected -> done.
-#   * Otherwise drop a one-shot SYSTEM scheduled task that does ALL the
-#     long-lived / connection-bouncing work (WARP install/restart/enroll/connect
-#     + RustDesk toml). We NEVER inline-launch those from run_script / the WS
-#     loop -- a lingering child would deadlock the command loop (Change 1).
+# eradicate_warp() replaces ensure_warp(): it runs every connect, INDEPENDENT of
+# any server-side creds, and actively sheds WARP -- tunnel down, MSI uninstall,
+# CF_WARP_Bakein task + worker removed, Run-key autolaunch stripped, Cloudflare
+# MDM policy purged, and any 127.0.2.x DNS hijack reset + flushed. It is cheap and
+# idempotent when WARP is absent (file/registry probes, no subprocess), so a clean
+# box pays nothing. The heavy MSI uninstall is rate-limited (see cooldown above).
+# The residual _warp_dns_hijacked() SIGNAL is kept for telemetry/alerting only.
 _WARP_CLI = r'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe'
 _WARP_PROGDATA = r'C:\ProgramData\Cloudflare'
-_WARP_MSI_URL = 'https://downloads.cloudflareclient.com/v1/download/windows/ga'
-_RELAY_PROBE_IP = '10.15.0.63'   # internal RustDesk relay (rust.corp.cirque.com)
-_RELAY_PROBE_PORT = 21116
 
 # Domain-controller LDAP probes: the corp-path signal that is TRUE on-corp/UID
 # but NOT merely because WARP is up (WARP does NOT publish a 389/LDAP path to the
@@ -1504,101 +1503,37 @@ def _warp_mesh_ip_present() -> bool:
     return False
 
 
-def _warp_is_offsite(on_lan: bool) -> bool:
-    """Decide, FAIL-CLOSED toward on-site, whether this box is genuinely off-site
-    and therefore needs WARP. LAN/site/UID boxes MUST be classified on-site so
-    that ensure_warp tears WARP DOWN (restoring internal DNS/AD) and never leaves
-    a switch_locked enrollment hijacking resolution.
-
-    HISTORY of the bug this replaces: the old gate used ONLY "TCP-reach the relay
-    10.15.0.63:21116". That was unreliable two ways:
-      (a) CIRCULAR — the relay is reachable *because WARP is up* over the 100.96.x
-          mesh, so a hijacked on-corp box looked "on-site" and never tore down;
-      (b) FALSE over the UID (UniFi Identity) VPN even when genuinely on-corp,
-          because the relay isn't published on that path.
-    Net effect: on-corp/UID boxes kept WARP connected -> DNS hijack (14/96 boxes
-    found hijacked 2026-07-07). See rustdesk-offsite-cloudflare-deadend memory.
-
-    NEW SIGNAL = _warp_has_corp_path(): a DC is reachable on LDAP/389 OR
-    corp.cirque.com resolves to a 10.15.x IP. Neither is true merely because WARP
-    is up (WARP only routes the relay :21116, not the DCs), and both are true on
-    the UID VPN. on_lan is kept only for the log line, not for gating (the Tracker
-    is published publicly so on_lan can be True off-site)."""
-    return not _warp_has_corp_path()
-
-
-def _get_warp_config(tracker_url: str, agent_id: str, token: str):
-    """Fetch the WARP enrollment (org, client_id, client_secret) from the tracker,
-    authenticated by agent_id + token. Cached per-process. LAN-primary then public
-    Cloudflare fallback (mirrors _get_rustdesk_relay). Returns (None, None, None)
-    on any failure / unset server-side so the caller skips WARP gracefully.
-
-    The secret is held only in memory for the lifetime of one enrollment and is
-    written to the (machine-only) MDM store via the SYSTEM task; it is never
-    logged or echoed."""
-    global _WARP_CONFIG_CACHE
-    if _WARP_CONFIG_CACHE is not None:
-        return _WARP_CONFIG_CACHE
-    import urllib.request as _ur
-    fallback = os.environ.get("RMM_TRACKER_URL_PUBLIC", "https://tracker.cirquetools.com").rstrip("/")
-    bases = []
-    for b in (tracker_url, fallback):
-        b = (b or "").rstrip("/")
-        if b and b not in bases:
-            bases.append(b)
-    for base in bases:
-        try:
-            url = f"{base}/api/rmm/warp-config/{agent_id}?token={token}"
-            req = _ur.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
-            with _ur.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
-                body = json.loads(resp.read())
-            org = (body.get("organization") or "").strip()
-            cid = (body.get("auth_client_id") or "").strip()
-            sec = (body.get("auth_client_secret") or "").strip()
-            if org and cid and sec:
-                _WARP_CONFIG_CACHE = (org, cid, sec)
-                print(f"[warp] enrollment config fetched from {base} (org={org})", flush=True)
-                return _WARP_CONFIG_CACHE
-            print("[warp] enrollment config unavailable -- skipping", flush=True)
-            _WARP_CONFIG_CACHE = (None, None, None)
-            return _WARP_CONFIG_CACHE
-        except Exception as e:
-            print(f"[warp] config fetch failed from {base}: {e}", flush=True)
-            continue
-    return (None, None, None)
-
-
-def _warp_enrolled_and_connected(org: str) -> bool:
-    """True if warp-cli reports registration in *org* AND a Connected status."""
-    import subprocess as _sp
-    if not os.path.isfile(_WARP_CLI):
+def _warp_present() -> bool:
+    """Cheap probe: does ANY Cloudflare WARP footprint exist on this box? Checks the
+    client exe, the staged bake-in worker/task, the Cloudflare MDM policy key, the
+    CloudflareWARP service key, and an up 100.96.x WARP mesh. File/registry checks
+    only (no subprocess) so the common clean-box case is nearly free. Windows-only;
+    False elsewhere / on any error."""
+    if sys.platform != "win32":
         return False
     try:
-        reg = _sp.run([_WARP_CLI, "--accept-tos", "registration", "show"],
-                      capture_output=True, text=True, errors="replace",
-                      timeout=15, creationflags=0x08000000)
-        if org.lower() not in (reg.stdout or "").lower():
-            return False
-        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
-                     capture_output=True, text=True, errors="replace",
-                     timeout=15, creationflags=0x08000000)
-        return "connected" in (st.stdout or "").lower()
+        if os.path.isfile(_WARP_CLI):
+            return True
+        if os.path.isfile(os.path.join(_WARP_PROGDATA, "warp_bakein_worker.ps1")):
+            return True
+        if os.path.isfile(r"C:\Windows\System32\Tasks\CF_WARP_Bakein"):
+            return True
+        import winreg  # type: ignore
+        for root, path in (
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Cloudflare\Warp"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\CloudflareWARP"),
+        ):
+            try:
+                k = winreg.OpenKey(root, path)
+                winreg.CloseKey(k)
+                return True
+            except OSError:
+                pass
+        if _warp_mesh_ip_present():
+            return True
     except Exception:
-        return False
-
-
-def _warp_is_up() -> bool:
-    """True if the WARP CLI exists and reports a Connected tunnel (ANY org)."""
-    import subprocess as _sp
-    if not os.path.isfile(_WARP_CLI):
-        return False
-    try:
-        st = _sp.run([_WARP_CLI, "--accept-tos", "status"],
-                     capture_output=True, text=True, errors="replace",
-                     timeout=15, creationflags=0x08000000)
-        return "connected" in (st.stdout or "").lower()
-    except Exception:
-        return False
+        pass
+    return False
 
 
 def _warp_teardown() -> None:
@@ -1687,9 +1622,9 @@ def _warp_teardown() -> None:
     #     -> the tray pops "Unable to Connect / Initializing tunnel interface" at
     #     next login, which looks exactly like WARP re-triggering (reported on
     #     PAULV-MSI 2026-07-08). Kill the running tray, strip the login auto-launch
-    #     (HKLM + WOW6432 + every loaded HKU hive + Startup shortcuts), and drop our
-    #     CF_WARP_Bakein task. All corp-path-only (this fn never runs off-site), and
-    #     ensure_warp re-creates CF_WARP_Bakein if the box later roams off-site.
+    #     (HKLM + WOW6432 + every loaded HKU hive + Startup shortcuts), and drop the
+    #     CF_WARP_Bakein task. As of 2.9.53 nothing ever re-creates that task -- WARP
+    #     is being eradicated, not re-enrolled -- so this removal is permanent.
     #     Our WARP is headless (service_mode/auto_connect via MDM) so the tray is
     #     cosmetic -- losing it costs nothing.
     try:
@@ -1845,248 +1780,150 @@ def _warp_muzzle_dormant() -> None:
         "Set-Service -Name CloudflareWARP -StartupType Manual -ErrorAction SilentlyContinue")
 
 
-def _build_warp_worker_ps1(org: str, relay_host: str, relay_ip: str) -> str:
-    """The one-shot SYSTEM worker: restart WARP (re-parse MDM), enroll into *org*
-    only if needed, connect, then write a clean internal RustDesk2.toml preserving
-    the existing key. Logs to disk. No secrets here (they're already in MDM).
-
-    RustDesk is pointed at the relay *IP* (relay_ip), NOT the hostname: this worker
-    only ever runs on OFF-SITE boxes, where rust.corp.cirque.com is split-DNS
-    internal-only and resolves to the dead public edge -- only the IP is reachable
-    over the WARP mesh. (Validated on TW-PTP2 2026-06-22; relay_host kept for ref.)"""
-    return (
-        '$ErrorActionPreference = "SilentlyContinue"\n'
-        '$Log   = "C:\\ProgramData\\Cloudflare\\warp_bakein.log"\n'
-        '$cli   = "C:\\Program Files\\Cloudflare\\Cloudflare WARP\\warp-cli.exe"\n'
-        f'$Org   = "{org}"\n'
-        'function L($m){ "$(Get-Date -Format o)  $m" | Out-File $Log -Append }\n'
-        '"" | Out-File $Log\n'
-        'L "=== warp bakein worker start ==="\n'
-        'Restart-Service -Name CloudflareWARP -Force\n'
-        'Start-Sleep -Seconds 12\n'
-        '$reg = (& $cli --accept-tos registration show 2>&1 | Out-String)\n'
-        'if ($reg -notmatch [regex]::Escape($Org)) {\n'
-        '    L "registration org != $Org -> re-enrolling"\n'
-        '    & $cli --accept-tos registration delete 2>&1 | Out-File $Log -Append\n'
-        '    Start-Sleep -Seconds 5\n'
-        '    & $cli --accept-tos registration new $Org 2>&1 | Out-File $Log -Append\n'
-        '    Start-Sleep -Seconds 6\n'
-        '} else { L "registration already in org $Org" }\n'
-        '& $cli --accept-tos connect 2>&1 | Out-File $Log -Append\n'
-        'Start-Sleep -Seconds 12\n'
-        'L ("WARP status: " + ((& $cli --accept-tos status 2>&1) -join " | "))\n'
-        '# Clear the stale "Awaiting external log in" GUI prompt that the WARP\n'
-        '# taskbar app pops in a logged-in user session during the brief\n'
-        '# de-register->re-register window. warp-svc holds the tunnel; the GUI\n'
-        '# relaunches clean (Connected) since registration is valid + onboarding=0.\n'
-        'Get-Process | Where-Object { ($_.ProcessName -like "*Cloudflare*" -or $_.ProcessName -like "*warp*") -and $_.ProcessName -ne "warp-svc" } | Stop-Process -Force -EA SilentlyContinue\n'
-        'L "cleared stale WARP GUI prompt (warp-svc kept)"\n'
-        '$rdDirs = @(\n'
-        '  "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Roaming\\RustDesk\\config",\n'
-        '  "$env:APPDATA\\RustDesk\\config",\n'
-        '  "C:\\ProgramData\\RustDesk\\config"\n'
-        ') | Where-Object { Test-Path $_ }\n'
-        'foreach ($d in $rdDirs) {\n'
-        '    $toml = Join-Path $d "RustDesk2.toml"\n'
-        '    $key  = ""\n'
-        '    if (Test-Path $toml) {\n'
-        '        $m = Select-String -Path $toml -Pattern "^\\s*key\\s*=\\s*\'([^\']*)\'" -EA SilentlyContinue | Select-Object -First 1\n'
-        '        if ($m) { $key = $m.Matches[0].Groups[1].Value }\n'
-        '    }\n'
-        '    $body = "rendezvous_server = \'' + relay_ip + '\'`nnat_type = 1`nserial = 0`n`n[options]`ncustom-rendezvous-server = \'' + relay_ip + '\'`nrelay-server = \'' + relay_ip + '\'`napi-server = \'\'`nkey = \'$key\'"\n'
-        '    Set-Content -Path $toml -Value $body -Encoding UTF8\n'
-        '    L "wrote $toml (key preserved: $([bool]$key))"\n'
-        '}\n'
-        'Restart-Service -Name RustDesk -Force -EA SilentlyContinue\n'
-        'Start-Sleep -Seconds 5\n'
-        '$st = ((& $cli --accept-tos status 2>&1) -join " | ")\n'
-        '$c = New-Object Net.Sockets.TcpClient\n'
-        f'$a = $c.BeginConnect("{relay_ip}", {_RELAY_PROBE_PORT}, $null, $null)\n'
-        '$ok = $a.AsyncWaitHandle.WaitOne(5000); $relayReach = ($ok -and $c.Connected); $c.Close()\n'
-        f'L "VERIFY relay {relay_ip}:{_RELAY_PROBE_PORT} reachable: $relayReach"\n'
-        'if (($st -match "Connected") -and $relayReach) { L "RESULT: OK" } else { L "RESULT: FAIL" }\n'
-        'L "=== warp bakein worker done ==="\n'
-    )
-
-
 def _warp_log_once(state: str, msg: str) -> None:
     """Print msg only when the WARP state CHANGES, to avoid spamming the log on
-    every reconnect (ensure_warp is re-evaluated each connect by design)."""
+    every reconnect (eradicate_warp is re-evaluated each connect by design)."""
     global _warp_logged_state
     if _warp_logged_state != state:
         print(msg, flush=True)
         _warp_logged_state = state
 
 
-def ensure_warp(tracker_url: str, agent_id: str, token: str, on_lan: bool) -> None:
-    """Idempotently enroll OFF-SITE boxes into Cloudflare WARP so they can reach
-    the internal RustDesk relay. On-LAN/site boxes skip. Safe to call repeatedly
-    and RE-EVALUATED every connect, so a laptop that roams LAN->off-site enrolls
-    without waiting for a process restart.
+def eradicate_warp() -> None:
+    """Permanently shed Cloudflare WARP from this box. Runs EVERY connect, entirely
+    INDEPENDENT of any server-side creds (no config fetch, nothing to blank server
+    side). Replaces the old ensure_warp() enroll/bake-in path, which is gone: the
+    agent never enrolls, installs, or re-creates the CF_WARP_Bakein task under any
+    condition. WARP was only a carrier to the OLD internal RustDesk relay; that relay
+    now lives standalone on AWS (rustdesk.cirquetools.com) and WARP destabilizes the
+    MikroTik SSTP VPN, so it is being eradicated fleet-wide.
 
-    on_lan = the connection's own resolved verdict (True when the agent connected
-    on the internal LAN endpoints; False on the Cloudflare fallback). It is the
-    fail-closed off-site signal -- a real LAN box always has on_lan=True so it can
-    never be misclassified by a transient probe.
+    Idempotent + cheap when WARP is absent (file/registry probes only, no subprocess),
+    so a clean box pays essentially nothing per connect. When a footprint is present:
+      1) _warp_teardown()  -- disconnect, unenroll, stop+Manual the service, strip the
+         Run-key autolaunch, kill the tray, DELETE the CF_WARP_Bakein task + reset any
+         127.0.2.x DNS hijack -> DHCP + flushdns (thorough, idempotent).
+      2) _warp_uninstall_msi()  -- silently uninstall the client MSI (rate-limited: the
+         uninstall is heavy and may pend a reboot; retried next connect after cooldown).
+      3) _warp_purge_policy_and_files()  -- delete the whole Policies\\Cloudflare tree,
+         mdm.xml, and the staged bake-in worker so no latent re-enroll config remains.
+      4) If the client survived (uninstall pending reboot), muzzle it so it can't prompt
+         or hijack in the interim; the next connect retries the uninstall after cooldown.
 
-    All long-lived steps run inside a one-shot SYSTEM scheduled task that logs to
-    disk (deadlock-safe per Change 1); this function only stages files + launches
-    the task and returns quickly. Windows-only."""
-    global _warp_worker_launched_at
+    This means an agent on 2.9.53 sheds WARP on its own -- we no longer depend on the
+    external warp_kill.ps1 sweep reaching every box, nor on the server creds staying
+    blank. Windows-only."""
+    global _warp_eradicate_last_uninstall
     if sys.platform != "win32":
         return
-    import subprocess as _sp, time as _time
+    import time as _time
+    # Reconnect-storm guard: this runs on the shared connect executor, and the heavy
+    # steps (teardown subprocess chain + up-to-6-min MSI uninstall) can occupy a worker
+    # for minutes. WS 1011 ping-timeout flaps can fire many reconnects; without this a
+    # pass would stack per reconnect and starve command/telemetry work. Non-blocking:
+    # if a pass is already running, skip -- the next connect re-evaluates anyway.
+    if not _warp_eradicate_lock.acquire(blocking=False):
+        return
     try:
-        # 1) OFF-SITE gate (fail-closed toward on-site). LAN/site boxes MUST skip,
-        #    AND if WARP is still up from a prior off-site stint, tear it DOWN now
-        #    so internal DNS/AD work again (the relay is reachable on-site OR once
-        #    the corp VPN is connected -> both cases self-heal here).
-        if not _warp_is_offsite(on_lan):
-            if _warp_is_up():
-                _warp_log_once("teardown", "[warp] on-site/VPN (relay reachable) but WARP up -- tearing down")
-                _warp_teardown()
-            else:
-                # On-site and WARP not "up" (connected). It may still be INSTALLED and
-                # sitting there unenrolled/dormant -- which shows the onboarding mode-
-                # picker if the MDM muzzle is missing (CHU-MSI 2026-07-15). Teardown
-                # never fires here (it gates on _warp_is_up), so muzzle explicitly:
-                # keep the client silent + dormant without uninstalling (so it can
-                # still re-enroll when the box roams off-site).
-                if os.path.isfile(_WARP_CLI):
-                    _warp_muzzle_dormant()
-                    _warp_log_once("onsite", "[warp] on-LAN/site -- WARP muzzled dormant (no onboarding prompt)")
-                else:
-                    _warp_log_once("onsite", "[warp] on-LAN/site, WARP not installed -- skip")
+        if not _warp_present():
+            _warp_log_once("clean", "[warp] no WARP footprint -- nothing to eradicate")
             return
 
-        org_default = 'cirquetools'
-        # 2) Idempotent: already enrolled + connected in our org -> done.
-        if _warp_enrolled_and_connected(org_default):
-            _warp_log_once("enrolled", f"[warp] already enrolled in {org_default} and connected -- ok")
-            return
+        _warp_log_once(
+            "eradicate",
+            "[warp] WARP present -- eradicating (tunnel down + MSI uninstall + policy/task/DNS purge)")
 
-        # 3) A worker we launched may still be converging -- don't re-fire it more
-        #    than once per cooldown window. (Re-evaluated, but rate-limited.)
+        # 1) Thorough, idempotent teardown (tunnel/service/run-keys/task/DNS).
+        try:
+            _warp_teardown()
+        except Exception as e:
+            print(f"[warp] eradicate teardown error: {e}", flush=True)
+
+        # 2) Uninstall the client MSI. Rate-limited -- msiexec is heavy and can pend a
+        #    reboot, so we don't re-run it every connect while it's converging.
         now = _time.monotonic()
-        if (now - _warp_worker_launched_at) < _WARP_WORKER_COOLDOWN:
-            _warp_log_once("converging", "[warp] enrollment worker recently launched -- waiting to converge")
-            return
+        if os.path.isfile(_WARP_CLI) and (
+                _warp_eradicate_last_uninstall is None
+                or (now - _warp_eradicate_last_uninstall) >= _WARP_ERADICATE_COOLDOWN):
+            _warp_eradicate_last_uninstall = now
+            _warp_uninstall_msi()
 
-        # 4) Fetch enrollment token from the tracker (never hardcoded in source).
-        org, cid, sec = _get_warp_config(tracker_url, agent_id, token)
-        if not (org and cid and sec):
-            print("[warp] no enrollment config available -- deferring", flush=True)
-            return
-        rd_server, _rd_key = _get_rustdesk_relay(tracker_url, agent_id, token)
-        relay_host = rd_server or 'rust.corp.cirque.com'
+        # 3) Remove the policy/config/worker leftovers the teardown intentionally KEEPS
+        #    as a muzzle -- we want WARP GONE, not muzzled-and-latent.
+        _warp_purge_policy_and_files()
 
-        os.makedirs(_WARP_PROGDATA, exist_ok=True)
-
-        # Write MDM to the Policies key + mdm.xml so a WARP service restart enrolls
-        # headless into OUR org (NOT consumer WARP). switch_locked, onboarding off.
-        try:
-            import winreg  # type: ignore
-            rp = r"SOFTWARE\Policies\Cloudflare\Warp"
-            k = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, rp)
-            winreg.SetValueEx(k, "organization", 0, winreg.REG_SZ, org)
-            winreg.SetValueEx(k, "service_mode", 0, winreg.REG_SZ, "warp")
-            winreg.SetValueEx(k, "auto_connect", 0, winreg.REG_DWORD, 0)
-            winreg.SetValueEx(k, "onboarding", 0, winreg.REG_DWORD, 0)
-            winreg.SetValueEx(k, "switch_locked", 0, winreg.REG_DWORD, 1)
-            winreg.SetValueEx(k, "auth_client_id", 0, winreg.REG_SZ, cid)
-            winreg.SetValueEx(k, "auth_client_secret", 0, winreg.REG_SZ, sec)
-            winreg.CloseKey(k)
-        except Exception as e:
-            print(f"[warp] MDM registry write failed: {e}", flush=True)
-
-        mdm_xml = (
-            "<dict>\n"
-            f"  <key>organization</key><string>{org}</string>\n"
-            "  <key>service_mode</key><string>warp</string>\n"
-            "  <key>auto_connect</key><integer>0</integer>\n"
-            f"  <key>auth_client_id</key><string>{cid}</string>\n"
-            f"  <key>auth_client_secret</key><string>{sec}</string>\n"
-            "  <key>switch_locked</key><true/>\n"
-            "  <key>onboarding</key><false/>\n"
-            "</dict>\n"
-        )
-        try:
-            with open(os.path.join(_WARP_PROGDATA, "mdm.xml"), "w", encoding="utf-8") as fh:
-                fh.write(mdm_xml)
-        except Exception as e:
-            print(f"[warp] mdm.xml write failed: {e}", flush=True)
-
-        # If WARP isn't installed, install the MSI first (quiet). The SYSTEM task
-        # restarts/enrolls after; if the MSI is still landing the next process
-        # cycle re-runs and the task picks up the now-present warp-cli.
-        if not os.path.isfile(_WARP_CLI):
-            print("[warp] warp-cli absent -- installing MSI", flush=True)
-            _warp_install_msi()
-
-        # Stage the one-shot SYSTEM worker that does ALL long-lived steps.
-        worker = _build_warp_worker_ps1(org, relay_host, _RELAY_PROBE_IP)
-        worker_path = os.path.join(_WARP_PROGDATA, "warp_bakein_worker.ps1")
-        with open(worker_path, "w", encoding="utf-8") as fh:
-            fh.write(worker)
-
-        tn = "CF_WARP_Bakein"
-        _sp.run(["schtasks", "/Delete", "/TN", tn, "/F"],
-                capture_output=True, timeout=15, creationflags=0x08000000)
-        # Backstop trigger: a near-future ONCE time (~2 min ahead) in case the
-        # explicit /Run below doesn't take -- so enrollment isn't pinned to a
-        # fixed wall-clock that an off-hours/asleep box might never reach.
-        st = _time.strftime("%H:%M", _time.localtime(_time.time() + 120))
-        cr = _sp.run(["schtasks", "/Create", "/TN", tn, "/TR",
-                      f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{worker_path}"',
-                      "/SC", "ONCE", "/ST", st, "/RU", "SYSTEM", "/RL", "HIGHEST", "/F"],
-                     capture_output=True, text=True, errors="replace",
-                     timeout=20, creationflags=0x08000000)
-        if cr.returncode != 0:
-            print(f"[warp] schtasks /Create failed (rc={cr.returncode}): "
-                  f"{(cr.stderr or cr.stdout or '').strip()[:200]}", flush=True)
-            return
-        rr = _sp.run(["schtasks", "/Run", "/TN", tn],
-                     capture_output=True, text=True, errors="replace",
-                     timeout=20, creationflags=0x08000000)
-        if rr.returncode != 0:
-            print(f"[warp] schtasks /Run failed (rc={rr.returncode}); "
-                  f"backstop ONCE trigger at {st} will fire it", flush=True)
-        # Mark launch time so we don't re-fire within the cooldown window; the
-        # next connect after cooldown re-evaluates (retries if the worker failed).
-        _warp_worker_launched_at = _time.monotonic()
-        _warp_log_once("launched", "[warp] enrollment worker launched (SYSTEM task) -- converging")
+        # 4) If the client is still on disk (uninstall pending a reboot), muzzle it so it
+        #    can't prompt/hijack in the interim; next connect retries after the cooldown.
+        if os.path.isfile(_WARP_CLI):
+            try:
+                _warp_muzzle_dormant()
+            except Exception as e:
+                print(f"[warp] eradicate muzzle error: {e}", flush=True)
+            print("[warp] client still present after uninstall (likely pending reboot) -- muzzled; will retry", flush=True)
+        else:
+            print("[warp] eradicated -- WARP client removed", flush=True)
     except Exception as e:
-        print(f"[warp] ensure_warp error: {e}", flush=True)
+        print(f"[warp] eradicate_warp error: {e}", flush=True)
+    finally:
+        _warp_eradicate_lock.release()
 
 
-def _warp_install_msi() -> None:
-    """Download + silently install the Cloudflare WARP MSI. Returns when msiexec
-    exits; the SYSTEM worker handles enrollment afterward."""
-    import subprocess as _sp, urllib.request as _ur, tempfile as _tmp
+def _warp_uninstall_msi() -> None:
+    """Silently uninstall the Cloudflare WARP client (all matching Uninstall entries)
+    and remove the CloudflareWARP service. Best-effort with a hard timeout so a wedged
+    msiexec can't hang the connect executor. Windows-only."""
+    import subprocess as _sp
+    if sys.platform != "win32":
+        return
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "$keys=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+        "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*');"
+        "$apps=Get-ItemProperty $keys -EA SilentlyContinue | "
+        "Where-Object { $_.DisplayName -like '*Cloudflare WARP*' };"
+        "foreach($a in $apps){"
+        "  if($a.PSChildName -match '^\\{.+\\}$'){"
+        "    Start-Process msiexec.exe -ArgumentList \"/x $($a.PSChildName) /qn /norestart\" -Wait"
+        "  } elseif($a.UninstallString){"
+        "    $u=$a.UninstallString -replace '(?i)/I','/X';"
+        "    Start-Process cmd.exe -ArgumentList '/c',\"$u /qn /norestart\" -Wait"
+        "  }"
+        "};"
+        "sc.exe stop CloudflareWARP | Out-Null; sc.exe delete CloudflareWARP | Out-Null"
+    )
     try:
-        tmp = _tmp.NamedTemporaryFile(suffix=".msi", delete=False)
-        tmp_path = tmp.name
-        tmp.close()
-        req = _ur.Request(_WARP_MSI_URL, headers={"User-Agent": "CirqueRMM"})
-        with _ur.urlopen(req, timeout=200) as resp, open(tmp_path, "wb") as fh:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                fh.write(chunk)
-        if os.path.getsize(tmp_path) < 1_000_000:
-            print("[warp] MSI download too small -- aborting", flush=True)
-            os.unlink(tmp_path)
-            return
-        r = _sp.run(["msiexec", "/i", tmp_path, "/qn", "/norestart"],
-                    capture_output=True, timeout=300, creationflags=0x08000000)
-        print(f"[warp] msiexec exit={r.returncode}", flush=True)
+        r = _sp.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-ExecutionPolicy", "Bypass", "-Command", ps],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=360, creationflags=0x08000000)
+        print(f"[warp] MSI uninstall run rc={r.returncode}", flush=True)
+    except Exception as e:
+        print(f"[warp] MSI uninstall failed: {e}", flush=True)
+
+
+def _warp_purge_policy_and_files() -> None:
+    """Remove the Cloudflare MDM policy tree (HKLM\\SOFTWARE\\Policies\\Cloudflare),
+    mdm.xml, and the staged bake-in worker so NO WARP footprint or latent re-enroll
+    config remains. Best-effort; Windows-only."""
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg  # type: ignore
+        # Delete the leaf Warp subkey first, then the (now-empty) parent Cloudflare key.
+        for path in (r"SOFTWARE\Policies\Cloudflare\Warp", r"SOFTWARE\Policies\Cloudflare"):
+            try:
+                winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, path)
+            except OSError:
+                pass
+    except Exception as e:
+        print(f"[warp] purge policy key failed: {e}", flush=True)
+    for p in (os.path.join(_WARP_PROGDATA, "mdm.xml"),
+              os.path.join(_WARP_PROGDATA, "warp_bakein_worker.ps1")):
         try:
-            os.unlink(tmp_path)
+            if os.path.isfile(p):
+                os.remove(p)
         except Exception:
             pass
-    except Exception as e:
-        print(f"[warp] MSI install failed: {e}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -6695,26 +6532,24 @@ async def main() -> None:
                 # so it never blocks the WebSocket from establishing.
                 # Skipped for server-mode agents where disable_rustdesk flag is set.
                 if not _disable_rustdesk:
-                    # Run rustdesk-ensure THEN warp-ensure in a single background
-                    # executor, in that order: WARP bake-in (off-site boxes only;
-                    # on-LAN/site boxes skip) needs the clean RustDesk toml + key
-                    # to already exist so its SYSTEM worker can preserve the key.
-                    # Both are idempotent and deadlock-safe (WARP heavy steps run
-                    # inside a one-shot SYSTEM task), and run off-thread so neither
-                    # blocks the WebSocket from establishing.
-                    # on_lan = this connection's OWN resolved verdict (LAN endpoint
-                    # vs Cloudflare fallback). Fail-closed off-site signal for WARP.
-                    _on_lan = (tracker_url == _LAN_TRACKER_URL)
-                    def _rustdesk_then_warp():
+                    # Run rustdesk-ensure THEN warp-eradicate in a single background
+                    # executor, in that order: ensure_rustdesk keeps the standalone-AWS
+                    # relay config + password intact; eradicate_warp then permanently
+                    # sheds any Cloudflare WARP footprint (WARP was only ever a carrier
+                    # to the OLD internal relay and destabilizes the MikroTik SSTP VPN --
+                    # see the eradicate_warp docstring). Both are idempotent and run
+                    # off-thread so neither blocks the WebSocket from establishing;
+                    # eradicate_warp is cheap when WARP is absent and needs no creds.
+                    def _rustdesk_then_warp_eradicate():
                         try:
                             ensure_rustdesk(tracker_url, agent_id, token)
                         except Exception as _e:
                             print(f"[rustdesk] ensure error: {_e}", flush=True)
                         try:
-                            ensure_warp(tracker_url, agent_id, token, _on_lan)
+                            eradicate_warp()
                         except Exception as _e:
-                            print(f"[warp] ensure error: {_e}", flush=True)
-                    loop.run_in_executor(None, _rustdesk_then_warp)
+                            print(f"[warp] eradicate error: {_e}", flush=True)
+                    loop.run_in_executor(None, _rustdesk_then_warp_eradicate)
 
                 # Collect extended info (hardware/OS/security) once on connect
                 try:

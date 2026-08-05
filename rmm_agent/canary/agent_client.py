@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.53"
+AGENT_VERSION = "2.9.54"
 
 import asyncio
 import base64
@@ -1978,6 +1978,51 @@ def ensure_ittools_dir() -> None:
         print(f"[ittools] Provisioned {_ITTOOLS_DIR} (Users:modify)", flush=True)
     except Exception as e:
         print(f"[ittools] provisioning failed: {e}", flush=True)
+
+
+def ensure_us_vpn_routing() -> None:
+    """Idempotently ensure the 'Cirque USA' SSTP VPN carries internal traffic.
+
+    US VPN boxes were fleet-wide under-provisioned: they connect + get a public
+    DNS answer with NO internal route, so *.corp.cirque.com resolves to the
+    public wildcard and internal tools (tracker/molten) are unreachable. This
+    adds, only when missing, (1) the 10.15.0.0/16 route through the Cirque USA
+    connection and (2) an NRPT rule forcing corp.cirque.com to the DCs
+    (10.15.0.2/.3). No-op if there is no Cirque USA connection (non-US boxes).
+    Runs as SYSTEM at startup; cheap check-then-act, so safe to run every boot.
+    """
+    if sys.platform != "win32":
+        return
+    ps = r'''
+$ErrorActionPreference='SilentlyContinue'
+$vpn = Get-VpnConnection -AllUserConnection | Where-Object { $_.ServerAddress -match 'aotc\.us\.cirque\.com' -or $_.Name -match 'Cirque\s*US' } | Select-Object -First 1
+$isUser=$false
+if(-not $vpn){ $vpn = Get-VpnConnection | Where-Object { $_.ServerAddress -match 'aotc\.us\.cirque\.com' -or $_.Name -match 'Cirque\s*US' } | Select-Object -First 1; $isUser=$true }
+if(-not $vpn){ return }
+$name=$vpn.Name
+if(-not (@($vpn.Routes | Where-Object { $_.DestinationPrefix -eq '10.15.0.0/16' }).Count -gt 0)){
+  if($isUser){ Add-VpnConnectionRoute -ConnectionName $name -DestinationPrefix '10.15.0.0/16' -PassThru -EA SilentlyContinue | Out-Null }
+  else { Add-VpnConnectionRoute -ConnectionName $name -DestinationPrefix '10.15.0.0/16' -AllUserConnection -PassThru -EA SilentlyContinue | Out-Null }
+  $ifidx=(Get-NetIPInterface -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -eq $name -and $_.ConnectionState -eq 'Connected'} | Select-Object -First 1).ifIndex
+  if($ifidx){ New-NetRoute -DestinationPrefix '10.15.0.0/16' -InterfaceIndex $ifidx -NextHop '0.0.0.0' -RouteMetric 1 -EA SilentlyContinue | Out-Null }
+}
+$dcOk=$false
+foreach($r in (Get-DnsClientNrptRule | Where-Object { $_.Namespace -match 'corp\.cirque\.com' })){ if(($r.NameServers -contains '10.15.0.2') -and ($r.NameServers -contains '10.15.0.3')){ $dcOk=$true } }
+if(-not $dcOk){
+  Get-DnsClientNrptRule | Where-Object { $_.Namespace -match 'corp\.cirque\.com' } | Remove-DnsClientNrptRule -Force -EA SilentlyContinue
+  Add-DnsClientNrptRule -Namespace '.corp.cirque.com' -NameServers '10.15.0.2','10.15.0.3' -EA SilentlyContinue
+  Clear-DnsClientCache
+}
+'''
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", ps],
+            capture_output=True, timeout=30, creationflags=0x08000000,
+        )
+        print("[usvpn] ensured Cirque USA route+NRPT (idempotent)", flush=True)
+    except Exception as e:
+        print(f"[usvpn] ensure failed: {e}", flush=True)
 
 
 def _parse_semver(v) -> tuple:
@@ -6495,6 +6540,10 @@ async def main() -> None:
     # Provision the C:\ITTOOLS drop folder for the "Install software" feature
     # (idempotent; gated behind a sentinel so it doesn't thrash the ACL).
     ensure_ittools_dir()
+
+    # Ensure the Cirque USA SSTP VPN carries internal traffic (route + NRPT DNS).
+    # Fleet-wide under-provisioning fix; no-op on non-US boxes. Idempotent.
+    ensure_us_vpn_routing()
 
     # Sync RustDesk peer ID on startup (fast, non-blocking)
     sync_rustdesk_id(tracker_url, agent_id, token)

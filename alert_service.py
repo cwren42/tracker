@@ -1486,6 +1486,26 @@ def build_machine_asset_map(con, machines):
     machine_asset_map = {}
     unmapped = []
 
+    # Stable-identity index for repurpose detection: Entra device id survives an
+    # OS-hostname change, so a box handed from one employee to another (renamed)
+    # keeps the same aadDeviceId. We use this ONLY to RELABEL the coverage gap
+    # (so a renamed box reads as "known asset under an old hostname" instead of
+    # "untracked device") — NOT to map it into machine_asset_map, because the
+    # current hostname-matched Defender device already carries the asset's live
+    # findings and folding a stale/inactive ghost's CVE list in would re-open
+    # remediated CVEs in the ingest path.
+    aad_index = {}
+    try:
+        for _r in con.execute(
+            "SELECT id, name, LOWER(azure_ad_device_id) AS a1, LOWER(ad_device_guid) AS a2 "
+            "FROM asset WHERE status!='Disposed'"
+        ).fetchall():
+            for _k in (_r['a1'], _r['a2']):
+                if _k:
+                    aad_index.setdefault(_k, {'id': _r['id'], 'name': _r['name']})
+    except Exception:
+        aad_index = {}
+
     def _norm(s):
         return ''.join(c for c in (s or '').lower() if c.isalnum())
 
@@ -1553,6 +1573,21 @@ def build_machine_asset_map(con, machines):
         if asset_row and asset_row['asset_id']:
             machine_asset_map[machine_id] = asset_row['asset_id']
         else:
+            # Repurpose relabel: hostname didn't match, but if the Entra device id
+            # points at a tracked asset this is a KNOWN box under an old hostname
+            # (e.g. jax-msi -> asset 94 'bao-msi'). Surface it as such instead of a
+            # mystery "untracked device", but do NOT map it (see aad_index note).
+            _aad = (m.get('aadDeviceId') or '').lower()
+            _ghost = aad_index.get(_aad) if _aad else None
+            if _ghost:
+                unmapped.append({
+                    'machine_id': machine_id, 'name': fqdn,
+                    'reason': (f'Repurposed/renamed box — Entra device maps to asset '
+                               f'{_ghost["id"]} "{_ghost["name"]}" (known machine under an old '
+                               f'hostname; offboard or let age out in Defender)'),
+                    'defender_side': False, 'renamed_ghost': True,
+                    'mapped_asset_id': _ghost['id']})
+                continue
             # Classify WHY it is unmapped, so the coverage gap is visible.
             nm = (short_name or '').lower()
             if merged:

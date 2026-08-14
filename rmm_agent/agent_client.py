@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.54"
+AGENT_VERSION = "2.9.55"
 
 import asyncio
 import base64
@@ -552,20 +552,50 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
         candidates.append("/etc/rustdesk/RustDesk.toml")
 
         peer_id = None
-        for path in candidates:
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read()
-                m = _re.search(r'^id\s*=\s*["\']?([0-9a-zA-Z_\-]+)["\']?', content, _re.MULTILINE)
-                if m:
-                    peer_id = m.group(1).strip()
-                    break
-            except Exception:
-                continue
 
-        # Fallback 1: check cached peer ID file (avoids repeated --get-id on every start)
+        # Primary source: `--get-id` is the AUTHORITATIVE peer ID the running
+        # client actually registered with the relay. Trusting the TOML `id=` or
+        # the cached id file first is a correctness bug: right after a RustDesk
+        # reinstall / re-image the service-account TOML `id=` is often empty
+        # (RustDesk assigns it lazily) AND the cache file still holds the
+        # PRE-reinstall id -- so the agent re-syncs a DEAD id forever and the
+        # relay answers "ID does not exist" to anyone who dials it (see the
+        # RAY-MSI 31960072->25156446 incident). Ask the client directly and
+        # refresh the cache from it. Runs at most hourly (rustdesk_watchdog), so
+        # the ~1s subprocess cost is negligible.
+        try:
+            exe = _rustdesk_exe()
+            if exe and os.path.isfile(exe):
+                import subprocess as _sp
+                r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
+                out = (r.stdout or "").strip()
+                if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
+                    peer_id = out
+                    try:
+                        os.makedirs(os.path.dirname(_RUSTDESK_PEER_ID_FILE), exist_ok=True)
+                        open(_RUSTDESK_PEER_ID_FILE, 'w').write(peer_id)
+                    except Exception:
+                        pass
+        except Exception as ge:
+            print(f"[rustdesk] --get-id failed: {ge}", flush=True)
+
+        # Fallback 1: read `id=` from any RustDesk.toml profile/layout (used only
+        # when --get-id is unavailable, e.g. RustDesk service not yet running).
+        if not peer_id:
+            for path in candidates:
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                    m = _re.search(r'^id\s*=\s*["\']?([0-9a-zA-Z_\-]+)["\']?', content, _re.MULTILINE)
+                    if m:
+                        peer_id = m.group(1).strip()
+                        break
+                except Exception:
+                    continue
+
+        # Fallback 2: last-known cached id (only if we could not read a live one).
         if not peer_id and os.path.isfile(_RUSTDESK_PEER_ID_FILE):
             try:
                 cached = open(_RUSTDESK_PEER_ID_FILE, 'r', encoding='utf-8').read().strip()
@@ -573,27 +603,6 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
                     peer_id = cached
             except Exception:
                 pass
-
-        # Fallback 2: ask the running RustDesk process via --get-id
-        # Only run if TOML not found AND cache is empty/missing
-        if not peer_id:
-            try:
-                exe = _rustdesk_exe()
-                if exe and os.path.isfile(exe):
-                    import subprocess as _sp
-                    r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
-                    out = (r.stdout or "").strip()
-                    if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
-                        peer_id = out
-                        # Cache it so we don't need to call --get-id again next restart
-                        try:
-                            os.makedirs(os.path.dirname(_RUSTDESK_PEER_ID_FILE), exist_ok=True)
-                            open(_RUSTDESK_PEER_ID_FILE, 'w').write(peer_id)
-                        except Exception:
-                            pass
-                        print(f"[rustdesk] Got peer ID via --get-id: {peer_id} (cached)", flush=True)
-            except Exception as ge:
-                print(f"[rustdesk] --get-id fallback failed: {ge}", flush=True)
 
         if not peer_id:
             return  # RustDesk not installed or ID not yet assigned

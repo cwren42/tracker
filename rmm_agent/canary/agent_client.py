@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.54"
+AGENT_VERSION = "2.9.57"
 
 import asyncio
 import base64
@@ -552,20 +552,50 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
         candidates.append("/etc/rustdesk/RustDesk.toml")
 
         peer_id = None
-        for path in candidates:
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read()
-                m = _re.search(r'^id\s*=\s*["\']?([0-9a-zA-Z_\-]+)["\']?', content, _re.MULTILINE)
-                if m:
-                    peer_id = m.group(1).strip()
-                    break
-            except Exception:
-                continue
 
-        # Fallback 1: check cached peer ID file (avoids repeated --get-id on every start)
+        # Primary source: `--get-id` is the AUTHORITATIVE peer ID the running
+        # client actually registered with the relay. Trusting the TOML `id=` or
+        # the cached id file first is a correctness bug: right after a RustDesk
+        # reinstall / re-image the service-account TOML `id=` is often empty
+        # (RustDesk assigns it lazily) AND the cache file still holds the
+        # PRE-reinstall id -- so the agent re-syncs a DEAD id forever and the
+        # relay answers "ID does not exist" to anyone who dials it (see the
+        # RAY-MSI 31960072->25156446 incident). Ask the client directly and
+        # refresh the cache from it. Runs at most hourly (rustdesk_watchdog), so
+        # the ~1s subprocess cost is negligible.
+        try:
+            exe = _rustdesk_exe()
+            if exe and os.path.isfile(exe):
+                import subprocess as _sp
+                r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
+                out = (r.stdout or "").strip()
+                if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
+                    peer_id = out
+                    try:
+                        os.makedirs(os.path.dirname(_RUSTDESK_PEER_ID_FILE), exist_ok=True)
+                        open(_RUSTDESK_PEER_ID_FILE, 'w').write(peer_id)
+                    except Exception:
+                        pass
+        except Exception as ge:
+            print(f"[rustdesk] --get-id failed: {ge}", flush=True)
+
+        # Fallback 1: read `id=` from any RustDesk.toml profile/layout (used only
+        # when --get-id is unavailable, e.g. RustDesk service not yet running).
+        if not peer_id:
+            for path in candidates:
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                    m = _re.search(r'^id\s*=\s*["\']?([0-9a-zA-Z_\-]+)["\']?', content, _re.MULTILINE)
+                    if m:
+                        peer_id = m.group(1).strip()
+                        break
+                except Exception:
+                    continue
+
+        # Fallback 2: last-known cached id (only if we could not read a live one).
         if not peer_id and os.path.isfile(_RUSTDESK_PEER_ID_FILE):
             try:
                 cached = open(_RUSTDESK_PEER_ID_FILE, 'r', encoding='utf-8').read().strip()
@@ -573,27 +603,6 @@ def sync_rustdesk_id(tracker_url: str, agent_id: str, token: str) -> None:
                     peer_id = cached
             except Exception:
                 pass
-
-        # Fallback 2: ask the running RustDesk process via --get-id
-        # Only run if TOML not found AND cache is empty/missing
-        if not peer_id:
-            try:
-                exe = _rustdesk_exe()
-                if exe and os.path.isfile(exe):
-                    import subprocess as _sp
-                    r = _sp.run([exe, "--get-id"], capture_output=True, text=True, timeout=10)
-                    out = (r.stdout or "").strip()
-                    if _re.match(r'^[0-9a-zA-Z_\-]+$', out):
-                        peer_id = out
-                        # Cache it so we don't need to call --get-id again next restart
-                        try:
-                            os.makedirs(os.path.dirname(_RUSTDESK_PEER_ID_FILE), exist_ok=True)
-                            open(_RUSTDESK_PEER_ID_FILE, 'w').write(peer_id)
-                        except Exception:
-                            pass
-                        print(f"[rustdesk] Got peer ID via --get-id: {peer_id} (cached)", flush=True)
-            except Exception as ge:
-                print(f"[rustdesk] --get-id fallback failed: {ge}", flush=True)
 
         if not peer_id:
             return  # RustDesk not installed or ID not yet assigned
@@ -1140,7 +1149,7 @@ def ensure_rustdesk(tracker_url: str, agent_id: str, token: str) -> None:
         # Always verify exe exists after winget -- it can exit 0 as SYSTEM
         # without actually installing (stub/redirect issue)
         if not _rustdesk_exe():
-            _rustdesk_direct_install()
+            _rustdesk_direct_install(tracker_url, agent_id, token)
 
         _write_rustdesk_config(rd_server, rd_key)
 
@@ -1190,45 +1199,93 @@ def _rustdesk_winget_install() -> bool:
         return False
 
 
-def _rustdesk_direct_install() -> None:
-    """Download RustDesk MSI from GitHub and install silently."""
+# Known-good SHA-256 of rustdesk-1.4.6-x86_64.msi (RustDesk 1.4.6 release asset).
+# Mirrored on the Tracker at rmm_agent/deps/ and served token-gated via
+# /api/rmm/rustdesk-msi/<agent_id>. Every downloaded MSI is verified against this
+# before msiexec runs -- an unverified MSI is never installed.
+_RUSTDESK_MSI_SHA256 = '7aad1f481b2fdf86166d082933071e7e9aaf7efd3666a4204cdc5fd2f42b0e59'
+
+
+def _rustdesk_direct_install(tracker_url: str, agent_id: str, token: str) -> None:
+    """Download the RustDesk MSI and install silently, hash-verified.
+
+    Sources tried in order (first verified hash wins):
+      1. Tracker mirror over the relay-fetch context (_ssl_ctx()): the resolved
+         tracker_url primary, then the RMM_TRACKER_URL_PUBLIC Cloudflare fallback.
+      2. GitHub direct as a last resort -- also via _ssl_ctx() so it no longer
+         dies with SSL: CERTIFICATE_VERIFY_FAILED on the embedded (no-CA) Python.
+    Each candidate is downloaded to a temp file, size-checked, and SHA-256 matched
+    against _RUSTDESK_MSI_SHA256; on mismatch the file is deleted and the next
+    source is tried. msiexec runs only on a verified MSI."""
     import subprocess as _sp, urllib.request as _ur, tempfile as _tmp, os as _os
-    MSI_URL = 'https://github.com/rustdesk/rustdesk/releases/download/1.4.6/rustdesk-1.4.6-x86_64.msi'
-    try:
-        print(f'[rustdesk] Downloading MSI: {MSI_URL}', flush=True)
-        tmp = _tmp.NamedTemporaryFile(suffix='.msi', delete=False)
-        tmp_path = tmp.name
-        tmp.close()
 
-        req = _ur.Request(MSI_URL, headers={'User-Agent': 'CirqueRMM'})
-        with _ur.urlopen(req, timeout=120) as resp, open(tmp_path, 'wb') as fh:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                fh.write(chunk)
+    # Candidate URLs: Tracker mirror (LAN primary, then public fallback), then GitHub.
+    fallback = _os.environ.get('RMM_TRACKER_URL_PUBLIC', 'https://tracker.cirquetools.com').rstrip('/')
+    bases = []
+    for b in (tracker_url, fallback):
+        b = (b or '').rstrip('/')
+        if b and b not in bases:
+            bases.append(b)
+    urls = [f'{base}/api/rmm/rustdesk-msi/{agent_id}?token={token}' for base in bases]
+    urls.append('https://github.com/rustdesk/rustdesk/releases/download/1.4.6/rustdesk-1.4.6-x86_64.msi')
 
-        size_mb = _os.path.getsize(tmp_path) / 1024 / 1024
-        print(f'[rustdesk] Downloaded {size_mb:.1f} MB', flush=True)
-        if size_mb < 5:
-            print('[rustdesk] Download too small -- aborting', flush=True)
-            _os.unlink(tmp_path)
-            return
-
-        # msiexec /i <file> /qn = quiet, no UI
-        r = _sp.run(
-            ['msiexec', '/i', tmp_path, '/qn', '/norestart'],
-            capture_output=True, timeout=180
-        )
-        print(f'[rustdesk] msiexec exit={r.returncode}', flush=True)
-        if r.stderr:
-            print(f'[rustdesk] msiexec stderr: {r.stderr[:300]}', flush=True)
+    for msi_url in urls:
+        # Log the mirror without leaking the token in the query string.
+        safe_url = msi_url.split('?', 1)[0]
+        tmp_path = None
         try:
-            _os.unlink(tmp_path)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f'[rustdesk] direct install failed: {e}', flush=True)
+            print(f'[rustdesk] Downloading MSI: {safe_url}', flush=True)
+            tmp = _tmp.NamedTemporaryFile(suffix='.msi', delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+
+            req = _ur.Request(msi_url, headers={'User-Agent': f'CirqueRMM/{AGENT_VERSION}'})
+            h = hashlib.sha256()
+            with _ur.urlopen(req, timeout=120, context=_ssl_ctx()) as resp, open(tmp_path, 'wb') as fh:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    h.update(chunk)
+
+            size_mb = _os.path.getsize(tmp_path) / 1024 / 1024
+            print(f'[rustdesk] Downloaded {size_mb:.1f} MB', flush=True)
+            if size_mb < 5:
+                print('[rustdesk] Download too small -- trying next source', flush=True)
+                _os.unlink(tmp_path)
+                continue
+
+            digest = h.hexdigest()
+            if digest.lower() != _RUSTDESK_MSI_SHA256.lower():
+                print(f'[rustdesk] SHA-256 mismatch (got {digest}) -- discarding, trying next source', flush=True)
+                _os.unlink(tmp_path)
+                continue
+            print('[rustdesk] SHA-256 verified', flush=True)
+
+            # msiexec /i <file> /qn = quiet, no UI
+            r = _sp.run(
+                ['msiexec', '/i', tmp_path, '/qn', '/norestart'],
+                capture_output=True, timeout=180
+            )
+            print(f'[rustdesk] msiexec exit={r.returncode}', flush=True)
+            if r.stderr:
+                print(f'[rustdesk] msiexec stderr: {r.stderr[:300]}', flush=True)
+            try:
+                _os.unlink(tmp_path)
+            except Exception:
+                pass
+            return  # verified + installed -- done
+        except Exception as e:
+            print(f'[rustdesk] direct install from {safe_url} failed: {e}', flush=True)
+            if tmp_path:
+                try:
+                    _os.unlink(tmp_path)
+                except Exception:
+                    pass
+            continue
+
+    print('[rustdesk] direct install failed -- no source produced a verified MSI', flush=True)
 
 
 def _write_rustdesk_config(rd_server: str, rd_key: str) -> None:
@@ -6517,6 +6574,121 @@ def _setup_agent_logging() -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# WS-INDEPENDENT command floor (2.9.57)  —  drain rmm_commands over SHORT HTTP
+# ---------------------------------------------------------------------------
+# Root cause this fixes: telemetry and streaming commands both ride the long-lived
+# WebSocket to the gateway. On lossy / GFW-throttled links (China boxes especially)
+# the GFW resets the long-lived WS while letting short HTTP POSTs through, so
+# telemetry (short bursts on a briefly-up WS) trickles in but ANY command that was
+# queued while the WS was down sits in rmm_commands.status='pending' for hours —
+# the queue's ONLY consumer is /api/rmm/agent/heartbeat, which nothing called.
+#
+# This daemon thread calls that already-existing HTTP heartbeat endpoint every
+# _HTTP_POLL_INTERVAL_S, runs whatever pending (non-control) commands it returns,
+# and POSTs each result back over plain HTTP — completely independent of the WS.
+# It is the always-on reliable FLOOR; the WebSocket stays the low-latency FAST PATH
+# when it is up. The two paths never double-execute: a command delivered live over
+# the WS never creates a pending rmm_commands row (it is pushed at send time), and
+# this loop only ever drains rows the server hands back and immediately marks
+# 'dispatched', so each id is claimed exactly once. A small seen-set is kept as a
+# belt-and-suspenders guard against the server ever re-returning an id.
+_HTTP_POLL_INTERVAL_S = 60          # reliable-floor cadence, WS-independent
+_http_poll_seen: set = set()        # command ids already executed this process
+
+
+def _http_poll_post_result(tracker_url: str, agent_id: str, token: str,
+                           cmd_id, result: str, exit_code: int) -> bool:
+    """POST a queued command's result to the HTTP command_result endpoint.
+    Retries a few times so a transient link blip does not lose the result
+    (the row stays 'dispatched' and is never re-returned, so a lost POST just
+    loses the output — never causes a re-run)."""
+    url = f"{tracker_url}/api/rmm/agent/command_result?agent_id={agent_id}&token={token}"
+    body = json.dumps({"id": cmd_id,
+                       "result": str(result)[:4000],
+                       "exit_code": int(exit_code)}).encode()
+    for _attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json",
+                         "User-Agent": f"CirqueRMM/{AGENT_VERSION}"},
+                method="POST")
+            with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=20) as r:
+                json.loads(r.read())
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
+
+
+def _http_poll_once(tracker_url: str, agent_id: str, token: str) -> bool:
+    """One heartbeat/command-drain cycle over short HTTP. Returns True if the GET
+    succeeded (so the caller knows this tracker_url is live and need not fail over)."""
+    url = f"{tracker_url}/api/rmm/agent/heartbeat?agent_id={agent_id}&token={token}"
+    req = urllib.request.Request(url, headers={"User-Agent": f"CirqueRMM/{AGENT_VERSION}"})
+    with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=20) as r:
+        data = json.loads(r.read())
+
+    for cmd in (data.get("pending_commands") or []):
+        cid = cmd.get("id")
+        if cid is None or cid in _http_poll_seen:
+            continue
+        _http_poll_seen.add(cid)
+        ctype = (cmd.get("command_type") or "powershell").lower()
+        shell = "cmd" if ctype == "cmd" else "powershell"
+        code = cmd.get("command") or ""
+        try:
+            rc, so, se = _run_powershell_code(code, 300, shell)
+            out = so
+            if se:
+                out = (out + "\n" + se) if out else se
+        except subprocess.TimeoutExpired:
+            rc, out = -1, "Timed out"
+        except Exception as e:
+            rc, out = 1, f"agent execution error: {e}"
+        print(f"[http-poll] ran queued cmd {cid} (rc={rc}) over HTTP", flush=True)
+        _http_poll_post_result(tracker_url, agent_id, token, cid, out, rc)
+
+    # Bound the dedupe set so a long-lived agent can't grow it without limit.
+    if len(_http_poll_seen) > 512:
+        for _old in list(_http_poll_seen)[:len(_http_poll_seen) - 256]:
+            _http_poll_seen.discard(_old)
+
+    # NOTE: control 'action' (force_update / restart / reinstall) is intentionally
+    # left to the WebSocket/launcher path so this loop never races the self-update
+    # file-swap. Control is delivered live over the WS today; the queue only ever
+    # holds shell/powershell rows, which is exactly what this loop drains.
+    return True
+
+
+def _http_command_poll_thread(agent_id: str, token: str,
+                              fallback_tracker: str, fallback_gateway: str) -> None:
+    """Reliable, WS-independent command floor. Runs forever in a daemon thread so it
+    keeps draining the queue even when the WebSocket will not connect at all (the
+    precise failure mode on GFW-throttled links). Re-resolves LAN-vs-Cloudflare each
+    cycle and fails over to the public endpoint if the resolved one is unreachable."""
+    print("[http-poll] WS-independent command floor started "
+          f"(every {_HTTP_POLL_INTERVAL_S}s)", flush=True)
+    while True:
+        try:
+            tracker_url, _gw = _resolve_urls(fallback_tracker, fallback_gateway)
+            ok = False
+            try:
+                ok = _http_poll_once(tracker_url, agent_id, token)
+            except Exception as e:
+                print(f"[http-poll] cycle error via {tracker_url}: {e}", flush=True)
+            # If the resolved (LAN-preferred) tracker failed, try Cloudflare this cycle.
+            if not ok and tracker_url != fallback_tracker:
+                try:
+                    _http_poll_once(fallback_tracker, agent_id, token)
+                except Exception as e:
+                    print(f"[http-poll] fallback error: {e}", flush=True)
+        except Exception as e:
+            print(f"[http-poll] loop error: {e}", flush=True)
+        time.sleep(_HTTP_POLL_INTERVAL_S)
+
+
 async def main() -> None:
     global _disable_rustdesk, _disable_tray
     _setup_agent_logging()
@@ -6547,6 +6719,20 @@ async def main() -> None:
 
     # Sync RustDesk peer ID on startup (fast, non-blocking)
     sync_rustdesk_id(tracker_url, agent_id, token)
+
+    # WS-INDEPENDENT command floor (2.9.57): drain the rmm_commands queue over short
+    # HTTP every _HTTP_POLL_INTERVAL_S in its own daemon thread, so queued commands
+    # still execute when the long-lived WebSocket is starved by a lossy/GFW-throttled
+    # link. Started BEFORE the WS reconnect loop on purpose — it must keep running
+    # even when websockets.connect() below never succeeds. The WS stays the fast path.
+    try:
+        threading.Thread(
+            target=_http_command_poll_thread,
+            args=(agent_id, token, fallback_tracker, fallback_gateway),
+            name="rmm-http-cmd-poll", daemon=True,
+        ).start()
+    except Exception as _e:
+        print(f"[http-poll] failed to start command floor: {_e}", flush=True)
 
     shells: Dict[int, ShellSession] = {}
     shell_tasks: Dict[int, asyncio.Task] = {}

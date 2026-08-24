@@ -600,9 +600,37 @@ def api_rmm_rustdesk_config(agent_id):
     token = request.args.get('token', '')
     if not agent_id or not token or not _verify_agent_token(agent_id, token):
         return jsonify({'ok': False, 'error': 'unauthorized'}), 401
-    server = os.environ.get('RUSTDESK_RELAY_SERVER', '')
-    key = os.environ.get('RUSTDESK_RELAY_KEY', '')
+    # Per-agent test override: agents listed in RUSTDESK_TEST_AGENTS get the
+    # _TEST relay/key (e.g. the AWS relay under validation); everyone else stays
+    # on the fleet default. Lets us pilot a new relay on one box without flipping
+    # the whole fleet. Remove RUSTDESK_TEST_AGENTS to promote fleet-wide.
+    test_agents = [a.strip().upper() for a in os.environ.get('RUSTDESK_TEST_AGENTS', '').split(',') if a.strip()]
+    if (agent_id or '').upper() in test_agents:
+        server = os.environ.get('RUSTDESK_RELAY_SERVER_TEST', '') or os.environ.get('RUSTDESK_RELAY_SERVER', '')
+        key = os.environ.get('RUSTDESK_RELAY_KEY_TEST', '') or os.environ.get('RUSTDESK_RELAY_KEY', '')
+    else:
+        server = os.environ.get('RUSTDESK_RELAY_SERVER', '')
+        key = os.environ.get('RUSTDESK_RELAY_KEY', '')
     return jsonify({'server': server, 'key': key})
+
+
+@bp.route('/api/rmm/rustdesk-msi/<agent_id>')
+def api_rmm_rustdesk_msi(agent_id):
+    """Serve the RustDesk MSI installer from the on-server deps mirror,
+    authenticated by agent_id + token (same gating as rustdesk-config).
+
+    Re-imaged boxes run an embedded Python with no CA bundle, so pulling the
+    MSI straight from GitHub dies with SSL: CERTIFICATE_VERIFY_FAILED. Agents
+    fetch it here instead (over the same relay-fetch context that already
+    works) and hash-verify before install. File lives on disk at
+    rmm_agent/deps/rustdesk-1.4.6-x86_64.msi (gitignored, served from disk)."""
+    token = request.args.get('token', '')
+    if not agent_id or not token or not _verify_agent_token(agent_id, token):
+        return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+    msi_path = os.path.join(current_app.root_path, 'rmm_agent', 'deps', 'rustdesk-1.4.6-x86_64.msi')
+    if not os.path.isfile(msi_path):
+        return jsonify({'ok': False, 'error': 'msi not found'}), 404
+    return send_file(msi_path, mimetype='application/x-msi')
 
 
 @bp.route('/api/rmm/warp-config/<agent_id>')

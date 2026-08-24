@@ -136,7 +136,7 @@ def parse_policy_file(filepath):
         'category': category,
         'doc_type': doc_type,
         'version_label': version_label,
-        'markdown_body': content,
+        'markdown_body': body_content,
     }
 
 

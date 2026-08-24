@@ -26,7 +26,9 @@ from models import (
 )
 from soc2_models import (
     SOC2Control, EvidenceSnapshot, M365User, IntuneDevice, StrikeGraphEvidence,
-    AuditLog, summarize_control_evidence, is_progress_relevant_evidence,
+    AdminRoleSnapshot, AuditLog, summarize_control_evidence,
+    is_progress_relevant_evidence, internal_m365_account_criteria,
+    is_internal_upn,
 )
 try:
     from openpyxl import Workbook
@@ -459,65 +461,155 @@ def api_soc2_snapshot(snapshot_id):
 @login_required
 @admin_required
 def user_access_review_report():
-    """Generate User Access Review Report"""
-    from datetime import datetime
-    
-    # Get all employees
-    employees = Employee.query.all()
-    
-    # Get all assets (systems)
-    assets = Asset.query.all()
-    
-    # Categorize users by system type
-    os_users = []
-    db_users = []
-    app_users = []
-    network_users = []
-    
-    for employee in employees:
-        # Operating System Users
-        os_users.append({
-            'name': employee.name,
-            'email': employee.email,
-            'department': employee.department,
-            'position': employee.position,
-            'access_type': 'Standard User'
-        })
-        
-        # Database Users (if applicable)
-        if employee.department in ['IT', 'Engineering', 'Development']:
-            db_users.append({
-                'name': employee.name,
-                'email': employee.email,
-                'department': employee.department,
-                'access_level': 'Read/Write' if '@ IT' in (employee.position or '') else 'Read Only'
-            })
-        
-        # Application Users
-        app_users.append({
-            'name': employee.name,
-            'email': employee.email,
-            'applications': 'M365, Asset Tracker, Incident Portal',
-            'role': 'Admin' if employee.department == 'IT' else 'User'
-        })
-        
-        # Network/Cloud Users
-        if employee.email:
-            network_users.append({
-                'name': employee.name,
-                'email': employee.email,
-                'domain': 'cirque.com',
-                'vpn_access': 'Yes' if employee.department in ['IT', 'Engineering'] else 'No'
-            })
-    
+    """Periodic Logical Access Review — built ONLY from observed access data.
+
+    Sources (no derivation, no assumptions):
+      - ``m365_user`` (is_current) — the account population synced from Entra:
+        enabled state, department/title, admin flag, employee linkage.
+      - ``admin_role_snapshot`` — the day's snapshot of Entra directory role
+        assignments (privileged access).
+
+    Entra is the single IdP in front of every access layer (operating system,
+    database, application, network/cloud), so one account population governs
+    all four — the same rationale the evidence catalog records for the four
+    per-layer user-list exports. This report therefore presents ONE real
+    population plus the privileged-access detail, rather than inventing a
+    separate per-layer access level for each employee.
+
+    Deliberately absent: sign-in recency and license assignment. Neither is
+    collected today (``last_signin_datetime`` and ``licenses`` are empty for
+    every row), so inactivity is NOT assessed here and the template says so
+    explicitly. Reporting "never signed in" off an unpopulated column would
+    manufacture 196 findings out of a missing Graph permission.
+    """
     review_date = datetime.now()
+
+    # Cirque's own accounts only. The tenant also holds ~100 B2B guests from
+    # customer/supplier tenants (LiteOn, Alps, Luxshare, Sensel, ...) who are not
+    # our users and must not be reviewed as though they were.
+    accounts_q = (
+        M365User.query
+        .filter(M365User.is_current.is_(True))
+        .filter(internal_m365_account_criteria())
+        .order_by(M365User.display_name.asc())
+        .all()
+    )
+
+    # Employee linkage for the accounts that carry one.
+    employee_ids = {u.employee_id for u in accounts_q if u.employee_id}
+    employees_by_id = {}
+    if employee_ids:
+        employees_by_id = {
+            e.id: e for e in Employee.query.filter(Employee.id.in_(employee_ids)).all()
+        }
+
+    def _roles_for(user):
+        """Directory roles as a list, parsed from the stored JSON array."""
+        if not user.admin_roles:
+            return []
+        try:
+            parsed = json.loads(user.admin_roles)
+        except (TypeError, ValueError):
+            return [user.admin_roles]
+        return parsed if isinstance(parsed, list) else [str(parsed)]
+
+    accounts = []
+    for user in accounts_q:
+        employee = employees_by_id.get(user.employee_id) if user.employee_id else None
+        accounts.append({
+            'name': user.display_name or user.user_principal_name,
+            'upn': user.user_principal_name,
+            'department': user.department,
+            'job_title': user.job_title,
+            'enabled': bool(user.account_enabled),
+            'is_admin': bool(user.is_admin),
+            'roles': _roles_for(user),
+            'employee_name': employee.name if employee else None,
+            'employee_ad_enabled': employee.ad_enabled if employee else None,
+        })
+
+    # Privileged access: the most recent DAY's directory-role snapshot. Rows are
+    # written one-by-one with their own utcnow(), so every row in a run has a
+    # slightly different snapshot_date -- matching on the exact MAX() timestamp
+    # returns a single row. Group by calendar day instead.
+    latest_snapshot_day = db.session.query(
+        func.max(func.date(AdminRoleSnapshot.snapshot_date))
+    ).scalar()
+    privileged_rows = []
+    if latest_snapshot_day:
+        privileged_rows = [
+            row for row in (
+                AdminRoleSnapshot.query
+                .filter(func.date(AdminRoleSnapshot.snapshot_date) == latest_snapshot_day)
+                .order_by(AdminRoleSnapshot.user_principal_name.asc(),
+                          AdminRoleSnapshot.role_name.asc())
+                .all()
+            )
+            # a guest holding a directory role is not one of our administrators
+            if is_internal_upn(row.user_principal_name)
+        ]
+
+    accounts_by_upn = {a['upn']: a for a in accounts if a['upn']}
+    privileged = {}
+    for row in privileged_rows:
+        entry = privileged.setdefault(row.user_principal_name, {
+            'upn': row.user_principal_name,
+            'roles': [],
+            'account': accounts_by_upn.get(row.user_principal_name),
+        })
+        if row.role_name not in entry['roles']:
+            entry['roles'].append(row.role_name)
+    privileged = sorted(privileged.values(), key=lambda item: item['upn'])
+
+    # Items a reviewer must actually confirm — each one observable, not inferred.
+    unlinked = [a for a in accounts if a['enabled'] and not a['employee_name']]
+    unlinked_admins = [a for a in unlinked if a['is_admin']]
+    cloud_enabled_ad_disabled = [
+        a for a in accounts if a['enabled'] and a['employee_ad_enabled'] is False
+    ]
+    global_admins = [p for p in privileged if 'Global Administrator' in p['roles']]
+
+    # Guests are counted but NOT reviewed as users. Stating the excluded figure
+    # on the report makes the scoping deliberate: an auditor reconciling this
+    # population against a raw tenant export finds the difference explained,
+    # rather than a listing that silently comes up ~100 accounts short.
+    guest_total = (
+        M365User.query
+        .filter(M365User.is_current.is_(True))
+        .filter(db.not_(internal_m365_account_criteria()))
+        .count()
+    )
+    guest_enabled = (
+        M365User.query
+        .filter(M365User.is_current.is_(True), M365User.account_enabled.is_(True))
+        .filter(db.not_(internal_m365_account_criteria()))
+        .count()
+    )
+
+    stats = {
+        'total_accounts': len(accounts),
+        'guests_excluded': guest_total,
+        'guests_excluded_enabled': guest_enabled,
+        'tenant_total': len(accounts) + guest_total,
+        'enabled': sum(1 for a in accounts if a['enabled']),
+        'disabled': sum(1 for a in accounts if not a['enabled']),
+        'privileged_users': len(privileged),
+        'privileged_assignments': len(privileged_rows),
+        'global_admins': len(global_admins),
+        'unlinked': len(unlinked),
+        'unlinked_admins': len(unlinked_admins),
+        'cloud_enabled_ad_disabled': len(cloud_enabled_ad_disabled),
+    }
+
     return render_template('compliance/user_access_review.html',
-                         os_users=os_users,
-                         db_users=db_users,
-                         app_users=app_users,
-                         network_users=network_users,
-                         review_date=review_date,
-                         total_employees=len(employees))
+                         accounts=accounts,
+                         privileged=privileged,
+                         unlinked=unlinked,
+                         cloud_enabled_ad_disabled=cloud_enabled_ad_disabled,
+                         global_admins=global_admins,
+                         stats=stats,
+                         snapshot_day=latest_snapshot_day,
+                         review_date=review_date)
 
 
 @bp.route('/compliance/vendor-risk-register')
@@ -546,41 +638,16 @@ def risk_assessment_methodology():
                          review_date=review_date)
 
 
-@bp.route('/compliance/employee-training-report')
-@login_required
-@admin_required
-def employee_training_report():
-    """Generate Employee Training Report"""
-    from datetime import datetime, timedelta
-    import random
-    
-    # Get all employees
-    employees = Employee.query.all()
-    
-    # Generate training completion data
-    training_records = []
-    for employee in employees:
-        completion_date = datetime.now() - timedelta(days=random.randint(10, 90))
-        training_records.append({
-            'name': employee.name,
-            'email': employee.email,
-            'department': employee.department,
-            'training_type': 'Annual Security Awareness',
-            'completion_date': completion_date.strftime('%Y-%m-%d'),
-            'status': 'Completed',
-            'score': random.randint(85, 100)
-        })
-    
-    # Most recent hire
-    recent_hire = training_records[0] if training_records else None
-    
-    review_date = datetime.now()
-    return render_template('compliance/employee_training_report.html',
-                         training_records=training_records,
-                         recent_hire=recent_hire,
-                         review_date=review_date,
-                         total_employees=len(employees),
-                         completion_rate=100)
+# REMOVED: /compliance/employee-training-report.
+# The route fabricated its own audit evidence -- it invented a completion date
+# per employee via random.randint(10, 90) days ago, invented a score via
+# random.randint(85, 100), and hardcoded status='Completed' with
+# completion_rate=100 for every employee. Its template never existed, so it
+# only ever returned a 500, but the page title made it look like uploadable
+# SOC 2 training evidence.
+# Real security-training data lives in soc2_security_training_record and is
+# already exported as security_training_records.csv in the Type 1 evidence pack
+# (readiness.export_type1_pack). Use that; do not reintroduce a generator here.
 
 
 @bp.route('/compliance/employee-reporting-procedure')

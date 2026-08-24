@@ -21,7 +21,7 @@ software and the server side that talks to it.
 - **Enrollment**: site-wide token in `setting['rmm_site_enrollment_token']`; per-agent token verified by `_verify_agent_token`. Agent endpoints are CSRF-exempt by URL prefix.
 - **Self-update** = a Python **source swap** of `agent_client.py` (server serves it + sha256 via `/rmm/agent/version`/`file`), NOT a full EXE reinstall. The EXE/MSI is only for fresh installs.
 - **Remote**: RustDesk sessions (`rustdesk_service.py`); the WS gateway handles live control/terminal.
-- **Cloudflare tunnel is OFF** for the site — affects how remote/roaming agents reach the server; keep that in mind for connectivity issues.
+- **Cloudflare tunnel is ON** (verified 2026-06-12: `cloudflared` token-tunnel runs on the tracker host; ingress → `localhost:8000` Tracker + `localhost:8765` gateway; public names `tracker.cirquetools.com` / `rmm.cirquetools.com`). Off-network/roaming agents fall back to these public URLs (LAN-first, Cloudflare for remote); off-site RustDesk also rides this tunnel. RustDesk relay = `rust.corp.cirque.com` → `10.15.0.63` (Proxmox); `10.15.254.3` is a dead k8s leftover (do not use).
 - Patch management (`patch_mgmt.py`) and agent backups (`backup.py`, `rmm_backup_*`) ride on the agent.
 
 ## How you work

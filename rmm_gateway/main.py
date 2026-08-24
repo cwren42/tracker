@@ -717,6 +717,18 @@ async def enqueue_remediation(agent_id: str, request: Request):
     #    can't miss its live connection. If not live, leave it queued for reconnect flush.
     agent_ws = _live_ws_for_asset(asset_id)
     if not agent_ws:
+        # Fallback: asset_agents (the asset_id->agent_id reverse map) is populated ONLY
+        # at WS-connect, so a live socket whose map entry is missing/stale — the agent
+        # connected before the asset-id re-key, or while its DB asset_id was transiently
+        # unset — would strand the command as an undeliverable 'queued' orphan even
+        # though its socket is right there in `agents` (looks exactly like a dead command
+        # channel). agent_id was already canonicalized from asset_id above, so the direct
+        # lookup is safe and cannot mis-deliver. Heal the reverse map so subsequent
+        # asset-keyed dispatch (and the reconnect flush) find it too.
+        agent_ws = agents.get(agent_id)
+        if agent_ws:
+            asset_agents[asset_id] = agent_id
+    if not agent_ws:
         return JSONResponse({"ok": True, "id": rq_id, "status": "queued", "delivered": False})
 
     # 3) Live → dispatch now with a correlation session_id; mark deploying on confirmed send.

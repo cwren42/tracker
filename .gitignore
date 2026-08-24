@@ -82,3 +82,6 @@ rmm_agent/CirqueRMM.exe
 #   cirque-python-embed-3.12.4-win_amd64.zip
 # Keep its version in lockstep with deps/python-3.12.4-amd64.exe and the cp312 wheelhouse.
 rmm_agent/deps/
+
+# graphify code knowledge graph (local, regenerated)
+graphify-out/

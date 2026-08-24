@@ -22,7 +22,8 @@ from soc2_models import (
     M365User, IntuneDevice, DeviceSoftware, AdminRoleSnapshot,
     AzureNetworkSecurityGroup, AzureSecurityAlert, AzureDatabase,
     AzureStorageAccount, AzureVirtualMachine, AzureSecurityAssessment,
-    AzureMonitorAlert, AzureNetworkTopology
+    AzureMonitorAlert, AzureNetworkTopology,
+    internal_m365_account_criteria, is_internal_upn,
 )
 from teamviewer_evidence_service import TeamViewerEvidenceService
 from defender_service import DefenderService
@@ -176,9 +177,17 @@ class EvidenceFileService(EvidenceAzureMixin):
             ws.column_dimensions[cell.column_letter].width = 20
     
     def generate_m365_users_file(self, evidence_name):
-        """Generate M365 Users list file"""
-        users = M365User.query.filter_by(is_current=True).all()
-        
+        """Generate M365 Users list file.
+
+        Cirque's own accounts only -- B2B guests from customer/supplier tenants
+        are not our users and must not inflate the access-review population in
+        evidence handed to the auditor (see internal_m365_account_criteria).
+        """
+        users = (M365User.query
+                 .filter(M365User.is_current.is_(True))
+                 .filter(internal_m365_account_criteria())
+                 .all())
+
         wb, ws = self.create_styled_workbook('M365 Users')
         headers = ['Display Name', 'Email', 'Job Title', 'Department', 'Office', 'Account Enabled', 'Is Admin']
         self.style_header_row(ws, headers)
@@ -1746,8 +1755,15 @@ class EvidenceFileService(EvidenceAzureMixin):
             })
             entry['roles'].append(r[1])
 
+        # A B2B guest holding a directory role is not one of our administrators;
+        # drop guests so privileged-access evidence covers Cirque staff only.
+        by_user = {upn: entry for upn, entry in by_user.items() if is_internal_upn(upn)}
+
         # include is_admin users that may not appear in the directory-role snapshot
-        admin_users = M365User.query.filter_by(is_admin=True, is_current=True).all()
+        admin_users = (M365User.query
+                       .filter(M365User.is_admin.is_(True), M365User.is_current.is_(True))
+                       .filter(internal_m365_account_criteria())
+                       .all())
         for u in admin_users:
             if u.user_principal_name not in by_user:
                 by_user[u.user_principal_name] = {
@@ -2318,9 +2334,13 @@ class EvidenceFileService(EvidenceAzureMixin):
         """Extract one IS-section from the manual markdown body.
 
         A section runs from its ``## IS-<id>: Title`` heading up to (but not
-        including) the next IS-section heading of the same or shallower level.
-        Non-IS sub-headings (e.g. "## SOC 2 Trust Services Criteria Mapping")
-        that appear *within* a policy are kept as part of the section.
+        including) the next *different* IS-section heading of the same or
+        shallower level. Non-IS sub-headings (e.g. "## SOC 2 Trust Services
+        Criteria Mapping") that appear *within* a policy are kept as part of
+        the section, as is a repeat of the section's own IS-ID: some manual
+        documents restate their ID as an inner heading (e.g. ``## IS-x`` then
+        ``# IS-x``), and treating that repeat as the next section truncated the
+        body to just the title (blank Information Security Policy PDF).
 
         Returns (title, section_text) or None if the section isn't found.
         """
@@ -2341,7 +2361,7 @@ class EvidenceFileService(EvidenceAzureMixin):
         end = len(lines)
         for j in range(start + 1, len(lines)):
             m = _IS_HEADING_RE.match(lines[j].strip())
-            if m and len(m.group(1)) <= level:
+            if m and m.group(2) != is_id and len(m.group(1)) <= level:
                 end = j
                 break
         return title, '\n'.join(lines[start:end]).strip()

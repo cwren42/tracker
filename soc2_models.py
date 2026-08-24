@@ -241,6 +241,43 @@ class M365User(db.Model):
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'))
 
 
+# --- Internal (Cirque) vs guest accounts -------------------------------------
+# The tenant holds both Cirque's own users and B2B guests from customer/supplier
+# tenants (LiteOn, Alps, Luxshare, Sensel, ...). Guests are NOT our users: they
+# must never be counted in a user-access-review population or in access
+# evidence uploaded to the auditor.
+#
+# Guests are provisioned as `<their.address>#EXT#@<host-domain>`. The '#EXT#'
+# test is NOT redundant with the domain test: 4 guests are hosted on the
+# @cirque.com domain itself (e.g. Haibo.Dan_liteon.com#EXT#@cirque.com), so
+# filtering on the domain suffix alone lets them through.
+#
+# Consequence of the domain rule: three non-guest service/resource accounts on
+# the default @cirque1.onmicrosoft.com domain are also excluded (800number and
+# Cirque Corporation Main Line, both disabled, plus the ENABLED 'gitlabtest').
+# They are tenant service accounts rather than external people -- if they ever
+# need to appear in an access review, give them a @cirque.com UPN rather than
+# loosening this filter.
+INTERNAL_UPN_DOMAIN = 'cirque.com'
+GUEST_UPN_MARKER = '#EXT#'
+
+
+def internal_m365_account_criteria():
+    """SQLAlchemy criteria selecting Cirque's own (non-guest) M365 accounts."""
+    return db.and_(
+        db.func.lower(M365User.user_principal_name).like(f'%@{INTERNAL_UPN_DOMAIN}'),
+        db.not_(M365User.user_principal_name.ilike(f'%{GUEST_UPN_MARKER}%')),
+    )
+
+
+def is_internal_upn(user_principal_name):
+    """Python-side equivalent of :func:`internal_m365_account_criteria`."""
+    if not user_principal_name:
+        return False
+    upn = user_principal_name.lower()
+    return upn.endswith(f'@{INTERNAL_UPN_DOMAIN}') and GUEST_UPN_MARKER.lower() not in upn
+
+
 class IntuneDevice(db.Model):
     """Intune Device snapshot for compliance"""
     __tablename__ = 'intune_device'

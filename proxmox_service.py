@@ -28,6 +28,8 @@ import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from secret_store import decrypt_secret
+
 logger = logging.getLogger(__name__)
 
 # Snapshot name prefixes created by cv4pve-autosnap / Sanoid
@@ -179,6 +181,53 @@ class ProxmoxClient:
             return {'success': False, 'error': str(e)}
 
 
+class PbsClient:
+    """Thin wrapper around the Proxmox Backup Server REST API.
+
+    PBS speaks a DIFFERENT API than PVE: port 8007, and token auth uses the
+    ``PBSAPIToken=<id>:<secret>`` header (note the ``:`` separator, vs PVE's
+    ``=``). Backups are organised as one *group* per guest
+    (``backup-type`` vm|ct + ``backup-id`` = vmid), each holding N snapshots.
+    """
+
+    def __init__(self, host: str, port: int = 8007,
+                 token_id: str = '', token_secret: str = '',
+                 verify_ssl: bool = False, datastore: str = 'main',
+                 label: str = 'PBS'):
+        self.base_url = f"https://{host}:{port}/api2/json"
+        self.headers = {'Authorization': f'PBSAPIToken={token_id}:{token_secret}'}
+        self.datastore = datastore
+        self.verify_ssl = verify_ssl
+        self.label = label
+        self._session = requests.Session()
+        self._session.verify = verify_ssl
+
+    def _get(self, path: str) -> list | dict:
+        url = f"{self.base_url}{path}"
+        r = self._session.get(url, headers=self.headers, timeout=30)
+        r.raise_for_status()
+        return r.json().get('data', [])
+
+    def get_groups(self) -> list[dict]:
+        """One entry per guest: backup-type, backup-id, backup-count, last-backup."""
+        return self._get(f'/admin/datastore/{self.datastore}/groups') or []
+
+    def get_snapshots(self) -> list[dict]:
+        """Every snapshot in the datastore (carries the per-backup ``comment``)."""
+        return self._get(f'/admin/datastore/{self.datastore}/snapshots') or []
+
+    def test_connection(self) -> dict:
+        try:
+            groups = self.get_groups()
+            return {
+                'success': True,
+                'datastore': self.datastore,
+                'group_count': len(groups),
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+
 # ---------------------------------------------------------------------------
 # High-level sync
 # ---------------------------------------------------------------------------
@@ -192,9 +241,15 @@ def _build_client(Setting, prefix: str, label: str) -> ProxmoxClient | None:
     host = _get_setting(Setting, f'proxmox_{prefix}_host')
     if not host:
         return None
-    port = int(_get_setting(Setting, f'proxmox_{prefix}_port', '8006') or '8006')
     token_id = _get_setting(Setting, f'proxmox_{prefix}_token_id')
     token_secret = _get_setting(Setting, f'proxmox_{prefix}_token_secret')
+    # Without a PVEAPIToken this client can't authenticate — skip it. This also
+    # keeps the PVE 'backup' path from firing against a host that is actually a
+    # PBS server (port 8007, PBSAPIToken) configured via proxmox_backup_host +
+    # the proxmox_pbs_* keys, which has no proxmox_backup_token_id.
+    if not token_id:
+        return None
+    port = int(_get_setting(Setting, f'proxmox_{prefix}_port', '8006') or '8006')
     verify_ssl = _get_setting(Setting, f'proxmox_{prefix}_verify_ssl', '0') == '1'
     return ProxmoxClient(host, port, token_id, token_secret, verify_ssl, label)
 
@@ -430,16 +485,157 @@ def sync_proxmox(app_ctx, db, ProxmoxBackupJob, ProxmoxZfsPool, Setting,
 
 
 # ---------------------------------------------------------------------------
+# PBS (Proxmox Backup Server) sync
+# ---------------------------------------------------------------------------
+
+def _build_pbs_client(Setting) -> PbsClient | None:
+    """Build the PBS client from Settings, or None if not configured.
+
+    Reuses ``proxmox_backup_host`` for the host and adds PBS-specific keys:
+    ``proxmox_pbs_token_id``, ``proxmox_pbs_token_secret`` (Fernet-encrypted at
+    rest), ``proxmox_pbs_port`` (default 8007), ``proxmox_pbs_datastore``
+    (default 'main'), ``proxmox_pbs_verify_ssl`` (default 0).
+    """
+    host = _get_setting(Setting, 'proxmox_backup_host')
+    token_id = _get_setting(Setting, 'proxmox_pbs_token_id')
+    token_secret = decrypt_secret(_get_setting(Setting, 'proxmox_pbs_token_secret'))
+    if not host or not token_id or not token_secret:
+        return None
+    port = int(_get_setting(Setting, 'proxmox_pbs_port', '8007') or '8007')
+    datastore = _get_setting(Setting, 'proxmox_pbs_datastore', 'main') or 'main'
+    verify_ssl = _get_setting(Setting, 'proxmox_pbs_verify_ssl', '0') == '1'
+    return PbsClient(host, port, token_id, token_secret, verify_ssl, datastore, 'PBS')
+
+
+def sync_pbs(app_ctx, db, ProxmoxBackupJob, Setting, MonitoringAlert=None):
+    """Sync PBS backup freshness into ``proxmox_backup_job`` (node='pbs').
+
+    Reads the datastore's backup groups (per-guest latest backup + snapshot
+    count) plus the snapshot list (for the guest name from each snapshot's
+    ``comment``), and upserts one row per guest. ``backup_status`` is 'ok' when
+    the newest backup is within ``proxmox_stale_hours`` (default 26h), 'stale'
+    when older, and 'missing' when the guest has no snapshots. Fires a *warning*
+    (never a critical) per stale/missing guest so intentionally-unbacked guests
+    can't page.
+    """
+    summary = {
+        'guests_synced': 0,
+        'stale': 0,
+        'missing': 0,
+        'alerts_fired': 0,
+        'errors': [],
+    }
+
+    client = _build_pbs_client(Setting)
+    if client is None:
+        logger.info('PBS not configured — skipping')
+        return summary
+
+    stale_hours = int(_get_setting(Setting, 'proxmox_stale_hours', '26') or '26')
+    stale_threshold = timedelta(hours=stale_hours)
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        groups = client.get_groups()
+    except Exception as e:
+        summary['errors'].append(f"PBS: cannot list groups: {e}")
+        logger.error('PBS: cannot list groups: %s', e)
+        return summary
+
+    # Best-effort {(type, id): guest-name} from the latest snapshot's comment.
+    name_map = {}
+    try:
+        latest = {}
+        for s in client.get_snapshots():
+            key = (s.get('backup-type'), str(s.get('backup-id')))
+            bt = s.get('backup-time') or 0
+            if key not in latest or bt > latest[key][0]:
+                latest[key] = (bt, (s.get('comment') or '').strip())
+        name_map = {k: v[1] for k, v in latest.items()}
+    except Exception as e:
+        logger.warning('PBS: snapshot list for names failed: %s', e)
+
+    for g in groups:
+        vm_type = g.get('backup-type', '')          # 'vm' | 'ct'
+        vmid_raw = str(g.get('backup-id', ''))
+        if vm_type not in ('vm', 'ct') or not vmid_raw:
+            continue
+        try:
+            vmid = int(vmid_raw)
+        except ValueError:
+            continue
+
+        count = int(g.get('backup-count', 0) or 0)
+        last_ts = int(g.get('last-backup', 0) or 0)
+        last_snap_time = (datetime.fromtimestamp(last_ts, tz=timezone.utc)
+                          if last_ts > 0 else None)
+
+        comment = name_map.get((vm_type, vmid_raw), '')
+        vm_name = comment if comment else f"vm-{vmid}"
+
+        if count <= 0 or last_snap_time is None:
+            bstatus = 'missing'
+        elif (now_utc - last_snap_time) > stale_threshold:
+            bstatus = 'stale'
+        else:
+            bstatus = 'ok'
+
+        last_snap_name = (last_snap_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                          if last_snap_time else None)
+
+        _upsert_backup(db, ProxmoxBackupJob, 'pbs', vmid, vm_name, vm_type,
+                       '', last_snap_name, last_snap_time, count, bstatus)
+        summary['guests_synced'] += 1
+        if bstatus == 'stale':
+            summary['stale'] += 1
+        elif bstatus == 'missing':
+            summary['missing'] += 1
+
+        if MonitoringAlert:
+            stale_key = f"PBS: {vm_name} ({vm_type} {vmid}) backup {bstatus}"
+            if bstatus in ('stale', 'missing'):
+                age_str = (f"{int((now_utc - last_snap_time).total_seconds() / 3600)}h ago"
+                           if last_snap_time else "never")
+                _fire_or_resolve_alert(
+                    db, MonitoringAlert, 'warning', stale_key,
+                    f"Last PBS backup: {last_snap_name or 'none'} ({age_str}). "
+                    f"Threshold: {stale_hours}h", resolve=False)
+                summary['alerts_fired'] += 1
+            else:
+                _fire_or_resolve_alert(db, MonitoringAlert, 'warning',
+                                       stale_key, '', resolve=True)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        summary['errors'].append(f"PBS: DB commit error: {e}")
+        logger.error('PBS: DB commit error: %s', e)
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Connection test helper
 # ---------------------------------------------------------------------------
 
 def test_proxmox_connection(Setting, prefix: str = 'cluster') -> dict:
-    """Quick connection test; returns dict with success/error/nodes."""
+    """Quick connection test; returns dict with success/error/nodes.
+
+    prefix='pbs' tests the Proxmox Backup Server (port 8007) instead of a PVE host.
+    """
+    if prefix == 'pbs':
+        client = _build_pbs_client(Setting)
+        if client is None:
+            return {'success': False, 'error': 'PBS not configured (host/token missing)'}
+        return client.test_connection()
     host = _get_setting(Setting, f'proxmox_{prefix}_host')
     if not host:
         return {'success': False, 'error': f'proxmox_{prefix}_host not set'}
     try:
         client = _build_client(Setting, prefix, prefix)
+        if client is None:
+            return {'success': False, 'error': f'proxmox_{prefix}_token_id not set'}
         return client.test_connection()
     except Exception as e:
         return {'success': False, 'error': str(e)}

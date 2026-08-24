@@ -77,6 +77,13 @@ PROXMOX_SYNC_LOCK_PATH = os.environ.get('TRACKER_PROXMOX_SYNC_LOCK_PATH', '/tmp/
 PROXMOX_SYNC_INTERVAL_MINUTES = int(os.environ.get('PROXMOX_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_PROXMOX_SYNC = os.environ.get('DISABLE_PROXMOX_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# PBS (Proxmox Backup Server) freshness sync — the NEW backup system (prox2/3/4 →
+# PBS VM/CT backups). Separate from the PVE cv4pve snapshot sync above; upserts
+# node='pbs' rows into proxmox_backup_job. Hourly is plenty (backups run daily).
+PBS_SYNC_LOCK_PATH = os.environ.get('TRACKER_PBS_SYNC_LOCK_PATH', '/tmp/tracker_pbs_sync.lock')
+PBS_SYNC_INTERVAL_MINUTES = int(os.environ.get('PBS_SYNC_INTERVAL_MINUTES', '60'))
+DISABLE_PBS_SYNC = os.environ.get('DISABLE_PBS_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
+
 # Agent online-state reconcile: make asset.online_state a reliable mirror of the
 # real live signal (rmm_agent.last_seen_at within 5 min = Online, else Offline),
 # so WS flaps can't false-Offline a live box AND genuinely-stale boxes still go
@@ -313,6 +320,19 @@ def start_sync_scheduler(flask_app):
             misfire_grace_time=120,
         )
 
+    if not DISABLE_PBS_SYNC:
+        _scheduler.add_job(
+            func=lambda: run_pbs_sync_job(flask_app),
+            trigger='interval',
+            minutes=max(PBS_SYNC_INTERVAL_MINUTES, 5),
+            id='pbs_sync',
+            name='Periodic PBS backup freshness sync (prox2/3/4 → PBS)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+
     if not DISABLE_BACKUP_SCHEDULER:
         _scheduler.add_job(
             func=lambda: run_backup_scheduler_job(flask_app),
@@ -392,6 +412,23 @@ def start_sync_scheduler(flask_app):
             max_instances=1,
             coalesce=True,
             misfire_grace_time=120,
+        )
+
+    # PROX2 AD machine-trust health probe (SSH, forced-command key). PROX2 is a
+    # Samba fileserver NOT in the RMM fleet; when its AD trust breaks, printer
+    # scan-to-folder silently fails. Edge-triggered notify; self-gated by Setting
+    # 'prox2_trust_monitor_enabled'. Fail-safe: swallows its own errors.
+    if os.environ.get('DISABLE_PROX2_TRUST_MONITOR', '').lower() not in ('1', 'true', 'yes'):
+        _scheduler.add_job(
+            func=lambda: run_prox2_trust_check_job(flask_app),
+            trigger='interval',
+            minutes=int(os.environ.get('PROX2_TRUST_CHECK_INTERVAL_MINUTES', '30')),
+            id='prox2_trust_check',
+            name='PROX2 AD machine-trust health probe (SSH)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
         )
 
     _scheduler.start()
@@ -846,6 +883,21 @@ def run_m365_employee_reconcile_job(flask_app_instance):
                     logger.exception('M365 reconcile: M365User Graph sync failed — '
                                      'continuing with existing M365User data')
 
+                # 1b. Refresh the Intune device snapshot table from Graph (best-effort).
+                # Same drift problem as M365User: the soc2 intune_device snapshot is otherwise
+                # only refreshed by a manual SOC2 sync, so it silently freezes (it had drifted
+                # ~7 weeks, surfacing stale managed-device rows on the employee access page).
+                # Runs before identity-link resolution below so fresh device rows link to assets.
+                try:
+                    from soc2_sync_service import SOC2SyncService
+                    from m365_config import m365_configured
+                    if m365_configured():
+                        dres = SOC2SyncService(flask_app_instance, db).sync_intune_devices()
+                        logger.info('M365 reconcile: Intune device snapshot sync: %s', dres)
+                except Exception:
+                    logger.exception('M365 reconcile: Intune device snapshot sync failed — '
+                                     'continuing with existing snapshot data')
+
                 # 2. Link any newly-synced M365User rows to their employee.
                 try:
                     from identity_graph import resolve_identity_links
@@ -1062,6 +1114,66 @@ def run_proxmox_sync_job(flask_app_instance):
                 db.session.remove()
             except Exception:
                 pass
+
+
+def run_pbs_sync_job(flask_app_instance):
+    """Run the PBS backup-freshness sync with a cross-process lock.
+
+    Reads the PBS datastore and upserts node='pbs' rows into proxmox_backup_job
+    (visible on the /monitoring/backups dashboard alongside the PVE snapshot rows).
+    """
+    with _file_lock(PBS_SYNC_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('PBS sync already running in another worker — skipping')
+            return
+
+    with flask_app_instance.app_context():
+        try:
+            from app import db, Setting, ProxmoxBackupJob, MonitoringAlert
+            from proxmox_service import sync_pbs
+
+            result = sync_pbs(flask_app_instance, db, ProxmoxBackupJob,
+                              Setting, MonitoringAlert)
+
+            row = Setting.query.filter_by(key='proxmox_pbs_last_sync').first()
+            if row is None:
+                row = Setting(key='proxmox_pbs_last_sync', value=datetime.utcnow().isoformat())
+                db.session.add(row)
+            else:
+                row.value = datetime.utcnow().isoformat()
+            db.session.commit()
+
+            logger.info(
+                'PBS sync complete: guests=%d stale=%d missing=%d alerts=%d errors=%d',
+                result.get('guests_synced', 0), result.get('stale', 0),
+                result.get('missing', 0), result.get('alerts_fired', 0),
+                len(result.get('errors', [])),
+            )
+            for err in result.get('errors', []):
+                logger.warning('PBS sync error: %s', err)
+        except Exception:
+            logger.exception('PBS sync job crashed')
+        finally:
+            try:
+                db.session.remove()
+            except Exception:
+                pass
+
+
+def run_prox2_trust_check_job(flask_app):
+    """SSH-probe PROX2's AD machine-trust; edge-triggered alert on break/recover.
+
+    Cross-process locked so only one worker probes per cycle. Fully fail-safe.
+    """
+    with _file_lock('/tmp/tracker_prox2_trust.lock') as acquired:
+        if not acquired:
+            logger.debug('PROX2 trust check already running in another worker — skipping')
+            return
+        try:
+            from prox2_trust_monitor import run_prox2_trust_check_job as _probe_job
+            _probe_job(flask_app)
+        except Exception:
+            logger.exception('PROX2 trust check job crashed')
 
 
 def run_backup_scheduler_job(flask_app):

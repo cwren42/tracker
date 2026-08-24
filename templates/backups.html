@@ -310,7 +310,7 @@
                             <td>{{ job.vmid }}</td>
                             <td><strong>{{ job.vm_name or '—' }}</strong></td>
                             <td>
-                                {% if job.vm_type == 'lxc' %}
+                                {% if job.vm_type in ('lxc', 'ct') %}
                                 <span class="badge bg-info text-dark">LXC</span>
                                 {% else %}
                                 <span class="badge bg-secondary">VM</span>

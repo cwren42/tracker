@@ -779,17 +779,25 @@ def backups():
 @login_required
 @admin_required
 def api_proxmox_sync():
-    """Trigger a manual Proxmox sync."""
-    from proxmox_service import sync_proxmox
+    """Trigger a manual Proxmox sync (PVE cluster/backup + PBS)."""
+    from proxmox_service import sync_proxmox, sync_pbs
     try:
         result = sync_proxmox(app, db, ProxmoxBackupJob, ProxmoxZfsPool,
                               Setting, MonitoringAlert)
+        # PBS backup-freshness sync (node='pbs' rows) — the new backup system.
+        pbs_result = sync_pbs(app, db, ProxmoxBackupJob, Setting, MonitoringAlert)
+        result['pbs'] = pbs_result
         # Record last sync time
         row = Setting.query.filter_by(key='proxmox_last_sync').first()
         if row is None:
             row = Setting(key='proxmox_last_sync')
             db.session.add(row)
         row.value = datetime.utcnow().isoformat()
+        pbs_row = Setting.query.filter_by(key='proxmox_pbs_last_sync').first()
+        if pbs_row is None:
+            pbs_row = Setting(key='proxmox_pbs_last_sync')
+            db.session.add(pbs_row)
+        pbs_row.value = datetime.utcnow().isoformat()
         db.session.commit()
         return jsonify({'success': True, **result})
     except Exception as e:
@@ -805,7 +813,7 @@ def api_proxmox_test():
     from proxmox_service import test_proxmox_connection
     data = request.get_json(silent=True) or {}
     prefix = data.get('prefix', 'cluster')
-    if prefix not in ('cluster', 'backup'):
+    if prefix not in ('cluster', 'backup', 'pbs'):
         return jsonify({'success': False, 'error': 'Invalid prefix'}), 400
     result = test_proxmox_connection(Setting, prefix)
     return jsonify(result)
@@ -816,6 +824,7 @@ def api_proxmox_test():
 @admin_required
 def api_proxmox_settings():
     """Save Proxmox settings."""
+    from secret_store import encrypt_secret
     data = request.get_json(silent=True) or {}
     allowed_keys = {
         'proxmox_cluster_host', 'proxmox_cluster_port',
@@ -824,18 +833,24 @@ def api_proxmox_settings():
         'proxmox_backup_host', 'proxmox_backup_port',
         'proxmox_backup_token_id', 'proxmox_backup_token_secret',
         'proxmox_backup_verify_ssl',
+        # PBS (Proxmox Backup Server) — the new backup system.
+        'proxmox_pbs_token_id', 'proxmox_pbs_token_secret',
+        'proxmox_pbs_port', 'proxmox_pbs_datastore', 'proxmox_pbs_verify_ssl',
         'proxmox_stale_hours',
     }
+    # Token secrets are Fernet-encrypted at rest (transparent on read).
+    secret_keys = {'proxmox_pbs_token_secret'}
     saved = []
     for key, value in data.items():
         if key not in allowed_keys:
             continue
+        stored = encrypt_secret(str(value)) if key in secret_keys else str(value)
         row = Setting.query.filter_by(key=key).first()
         if row is None:
-            row = Setting(key=key, value=str(value))
+            row = Setting(key=key, value=stored)
             db.session.add(row)
         else:
-            row.value = str(value)
+            row.value = stored
         saved.append(key)
     try:
         db.session.commit()

@@ -698,49 +698,69 @@ def rmm_agent_heartbeat():
     except Exception:
         db.session.rollback()
 
-    # Fleet crash detection: if a deploy happened recently and > 30% are now offline, alert
+    # Fleet crash detection: alert ONLY on a genuine cliff — a large fraction of the fleet
+    # that was reporting minutes ago suddenly went dark together (bad agent deploy, gateway
+    # or network outage). The old check alerted on steady-state ">=50% currently offline",
+    # which treats normal overnight/weekend power-off as a crash and flooded the inbox
+    # (e.g. "58/106 (54%) offline" emailed at 3AM). A real crash is a CLIFF, not a headcount.
     try:
         last_alert_key = 'rmm_fleet_crash_last_alert'
+        import time as _time
+        now_epoch = _time.time()
         last_alert_row = db.session.execute(
             text("SELECT value FROM setting WHERE key = :k"), {'k': last_alert_key}
         ).fetchone()
-        last_alert_ts = 0
+        last_alert_ts = 0.0
         if last_alert_row:
             try:
                 last_alert_ts = float(last_alert_row.value)
             except Exception:
                 pass
 
-        import time as _time
-        if _time.time() - last_alert_ts > 86400:  # at most once per 24h (was 15min — chronic >30%-offline is normal and flooded the inbox ~96x/day)
-            total, offline = db.session.execute(
-                text("""SELECT COUNT(*), COUNT(*) FILTER (
-                          WHERE last_seen_at < NOW() - INTERVAL '10 minutes'
-                            OR last_seen_at IS NULL)
+        if now_epoch - last_alert_ts > 86400:  # at most once per 24h
+            stats = db.session.execute(
+                text("""SELECT COUNT(*) AS total,
+                               COUNT(*) FILTER (WHERE last_seen_at < NOW() - INTERVAL '10 minutes'
+                                                   OR last_seen_at IS NULL) AS offline,
+                               COUNT(*) FILTER (WHERE last_seen_at >= NOW() - INTERVAL '30 minutes'
+                                                  AND last_seen_at <  NOW() - INTERVAL '10 minutes') AS recent_dropped
                         FROM rmm_agent WHERE enabled = true""")
             ).fetchone()
-            if total and total > 0 and offline / total >= 0.50:  # 50%+ down = a real outage, not normal sleep/offline
+            total = stats.total or 0
+            # CLIFF: >=30% of the WHOLE fleet was reporting within the last 30 min but has
+            # now gone silent >10 min. Staggered human power-off never clusters this tightly.
+            # (Tune the 0.30 here if it ever proves too sensitive/insensitive.)
+            if total > 0 and (stats.recent_dropped / total) >= 0.30:
                 try:
-                    from utils import send_admin_notification
-                    send_admin_notification(
-                        'ALERT: RMM Fleet Offline',
-                        f'<p><strong>Fleet crash detected:</strong> {offline}/{total} agents '
-                        f'({int(offline/total*100)}%) have been offline for &gt;10 minutes.</p>'
-                        f'<p>Check the <a href="/rmm">RMM dashboard</a> and consider rolling back '
-                        f'the agent version if a recent deploy caused this.</p>'
-                    )
-                    # Record alert time so we don't spam
-                    db.session.execute(
-                        text("""INSERT INTO setting (key, value, updated_at)
-                                VALUES (:k, :v, NOW())
-                                ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"""),
-                        {'k': last_alert_key, 'v': str(_time.time())}
-                    )
+                    # Atomically claim the 24h cooldown so concurrent agent polls can't double-send.
+                    if last_alert_row is not None:
+                        claimed = db.session.execute(
+                            text("""UPDATE setting SET value = :v, updated_at = NOW()
+                                    WHERE key = :k AND value IS NOT DISTINCT FROM :old"""),
+                            {'k': last_alert_key, 'v': str(now_epoch), 'old': last_alert_row.value}
+                        ).rowcount
+                    else:
+                        claimed = db.session.execute(
+                            text("""INSERT INTO setting (key, value, updated_at)
+                                    VALUES (:k, :v, NOW()) ON CONFLICT (key) DO NOTHING"""),
+                            {'k': last_alert_key, 'v': str(now_epoch)}
+                        ).rowcount
                     db.session.commit()
+                    if claimed:
+                        from utils import send_admin_notification
+                        send_admin_notification(
+                            'ALERT: RMM Fleet Offline',
+                            f'<p><strong>Fleet crash detected:</strong> {stats.recent_dropped}/{total} agents '
+                            f'({int(stats.recent_dropped/total*100)}%) that were reporting minutes ago just went '
+                            f'offline together (silent &gt;10 min). Total offline now: {stats.offline}/{total}.</p>'
+                            f'<p>This is a sudden mass-drop (likely a bad agent deploy, or a gateway/network '
+                            f'outage) — not normal overnight power-off. Check the <a href="/rmm">RMM dashboard</a> '
+                            f'and consider rolling back the agent version if a recent deploy caused this.</p>'
+                        )
                 except Exception:
                     db.session.rollback()
     except Exception:
-        pass
+        db.session.rollback()
 
     return jsonify({'action': action, 'pending_commands': pending, 'ts': now_iso})
 

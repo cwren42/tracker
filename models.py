@@ -1335,7 +1335,8 @@ def _make_audit_listener(entity_type):
             attr.key: str(getattr(target, attr.key))
             for attr in db.inspect(target).attrs
             if db.inspect(target).attrs[attr.key].history.has_changes()
-            and attr.key not in ('updated_at', 'last_seen', 'last_login')
+            and attr.key not in ('updated_at', 'last_seen', 'last_login',
+                                  'unifi_last_seen', 'unifi_uptime_secs')
         }
         if changed:
             _log_audit(entity_type, target.id, 'update', changed)

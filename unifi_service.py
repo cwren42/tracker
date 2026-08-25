@@ -10,7 +10,7 @@ Device endpoint: GET /proxy/network/api/s/{site}/stat/device
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 import urllib3
@@ -742,6 +742,17 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                             asset.os_version = firmware
                         if not asset.unifi_device_id:
                             asset.unifi_device_id = unifi_id
+                        # Reboot/power-loss detection BEFORE overwriting the baseline —
+                        # this sync and the fast net-uptime monitor both write
+                        # unifi_uptime_secs, so whichever poll first sees the low
+                        # post-reboot value must be the one to raise the alert.
+                        if MonitoringAlert and category == 'Network Device':
+                            if _flag_reboot_if_detected(db, MonitoringAlert, asset,
+                                                        asset.unifi_uptime_secs or 0, uptime_secs,
+                                                        name, model, device_type, now):
+                                changes.append('reboot detected (uptime reset)')
+                            else:
+                                _resolve_settled_reboot_alerts(db, MonitoringAlert, asset, uptime_secs, now)
                         asset.unifi_last_seen = now
                         asset.unifi_uptime_secs = uptime_secs
                         # Only stamp updated_at + log history on a MEANINGFUL change
@@ -835,3 +846,203 @@ def _set_setting(db, Setting, key: str, value: str) -> None:
         db.session.add(s)
     s.value = value
     s.updated_at = datetime.utcnow()
+
+
+# ── Network-device reboot / power-loss monitor ───────────────────────────────
+# Core/aggregation switches and gateways are single points of failure: a reboot
+# (usually a power blip on the rack UPS/PDU) drops the whole building's internet
+# and VPN at once. UniFi retains no event history we can read, so this dedicated
+# fast poll watches device uptime and raises an alert the moment it resets
+# backwards (= a restart), building the reboot history we otherwise lack.
+
+# Aggregation + gateway model codes treated as CORE (building-wide blast radius).
+CORE_DEVICE_MODELS = {
+    'USAGGPRO',   # UniFi Aggregation Pro (Core / Server AGG)
+    'UDMPROMAX', 'UDMPRO', 'UDMSE', 'UDM',   # gateways
+    'UXGPRO', 'UXG',
+}
+# uptime is monotonic between polls; a drop beyond this many seconds = a reboot
+# (guards against minor counter jitter, never against a real ~5-min poll delta).
+REBOOT_BACKWARD_SLACK_SECS = 90
+# A reboot alert auto-resolves once the device has been back up this long, so the
+# operational alert self-clears while the (now-resolved) row remains as history.
+SETTLED_UPTIME_SECS = 3600
+
+
+def _is_core_device(name: str, model: str, device_type: str) -> bool:
+    n = (name or '').upper()
+    return (
+        'AGG' in n or 'CORE' in n
+        or (device_type or '') == 'Gateway'
+        or (model or '').upper() in CORE_DEVICE_MODELS
+    )
+
+
+def _fmt_duration(secs: int) -> str:
+    secs = int(secs or 0)
+    if secs < 60:
+        return f'{secs}s'
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m, _ = divmod(rem, 60)
+    parts = []
+    if d:
+        parts.append(f'{d}d')
+    if h:
+        parts.append(f'{h}h')
+    if m and not d:
+        parts.append(f'{m}m')
+    return ' '.join(parts) or f'{secs}s'
+
+
+def _flag_reboot_if_detected(db, MonitoringAlert, asset, prev_uptime, cur_uptime,
+                             name, model, device_type, now) -> bool:
+    """If a network device's uptime jumped backwards past the jitter slack (a reboot /
+    power loss), raise a deduped MonitoringAlert (CRITICAL for core/aggregation gear,
+    warning otherwise). Returns True if a new alert row was created.
+
+    Shared by the fast monitor AND the full sync so that whichever poll first observes
+    the low post-reboot uptime catches it — the two jobs both write asset.unifi_uptime_secs,
+    so a single detector would miss reboots the other writer overwrites first.
+    """
+    # Need a real prior baseline; cur may legitimately be 0 (just booted) so only guard None.
+    if not prev_uptime or cur_uptime is None:
+        return False
+    if (cur_uptime + REBOOT_BACKWARD_SLACK_SECS) >= prev_uptime:
+        return False  # uptime grew or held — no reboot
+
+    is_core = _is_core_device(name, model, device_type)
+    severity = 'critical' if is_core else 'warning'
+    msg = (f'{name} rebooted (possible power loss) — '
+           f'uptime reset {_fmt_duration(prev_uptime)} → {_fmt_duration(cur_uptime)}')
+    details = (
+        f'Network {device_type} "{name}" ({model}) uptime dropped from '
+        f'{prev_uptime}s to {cur_uptime}s between polls, indicating a restart or '
+        f'power interruption.'
+    )
+    if is_core:
+        details += (' CORE/aggregation device — a reboot here drops building-wide '
+                    'internet + VPN. Check the rack UPS/PDU feeding it.')
+    # Dedup: one active reboot alert per asset per 20-min window (a genuine second
+    # reboot >20 min later gets its own row, preserving history).
+    existing = (MonitoringAlert.query
+                .filter_by(asset_id=asset.id, status='active')
+                .filter(MonitoringAlert.message.like('%rebooted%'))
+                .filter(MonitoringAlert.triggered_at >= now - timedelta(minutes=20))
+                .first())
+    if existing:
+        return False
+    db.session.add(MonitoringAlert(
+        asset_id=asset.id, severity=severity, status='active',
+        message=msg, details=details,
+        triggered_at=now, first_failed_at=now, last_failed_at=now, failure_count=1,
+    ))
+    logger.warning('network-uptime alert (%s): %s', severity, msg)
+    return True
+
+
+def _resolve_settled_reboot_alerts(db, MonitoringAlert, asset, cur_uptime, now) -> None:
+    """Auto-resolve a device's active reboot alert(s) once it has been back up and stable
+    (uptime past SETTLED_UPTIME_SECS). The operational alert self-clears so the dashboard
+    critical/warning badges don't accumulate forever; the resolved row stays as history."""
+    if cur_uptime is None or cur_uptime < SETTLED_UPTIME_SECS:
+        return
+    open_alerts = (MonitoringAlert.query
+                   .filter_by(asset_id=asset.id, status='active')
+                   .filter(MonitoringAlert.message.like('%rebooted%'))
+                   .all())
+    for a in open_alerts:
+        a.status = 'resolved'
+        a.resolved_at = now
+
+
+def run_network_uptime_monitor(app_instance, db, Asset, Setting, MonitoringAlert) -> dict:
+    """Lightweight fast poll of UniFi network gear (switches/gateways/APs) that
+    detects reboots — device uptime resetting backwards between polls — and
+    raises a MonitoringAlert immediately (CRITICAL for core/aggregation gear,
+    warning otherwise). Advances asset.unifi_uptime_secs between the slower full
+    syncs so detection latency is the monitor's own interval, not 15 min. Each
+    alert persists with triggered_at, so monitoring_alert becomes the durable
+    reboot history for "how often has this happened".
+    """
+    summary = {'checked': 0, 'reboots': 0, 'alerts': 0, 'errors': 0, 'skipped': 0}
+    now = datetime.utcnow()
+
+    with app_instance.app_context():
+        config = load_unifi_config(Setting)
+        if not config:
+            summary['skipped'] = 1
+            return summary
+        try:
+            svc = UnifiService(**config)
+            svc.login()
+            devices = svc.get_devices()  # network gear only — the cheap /stat/device call
+            svc.logout()
+        except Exception:
+            logger.exception('network-uptime monitor: UniFi fetch failed')
+            summary['errors'] += 1
+            return summary
+
+        def _strip_mac(col):
+            return db.func.replace(db.func.replace(
+                db.func.lower(db.func.coalesce(col, '')), ':', ''), '-', '')
+
+        for dev in devices:
+            try:
+                category, device_type = _classify_device(dev)
+                if category != 'Network Device':
+                    continue
+                mac = (dev.get('mac') or '').lower().strip()
+                name = (dev.get('name') or dev.get('model') or mac or 'Unknown').strip()
+                model = dev.get('model') or ''
+                # Preserve None (no reading) vs 0 (just booted) — the latter IS a reboot signal.
+                _raw_uptime = dev.get('uptime')
+                cur_uptime = int(_raw_uptime) if _raw_uptime is not None else None
+                real_id = (dev.get('device_id') or dev.get('_id') or dev.get('id') or '').strip()
+                mac_norm = ''.join(c for c in mac if c in '0123456789abcdef')
+                summary['checked'] += 1
+
+                # Match the asset the same way the full sync does.
+                asset = None
+                if real_id:
+                    asset = Asset.query.filter_by(unifi_device_id=real_id).first()
+                if not asset and mac_norm:
+                    asset = Asset.query.filter(
+                        (_strip_mac(Asset.hardware_mac_ethernet) == mac_norm) |
+                        (_strip_mac(Asset.hardware_mac_wifi) == mac_norm)
+                    ).first()
+                if not asset and name:
+                    asset = Asset.query.filter(
+                        Asset.name == name, Asset.category == 'Network Device'
+                    ).first()
+                if not asset:
+                    # Not yet created by the full sync — it will pick it up. Skip.
+                    continue
+
+                if cur_uptime is None:
+                    continue  # no uptime reading this poll — don't clobber the baseline
+
+                prev_uptime = asset.unifi_uptime_secs or 0
+                if _flag_reboot_if_detected(db, MonitoringAlert, asset, prev_uptime,
+                                            cur_uptime, name, model, device_type, now):
+                    summary['reboots'] += 1
+                    summary['alerts'] += 1
+                else:
+                    # No reboot this poll — clear any stale reboot alert once it's settled.
+                    _resolve_settled_reboot_alerts(db, MonitoringAlert, asset, cur_uptime, now)
+
+                # Advance state so detection latency = this monitor's interval.
+                asset.unifi_uptime_secs = cur_uptime
+                asset.unifi_last_seen = now
+            except Exception:
+                logger.exception('network-uptime monitor: device loop error')
+                summary['errors'] += 1
+
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception('network-uptime monitor: commit failed')
+            summary['errors'] += 1
+
+    return summary

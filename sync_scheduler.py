@@ -30,6 +30,13 @@ UNIFI_SYNC_LOCK_PATH = os.environ.get('TRACKER_UNIFI_SYNC_LOCK_PATH', '/tmp/trac
 UNIFI_SYNC_INTERVAL_MINUTES = int(os.environ.get('UNIFI_SYNC_INTERVAL_MINUTES', '15'))
 DISABLE_UNIFI_SYNC = os.environ.get('DISABLE_UNIFI_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+# Fast, lightweight reboot/power-loss watch for core network gear (see
+# unifi_service.run_network_uptime_monitor). Runs far more often than the full
+# UniFi sync so a core switch/gateway reboot is caught within minutes.
+NET_UPTIME_MONITOR_LOCK_PATH = os.environ.get('TRACKER_NET_UPTIME_MONITOR_LOCK_PATH', '/tmp/tracker_net_uptime_monitor.lock')
+NET_UPTIME_MONITOR_INTERVAL_MINUTES = int(os.environ.get('NET_UPTIME_MONITOR_INTERVAL_MINUTES', '5'))
+DISABLE_NET_UPTIME_MONITOR = os.environ.get('DISABLE_NET_UPTIME_MONITOR', '').strip() in ('1', 'true', 'yes', 'on')
+
 # Rogue-device scan: poll UniFi active clients, reconcile against known assets +
 # the acknowledged allowlist, alert on new unknown MACs. Fast cadence (few min).
 NETWORK_SCAN_LOCK_PATH = os.environ.get('TRACKER_NETWORK_SCAN_LOCK_PATH', '/tmp/tracker_network_scan.lock')
@@ -182,6 +189,19 @@ def start_sync_scheduler(flask_app):
             minutes=max(UNIFI_SYNC_INTERVAL_MINUTES, 1),
             id='unifi_sync',
             name='Periodic UniFi device sync',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
+    if not DISABLE_NET_UPTIME_MONITOR:
+        _scheduler.add_job(
+            func=lambda: run_net_uptime_monitor_job(flask_app),
+            trigger='interval',
+            minutes=max(NET_UPTIME_MONITOR_INTERVAL_MINUTES, 1),
+            id='net_uptime_monitor',
+            name='Network device reboot/power-loss monitor (core switches & gateways)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -1051,6 +1071,27 @@ def run_unifi_sync_job(flask_app_instance):
                 sync_unifi_assets(flask_app_instance, db, Asset, Setting, AssetHistory, MonitoringAlert)
             except Exception:
                 logger.exception('UniFi sync job crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+
+def run_net_uptime_monitor_job(flask_app_instance):
+    """Fast reboot/power-loss watch for core network gear, cross-process locked."""
+    with _file_lock(NET_UPTIME_MONITOR_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.debug('net uptime monitor already running in another worker — skipping')
+            return
+
+        with flask_app_instance.app_context():
+            try:
+                from app import db, Asset, Setting, MonitoringAlert
+                from unifi_service import run_network_uptime_monitor
+                run_network_uptime_monitor(flask_app_instance, db, Asset, Setting, MonitoringAlert)
+            except Exception:
+                logger.exception('net uptime monitor job crashed')
             finally:
                 try:
                     db.session.remove()

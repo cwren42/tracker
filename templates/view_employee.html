@@ -165,6 +165,9 @@
                 <p><strong>Name:</strong><br>{{ employee.name }}</p>
                 <p><strong>Department:</strong><br>{{ employee.department or 'Not specified' }}</p>
                 {% if employee.position %}<p><strong>Position:</strong><br>{{ employee.position }}</p>{% endif %}
+                {% if employee.job_title and employee.job_title != employee.position %}<p><strong>Job Title:</strong><br>{{ employee.job_title }}</p>{% endif %}
+                <p><strong>Start Date:</strong><br>{{ employee.start_date.strftime('%A, %b %d, %Y') if employee.start_date else 'Not set' }}</p>
+                {% if employee.manager %}<p><strong>Manager:</strong><br>{{ employee.manager }}</p>{% endif %}
                 <p><strong>Email:</strong><br>{{ employee.email or 'Not specified' }}</p>
                 <p><strong>Phone:</strong><br>{{ employee.phone or 'Not specified' }}</p>
                 <p><strong>Added:</strong><br>{{ employee.created_at.strftime('%Y-%m-%d') }}</p>

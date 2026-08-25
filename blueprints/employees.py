@@ -1012,6 +1012,15 @@ def edit_employee(employee_id):
             employee.phone = request.form.get('phone')
             employee.position = request.form.get('position')
             employee.location = request.form.get('location') or None
+            # Start date (HTML date input → 'YYYY-MM-DD'; empty clears it).
+            start_raw = (request.form.get('start_date') or '').strip()
+            if start_raw:
+                try:
+                    employee.start_date = datetime.strptime(start_raw, '%Y-%m-%d').date()
+                except ValueError:
+                    flash('Start date ignored — expected YYYY-MM-DD.', 'warning')
+            else:
+                employee.start_date = None
             if current_user.role == 'admin':
                 # getlist returns all values; checkbox sends '1' when checked
                 is_visible_vals = request.form.getlist('is_visible')

@@ -131,9 +131,15 @@
                     </div>
                     
                     <div class="mb-3">
+                        <label for="start_date" class="form-label">Start Date</label>
+                        <input type="date" class="form-control" id="start_date" name="start_date"
+                               value="{{ employee.start_date.strftime('%Y-%m-%d') if employee.start_date else '' }}">
+                    </div>
+
+                    <div class="mb-3">
                         <label for="phone" class="form-label">Phone</label>
                         <input type="tel" class="form-control" id="phone" name="phone"
-                               value="{{ employee.phone or '' }}" 
+                               value="{{ employee.phone or '' }}"
                                placeholder="(123) 456-7890">
                     </div>
 

@@ -216,6 +216,14 @@ class PbsClient:
         """Every snapshot in the datastore (carries the per-backup ``comment``)."""
         return self._get(f'/admin/datastore/{self.datastore}/snapshots') or []
 
+    def get_datastore_status(self) -> dict:
+        """Datastore capacity: {total, used, avail} bytes (+ gc info if present)."""
+        try:
+            d = self._get(f'/admin/datastore/{self.datastore}/status')
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+
     def test_connection(self) -> dict:
         try:
             groups = self.get_groups()
@@ -639,3 +647,149 @@ def test_proxmox_connection(Setting, prefix: str = 'cluster') -> dict:
         return client.test_connection()
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+
+def _fmt_age(hours):
+    if hours is None:
+        return 'never'
+    if hours < 1:
+        return f'{int(hours * 60)}m ago'
+    if hours < 48:
+        return f'{hours:.0f}h ago'
+    return f'{hours / 24:.1f}d ago'
+
+
+def send_pbs_daily_report(app_ctx, db, ProxmoxBackupJob, Setting, recipients=None) -> dict:
+    """Build and email a daily PBS backup summary — guests protected, capacity,
+    and any stale/missing — intended to run each morning after the overnight run.
+    Reads the already-synced ``proxmox_backup_job`` rows (node='pbs'); the caller
+    should refresh them via ``sync_pbs`` first so the report reflects last night."""
+    from utils import send_email
+
+    summary = {'total': 0, 'ok': 0, 'issues': 0, 'sent': False, 'recipients': []}
+    now = datetime.utcnow()
+
+    if not recipients:
+        raw = _get_setting(Setting, 'pbs_report_recipients', '') or ''
+        recipients = [e.strip() for e in raw.replace(';', ',').split(',') if e.strip()] or ['cwren@cirque.com']
+    summary['recipients'] = recipients
+
+    rows = db.session.execute(db.text("""
+        SELECT vmid, vm_name, vm_type, backup_status, last_snapshot_time, snapshot_count
+        FROM proxmox_backup_job
+        WHERE node = 'pbs'
+        ORDER BY lower(coalesce(vm_name, '')), vmid
+    """)).fetchall()
+
+    def age_h(ts):
+        return (now - ts).total_seconds() / 3600.0 if ts else None
+
+    ok      = [r for r in rows if (r.backup_status or '') == 'ok']
+    stale   = [r for r in rows if (r.backup_status or '') == 'stale']
+    missing = [r for r in rows if (r.backup_status or '') == 'missing']
+    issues  = stale + missing
+    total   = len(rows)
+    total_snaps = sum((r.snapshot_count or 0) for r in rows)
+    summary.update(total=total, ok=len(ok), issues=len(issues))
+
+    # Datastore capacity (live from PBS)
+    cap_html = ''
+    try:
+        client = _build_pbs_client(Setting)
+        st = client.get_datastore_status() if client else {}
+        tot, used, avail = st.get('total') or 0, st.get('used') or 0, st.get('avail') or 0
+        if tot:
+            tb = lambda b: f"{b / (1024 ** 4):.2f} TB"
+            pct = round(used / tot * 100, 1)
+            bar_col = '#dc3545' if pct >= 90 else ('#f0ad4e' if pct >= 75 else '#4caf50')
+            cap_html = (
+                f'<div style="margin:6px 0 2px;font-weight:600;">Datastore capacity</div>'
+                f'<div style="background:#e9ecef;border-radius:6px;height:16px;width:100%;overflow:hidden;">'
+                f'<div style="background:{bar_col};height:16px;width:{min(pct,100)}%;"></div></div>'
+                f'<div style="color:#555;font-size:13px;margin-top:3px;">'
+                f'{tb(used)} used of {tb(tot)} ({pct}%) &middot; {tb(avail)} free</div>'
+            )
+    except Exception as e:
+        logger.warning('PBS report: datastore status failed: %s', e)
+
+    # Guest table
+    def badge(status):
+        c = {'ok': '#4caf50', 'stale': '#f0ad4e', 'missing': '#dc3545'}.get(status, '#888')
+        return (f'<span style="background:{c};color:#fff;padding:1px 8px;border-radius:10px;'
+                f'font-size:12px;">{status or "?"}</span>')
+
+    def guest_rows(rs):
+        out = []
+        for r in rs:
+            nm = (r.vm_name or f'vmid {r.vmid}')
+            a = age_h(r.last_snapshot_time)
+            out.append(
+                f'<tr>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;">{nm}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;text-transform:uppercase;color:#666;font-size:12px;">{r.vm_type or ""}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;">{_fmt_age(a)}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;">{r.snapshot_count or 0}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;">{badge(r.backup_status)}</td>'
+                f'</tr>'
+            )
+        return ''.join(out)
+
+    all_ok = not issues
+    hdr_col = '#4caf50' if all_ok else '#f0ad4e'
+    hdr_txt = ('✅ All guests protected' if all_ok
+               else f'⚠️ {len(issues)} guest(s) need attention')
+    subject = (f"✅ PBS Backup Report — {now.strftime('%b %d')} — all {total} guests protected"
+               if all_ok else
+               f"⚠️ PBS Backup Report — {now.strftime('%b %d')} — {len(issues)} issue(s), {len(ok)}/{total} protected")
+
+    issues_block = ''
+    if issues:
+        issues_block = (
+            '<div style="background:#fff8 e1;border-left:4px solid #f0ad4e;padding:10px 14px;margin:14px 0;border-radius:4px;">'
+            '<b>Needs attention:</b><table style="width:100%;border-collapse:collapse;margin-top:6px;">'
+            '<tr style="text-align:left;color:#666;font-size:12px;"><th style="padding:4px 10px;">Guest</th>'
+            '<th style="padding:4px 10px;">Type</th><th style="padding:4px 10px;">Last backup</th>'
+            '<th style="padding:4px 10px;text-align:center;">Snaps</th><th style="padding:4px 10px;text-align:center;">Status</th></tr>'
+            + guest_rows(issues) + '</table></div>'
+        ).replace('#fff8 e1', '#fff8e1')
+
+    html = f"""<html><body style="font-family:Arial,Helvetica,sans-serif;color:#222;max-width:760px;margin:0 auto;">
+      <div style="border-top:5px solid {hdr_col};padding:16px 20px;background:#fafafa;">
+        <h2 style="margin:0 0 4px;">Proxmox Backup Server — Nightly Report</h2>
+        <div style="color:#666;">{now.strftime('%A, %B %d, %Y')} &middot; overnight run (03:00)</div>
+        <div style="font-size:18px;font-weight:600;color:{hdr_col};margin-top:10px;">{hdr_txt}</div>
+      </div>
+      <div style="padding:8px 20px;">
+        <table style="width:100%;margin:14px 0;text-align:center;border-collapse:collapse;">
+          <tr>
+            <td style="padding:10px;"><div style="font-size:26px;font-weight:700;">{total}</div><div style="color:#666;font-size:12px;">GUESTS</div></td>
+            <td style="padding:10px;"><div style="font-size:26px;font-weight:700;color:#4caf50;">{len(ok)}</div><div style="color:#666;font-size:12px;">PROTECTED</div></td>
+            <td style="padding:10px;"><div style="font-size:26px;font-weight:700;color:{'#dc3545' if issues else '#4caf50'};">{len(issues)}</div><div style="color:#666;font-size:12px;">ISSUES</div></td>
+            <td style="padding:10px;"><div style="font-size:26px;font-weight:700;">{total_snaps}</div><div style="color:#666;font-size:12px;">SNAPSHOTS</div></td>
+          </tr>
+        </table>
+        {cap_html}
+        {issues_block}
+        <div style="margin:16px 0 6px;font-weight:600;">All guests</div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr style="text-align:left;color:#666;font-size:12px;border-bottom:2px solid #ddd;">
+            <th style="padding:6px 10px;">Guest</th><th style="padding:6px 10px;">Type</th>
+            <th style="padding:6px 10px;">Last backup</th><th style="padding:6px 10px;text-align:center;">Snaps</th>
+            <th style="padding:6px 10px;text-align:center;">Status</th></tr>
+          {guest_rows(rows)}
+        </table>
+        <p style="color:#999;font-size:12px;margin-top:22px;">Automated report from the Asset Tracker &middot; PBS datastore <b>main</b> &middot; source of truth: proxmox_backup_job (synced from PBS).</p>
+      </div></body></html>"""
+
+    text = (f"PBS Backup Report — {now.strftime('%Y-%m-%d')}\n{hdr_txt}\n\n"
+            f"Guests: {total} | Protected: {len(ok)} | Issues: {len(issues)} | Snapshots: {total_snaps}\n\n"
+            + '\n'.join(f"  {(r.vm_name or r.vmid)}: {r.backup_status} "
+                        f"(last {_fmt_age(age_h(r.last_snapshot_time))}, {r.snapshot_count or 0} snaps)"
+                        for r in rows))
+
+    try:
+        summary['sent'] = bool(send_email(subject, recipients, text, html))
+    except Exception as e:
+        logger.error('PBS report: send failed: %s', e)
+        summary['sent'] = False
+    return summary

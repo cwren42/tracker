@@ -75,6 +75,10 @@ DEFENDER_SYNC_LOCK_PATH = os.environ.get('TRACKER_DEFENDER_SYNC_LOCK_PATH', '/tm
 DEFENDER_SYNC_HOUR = int(os.environ.get('DEFENDER_SYNC_HOUR', '2'))  # 2 AM local time
 DISABLE_DEFENDER_SYNC = os.environ.get('DISABLE_DEFENDER_SYNC', '').strip() in ('1', 'true', 'yes', 'on')
 
+PBS_REPORT_LOCK_PATH = os.environ.get('TRACKER_PBS_REPORT_LOCK_PATH', '/tmp/tracker_pbs_report.lock')
+PBS_REPORT_HOUR = int(os.environ.get('PBS_REPORT_HOUR', '8'))  # 8 AM local (after the 03:00 backup)
+DISABLE_PBS_REPORT = os.environ.get('DISABLE_PBS_REPORT', '').strip() in ('1', 'true', 'yes', 'on')
+
 VULN_EMAIL_LOCK_PATH = os.environ.get('TRACKER_VULN_EMAIL_LOCK_PATH', '/tmp/tracker_vuln_email.lock')
 PATCH_REBOOT_SWEEP_LOCK_PATH = os.environ.get('TRACKER_PATCH_REBOOT_SWEEP_LOCK_PATH', '/tmp/tracker_patch_reboot_sweep.lock')
 VULN_EMAIL_HOUR = int(os.environ.get('VULN_EMAIL_HOUR', '7'))  # 7 AM local time (after 2 AM Defender sync)
@@ -321,6 +325,20 @@ def start_sync_scheduler(flask_app):
             minute=0,
             id='daily_vuln_email',
             name='Daily vulnerability email digest',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
+    if not DISABLE_PBS_REPORT:
+        _scheduler.add_job(
+            func=lambda: run_pbs_report_email_job(flask_app),
+            trigger='cron',
+            hour=PBS_REPORT_HOUR,
+            minute=0,
+            id='daily_pbs_report',
+            name='Daily PBS backup report email',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -1199,6 +1217,36 @@ def run_pbs_sync_job(flask_app_instance):
                 db.session.remove()
             except Exception:
                 pass
+
+
+def run_pbs_report_email_job(flask_app_instance):
+    """Refresh PBS backup data, then email the daily backup report (guests
+    protected, capacity, any stale/missing). Cross-process locked."""
+    with _file_lock(PBS_REPORT_LOCK_PATH) as acquired:
+        if not acquired:
+            logger.info('PBS report skipped (lock held by another process)')
+            return
+
+        with flask_app_instance.app_context():
+            try:
+                from app import db, Setting, ProxmoxBackupJob, MonitoringAlert
+                from proxmox_service import sync_pbs, send_pbs_daily_report
+                # Refresh first so the report reflects last night's run.
+                try:
+                    sync_pbs(flask_app_instance, db, ProxmoxBackupJob, Setting, MonitoringAlert)
+                except Exception:
+                    logger.warning('PBS report: pre-send sync failed; sending with last-synced data', exc_info=True)
+                res = send_pbs_daily_report(flask_app_instance, db, ProxmoxBackupJob, Setting)
+                logger.info('PBS report: sent=%s to=%s (total=%d ok=%d issues=%d)',
+                            res.get('sent'), res.get('recipients'), res.get('total', 0),
+                            res.get('ok', 0), res.get('issues', 0))
+            except Exception:
+                logger.exception('PBS report job crashed')
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
 
 
 def run_prox2_trust_check_job(flask_app):

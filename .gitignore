@@ -85,3 +85,4 @@ rmm_agent/deps/
 
 # graphify code knowledge graph (local, regenerated)
 graphify-out/
+private_evidence/

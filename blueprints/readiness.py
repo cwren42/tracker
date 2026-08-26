@@ -4,7 +4,7 @@ import os
 import zipfile
 from datetime import datetime
 
-from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, send_file, url_for
 from flask_login import login_required, current_user
 from openpyxl import load_workbook
 from sqlalchemy import or_
@@ -986,3 +986,28 @@ def update_readiness_item(item_id):
     db.session.commit()
     flash('Readiness item updated.', 'success')
     return redirect(url_for('readiness.readiness_item_detail', item_id=item.id))
+
+# Admin-gated download of the assembled SOC2 evidence "upload pack" ZIP.
+# The pack is stored OUTSIDE the web-served /static tree (in private_evidence/)
+# because it concentrates employee PII; it must only be reachable by an admin
+# through this route, never by a direct static URL. Derive the path from this
+# module's location (never a hardcoded absolute — that breaks CI/other checkouts).
+_UPLOAD_PACK_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'private_evidence'
+)
+
+
+@bp.route('/soc2/readiness/export/upload-pack')
+@login_required
+@admin_required
+def download_upload_pack():
+    """Stream the newest assembled SOC2 evidence upload ZIP (admin only)."""
+    import glob
+    try:
+        packs = sorted(glob.glob(os.path.join(_UPLOAD_PACK_DIR, 'SOC2-Type1-Upload-Pack-*.zip')))
+    except Exception:
+        packs = []
+    if not packs:
+        abort(404, description='No evidence upload pack found.')
+    latest = packs[-1]
+    return send_file(latest, as_attachment=True, download_name=os.path.basename(latest))

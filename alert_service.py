@@ -1057,6 +1057,14 @@ def _eval_agent_alerts(con, rules_by_type):
                         if not is_windows_os and not is_linux_os:
                             continue
 
+                    # ── USB/removable-external gate (2.9.58+ agents) ──────────
+                    # Windows reports USB SSDs/HDDs as DriveType==3 ("fixed"), so
+                    # the gate above can't exclude them. bus_type does: skip
+                    # USB/SD/MMC external media (a full Seagate Expansion must not
+                    # page). Absent on older agents → no change for them.
+                    if str(d.get('bus_type') or '').lower() in ('usb', 'sd', 'mmc'):
+                        continue
+
                     pct_free = 100 - (d.get('percent', 100))
                     drive    = d.get('device', '?')
                     # Auto-cleanup eligibility (Part 4): only the Windows OS volume

@@ -16,7 +16,7 @@ internal LAN endpoints. If unreachable (off-network, or LAN gateway down), it
 falls back to the public Cloudflare tunnel endpoints automatically.
 """
 
-AGENT_VERSION = "2.9.57"
+AGENT_VERSION = "2.9.58"
 
 import asyncio
 import base64
@@ -2298,6 +2298,43 @@ def _get_drive_types() -> dict:
         return {}
 
 
+def _get_drive_bus_types() -> dict:
+    """Return a map {drive_letter_upper: BusType_string}, e.g. {"C:": "NVMe",
+    "D:": "USB"}.  Used to exclude USB/SD/MMC EXTERNAL drives from disk-space
+    alerts: Windows reports USB SSDs/HDDs as Win32_LogicalDisk DriveType 3
+    ("fixed"), so DriveType alone can't tell an external Seagate Expansion from
+    the machine's own disk -- the physical disk's BusType can. Maps each drive
+    letter -> its partition's disk -> BusType (USB/SD/MMC/SATA/NVMe/SAS/RAID/...).
+    Windows-only; {} on non-Windows or failure (callers degrade gracefully).
+    """
+    if platform.system() != "Windows":
+        return {}
+    try:
+        data = _ps_json(
+            "Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { "
+            "$d = Get-Disk -Number $_.DiskNumber -ErrorAction SilentlyContinue; "
+            "[PSCustomObject]@{ L = \"$($_.DriveLetter):\"; B = \"$($d.BusType)\" } } "
+            "| ConvertTo-Json -Compress",
+            timeout=10,
+        )
+        if not data:
+            return {}
+        if isinstance(data, dict):
+            data = [data]
+        out = {}
+        for row in data:
+            try:
+                letter = (row.get("L") or "").strip().upper()
+                bus = (row.get("B") or "").strip()
+                if letter and bus:
+                    out[letter] = bus
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
+
+
 def _get_cpu_name() -> str:
     try:
         import winreg
@@ -3503,7 +3540,8 @@ def collect_telemetry(agent_id: str) -> dict:
 
     # Disk partitions
     disks = []
-    _drive_types = _get_drive_types()  # {C: 3, D: 5, ...}; {} off-Windows
+    _drive_types = _get_drive_types()      # {C: 3, D: 5, ...}; {} off-Windows
+    _bus_types   = _get_drive_bus_types()  # {C: 'NVMe', D: 'USB', ...}; {} off-Windows
     for part in psutil.disk_partitions(all=False):
         try:
             usage = psutil.disk_usage(part.mountpoint)
@@ -3520,6 +3558,8 @@ def collect_telemetry(agent_id: str) -> dict:
             }
             if _letter in _drive_types:
                 disk["drive_type"] = _drive_types[_letter]
+            if _letter in _bus_types:
+                disk["bus_type"] = _bus_types[_letter]
             disks.append(disk)
         except Exception:
             pass

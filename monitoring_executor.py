@@ -642,8 +642,12 @@ class MonitoringExecutor:
             return round(float(ram_percent), 1) if ram_percent is not None else None
 
         if metric == 'disk_usage':
-            # disk_json: [{"mountpoint": "C:\\", "percent": 65.7, "drive_type": 3, ...}]
+            # disk_json: [{"mountpoint": "C:\\", "percent": 65.7, "drive_type": 3, "bus_type": "NVMe", ...}]
             # Report the busiest FIXED disk (drive_type 3); ignore removable/network.
+            # ALSO exclude USB/SD/MMC external drives: Windows reports USB SSDs/HDDs
+            # as drive_type 3 ("fixed"), so drive_type alone can't tell them apart --
+            # bus_type does. A full Seagate Expansion must not alert. (bus_type is
+            # absent on pre-2.9.58 agents -> those keep the drive_type-only behavior.)
             if not disk_json:
                 return None
             try:
@@ -651,7 +655,9 @@ class MonitoringExecutor:
             except (ValueError, TypeError):
                 return None
             pcts = [d.get('percent') for d in disks
-                    if d.get('drive_type') == 3 and d.get('percent') is not None]
+                    if d.get('drive_type') == 3
+                    and str(d.get('bus_type') or '').lower() not in ('usb', 'sd', 'mmc')
+                    and d.get('percent') is not None]
             return round(max(pcts), 1) if pcts else None
 
         return None

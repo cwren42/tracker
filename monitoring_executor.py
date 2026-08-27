@@ -690,6 +690,10 @@ class MonitoringExecutor:
         for svc in down:
             if target in (str(svc.get('name', '')).lower(),
                           str(svc.get('display', '')).lower()):
+                # A Disabled service being Stopped is intentional (e.g. Print Spooler
+                # Disabled on DCs) — not "down". Only auto/manual services count.
+                if str(svc.get('start_type', '')).strip().lower() == 'disabled':
+                    return 'running'
                 return 'stopped'
         return 'running'
     

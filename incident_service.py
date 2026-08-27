@@ -873,6 +873,12 @@ def _detect_service_down(con):
                 continue
             display = (s.get('display') or name).strip()
             start_type = (s.get('start_type') or '').strip()
+            # A DISABLED service is intentionally off, not a fault — e.g. the Print
+            # Spooler is Disabled on Domain Controllers as PrintNightmare hardening
+            # ("DCs should not run Spooler"). Never incident a disabled service; only
+            # services that are supposed to be running (Auto/Manual) count as "down".
+            if start_type.lower() == 'disabled':
+                continue
             ctx = {'host': r['hostname'], 'service': name, 'display': display,
                    'start_type': start_type, 'status': status or 'Stopped'}
             fb = (f"{display} ({name}) is {status or 'Stopped'} on {r['hostname']}"

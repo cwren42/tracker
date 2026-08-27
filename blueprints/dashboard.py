@@ -343,11 +343,14 @@ def get_dashboard_data():
     if noncompliant_sync_times:
         noncompliant_last_updated = _format_dt_utc(max(noncompliant_sync_times))
     
-    # NEW: Devices offline for 7+ days
+    # NEW: Devices offline for 7+ days. Exclude terminal/expected-offline states —
+    # a Retired/Disposed/Decommissioned asset is intentionally dark (e.g. SHAMPTON-THINK,
+    # a retired ThinkPad) and shouldn't clutter an operational "offline" view.
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
     offline_assets = Asset.query.filter(
         Asset.last_seen.isnot(None),
-        Asset.last_seen < seven_days_ago
+        Asset.last_seen < seven_days_ago,
+        db.func.coalesce(Asset.status, '').notin_(['Retired', 'Disposed', 'Decommissioned'])
     ).all()
     
     # Calculate average asset age

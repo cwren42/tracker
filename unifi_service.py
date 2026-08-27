@@ -905,8 +905,12 @@ def _flag_reboot_if_detected(db, MonitoringAlert, asset, prev_uptime, cur_uptime
     the low post-reboot uptime catches it — the two jobs both write asset.unifi_uptime_secs,
     so a single detector would miss reboots the other writer overwrites first.
     """
-    # Need a real prior baseline; cur may legitimately be 0 (just booted) so only guard None.
-    if not prev_uptime or cur_uptime is None:
+    # Need a real prior baseline. cur_uptime==0 is UniFi's "no reading / just-(re)connected"
+    # sentinel — a transient 0 from a controller<->device API blip is NOT a reboot (the device's
+    # true uptime reappears on the next poll). A genuine reboot is still caught on the next poll
+    # when uptime is small-but-nonzero and still below the prior baseline. Guard both None and 0
+    # to kill false uptime-reset ("possible power loss") alerts.
+    if not prev_uptime or not cur_uptime:
         return False
     if (cur_uptime + REBOOT_BACKWARD_SLACK_SECS) >= prev_uptime:
         return False  # uptime grew or held — no reboot

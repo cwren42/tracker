@@ -1382,8 +1382,15 @@ def download_employee_template():
 def upload_employee_photo(employee_id):
     """Manual photo upload for an employee (fallback when AD/M365 has no photo)."""
     employee = Employee.query.get_or_404(employee_id)
+    # No request logging exists on this host (nginx access_log is off and
+    # gunicorn runs without --access-logfile), so upload failures were
+    # invisible. Log the attempt explicitly.
+    current_app.logger.info(
+        'photo-upload attempt: employee=%s (%s) files=%s content_length=%s',
+        employee_id, employee.name, list(request.files.keys()), request.content_length)
 
     if 'photo' not in request.files:
+        current_app.logger.warning('photo-upload: no "photo" part in request for %s', employee_id)
         flash('No file selected.', 'warning')
         return redirect(url_for('employees.edit_employee', employee_id=employee_id))
 
@@ -1411,9 +1418,12 @@ def upload_employee_photo(employee_id):
         employee.photo = photo_rel
         db.session.commit()
 
+        current_app.logger.info('photo-upload OK: employee=%s -> %s (%d bytes)',
+                                employee_id, filename, os.path.getsize(filepath))
         flash(f'Photo updated for {employee.name}.', 'success')
     except Exception as e:
         db.session.rollback()
+        current_app.logger.exception('photo-upload FAILED: employee=%s', employee_id)
         flash(f'Photo upload failed: {e}', 'danger')
 
     return redirect(url_for('employees.edit_employee', employee_id=employee_id))

@@ -56,6 +56,13 @@ ONLINE_WITHIN_DAYS = 180
 # Editable at runtime via the `isms_ledger_excluded_assets` setting, one entry
 # per line, which replaces this default when set.
 LEDGER_EXCLUDED_ASSETS_DEFAULT = ('ChrisHome', 'ITWORKBENCH')
+
+# Departments whose people are not Cirque workers and do not belong on the
+# worker ledger. Netstar staff exist in Tracker solely so their access badges
+# can be printed. Extend via the `isms_ledger_excluded_departments` setting,
+# one per line.
+LEDGER_EXCLUDED_DEPARTMENTS_DEFAULT = ('Netstar',)
+LEDGER_DEPARTMENT_EXCLUSION_SETTING = 'isms_ledger_excluded_departments'
 LEDGER_EXCLUSION_SETTING = 'isms_ledger_excluded_assets'
 
 # Cloud services carried on F04C rather than in Tracker's asset register. ALAP's
@@ -567,8 +574,17 @@ def _same_worker(template_name, employee_name):
     return len(shorter) >= 3 and longer.startswith(shorter)
 
 
+def excluded_departments():
+    from models import Setting
+    row = Setting.query.filter_by(key=LEDGER_DEPARTMENT_EXCLUSION_SETTING).first()
+    if row is not None and _clean(row.value):
+        values = [line.strip() for line in str(row.value).replace(',', '\n').splitlines()]
+        return tuple(v for v in values if v)
+    return LEDGER_EXCLUDED_DEPARTMENTS_DEFAULT
+
+
 def _load_employees():
-    return _fetch(
+    rows = _fetch(
         """
         SELECT e.id, e.name, e.email, e.sam_account_name, e.department,
                e.job_title, e.work_type, e.start_date, e.location,
@@ -581,6 +597,10 @@ def _load_employees():
         ORDER BY e.name
         """
     )
+    blocked = {d.strip().upper() for d in excluded_departments() if d.strip()}
+    if blocked:
+        rows = [r for r in rows if _clean(r['department']).upper() not in blocked]
+    return rows
 
 
 def _load_training():

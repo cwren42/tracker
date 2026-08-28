@@ -137,6 +137,18 @@ WORKER_TYPE_MAP = {
     'temp': 'Temporary Staffing Agreement',
 }
 
+# The template names workers formally ("Douglas A. Steck") where Tracker uses
+# what they go by ("Doug Steck"). Matching on the exact string put the same
+# person on F09A twice -- once as a live row and once as a stale "departed" row
+# with no email. Normalising middle initials plus a first-name prefix test
+# resolves most; genuine nicknames that share no prefix (Michael/Mike) need an
+# explicit alias. Extend via the `isms_ledger_worker_aliases` setting, one
+# "Template Name = Tracker Name" per line.
+WORKER_ALIAS_SETTING = 'isms_ledger_worker_aliases'
+WORKER_ALIAS_DEFAULT = {
+    'MICHAEL LAYTON': 'Mike Layton',
+}
+
 SHEET_SUPPLEMENT = 'F04C Asset- Supplement'
 SHEET_WORKERS = 'F09A  Worker List'
 SHEET_PARTNERS = 'F06B BusinessPartner'
@@ -509,6 +521,50 @@ def _load_assets(*, stale=False):
     if not patterns:
         return rows
     return [row for row in rows if not _is_excluded(row, patterns)]
+
+
+def worker_aliases():
+    """Template-name -> Tracker-name overrides, keyed upper-case."""
+    from models import Setting
+    row = Setting.query.filter_by(key=WORKER_ALIAS_SETTING).first()
+    if row is None or not _clean(row.value):
+        return dict(WORKER_ALIAS_DEFAULT)
+    aliases = dict(WORKER_ALIAS_DEFAULT)
+    for line in str(row.value).splitlines():
+        if '=' in line:
+            left, right = line.split('=', 1)
+            if _clean(left) and _clean(right):
+                aliases[_key(left)] = _clean(right)
+    return aliases
+
+
+_MIDDLE_INITIAL = re.compile(r'\b[A-Z]\.?\s+', re.IGNORECASE)
+
+
+def _name_parts(name):
+    """(first, last) with middle initials dropped, upper-cased."""
+    cleaned = _MIDDLE_INITIAL.sub(' ', f' {_clean(name)} ')
+    tokens = [t for t in re.split(r'\s+', cleaned.strip()) if t]
+    if not tokens:
+        return '', ''
+    return tokens[0].upper(), tokens[-1].upper()
+
+
+def _same_worker(template_name, employee_name):
+    """Do these two names denote the same person?
+
+    Requires an exact surname match, then either identical first names or one
+    being a prefix of the other (Doug/Douglas). Surname alone is not enough --
+    Brenda and Sigrid Milian are different people.
+    """
+    t_first, t_last = _name_parts(template_name)
+    e_first, e_last = _name_parts(employee_name)
+    if not t_last or t_last != e_last:
+        return False
+    if t_first == e_first:
+        return True
+    shorter, longer = sorted((t_first, e_first), key=len)
+    return len(shorter) >= 3 and longer.startswith(shorter)
 
 
 def _load_employees():
@@ -938,10 +994,31 @@ def _fill_workers(worksheet):
     matched_keys = set()
     stats = {'total': 0, 'new': 0, 'departed': 0, 'with_training': 0, 'without_training': 0}
 
+    aliases = worker_aliases()
+    # Resolve each template row to the employee it actually denotes, so a
+    # formal-vs-familiar spelling does not produce a duplicate row.
+    alias_targets = {}
+    for template_key in existing:
+        target = aliases.get(template_key)
+        if target:
+            alias_targets[_key(target)] = template_key
+
     for employee in employees:
         key = _key(employee['name'])
         prior = existing.get(key)
-        if prior:
+        matched_key = key if prior else None
+        if prior is None:
+            template_key = alias_targets.get(key)
+            if template_key is None:
+                template_key = next(
+                    (tk for tk in existing
+                     if tk not in matched_keys and _same_worker(tk, employee['name'])), None)
+            if template_key:
+                prior = existing[template_key]
+                matched_key = template_key
+                stats['alias_matched'] = stats.get('alias_matched', 0) + 1
+        if prior is not None:
+            matched_keys.add(matched_key)
             matched_keys.add(key)
         else:
             stats['new'] += 1

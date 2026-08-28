@@ -343,11 +343,17 @@
             fd.append('photo', blob, 'photo.jpg');
             fetch('{{ url_for("employees.upload_employee_photo", employee_id=employee.id) }}', {
                 method: 'POST',
+                // CSRF is enforced app-wide; without this header the POST is
+                // rejected 400 and the upload silently does nothing.
+                headers: { 'X-CSRFToken': '{{ csrf_token() }}' },
                 body: fd
-            }).then(() => {
+            }).then(resp => {
+                // fetch only rejects on network failure, so a 400/500 has to be
+                // checked explicitly or the reload hides the error.
+                if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
                 window.location.reload();
-            }).catch(() => {
-                alert('Upload failed. Please try again.');
+            }).catch(err => {
+                alert('Photo upload failed: ' + err.message);
                 saveBtn.disabled = false;
                 saving.style.display = 'none';
             });

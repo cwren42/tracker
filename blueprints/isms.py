@@ -16,10 +16,12 @@ from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from docx import Document
+from werkzeug.utils import secure_filename
 
 from extensions import db
 from models import Asset, AuditTrail, ISMSDocument, ISMSDocumentVersion, ISMSExportRun
 from utils import admin_required
+import isms_ledger_service
 
 
 bp = Blueprint('isms', __name__)
@@ -913,6 +915,101 @@ def export_glocalization_survey(document_id):
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
         download_name=download_name,
+    )
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+# ---------------------------------------------------------------------------
+# ISMS Management Ledgers (ALAP IS-APM02-F02..F09 workbook)
+# ---------------------------------------------------------------------------
+
+def _log_ledger_action(action, details):
+    try:
+        db.session.add(
+            AuditTrail(
+                asset_id=None,
+                action=action,
+                table_name='isms_ledger',
+                record_id=None,
+                old_values=None,
+                new_values=details,
+                changed_by=_current_actor_username(),
+            )
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+@bp.route('/isms/ledgers')
+@login_required
+@admin_required
+def ledgers():
+    template = isms_ledger_service.template_info()
+    coverage = isms_ledger_service.ledger_coverage() if template else None
+    return render_template(
+        'isms_ledgers.html',
+        template=template,
+        coverage=coverage,
+        template_dir=str(isms_ledger_service.LEDGER_TEMPLATE_DIR),
+    )
+
+
+@bp.route('/isms/ledgers/template', methods=['POST'])
+@login_required
+@admin_required
+def upload_ledger_template():
+    upload = request.files.get('template')
+    if upload is None or not upload.filename:
+        flash('Choose a .xlsx ledger template to upload.', 'warning')
+        return redirect(url_for('isms.ledgers'))
+
+    filename = secure_filename(upload.filename)
+    if not filename.lower().endswith('.xlsx'):
+        flash('The ledger template must be an .xlsx workbook.', 'danger')
+        return redirect(url_for('isms.ledgers'))
+
+    isms_ledger_service.LEDGER_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    destination = isms_ledger_service.LEDGER_TEMPLATE_DIR / filename
+    upload.save(destination)
+
+    try:
+        load_workbook(destination)
+    except Exception as exc:
+        destination.unlink(missing_ok=True)
+        flash(f'That file could not be read as an Excel workbook: {exc}', 'danger')
+        return redirect(url_for('isms.ledgers'))
+
+    _log_ledger_action('isms_ledger_template_upload', f'Uploaded ledger template {filename}')
+    flash(f'Ledger template {filename} uploaded. It is now the active template.', 'success')
+    return redirect(url_for('isms.ledgers'))
+
+
+@bp.route('/isms/ledgers/export')
+@login_required
+@admin_required
+def export_ledgers():
+    try:
+        output, summary = isms_ledger_service.build_ledger_workbook()
+    except FileNotFoundError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('isms.ledgers'))
+
+    filled = ', '.join(
+        f"{name} {stats.get('total', 0)}" for name, stats in summary['sheets'].items()
+    )
+    _log_ledger_action(
+        'isms_ledger_export',
+        f"Generated ISMS management ledgers from template {summary['template']} ({filled})",
+    )
+
+    response = send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=isms_ledger_service.export_filename(),
     )
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'

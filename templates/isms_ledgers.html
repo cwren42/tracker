@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}ISMS Management Ledgers{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h1 class="mb-0"><i class="bi bi-table me-2"></i>ISMS Management Ledgers</h1>
+        <p class="text-muted mb-0">ALAP asset, worker, partner and software ledgers ([IS-APM02-F02..F09]) filled from live Tracker data.</p>
+    </div>
+    <div class="d-flex gap-2">
+        {% if template %}
+        <a class="btn btn-primary" href="{{ url_for('isms.export_ledgers') }}">
+            <i class="bi bi-file-earmark-excel"></i> Generate filled workbook
+        </a>
+        {% endif %}
+        <a class="btn btn-outline-secondary" href="{{ url_for('isms.documents') }}">
+            <i class="bi bi-journal-text"></i> ISMS Manual
+        </a>
+    </div>
+</div>
+
+{% if not template %}
+<div class="alert alert-warning">
+    <strong>No ledger template found.</strong>
+    Upload the ALAP-supplied <code>.xlsx</code> below. The generator fills that workbook in place so its
+    tables, dropdowns and calculated columns survive.
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header"><strong>Active template</strong></div>
+            <div class="card-body">
+                {% if template %}
+                <div class="d-flex align-items-center gap-3 mb-3">
+                    <i class="bi bi-file-earmark-excel fs-2 text-success"></i>
+                    <div>
+                        <div class="fw-semibold">{{ template.name }}</div>
+                        <div class="small text-muted">{{ template.size_kb }} KB &middot; last changed {{ template.modified }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-muted">Nothing uploaded yet.</p>
+                {% endif %}
+                <form method="post" action="{{ url_for('isms.upload_ledger_template') }}" enctype="multipart/form-data" class="row g-2 align-items-end">
+                    <div class="col-sm">
+                        <label class="form-label small text-muted mb-1" for="ledger-template">Upload a new template (replaces the active one)</label>
+                        <input class="form-control form-control-sm" type="file" id="ledger-template" name="template" accept=".xlsx" required>
+                    </div>
+                    <div class="col-sm-auto">
+                        <button class="btn btn-outline-primary btn-sm" type="submit"><i class="bi bi-upload"></i> Upload</button>
+                    </div>
+                </form>
+                <div class="form-text mt-2">Stored in <code>{{ template_dir }}</code>. The most recently changed <code>.xlsx</code> there is the active template.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card h-100">
+            <div class="card-header"><strong>What Tracker will contribute</strong></div>
+            <div class="card-body">
+                {% if coverage %}
+                <dl class="row mb-0 small">
+                    <dt class="col-7 fw-normal text-muted">Supporting assets in scope</dt>
+                    <dd class="col-5 text-end fw-semibold">{{ coverage.assets }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">&mdash; retired / disposed</dt>
+                    <dd class="col-5 text-end">{{ coverage.assets_retired }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">&mdash; no assigned owner</dt>
+                    <dd class="col-5 text-end">{{ coverage.assets_unassigned }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">Active employees</dt>
+                    <dd class="col-5 text-end fw-semibold">{{ coverage.employees }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">&mdash; with ISMS training on file</dt>
+                    <dd class="col-5 text-end">{{ coverage.employees_trained }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">&mdash; <span class="{% if coverage.employees_untrained %}text-danger{% endif %}">no training record</span></dt>
+                    <dd class="col-5 text-end {% if coverage.employees_untrained %}text-danger fw-semibold{% endif %}">{{ coverage.employees_untrained }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">Active vendors</dt>
+                    <dd class="col-5 text-end fw-semibold">{{ coverage.vendors }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">Licensed software titles</dt>
+                    <dd class="col-5 text-end fw-semibold">{{ coverage.licenses }}</dd>
+
+                    <dt class="col-7 fw-normal text-muted">Named license assignments</dt>
+                    <dd class="col-5 text-end fw-semibold">{{ coverage.license_assignments }}</dd>
+                </dl>
+                {% else %}
+                <p class="text-muted mb-0">Upload a template to see coverage.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header"><strong>Sheet coverage</strong></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Sheet</th>
+                        <th>Source</th>
+                        <th>Filled by</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><div class="fw-semibold">F04C Asset - Supplement</div><div class="small text-muted">Supporting assets &amp; cloud services</div></td>
+                        <td class="small"><code>asset</code> &rarr; laptops, desktops, workstations, servers, mini PCs. Network gear, cameras and tablets are out of scope.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F09A Worker List</div><div class="small text-muted">Personnel engaged in scope</div></td>
+                        <td class="small"><code>employee</code> + <code>soc2_security_training_record</code> (last ISMS training) + assigned devices from <code>asset</code>.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F06B BusinessPartner</div></td>
+                        <td class="small"><code>soc2_vendor</code> &rarr; name, service, owner, last/next review date.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F08A Non-Std Software</div></td>
+                        <td class="small"><code>license</code> &rarr; title, license type, seat count; version resolved from <code>rmm_software</code>.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F09-A Worker access</div></td>
+                        <td class="small">Device assignments from <code>asset.employee_id</code>.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F09-B Software users</div></td>
+                        <td class="small"><code>license_assignment</code> &rarr; who holds which named seat.</td>
+                        <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F02B Asset - Info</div><div class="small text-muted">Information assets</div></td>
+                        <td class="small">Customer / engineering information assets and their risk scoring. Not held in Tracker &mdash; carried through from the template untouched.</td>
+                        <td><span class="badge bg-secondary-subtle text-secondary-emphasis">Manual</span></td>
+                    </tr>
+                    <tr>
+                        <td><div class="fw-semibold">F03A Prototype &middot; F07A Project &middot; F02-A</div></td>
+                        <td class="small">Not applicable / manually maintained. Carried through untouched.</td>
+                        <td><span class="badge bg-secondary-subtle text-secondary-emphasis">Manual</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header"><strong>How generation behaves</strong></div>
+    <div class="card-body small">
+        <ul class="mb-0">
+            <li><strong>The template is filled in place.</strong> Excel tables, dropdown validation against <code>Masters</code>, calculated columns (Auto_No, Importance, Risk) and the cross-sheet XLOOKUPs are preserved; table ranges are extended to match the new row counts.</li>
+            <li><strong>ISMS judgement calls are carried forward per row.</strong> Confidentiality / Integrity / Availability scores, threat and vulnerability classes, protect class and purpose text stay as filed. Only Tracker-owned fields (asset tag, hostname, owner, location, training dates, seat counts) are refreshed.</li>
+            <li><strong>Nothing is deleted.</strong> Assets and workers the template lists that Tracker no longer has active are kept and stamped in Remarks as retired / departed, so the ledger keeps its history.</li>
+            <li><strong>Dates are normalised.</strong> The template stores raw Excel serials (<code>45512</code>); generated rows write real dates formatted <code>yyyy/mm/dd</code>.</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

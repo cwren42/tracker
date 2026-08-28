@@ -1080,11 +1080,31 @@ def _fill_workers(worksheet):
             24: _carry(prior, 24),
         })
 
+    # Kit listed against a departed worker that has since been reassigned must
+    # not stay on their row -- otherwise one laptop or phone appears against two
+    # people, which reads as an inventory error rather than a handover.
+    reassigned = {}
+    for row in _fetch(
+        """SELECT a.asset_tag, e.name AS holder
+             FROM asset a JOIN employee e ON e.id = a.employee_id
+            WHERE a.asset_tag IS NOT NULL AND a.asset_tag <> ''
+              AND e.is_visible = TRUE AND e.offboarded_at IS NULL"""):
+        reassigned[_key(row['asset_tag'])] = row['holder']
+
     for key, prior in existing.items():
         if key in matched_keys:
             continue
         remarks = _carry(prior, 24)
+        handed_over = []
+        for column, label in ((17, 'PC'), (18, 'phone'), (19, 'equipment')):
+            holder = reassigned.get(_key(prior.get(column)))
+            if holder:
+                handed_over.append(f'{label} {_clean(prior.get(column))} reassigned to {holder}')
+                prior = dict(prior)
+                prior[column] = 'NA'
         note = 'Departed - no active Tracker employee record at generation time'
+        if handed_over:
+            note += '; ' + ', '.join(handed_over)
         row = {column: prior.get(column) for column in range(3, last_column + 1)
                if not (isinstance(prior.get(column), str) and str(prior.get(column)).startswith('='))}
         for column in (10, 11, 12, 14, 15):

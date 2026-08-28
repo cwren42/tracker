@@ -98,6 +98,9 @@ class Employee(db.Model):
     # 30-day retention clock for the delayed AD-deletion sweep. Only set via the offboard
     # flow (never backfilled) so long-disabled legacy accounts are not mass-deleted.
     offboarded_at = db.Column(db.DateTime, nullable=True)
+    # person | service | shared | unknown. is_visible had been carrying this
+    # distinction implicitly, which conflated departures with service accounts.
+    account_type = db.Column(db.String(20))
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
 
 class Asset(db.Model):

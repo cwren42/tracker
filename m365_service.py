@@ -338,8 +338,20 @@ class M365Service:
     def get_all_users(self):
         """Get all M365 users"""
         logger.info("Fetching all M365 users")
-        # Note: signInActivity requires AuditLog.Read.All permission (optional)
-        users = self._get_all_pages('users?$select=id,userPrincipalName,displayName,jobTitle,department,officeLocation,accountEnabled,createdDateTime')
+        # signInActivity needs AuditLog.Read.All, which this app registration
+        # holds. Without it last_signin_datetime stays null for every user and
+        # no access review can evidence a dormant account.
+        select = ('id,userPrincipalName,displayName,jobTitle,department,'
+                  'officeLocation,accountEnabled,createdDateTime,signInActivity')
+        try:
+            users = self._get_all_pages(f'users?$select={select}')
+        except Exception as exc:
+            # Fall back rather than lose the whole user sync if the permission
+            # is ever revoked.
+            logger.warning(f"signInActivity unavailable ({exc}); retrying without it")
+            users = self._get_all_pages(
+                'users?$select=id,userPrincipalName,displayName,jobTitle,'
+                'department,officeLocation,accountEnabled,createdDateTime')
         logger.info(f"Retrieved {len(users)} users")
         return users
     

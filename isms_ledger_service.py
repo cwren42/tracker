@@ -575,6 +575,9 @@ def _load_employees():
                e.ad_enabled, e.offboarded_at
         FROM employee e
         WHERE e.is_visible = TRUE AND e.offboarded_at IS NULL
+          -- Service accounts and shared mailboxes are not workers; they must
+          -- never reach the ISMS worker ledger even if made visible.
+          AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared'))
         ORDER BY e.name
         """
     )

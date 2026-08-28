@@ -92,7 +92,10 @@ class SOC2SyncService:
                         # Create new
                         created_dt = user.get('createdDateTime')
                         created = datetime.fromisoformat(created_dt.replace('Z', '+00:00')) if created_dt else None
-                        
+                        signin = (user.get('signInActivity') or {}).get('lastSignInDateTime')
+                        last_signin = (datetime.fromisoformat(signin.replace('Z', '+00:00'))
+                                       if signin else None)
+
                         m365_user = M365User(
                             user_principal_name=upn,
                             display_name=user.get('displayName'),
@@ -103,6 +106,7 @@ class SOC2SyncService:
                             admin_roles=json.dumps(admin_dict.get(upn, [])),
                             account_enabled=user.get('accountEnabled'),
                             created_datetime=created,
+                            last_signin_datetime=last_signin,
                             m365_id=user['id'],
                             sync_date=datetime.utcnow(),
                             is_current=True

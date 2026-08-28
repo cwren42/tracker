@@ -328,8 +328,13 @@ def soc2_dashboard():
     automated_evidence, automated_evidence_summary = _build_automated_evidence_status()
     
     # Get sync statistics
-    m365_user_count = M365User.query.filter_by(is_current=True).count()
-    m365_admin_count = M365User.query.filter_by(is_current=True, is_admin=True).count()
+    # Guests are external B2B invitees, not our users -- counting them
+    # roughly doubled the reported headcount.
+    _members = M365User.query.filter(
+        M365User.is_current.is_(True),
+        db.or_(M365User.user_type.is_(None), M365User.user_type != 'Guest'))
+    m365_user_count = _members.count()
+    m365_admin_count = _members.filter(M365User.is_admin.is_(True)).count()
     intune_device_count = IntuneDevice.query.filter_by(is_current=True).count()
     intune_compliant_count = IntuneDevice.query.filter_by(is_current=True, compliance_state='compliant').count()
     

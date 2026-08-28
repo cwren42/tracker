@@ -232,6 +232,10 @@ class M365User(db.Model):
     account_enabled = db.Column(db.Boolean)
     created_datetime = db.Column(db.DateTime)
     last_signin_datetime = db.Column(db.DateTime)
+    # Graph userType: Member = our own account, Guest = external B2B invitee.
+    # Guests hold tenant access but are not our people and must not inflate
+    # user counts or evidence.
+    user_type = db.Column(db.String(20))
     licenses = db.Column(db.Text)  # JSON array of license assignments
     m365_id = db.Column(db.String(100), unique=True)  # Microsoft Graph ID
     sync_date = db.Column(db.DateTime, default=datetime.utcnow)

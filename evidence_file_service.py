@@ -184,7 +184,9 @@ class EvidenceFileService(EvidenceAzureMixin):
         evidence handed to the auditor (see internal_m365_account_criteria).
         """
         users = (M365User.query
-                 .filter(M365User.is_current.is_(True))
+                 .filter(M365User.is_current.is_(True),
+                         db.or_(M365User.user_type.is_(None),
+                                M365User.user_type != 'Guest'))
                  .filter(internal_m365_account_criteria())
                  .all())
 

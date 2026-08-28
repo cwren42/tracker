@@ -80,6 +80,7 @@ class SOC2SyncService:
                         m365_user.is_admin = is_admin
                         m365_user.admin_roles = json.dumps(admin_dict.get(upn, []))
                         m365_user.account_enabled = user.get('accountEnabled')
+                        m365_user.user_type = user.get('userType')
                         m365_user.sync_date = datetime.utcnow()
                         m365_user.is_current = True
                         
@@ -105,6 +106,7 @@ class SOC2SyncService:
                             is_admin=is_admin,
                             admin_roles=json.dumps(admin_dict.get(upn, [])),
                             account_enabled=user.get('accountEnabled'),
+                            user_type=user.get('userType'),
                             created_datetime=created,
                             last_signin_datetime=last_signin,
                             m365_id=user['id'],

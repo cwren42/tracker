@@ -342,7 +342,7 @@ class M365Service:
         # holds. Without it last_signin_datetime stays null for every user and
         # no access review can evidence a dormant account.
         select = ('id,userPrincipalName,displayName,jobTitle,department,'
-                  'officeLocation,accountEnabled,createdDateTime,signInActivity')
+                  'officeLocation,accountEnabled,createdDateTime,signInActivity,userType')
         try:
             users = self._get_all_pages(f'users?$select={select}')
         except Exception as exc:
@@ -351,7 +351,7 @@ class M365Service:
             logger.warning(f"signInActivity unavailable ({exc}); retrying without it")
             users = self._get_all_pages(
                 'users?$select=id,userPrincipalName,displayName,jobTitle,'
-                'department,officeLocation,accountEnabled,createdDateTime')
+                'department,officeLocation,accountEnabled,createdDateTime,userType')
         logger.info(f"Retrieved {len(users)} users")
         return users
     

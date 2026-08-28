@@ -1429,6 +1429,86 @@ def upload_employee_photo(employee_id):
     return redirect(url_for('employees.edit_employee', employee_id=employee_id))
 
 
+
+# ── Badge logos ─────────────────────────────────────────────────────────────
+# Staff from partner organisations (Netstar) carry their own logo on their
+# access badge. Mapping lives in the `badge_logo_map` setting so new partners
+# can be added without a code change: {"Netstar": {"logo": "netstar.png",
+# "company": "Netstar"}}.
+BADGE_LOGO_SETTING = 'badge_logo_map'
+BADGE_LOGO_DIR = 'badge_logos'
+
+
+def _badge_logo_map():
+    import json as _json
+    row = Setting.query.filter_by(key=BADGE_LOGO_SETTING).first()
+    if not row or not (row.value or '').strip():
+        return {}
+    try:
+        return _json.loads(row.value)
+    except ValueError:
+        current_app.logger.warning('badge_logo_map is not valid JSON; ignoring')
+        return {}
+
+
+def _badge_profile_for(employee, default_company, default_logo_url):
+    """(company_name, logo_url) for this employee's badge."""
+    mapping = _badge_logo_map()
+    key = (employee.department or '').strip()
+    entry = None
+    for name, cfg in mapping.items():
+        if name.strip().lower() == key.lower():
+            entry = cfg
+            break
+    if not entry:
+        return default_company, default_logo_url
+    filename = (entry.get('logo') or '').strip()
+    logo_url = default_logo_url
+    if filename:
+        abs_path = os.path.join(current_app.root_path, 'static', 'images',
+                                BADGE_LOGO_DIR, filename)
+        if os.path.exists(abs_path):
+            logo_url = url_for('static', filename=f'images/{BADGE_LOGO_DIR}/{filename}')
+    return (entry.get('company') or default_company), logo_url
+
+
+@bp.route('/employees/id-cards/logo', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def upload_badge_logo():
+    """Upload the badge logo for a partner organisation."""
+    import json as _json
+    org = (request.form.get('org') or '').strip()
+    file = request.files.get('logo')
+    if not org or not file or not file.filename:
+        flash('Pick an organisation and a logo file.', 'warning')
+        return redirect(url_for('employees.id_card_designer'))
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}:
+        flash('Invalid file type. Use png, jpg, gif, webp or svg.', 'danger')
+        return redirect(url_for('employees.id_card_designer'))
+
+    slug = re.sub(r'[^a-z0-9]+', '-', org.lower()).strip('-') or 'partner'
+    filename = f'{slug}.{ext}'
+    target_dir = os.path.join(current_app.root_path, 'static', 'images', BADGE_LOGO_DIR)
+    os.makedirs(target_dir, exist_ok=True)
+    file.save(os.path.join(target_dir, filename))
+
+    mapping = _badge_logo_map()
+    mapping[org] = {'logo': filename, 'company': org}
+    row = Setting.query.filter_by(key=BADGE_LOGO_SETTING).first()
+    if row is None:
+        row = Setting(key=BADGE_LOGO_SETTING)
+        db.session.add(row)
+    row.value = _json.dumps(mapping, indent=2)
+    db.session.commit()
+    current_app.logger.info('badge logo set for %s -> %s', org, filename)
+    flash(f'Badge logo saved for {org}. Their cards will use it automatically.', 'success')
+    return redirect(url_for('employees.id_card_designer'))
+
+
 @bp.route('/employees/id-cards')
 @login_required
 @manager_required
@@ -1463,9 +1543,17 @@ def id_card_designer():
     ).order_by(Employee.location).all()
     locations = [loc[0] for loc in all_locations]
 
+    default_company = company_name.value if company_name else 'Cirque Corporation'
+    badge_profiles = {e.id: _badge_profile_for(e, default_company, company_logo_url)
+                      for e in employees}
+    known_orgs = sorted({(e.department or '').strip() for e in employees
+                         if (e.department or '').strip()})
     return render_template('id_card_designer.html', employees=employees,
-                           company_name=company_name.value if company_name else 'Cirque Corporation',
+                           company_name=default_company,
                            company_logo_url=company_logo_url,
+                           badge_profiles=badge_profiles,
+                           badge_logo_map=_badge_logo_map(),
+                           known_orgs=known_orgs,
                            locations=locations)
 
 
@@ -1485,6 +1573,11 @@ def employee_id_card(employee_id):
     company_logo_url = url_for('static', filename='images/company_logo.png') if os.path.exists(
         os.path.join(current_app.root_path, 'static', 'images', 'company_logo.png')) else None
 
+    default_company = company_name.value if company_name else 'Cirque Corporation'
     return render_template('id_card_designer.html', employees=[employee], single=True,
-                           company_name=company_name.value if company_name else 'Cirque Corporation',
-                           company_logo_url=company_logo_url)
+                           company_name=default_company,
+                           company_logo_url=company_logo_url,
+                           badge_profiles={employee.id: _badge_profile_for(
+                               employee, default_company, company_logo_url)},
+                           badge_logo_map=_badge_logo_map(),
+                           known_orgs=[])

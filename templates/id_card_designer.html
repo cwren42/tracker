@@ -193,7 +193,10 @@ const EMPLOYEES = [
         cardNumber: {{ (emp.card_number or '') | tojson }},
         location: {{ (emp.location or '') | tojson }},
         isVisible: {{ (emp.is_visible != False) | tojson }},
-        photoUrl: {% if emp.photo %}{{ photo_url(emp.photo) | tojson }}{% else %}null{% endif %}
+        photoUrl: {% if emp.photo %}{{ photo_url(emp.photo) | tojson }}{% else %}null{% endif %},
+        // Partner staff carry their own organisation's logo and name.
+        badgeCompany: {{ (badge_profiles[emp.id][0] if badge_profiles and emp.id in badge_profiles else company_name) | tojson }},
+        badgeLogoUrl: {{ (badge_profiles[emp.id][1] if badge_profiles and emp.id in badge_profiles else company_logo_url) | tojson }}
     }{% if not loop.last %},{% endif %}
     {% endfor %}
 ];
@@ -241,6 +244,37 @@ const EMPLOYEES = [
         <div class="ctrl-section">
             <label>Background Logo / Watermark</label>
             <input type="file" id="ctrl-logo" accept="image/*" onchange="handleLogoUpload(this)" class="form-control form-control-sm mb-2">
+
+            <!-- Partner organisation logos. Saved server-side and applied to
+                 that organisation's staff automatically, so a mixed batch
+                 prints each person with the right badge in one run. -->
+            <details class="mb-2">
+                <summary class="small fw-semibold" style="cursor:pointer">Partner organisation logos</summary>
+                {% if badge_logo_map %}
+                <ul class="small text-muted mt-2 mb-2 ps-3">
+                    {% for org, cfg in badge_logo_map.items() %}
+                    <li>{{ org }} &rarr; <code>{{ cfg.logo }}</code></li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="small text-muted mt-2 mb-2">None set &mdash; everyone gets the Cirque logo.</p>
+                {% endif %}
+                <form method="POST" action="{{ url_for('employees.upload_badge_logo') }}"
+                      enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <label class="form-label small mb-1">Organisation (matches the employee's Department)</label>
+                    <input class="form-control form-control-sm mb-2" type="text" name="org"
+                           list="known-orgs" placeholder="Netstar" required>
+                    <datalist id="known-orgs">
+                        {% for o in known_orgs or [] %}<option value="{{ o }}">{% endfor %}
+                    </datalist>
+                    <input class="form-control form-control-sm mb-2" type="file" name="logo"
+                           accept=".png,.jpg,.jpeg,.gif,.webp,.svg" required>
+                    <button class="btn btn-primary btn-sm w-100" type="submit">
+                        <i class="bi bi-upload"></i> Save organisation logo
+                    </button>
+                </form>
+            </details>
             <div id="logo-controls" style="display:none">
                 <label>Scale (<span id="logo-scale-val">100</span>%)</label>
                 <input type="range" id="ctrl-logo-scale" min="0.5" max="3" step="0.1" value="1" oninput="applyConfig(); document.getElementById('logo-scale-val').textContent=Math.round(this.value*100)">
@@ -386,25 +420,32 @@ function buildCard(emp) {
     const firstName = spaceIdx > -1 ? emp.name.slice(0, spaceIdx) : emp.name;
     const lastName  = spaceIdx > -1 ? emp.name.slice(spaceIdx + 1) : '';
 
+    // Each card uses its own organisation's logo and name, so a mixed batch
+    // (Cirque + partner staff) prints correctly in one run. A logo uploaded in
+    // the designer overrides everything, which is what a manual override means.
+    const manualLogo = (logoDataUrl && logoDataUrl !== DEFAULT_LOGO_URL) ? logoDataUrl : null;
+    const cardLogo    = manualLogo || emp.badgeLogoUrl || logoDataUrl;
+    const cardCompany = emp.badgeCompany || cfg.companyName;
+
     let inner = '';
 
     if (cfg.isGuest) {
         // ── Guest layout (vertical only in original) ──
-        const logoImg = logoDataUrl
-            ? `<img src="${logoDataUrl}" alt="Company Logo" style="max-width:40mm;max-height:35mm;object-fit:contain;margin-bottom:8mm;">`
+        const logoImg = cardLogo
+            ? `<img src="${cardLogo}" alt="Company Logo" style="max-width:40mm;max-height:35mm;object-fit:contain;margin-bottom:8mm;">`
             : '';
         inner = `
             <div style="position:absolute;inset:10mm;display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:2;text-align:center;">
                 ${logoImg}
                 <h2 style="margin:0;font-size:38px;line-height:1.1;font-weight:800;color:#000;font-family:'Titillium Web',sans-serif;letter-spacing:-0.5px;text-transform:uppercase;">GUEST</h2>
             </div>
-            ${cfg.companyName ? `<div style="position:absolute;bottom:10mm;left:0;right:0;text-align:center;z-index:2;"><p style="margin:0;font-size:15px;color:#111;font-weight:600;font-family:'Titillium Web',sans-serif;letter-spacing:0.5px;text-transform:uppercase;">${escHtml(cfg.companyName)}</p></div>` : ''}`;
+            ${cardCompany ? `<div style="position:absolute;bottom:10mm;left:0;right:0;text-align:center;z-index:2;"><p style="margin:0;font-size:15px;color:#111;font-weight:600;font-family:'Titillium Web',sans-serif;letter-spacing:0.5px;text-transform:uppercase;">${escHtml(cardCompany)}</p></div>` : ''}`;
 
     } else if (isV) {
         // ── Vertical normal ──
         // Logo watermark: direct <img> absolutely positioned (matches original exactly)
-        const logoWm = logoDataUrl
-            ? `<img src="${logoDataUrl}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+        const logoWm = cardLogo
+            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
             : '';
 
         const photoEl = emp.photoUrl
@@ -419,15 +460,15 @@ function buildCard(emp) {
                 <div style="flex:1;padding-top:1mm;">
                     <h2 style="margin:0;font-size:19px;line-height:1.1;font-weight:700;color:#000;font-family:'Titillium Web',sans-serif;letter-spacing:-0.5px;">${escHtml(firstName)} ${escHtml(lastName)}</h2>
                     ${emp.position ? `<p style="margin:1.5mm 0 0 0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(emp.position)}</p>` : ''}
-                    ${cfg.companyName ? `<p style="margin:0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(cfg.companyName)}</p>` : ''}
+                    ${cardCompany ? `<p style="margin:0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(cardCompany)}</p>` : ''}
                     ${emp.email ? `<p style="margin:0;font-size:12px;color:#111;font-weight:400;font-family:'Titillium Web',sans-serif;line-height:1.2;">${escHtml(emp.email)}</p>` : ''}
                 </div>
             </div>`;
 
     } else {
         // ── Horizontal normal ──
-        const logoWm = logoDataUrl
-            ? `<img src="${logoDataUrl}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+        const logoWm = cardLogo
+            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
             : '';
 
         const photoEl = emp.photoUrl
@@ -441,7 +482,7 @@ function buildCard(emp) {
                 <div style="padding-left:6mm;flex:1;">
                     <h2 style="margin:0;font-size:20px;font-weight:800;color:#000;font-family:'Titillium Web',sans-serif;">${escHtml(firstName)} ${escHtml(lastName)}</h2>
                     ${emp.position ? `<p style="margin:1mm 0;font-size:14px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(emp.position)}</p>` : ''}
-                    ${cfg.companyName ? `<p style="margin:1mm 0;font-size:14px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(cfg.companyName)}</p>` : ''}
+                    ${cardCompany ? `<p style="margin:1mm 0;font-size:14px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(cardCompany)}</p>` : ''}
                     ${emp.email ? `<p style="margin:1mm 0;font-size:12px;color:#111;font-family:'Titillium Web',sans-serif;">${escHtml(emp.email)}</p>` : ''}
                 </div>
             </div>`;

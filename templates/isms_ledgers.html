@@ -169,4 +169,16 @@
         </ul>
     </div>
 </div>
+
+<div class="card mt-3">
+    <div class="card-header"><strong>ALAP template revisions applied at generation</strong></div>
+    <div class="card-body small">
+        <p class="text-muted">ALAP issued a revision list against these ledgers. Each item is the same defect &mdash; row&nbsp;6 is correct and rows&nbsp;7+ were dragged out of step. They are applied every time the workbook is generated, so they hold for whichever template revision is uploaded and are a no-op on an already-corrected file.</p>
+        <ul class="mb-0">
+            <li><strong>Importance formula</strong> (F02B, F04C, F08A) &mdash; <code>=MAX(L6:N[last row])</code> spans the whole table body instead of the row's own C/I/A triple, so one asset scored 4 drags every row above it to 4. Rewritten to <code>=MAX(L6:N6)</code> in the cells <em>and</em> in the table's stored calculated-column formula, which Excel otherwise re-broadcasts on open.</li>
+            <li><strong>F02-A area selection</strong> &mdash; the &ldquo;Area select&rdquo; dropdown sits in column&nbsp;E on row&nbsp;6 but column&nbsp;F from row&nbsp;7 down, with the dependent lookup one column out to match. Rows&nbsp;7+ are pulled back into line with row&nbsp;6 and the stray column&nbsp;G lookup is removed.</li>
+            <li><strong>F09-A / F09-B column A</strong> &mdash; row&nbsp;6 validates against <code>Name_Mail</code> but rows&nbsp;7+ against <code>Worker_Name</code>. Both sheets' XLOOKUPs key on <em>Name (Mail)</em>, so the row-7+ rule rejected the only value that resolves. Now <code>Name_Mail</code> throughout.</li>
+        </ul>
+    </div>
+</div>
 {% endblock %}

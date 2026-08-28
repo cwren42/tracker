@@ -25,6 +25,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.cell_range import MultiCellRange
 
 from extensions import db
 
@@ -103,6 +104,7 @@ SHEET_WORKERS = 'F09A  Worker List'
 SHEET_PARTNERS = 'F06B BusinessPartner'
 SHEET_SOFTWARE = 'F08A Non-Std Software'
 SHEET_WORKER_ACCESS = 'F09-A'
+SHEET_ASSET_AREA = 'F02-A'
 SHEET_SOFTWARE_USERS = 'F09-B'
 SHEET_INFO = 'F02B Asset - Info'
 
@@ -240,16 +242,25 @@ def _shift_formula(formula, source_row, target_row):
     )
 
 
-# ALAP's template ships a drag artifact: on F02B and F04C the ``Importance``
-# calculated column is ``MAX(S6:U95)`` / ``MAX(U6:W100)`` -- a rectangle over the
-# whole table body rather than the row's own C/I/A triple. F08A's identical
-# column is written correctly as ``MAX(L6:N6)``, and both the column header and
-# the Legend define Importance as the max of that row. Left alone the defect
-# scales with the table: one asset scored 4 would drag every row above it to 4.
-# These rewrite the column to the single-row form the sheet intends.
+# --------------------------------------------------------------------------
+# ALAP template revisions
+#
+# ALAP issued a revision list against these ledgers (2026-08). Each item is the
+# same class of defect: row 6 is right and rows 7+ were dragged out of step.
+# They are applied at generation time rather than baked into the stored
+# template, so they hold for whichever template revision is uploaded and
+# re-applying them to an already-corrected workbook is a no-op.
+# --------------------------------------------------------------------------
+
+# Revision 1 -- Importance must be the max of the row's own C/I/A triple.
+# The template ships it as a drag artifact spanning the whole table body
+# (``MAX(S6:U95)`` on F02B, ``MAX(U6:W100)`` on F04C), which scales with the
+# table: one asset scored 4 drags every row above it to 4. ALAP's own wording:
+# "Incorrect: =MAX(L6:N[highest row]) / Correct: =MAX(L6:N6)".
 IMPORTANCE_FIXUPS = {
     SHEET_INFO: {'column': 22, 'formula': '=MAX(S{row}:U{row})'},          # V
     SHEET_SUPPLEMENT: {'column': 24, 'formula': '=MAX(U{row}:W{row})'},    # X
+    SHEET_SOFTWARE: {'column': 15, 'formula': '=MAX(L{row}:N{row})'},      # O
 }
 
 
@@ -272,6 +283,62 @@ def _fix_importance_column(worksheet, last_data_row):
             table_column.calculatedColumnFormula.attr_text = (
                 fixup['formula'].format(row=FIRST_DATA_ROW).lstrip('=')
             )
+
+
+def _replace_validation(worksheet, match_formula, new_sqref, new_formula=None, *, drop=False):
+    """Retarget (or remove) the data validation whose formula1 matches.
+
+    openpyxl keeps validations as a flat list keyed by their ``sqref`` range,
+    so a revision is expressed by rewriting that range rather than by editing
+    individual cells.
+    """
+    validations = worksheet.data_validations.dataValidation
+    for validation in list(validations):
+        if _clean(validation.formula1) != match_formula:
+            continue
+        if drop:
+            validations.remove(validation)
+            return True
+        validation.sqref = MultiCellRange(new_sqref)
+        if new_formula is not None:
+            validation.formula1 = new_formula
+        return True
+    return False
+
+
+def _apply_validation_revisions(workbook):
+    """Revisions 2 and 3 -- data-validation ranges that skip a column or bind
+    the wrong list from row 7 down."""
+    applied = []
+
+    # Revision 2 [F02-A]: the "Area select" dropdown sits in column E on row 6
+    # but column F from row 7 down, so the dependent INDIRECT lookup is one
+    # column out too. Pull rows 7+ back into line with row 6 and drop the
+    # stray dependent validation left in column G. ALAP's instruction is the
+    # manual equivalent: delete E7 downward and shift the cells left.
+    area = workbook[SHEET_ASSET_AREA]
+    if _replace_validation(area, 'Store_Area', 'E6:E1048576'):
+        applied.append('F02-A: Area select realigned to column E for all rows')
+    if _replace_validation(area, 'INDIRECT($E6)', 'F6:F1048576'):
+        applied.append('F02-A: dependent storage-location lookup realigned to column F')
+    if _replace_validation(area, 'INDIRECT($F7)', None, drop=True):
+        applied.append('F02-A: removed the stray column-G lookup left by the shift')
+
+    # Revision 3 [F09-A][F09-B]: column A row 6 validates against Name_Mail
+    # (``Name(email)``), but rows 7+ validate against Worker_Name (bare name).
+    # The XLOOKUPs in both sheets key on Name (Mail), so the row-7+ rule
+    # rejects the only value that actually resolves -- and it is the value this
+    # generator writes.
+    for sheet_name in (SHEET_WORKER_ACCESS, SHEET_SOFTWARE_USERS):
+        worksheet = workbook[sheet_name]
+        # Drop row 6's standalone Name_Mail rule first, so widening the
+        # Worker_Name rule to cover column A does not leave two overlapping
+        # validations on A6.
+        _replace_validation(worksheet, 'Name_Mail', None, drop=True)
+        if _replace_validation(worksheet, 'Worker_Name', 'A6:A1048576', 'Name_Mail'):
+            applied.append(f'{sheet_name}: column A now validates against Name_Mail for all rows')
+
+    return applied
 
 
 def _resize_table(worksheet, last_data_row):
@@ -877,6 +944,8 @@ def build_ledger_workbook(template_path=None):
     )
     _fix_importance_column(info_sheet, FIRST_DATA_ROW + info_rows - 1)
     summary['sheets']['F02B Information Assets (manual)'] = {'total': info_rows}
+
+    summary['revisions'] = _apply_validation_revisions(workbook)
 
     output = io.BytesIO()
     workbook.save(output)

@@ -103,6 +103,49 @@
 </div>
 
 <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div><strong>Filing readiness</strong>
+            <span class="text-muted small">&mdash; per-column fill rate on ALAP's required-input fields</span></div>
+        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('isms.ledgers', readiness=1) }}">
+            <i class="bi bi-clipboard-check"></i> {{ 'Re-check' if readiness else 'Check readiness' }}
+        </a>
+    </div>
+    <div class="card-body {% if not readiness %}text-muted small{% else %}p-0{% endif %}">
+        {% if not readiness %}
+        Generates the workbook and measures every required column against ALAP's item guides. FY25 carry-over and
+        auto-calculated columns are excluded &mdash; a blank in those is correct, not a gap.
+        {% else %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Sheet</th><th>Column</th><th>Field</th><th class="text-end">Filled</th><th>Fill it in</th></tr></thead>
+                <tbody>
+                {% for sheet in readiness %}
+                    {% for entry in sheet.columns %}
+                    <tr class="{% if not entry.complete %}table-warning{% endif %}">
+                        {% if loop.first %}<td rowspan="{{ sheet.columns|length }}" class="fw-semibold">{{ sheet.sheet }}<div class="small text-muted">{{ sheet.rows }} rows</div></td>{% endif %}
+                        <td><code>{{ entry.column }}</code></td>
+                        <td class="small">{{ entry.label }}</td>
+                        <td class="text-end small {% if not entry.complete %}fw-semibold{% endif %}">{{ entry.filled }}/{{ entry.total }}</td>
+                        <td class="small">
+                            {% if entry.complete %}<span class="text-success"><i class="bi bi-check-lg"></i></span>
+                            {% elif entry.source == 'Information Assets' %}<a href="{{ url_for('isms_assets.information_assets', show='incomplete') }}">Information Assets</a>
+                            {% elif entry.source == 'Vendors' %}<a href="{{ url_for('vendor_management.vendors_dashboard') }}">Vendors</a>
+                            {% elif entry.source == 'Licenses' %}<a href="{{ url_for('licenses.licenses') }}">Licenses</a>
+                            {% elif entry.source == 'Employees' %}<a href="{{ url_for('employees.employees') }}">Employees</a>
+                            {% elif entry.source %}{{ entry.source }}
+                            {% else %}&mdash;{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card mb-4">
     <div class="card-header"><strong>Sheet coverage</strong></div>
     <div class="card-body p-0">
         <div class="table-responsive">

@@ -949,6 +949,13 @@ def _log_ledger_action(action, details):
 def ledgers():
     template = isms_ledger_service.template_info()
     coverage = isms_ledger_service.ledger_coverage() if template else None
+    readiness = None
+    if template and request.args.get('readiness') == '1':
+        # Generating the workbook to measure it is not free, so it's opt-in.
+        try:
+            readiness = isms_ledger_service.ledger_readiness()
+        except Exception as exc:
+            flash(f'Could not compute readiness: {exc}', 'warning')
     return render_template(
         'isms_ledgers.html',
         template=template,
@@ -956,6 +963,7 @@ def ledgers():
         template_dir=str(isms_ledger_service.LEDGER_TEMPLATE_DIR),
         exclusions=isms_ledger_service.ledger_exclusions(),
         exclusion_setting=isms_ledger_service.LEDGER_EXCLUSION_SETTING,
+        readiness=readiness,
     )
 
 

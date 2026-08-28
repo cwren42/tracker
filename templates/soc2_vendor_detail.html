@@ -33,6 +33,74 @@
             </div>
         </div>
 
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">ISMS Ledger Fields</h5>
+                <span class="badge bg-secondary-subtle text-secondary-emphasis">F06B</span>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted">Required by the ALAP business-partner ledger and recorded nowhere else. Terms review runs on a
+                    {{ 6 if vendor.criticality in ['Critical','High'] else 12 }}-month cycle for a {{ vendor.criticality }} vendor.</p>
+                <form method="post" action="{{ url_for('vendor_management.update_vendor_isms', vendor_id=vendor.id) }}" class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small">xNDA-007 executed <span class="text-muted">(col I)</span></label>
+                        <input type="date" name="nda_executed_date" class="form-control form-control-sm"
+                               value="{{ vendor.nda_executed_date.isoformat() if vendor.nda_executed_date else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">ISMS standards last notified <span class="text-muted">(col J)</span></label>
+                        <input type="date" name="isms_notified_date" class="form-control form-control-sm"
+                               value="{{ vendor.isms_notified_date.isoformat() if vendor.isms_notified_date else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Terms &amp; conditions last reviewed</label>
+                        <input type="date" name="terms_reviewed_date" class="form-control form-control-sm"
+                               value="{{ vendor.terms_reviewed_date.isoformat() if vendor.terms_reviewed_date else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Next terms review <span class="text-muted">(auto if blank)</span></label>
+                        <input type="date" name="terms_next_review_date" class="form-control form-control-sm"
+                               value="{{ vendor.terms_next_review_date.isoformat() if vendor.terms_next_review_date else '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Contact department at partner <span class="text-muted">(col D)</span></label>
+                        <input type="text" name="contact_department" class="form-control form-control-sm"
+                               value="{{ vendor.contact_department or '' }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Availability <span class="text-muted">(W)</span></label>
+                        <select name="required_availability" class="form-select form-select-sm">
+                            <option value="">—</option>
+                            {% for level, text in [(3,'3 — absolutely unacceptable'),(2,'2 — unacceptable'),(1,'1 — tolerable')] %}
+                            <option value="{{ level }}" {% if vendor.required_availability == level %}selected{% endif %}>{{ text }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Training req. <span class="text-muted">(X)</span></label>
+                        <select name="training_required" class="form-select form-select-sm">
+                            <option value="">—</option>
+                            <option value="Yes" {% if vendor.training_required == 'Yes' %}selected{% endif %}>Yes</option>
+                            <option value="No" {% if vendor.training_required == 'No' %}selected{% endif %}>No</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">On-site presence &amp; permitted access areas <span class="text-muted">(col G)</span></label>
+                        <input type="text" name="onsite_access_scope" class="form-control form-control-sm"
+                               value="{{ vendor.onsite_access_scope or '' }}" placeholder="e.g. Cloud Based, or Server Room">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Data return / deletion on termination <span class="text-muted">(col Y)</span></label>
+                        <input type="text" name="data_return_on_termination" class="form-control form-control-sm"
+                               value="{{ vendor.data_return_on_termination or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-save"></i> Save ISMS fields</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white"><h5 class="mb-0">Add Review</h5></div>
             <div class="card-body">

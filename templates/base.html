@@ -204,7 +204,8 @@
             'policy_acknowledgements.acknowledgements_dashboard','policy_acknowledgements.create_acknowledgement','policy_acknowledgements.acknowledgement_detail','policy_acknowledgements.update_acknowledgement',
             'security_training.security_training_dashboard','security_training.create_security_training_record','security_training.security_training_record_detail','security_training.update_security_training_record',
             'isms.documents','isms.document_detail','isms.edit_document','isms.document_history','isms.document_diff','isms.export_document',
-            'isms.ledgers','isms.upload_ledger_template','isms.export_ledgers'
+            'isms.ledgers','isms.upload_ledger_template','isms.export_ledgers',
+            'isms_assets.information_assets','isms_assets.information_asset_detail','isms_assets.create_information_asset','isms_assets.bulk_set'
         ] %}
         {% set _compliance_active = request.endpoint in _compliance_eps %}
         <a class="sidebar-link sidebar-parent {% if _compliance_active %}active{% endif %}"
@@ -224,6 +225,7 @@
             <li><a class="sidebar-link {% if request.endpoint in ['security_training.security_training_dashboard', 'security_training.create_security_training_record', 'security_training.security_training_record_detail', 'security_training.update_security_training_record'] %}active{% endif %}" href="{{ url_for('security_training.security_training_dashboard') }}"><i class="bi bi-mortarboard"></i><span class="link-label">Security Training</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint in ['isms.documents', 'isms.document_detail', 'isms.edit_document', 'isms.document_history', 'isms.document_diff', 'isms.export_document'] %}active{% endif %}" href="{{ url_for('isms.documents') }}"><i class="bi bi-journal-text"></i><span class="link-label">ISMS Manual</span></a></li>
             <li><a class="sidebar-link {% if request.endpoint in ['isms.ledgers', 'isms.upload_ledger_template', 'isms.export_ledgers'] %}active{% endif %}" href="{{ url_for('isms.ledgers') }}"><i class="bi bi-table"></i><span class="link-label">ISMS Ledgers</span></a></li>
+            <li><a class="sidebar-link {% if request.endpoint in ['isms_assets.information_assets', 'isms_assets.information_asset_detail', 'isms_assets.create_information_asset', 'isms_assets.bulk_set'] %}active{% endif %}" href="{{ url_for('isms_assets.information_assets') }}"><i class="bi bi-folder2-open"></i><span class="link-label">Information Assets</span></a></li>
         </ul>
 
         <div class="nav-section-label">Admin</div>

@@ -420,6 +420,7 @@ class License(db.Model):
     software_name = db.Column(db.String(200), nullable=False)
     vendor = db.Column(db.String(100))
     license_type = db.Column(db.String(50))  # Per User, Per Device, Site License, Subscription, Perpetual
+    version = db.Column(db.String(120))  # F08A Software Version on the ISMS ledger
     license_key = db.Column(db.String(500))
     total_licenses = db.Column(db.Integer, default=1)
     purchase_date = db.Column(db.Date)
@@ -682,6 +683,67 @@ class SOC2InternalAuditFinding(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ISMSInformationAsset(db.Model):
+    """The F02B information-asset register.
+
+    Customer and engineering information assets, their classification and
+    risk scoring. Tracker has no other notion of an information asset — these
+    are documents, datasets and records rather than hardware — so the ALAP
+    ledger's F02B sheet is generated from here.
+    """
+    __tablename__ = 'isms_information_asset'
+
+    id = db.Column(db.Integer, primary_key=True)
+    asset_name = db.Column(db.String(400), nullable=False)
+    required_protect_class = db.Column(db.String(100))
+    critical_classification = db.Column(db.String(200))     # F02B E
+    customer_name = db.Column(db.String(200))               # F02B F
+    information_category = db.Column(db.String(200))        # F02B G
+    information_category_fy25 = db.Column(db.String(20))    # F02B H (carried)
+    asset_manager = db.Column(db.String(200))
+    owning_department = db.Column(db.String(200))
+    business_area = db.Column(db.String(200))               # F02B K
+    purpose = db.Column(db.Text)
+    media_form = db.Column(db.String(100))                  # F02B M
+    media_form_fy25 = db.Column(db.String(100))
+    stored_on = db.Column(db.String(400))
+    viewing_authority = db.Column(db.String(20))
+    permitted_scope_of_use = db.Column(db.Text)             # F02B Q
+    other_requirements = db.Column(db.Text)
+    confidentiality = db.Column(db.Integer)
+    integrity = db.Column(db.Integer)
+    availability = db.Column(db.Integer)
+    threat_class = db.Column(db.Integer)
+    vulnerability_class = db.Column(db.Integer)
+    usage_start_date = db.Column(db.Date)
+    usage_stop_date = db.Column(db.Date)
+    remarks = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    source = db.Column(db.String(50), default='manual')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = db.Column(db.String(120))
+
+    @property
+    def importance(self):
+        """Max of C/I/A — the same rule the ledger's Importance column uses."""
+        return max([v for v in (self.confidentiality, self.integrity, self.availability)
+                    if v is not None] or [0])
+
+    @property
+    def missing_ledger_fields(self):
+        """Which ALAP-required FY26 columns are still empty on this row."""
+        required = {
+            'Critical Information Classification': self.critical_classification,
+            'Information Category': self.information_category,
+            'Primary Business Area': self.business_area,
+            'Media form': self.media_form,
+            'Permitted Scope of Use': self.permitted_scope_of_use,
+        }
+        return [name for name, value in required.items()
+                if value is None or not str(value).strip()]
+
+
 class SOC2Vendor(db.Model):
     __tablename__ = 'soc2_vendor'
 
@@ -701,6 +763,19 @@ class SOC2Vendor(db.Model):
     evidence_reference = db.Column(db.String(500))
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
+
+    # ISMS ledger (F06B) fields. Recorded here so the ALAP business-partner
+    # ledger generates instead of being hand-typed each filing.
+    nda_executed_date = db.Column(db.Date)
+    isms_notified_date = db.Column(db.Date)
+    terms_reviewed_date = db.Column(db.Date)
+    terms_next_review_date = db.Column(db.Date)
+    contact_department = db.Column(db.String(200))
+    onsite_access_scope = db.Column(db.Text)
+    required_availability = db.Column(db.Integer)
+    training_required = db.Column(db.String(10))
+    data_return_on_termination = db.Column(db.Text)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

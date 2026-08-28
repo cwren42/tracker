@@ -859,7 +859,8 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
         try:
             cat_map = {
                 'agent': 'Hardware', 'asset': 'Hardware',
-                'vulnerability': 'Security', 'eagle_eyes': 'General'
+                'vulnerability': 'Security', 'eagle_eyes': 'General',
+                'compliance': 'General'
             }
             cat = cat_map.get(category, 'General')
             ticket_id = _open_or_reopen_alert_ticket(
@@ -887,7 +888,8 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     # Insert notification bell
     icon_map = {
         'agent': 'bi-pc-display', 'asset': 'bi-hdd',
-        'vulnerability': 'bi-shield-exclamation', 'eagle_eyes': 'bi-eye'
+        'vulnerability': 'bi-shield-exclamation', 'eagle_eyes': 'bi-eye',
+        'compliance': 'bi-patch-check'
     }
     color_map = {
         'Urgent': 'danger', 'High': 'danger', 'Normal': 'warning', 'Low': 'info'
@@ -1323,6 +1325,209 @@ def _eval_vulnerability_alerts(con, rules_by_type):
 # Main loop
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Terms & conditions review cadence, by vendor criticality. Critical and High
+# vendors are re-read twice a year; the rest annually.
+TERMS_REVIEW_MONTHS = {'Critical': 6, 'High': 6, 'Medium': 12, 'Low': 12}
+DEFAULT_TERMS_REVIEW_MONTHS = 12
+
+# An asset is considered inspected by its Defender vulnerability sync. Past
+# this, the ISMS ledger's Planned Inspection Date has come due.
+ASSET_INSPECTION_INTERVAL_DAYS = 90
+
+ISMS_TRAINING_INTERVAL_DAYS = 365
+
+
+def _months_later(start, months):
+    month = start.month - 1 + months
+    year = start.year + month // 12
+    month = month % 12 + 1
+    day = min(start.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+                          else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+    return date(year, month, day)
+
+
+def _eval_compliance_alerts(con, rules_by_type):
+    """Periodic ISMS obligations: vendor reviews and terms, worker training,
+    asset inspections, and the ledger filing itself.
+
+    These are slow-moving dates that nothing watched before — a vendor review
+    ran a month past due unnoticed because no rule existed to catch it.
+    """
+    today = date.today()
+
+    def _as_date(value):
+        if not value:
+            return None
+        # datetime subclasses date, so narrow it explicitly or the arithmetic
+        # below mixes date and datetime and raises.
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            return None
+
+    # ── Vendors: review due / overdue, terms review, missing NDA ────────────
+    try:
+        vendors = con.execute(
+            """SELECT id, vendor_name, criticality, last_review_date, next_review_date,
+                      nda_executed_date, terms_reviewed_date, terms_next_review_date
+                 FROM soc2_vendor WHERE is_active = true"""
+        ).fetchall()
+    except Exception as exc:
+        logger.debug(f'compliance: vendor query failed ({exc})')
+        vendors = []
+
+    for vendor in vendors:
+        name = vendor['vendor_name']
+        token = f"vendor:{vendor['id']}"
+
+        next_review = _as_date(vendor['next_review_date'])
+        if next_review:
+            days_left = (next_review - today).days
+            rule = rules_by_type.get('vendor_review_overdue')
+            if rule and rule['enabled'] and days_left < 0:
+                _fire_alert(con, rule,
+                            f'Vendor review for {name} is {abs(days_left)} days overdue '
+                            f'(was due {next_review}).', dedup_token=token)
+            rule = rules_by_type.get('vendor_review_due')
+            threshold = rule['threshold_value'] if rule else 30
+            if rule and rule['enabled'] and 0 <= days_left <= (threshold or 30):
+                _fire_alert(con, rule,
+                            f'Vendor review for {name} is due in {days_left} days '
+                            f'({next_review}).', dedup_token=token)
+
+        # Terms & conditions, risk-tiered off the last read.
+        rule = rules_by_type.get('vendor_terms_due')
+        if rule and rule['enabled']:
+            terms_next = _as_date(vendor['terms_next_review_date'])
+            if terms_next is None:
+                last_terms = _as_date(vendor['terms_reviewed_date'])
+                months = TERMS_REVIEW_MONTHS.get(vendor['criticality'],
+                                                 DEFAULT_TERMS_REVIEW_MONTHS)
+                terms_next = _months_later(last_terms, months) if last_terms else None
+            if terms_next is None:
+                _fire_alert(con, rule,
+                            f'{name} has no terms & conditions review on record. '
+                            f'Set a review date so the {TERMS_REVIEW_MONTHS.get(vendor["criticality"], DEFAULT_TERMS_REVIEW_MONTHS)}-month '
+                            f'cycle can be tracked.', dedup_token=f'{token}:terms')
+            else:
+                days_left = (terms_next - today).days
+                threshold = rule['threshold_value'] or 30
+                if days_left < 0:
+                    _fire_alert(con, rule,
+                                f'Terms & conditions review for {name} is {abs(days_left)} '
+                                f'days overdue (was due {terms_next}).',
+                                dedup_token=f'{token}:terms')
+                elif days_left <= threshold:
+                    _fire_alert(con, rule,
+                                f'Terms & conditions review for {name} is due in '
+                                f'{days_left} days ({terms_next}).',
+                                dedup_token=f'{token}:terms')
+
+        rule = rules_by_type.get('vendor_nda_missing')
+        if rule and rule['enabled'] and not vendor['nda_executed_date']:
+            _fire_alert(con, rule,
+                        f'{name} has no xNDA-007 information security agreement '
+                        f'execution date on file. Required for the ISMS business '
+                        f'partner ledger (F06B).', dedup_token=f'{token}:nda')
+
+    # ── Workers: annual ISMS training ───────────────────────────────────────
+    try:
+        workers = con.execute(
+            """SELECT e.id, e.name,
+                      (SELECT MAX(r.training_date) FROM soc2_security_training_record r
+                        WHERE r.employee_id = e.id) AS last_training
+                 FROM employee e
+                WHERE e.is_visible = true AND e.offboarded_at IS NULL"""
+        ).fetchall()
+    except Exception as exc:
+        logger.debug(f'compliance: worker query failed ({exc})')
+        workers = []
+
+    for worker in workers:
+        last = _as_date(worker['last_training'])
+        token = f"worker:{worker['id']}"
+        if last is None:
+            rule = rules_by_type.get('isms_training_overdue')
+            if rule and rule['enabled']:
+                _fire_alert(con, rule,
+                            f'{worker["name"]} has no ISMS training record on file.',
+                            dedup_token=token)
+            continue
+        due = last + timedelta(days=ISMS_TRAINING_INTERVAL_DAYS)
+        days_left = (due - today).days
+        rule = rules_by_type.get('isms_training_overdue')
+        if rule and rule['enabled'] and days_left < 0:
+            _fire_alert(con, rule,
+                        f'ISMS training for {worker["name"]} is {abs(days_left)} days '
+                        f'overdue (last trained {last}).', dedup_token=token)
+            continue
+        rule = rules_by_type.get('isms_training_due')
+        threshold = (rule['threshold_value'] if rule else 30) or 30
+        if rule and rule['enabled'] and 0 <= days_left <= threshold:
+            _fire_alert(con, rule,
+                        f'ISMS training for {worker["name"]} is due in {days_left} days '
+                        f'({due}).', dedup_token=token)
+
+    # ── Assets: security inspection cadence ─────────────────────────────────
+    rule = rules_by_type.get('asset_inspection_due')
+    if rule and rule['enabled']:
+        try:
+            stale = con.execute(
+                """SELECT a.id, a.name,
+                          (SELECT MAX(v.synced_at) FROM device_vulnerability v
+                            WHERE v.asset_id = a.id) AS last_scan
+                     FROM asset a
+                    WHERE a.category IN ('Laptop','Desktop','Workstation','Server','Computer','Mini PC')
+                      AND (a.status IS NULL OR a.status NOT IN ('Retired','Disposed'))"""
+            ).fetchall()
+        except Exception as exc:
+            logger.debug(f'compliance: asset inspection query failed ({exc})')
+            stale = []
+        never, overdue = [], []
+        for row in stale:
+            last_scan = _as_date(row['last_scan'])
+            if last_scan is None:
+                never.append(row['name'])
+            elif (today - last_scan).days > ASSET_INSPECTION_INTERVAL_DAYS:
+                overdue.append(row['name'])
+        if never:
+            _fire_alert(con, rule,
+                        f'{len(never)} asset(s) have never had a security inspection '
+                        f'(no Defender vulnerability scan on record): '
+                        f'{", ".join(sorted(never)[:8])}'
+                        f'{" and others" if len(never) > 8 else ""}.',
+                        dedup_token='asset_inspection:never')
+        if overdue:
+            _fire_alert(con, rule,
+                        f'{len(overdue)} asset(s) have not been inspected in over '
+                        f'{ASSET_INSPECTION_INTERVAL_DAYS} days: '
+                        f'{", ".join(sorted(overdue)[:8])}'
+                        f'{" and others" if len(overdue) > 8 else ""}.',
+                        dedup_token='asset_inspection:stale')
+
+    # ── The ledger filing itself ────────────────────────────────────────────
+    rule = rules_by_type.get('ledger_filing_due')
+    if rule and rule['enabled']:
+        filing = _as_date(_get_setting(con, 'isms_ledger_next_filing_date', ''))
+        if filing:
+            days_left = (filing - today).days
+            threshold = rule['threshold_value'] or 30
+            if days_left < 0:
+                _fire_alert(con, rule,
+                            f'The ISMS management ledger filing was due {filing} '
+                            f'({abs(days_left)} days ago).',
+                            dedup_token='ledger_filing')
+            elif days_left <= threshold:
+                _fire_alert(con, rule,
+                            f'ISMS management ledger filing due in {days_left} days '
+                            f'({filing}). Review outstanding fields on /isms/ledgers '
+                            f'before generating.', dedup_token='ledger_filing')
+
+
 def run_evaluator():
     """Blocking loop – run in a daemon thread.
     Uses a timestamp file + exclusive lock so only ONE of the Gunicorn workers
@@ -1386,6 +1591,7 @@ def _run_once():
         _eval_agent_alerts(con, rules_by_type)
         _eval_asset_alerts(con, rules_by_type)
         _eval_vulnerability_alerts(con, rules_by_type)
+        _eval_compliance_alerts(con, rules_by_type)
 
         # State-based auto-resolution: close tickets for conditions that cleared
         _resolve_cleared_alerts(con, eval_started_at)

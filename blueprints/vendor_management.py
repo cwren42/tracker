@@ -81,6 +81,55 @@ def vendor_detail(vendor_id):
     )
 
 
+ISMS_TERMS_MONTHS = {'Critical': 6, 'High': 6, 'Medium': 12, 'Low': 12}
+
+
+def _add_months(start, months):
+    month = start.month - 1 + months
+    year = start.year + month // 12
+    month = month % 12 + 1
+    import calendar
+    return start.replace(year=year, month=month,
+                         day=min(start.day, calendar.monthrange(year, month)[1]))
+
+
+@bp.route('/soc2/vendors/<int:vendor_id>/isms', methods=['POST'])
+@login_required
+@admin_required
+def update_vendor_isms(vendor_id):
+    """Fields the ALAP business-partner ledger (F06B) needs that nothing else
+    in Tracker records."""
+    vendor = SOC2Vendor.query.get_or_404(vendor_id)
+
+    vendor.contact_department = (request.form.get('contact_department') or '').strip() or None
+    vendor.nda_executed_date = _parse_date(request.form.get('nda_executed_date'))
+    vendor.isms_notified_date = _parse_date(request.form.get('isms_notified_date'))
+    vendor.terms_reviewed_date = _parse_date(request.form.get('terms_reviewed_date'))
+    vendor.onsite_access_scope = (request.form.get('onsite_access_scope') or '').strip() or None
+    vendor.training_required = (request.form.get('training_required') or '').strip() or None
+    vendor.data_return_on_termination = (request.form.get('data_return_on_termination') or '').strip() or None
+
+    availability = (request.form.get('required_availability') or '').strip()
+    vendor.required_availability = int(availability) if availability.isdigit() else None
+
+    # Next terms review is risk-tiered off the last one unless given explicitly.
+    explicit_next = _parse_date(request.form.get('terms_next_review_date'))
+    if explicit_next:
+        vendor.terms_next_review_date = explicit_next
+    elif vendor.terms_reviewed_date:
+        vendor.terms_next_review_date = _add_months(
+            vendor.terms_reviewed_date,
+            ISMS_TERMS_MONTHS.get(vendor.criticality, 12))
+    else:
+        vendor.terms_next_review_date = None
+
+    _log_audit('soc2_vendor', vendor.id, 'update',
+               {'vendor_name': vendor.vendor_name, 'section': 'isms_ledger_fields'})
+    db.session.commit()
+    flash('ISMS ledger fields saved.', 'success')
+    return redirect(url_for('vendor_management.vendor_detail', vendor_id=vendor.id))
+
+
 @bp.route('/soc2/vendors/<int:vendor_id>/reviews/new', methods=['POST'])
 @login_required
 @admin_required

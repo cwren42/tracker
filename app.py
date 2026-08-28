@@ -191,7 +191,7 @@ def _photo_url(photo_rel):
 
 # ── Register Blueprints ───────────────────────────────────────────────────
 from blueprints import auth, assets, dashboard, employees, internal_audit, licenses, management_review, phishing, policy_acknowledgements, security_training, system_description, vendor_management
-from blueprints import isms, monitoring, readiness, reports, rmm, settings, soc2
+from blueprints import isms, isms_assets, monitoring, readiness, reports, rmm, settings, soc2
 from blueprints import tickets, vulnerabilities, ai, misc
 from blueprints import backup, quarantine, patch_mgmt, systems, incidents
 from blueprints import network as network_bp
@@ -209,6 +209,7 @@ app.register_blueprint(rmm.bp)
 app.register_blueprint(settings.bp)
 app.register_blueprint(soc2.bp)
 app.register_blueprint(isms.bp)
+app.register_blueprint(isms_assets.bp)
 app.register_blueprint(readiness.bp)
 app.register_blueprint(internal_audit.bp)
 app.register_blueprint(vendor_management.bp)

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}{{ record.asset_name[:60] }}{% endblock %}
+
+{% macro select(name, label, options, current, hint='') %}
+<div class="col-md-6">
+    <label class="form-label small">{{ label }} {% if hint %}<span class="text-muted">({{ hint }})</span>{% endif %}</label>
+    <select name="{{ name }}" class="form-select form-select-sm">
+        <option value="">—</option>
+        {% for option in options %}
+        <option value="{{ option }}" {% if current|string == option|string %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('isms_assets.information_assets') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to register</a>
+    <h2 class="mt-2 mb-1">{{ record.asset_name }}</h2>
+    <div class="text-muted small">
+        Importance {{ record.importance }}
+        {% if record.missing_ledger_fields %}
+        &middot; <span class="text-danger">missing: {{ record.missing_ledger_fields|join(', ') }}</span>
+        {% else %}
+        &middot; <span class="text-success">all required ledger fields complete</span>
+        {% endif %}
+    </div>
+</div>
+
+<form method="post">
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card mb-4">
+            <div class="card-header"><strong>Classification</strong> <span class="text-muted small">&mdash; the FY26 columns ALAP added</span></div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label small">Asset name</label>
+                        <input type="text" name="asset_name" class="form-control form-control-sm" value="{{ record.asset_name }}" required>
+                    </div>
+                    {{ select('required_protect_class', 'Required Protect Class', protect_classes, record.required_protect_class, 'D') }}
+                    {{ select('critical_classification', 'Critical Information Classification', critical_classifications, record.critical_classification, 'E') }}
+                    <div class="col-md-6">
+                        <label class="form-label small">Customer name <span class="text-muted">(F)</span></label>
+                        <input type="text" name="customer_name" class="form-control form-control-sm" value="{{ record.customer_name or '' }}">
+                        <div class="form-text">Leave blank when the customer is not on ALAP's list.</div>
+                    </div>
+                    {{ select('information_category', 'Information Category', information_categories, record.information_category, 'G') }}
+                    {{ select('business_area', 'Primary Business Area', business_areas, record.business_area, 'K') }}
+                    {{ select('media_form', 'Media form', media_forms, record.media_form, 'M') }}
+                    <div class="col-12">
+                        <label class="form-label small">Permitted Scope of Use <span class="text-muted">(Q)</span></label>
+                        <textarea name="permitted_scope_of_use" rows="2" class="form-control form-control-sm">{{ record.permitted_scope_of_use or '' }}</textarea>
+                        <div class="form-text">Who may access it and from where; storage conditions.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Other customer / legal requirements</label>
+                        <input type="text" name="other_requirements" class="form-control form-control-sm" value="{{ record.other_requirements or '' }}">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><strong>Ownership &amp; storage</strong></div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small">Asset manager</label>
+                        <input type="text" name="asset_manager" class="form-control form-control-sm" value="{{ record.asset_manager or '' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Owning department</label>
+                        <input type="text" name="owning_department" class="form-control form-control-sm" value="{{ record.owning_department or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Purpose</label>
+                        <input type="text" name="purpose" class="form-control form-control-sm" value="{{ record.purpose or '' }}">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label small">Stored on <span class="text-muted">(support asset)</span></label>
+                        <input type="text" name="stored_on" class="form-control form-control-sm" value="{{ record.stored_on or '' }}">
+                    </div>
+                    {{ select('viewing_authority', 'Viewing Authority', viewing_authorities, record.viewing_authority) }}
+                    <div class="col-12">
+                        <label class="form-label small">Remarks</label>
+                        <textarea name="remarks" rows="2" class="form-control form-control-sm">{{ record.remarks or '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card mb-4">
+            <div class="card-header"><strong>Risk scoring</strong></div>
+            <div class="card-body">
+                <div class="row g-3">
+                    {{ select('confidentiality', 'Confidentiality', score_options, record.confidentiality) }}
+                    {{ select('integrity', 'Integrity', score_options, record.integrity) }}
+                    {{ select('availability', 'Availability', score_options, record.availability) }}
+                    {{ select('threat_class', 'Threat probability', score_options, record.threat_class) }}
+                    {{ select('vulnerability_class', 'Vulnerability', score_options, record.vulnerability_class) }}
+                </div>
+                <hr>
+                <div class="small text-muted">
+                    Importance is the highest of Confidentiality, Integrity and Availability &mdash; currently
+                    <strong>{{ record.importance }}</strong>. Damage probability and Risk are calculated in the workbook.
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header"><strong>Carried from FY25</strong></div>
+            <div class="card-body small">
+                <dl class="row mb-0">
+                    <dt class="col-6 fw-normal text-muted">Information Category (H)</dt>
+                    <dd class="col-6 text-end">{{ record.information_category_fy25 or '—' }}</dd>
+                    <dt class="col-6 fw-normal text-muted">Media Form (N)</dt>
+                    <dd class="col-6 text-end">{{ record.media_form_fy25 or '—' }}</dd>
+                </dl>
+                <p class="text-muted mt-2 mb-0">ALAP marks these &ldquo;no input required&rdquo;. They are shown for reference and written to the ledger unchanged &mdash; the FY26 columns above are separate answers, not copies of these.</p>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" type="submit"><i class="bi bi-save"></i> Save</button>
+    </div>
+</div>
+</form>
+{% endblock %}

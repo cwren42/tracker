@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Information Assets{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h1 class="mb-0"><i class="bi bi-folder2-open me-2"></i>Information Assets</h1>
+        <p class="text-muted mb-0">The F02B register &mdash; documents, datasets and records, as opposed to hardware. Feeds the ISMS ledger.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('isms.ledgers') }}"><i class="bi bi-table"></i> ISMS Ledgers</a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Registered</div>
+                <div class="fs-3 fw-semibold">{{ total }}</div>
+                <div class="small {% if incomplete_count %}text-danger{% else %}text-success{% endif %}">
+                    {{ incomplete_count }} missing required ledger fields
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header"><strong>What's missing</strong></div>
+            <div class="card-body">
+                {% if tally %}
+                <div class="d-flex flex-wrap gap-2">
+                    {% for field, count in tally %}
+                    <span class="badge bg-danger-subtle text-danger-emphasis">{{ field }} &mdash; {{ count }}</span>
+                    {% endfor %}
+                </div>
+                <p class="small text-muted mt-3 mb-0">Most of these share an answer across the register. Use the bulk fill below rather than editing 89 rows by hand.</p>
+                {% else %}
+                <p class="text-success mb-0"><i class="bi bi-check-circle"></i> Every record has its required ALAP fields.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header"><strong>Bulk fill</strong></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('isms_assets.bulk_set') }}" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-1">Field</label>
+                <select name="field" class="form-select form-select-sm" required>
+                    <option value="">Choose&hellip;</option>
+                    <option value="critical_classification">Critical Information Classification (E)</option>
+                    <option value="information_category">Information Category (G)</option>
+                    <option value="business_area">Primary Business Area (K)</option>
+                    <option value="media_form">Media form (M)</option>
+                    <option value="permitted_scope_of_use">Permitted Scope of Use (Q)</option>
+                    <option value="required_protect_class">Required Protect Class (D)</option>
+                    <option value="viewing_authority">Viewing Authority (P)</option>
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label small text-muted mb-1">Value</label>
+                <input type="text" name="value" class="form-control form-control-sm" required
+                       placeholder="e.g. Information obtained from external">
+            </div>
+            <div class="col-md-2">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="only_blank" id="only_blank" checked>
+                    <label class="form-check-label small" for="only_blank">Only where blank</label>
+                </div>
+            </div>
+            <div class="col-md-1">
+                <button class="btn btn-primary btn-sm w-100" type="submit">Apply</button>
+            </div>
+        </form>
+        <div class="form-text mt-2">Values must match the ledger's <code>Masters</code> dropdowns exactly, or Excel will reject them.</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>Register</strong>
+        <div class="btn-group btn-group-sm">
+            <a class="btn {% if show != 'incomplete' %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+               href="{{ url_for('isms_assets.information_assets') }}">All {{ total }}</a>
+            <a class="btn {% if show == 'incomplete' %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+               href="{{ url_for('isms_assets.information_assets', show='incomplete') }}">Incomplete {{ incomplete_count }}</a>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Asset</th>
+                        <th>Classification</th>
+                        <th>Category</th>
+                        <th>Business area</th>
+                        <th>C/I/A</th>
+                        <th>Missing</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in records %}
+                    <tr>
+                        <td>
+                            <a class="fw-semibold text-decoration-none"
+                               href="{{ url_for('isms_assets.information_asset_detail', record_id=record.id) }}">{{ record.asset_name[:70] }}</a>
+                            {% if record.asset_manager %}<div class="small text-muted">{{ record.asset_manager }}</div>{% endif %}
+                        </td>
+                        <td class="small">{{ record.critical_classification or '—' }}</td>
+                        <td class="small">{{ record.information_category or '—' }}</td>
+                        <td class="small">{{ record.business_area or '—' }}</td>
+                        <td class="small text-nowrap">{{ record.confidentiality or '-' }}/{{ record.integrity or '-' }}/{{ record.availability or '-' }}</td>
+                        <td>
+                            {% if record.missing_ledger_fields %}
+                            <span class="badge bg-danger-subtle text-danger-emphasis">{{ record.missing_ledger_fields|length }}</span>
+                            {% else %}
+                            <span class="badge bg-success-subtle text-success-emphasis">complete</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header"><strong>Add an information asset</strong></div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('isms_assets.create_information_asset') }}" class="row g-2 align-items-end">
+            <div class="col-md-9">
+                <label class="form-label small text-muted mb-1">Asset name</label>
+                <input type="text" name="asset_name" class="form-control form-control-sm" required
+                       placeholder="e.g. &lt;Customer Data&gt; Design Document_Dell 01">
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-primary btn-sm w-100" type="submit"><i class="bi bi-plus-lg"></i> Create</button>
+            </div>
+        </form>
+        <div class="form-text mt-2">ALAP asks that names be unique and that cloud data assets are prefixed &lang;Customer Data&rang; or &lang;Derived Data&rang;.</div>
+    </div>
+</div>
+{% endblock %}

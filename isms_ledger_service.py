@@ -644,7 +644,10 @@ def _load_vendors():
         """
         SELECT vendor_name, service_description, vendor_type, criticality,
                owner, contract_status, last_review_date, next_review_date,
-               data_access_scope, assurance_status, notes
+               data_access_scope, assurance_status, notes,
+               nda_executed_date, isms_notified_date, contact_department,
+               onsite_access_scope, required_availability, training_required,
+               data_return_on_termination
         FROM soc2_vendor
         WHERE is_active = TRUE
         ORDER BY vendor_name
@@ -656,7 +659,7 @@ def _load_licenses():
     return _fetch(
         """
         SELECT l.id, l.software_name, l.vendor, l.license_type, l.total_licenses,
-               l.status, l.notes,
+               l.status, l.notes, l.version,
                (SELECT s.version FROM rmm_software s
                  WHERE s.name = l.software_name AND s.version IS NOT NULL
                  GROUP BY s.version ORDER BY COUNT(*) DESC LIMIT 1) AS common_version
@@ -1029,16 +1032,13 @@ def _fill_partners(worksheet):
 
         rows.append({
             3: _clean(vendor['vendor_name']),
-            # D is the partner's liaison department, which we do not hold --
-            # vendor_type is not that. ALAP marks it optional; leave it empty
-            # rather than filling it with the wrong thing.
-            4: None,
+            4: _clean(vendor['contact_department']) or None,
             5: _carry(prior, 5, 'IT'),
             6: _clean(vendor['service_description']) or _carry(prior, 6),
-            7: _carry(prior, 7),   # FY25
+            7: _carry(prior, 7, _clean(vendor['onsite_access_scope'])),   # FY25 first
             8: _carry(prior, 8, DEFAULT_SECURITY_MANAGER),
-            9: _existing_date(_carry(prior, 9)),
-            10: _existing_date(_carry(prior, 10)),
+            9: vendor['nda_executed_date'] or _existing_date(_carry(prior, 9)),
+            10: vendor['isms_notified_date'] or _existing_date(_carry(prior, 10)),
             11: vendor['last_review_date'] or _existing_date(_carry(prior, 11)),
             12: _carry(prior, 12, 'Pass' if vendor['assurance_status'] else None),
             13: vendor['next_review_date'] or _existing_date(_carry(prior, 13)),
@@ -1050,9 +1050,9 @@ def _fill_partners(worksheet):
             20: _existing_date(_carry(prior, 20)),
             21: _carry(prior, 21),
             22: _carry(prior, 22),
-            23: _carry(prior, 23, 2),
-            24: _carry(prior, 24, 'Yes'),
-            25: _carry(prior, 25, 'Yes'),
+            23: _carry(prior, 23, vendor['required_availability'] or 2),
+            24: _carry(prior, 24, _clean(vendor['training_required']) or 'Yes'),
+            25: _carry(prior, 25, _clean(vendor['data_return_on_termination']) or 'Yes'),
             26: _carry(prior, 26, _clean(vendor['data_access_scope'])),
         })
 
@@ -1109,7 +1109,9 @@ def _fill_software(worksheet):
 
         rows.append({
             3: _clean(entry['software_name']),
-            4: _clean(entry['common_version']) or _carry(prior, 4),
+            # The recorded version wins; the RMM-derived one is only a hint,
+            # and loose name matching there returns the wrong product's version.
+            4: _clean(entry['version']) or _clean(entry['common_version']) or _carry(prior, 4),
             5: _carry(prior, 5, _clean(entry['notes']) or 'Business / engineering tooling'),
             6: _carry(prior, 6),   # FY25
             7: _carry(prior, 7),
@@ -1127,6 +1129,78 @@ def _fill_software(worksheet):
 
     stats['total'] = _write_rows(worksheet, rows, last_column)
     return stats
+
+
+def _load_information_assets():
+    return _fetch(
+        """
+        SELECT asset_name, required_protect_class, critical_classification,
+               customer_name, information_category, information_category_fy25,
+               asset_manager, owning_department, business_area, purpose,
+               media_form, media_form_fy25, stored_on, viewing_authority,
+               permitted_scope_of_use, other_requirements,
+               confidentiality, integrity, availability,
+               threat_class, vulnerability_class, remarks
+        FROM isms_information_asset
+        WHERE is_active = TRUE
+        ORDER BY id
+        """
+    )
+
+
+def _fill_information_assets(worksheet):
+    """F02B -- generated from Tracker's information-asset register.
+
+    Previously this sheet was carried through untouched because Tracker had no
+    information-asset concept. The register now holds all 90, so the sheet is
+    generated and the FY26 columns ALAP added fill in as they are completed.
+    """
+    last_column = 29  # AC
+    records = _load_information_assets()
+    if not records:
+        # Nothing in the register -- leave the sheet exactly as filed.
+        rows = sum(1 for row in range(FIRST_DATA_ROW, worksheet.max_row + 1)
+                   if _clean(worksheet.cell(row=row, column=3).value))
+        _fix_importance_column(worksheet, max(FIRST_DATA_ROW, FIRST_DATA_ROW + rows - 1))
+        return {'total': rows, 'from_register': 0, 'incomplete': 0}
+
+    rows, incomplete = [], 0
+    for record in records:
+        missing = [f for f in (record['critical_classification'],
+                               record['information_category'],
+                               record['business_area'],
+                               record['media_form'],
+                               record['permitted_scope_of_use'])
+                   if not _clean(f)]
+        if missing:
+            incomplete += 1
+        rows.append({
+            3: _clean(record['asset_name']),
+            4: _clean(record['required_protect_class']),
+            5: _clean(record['critical_classification']),
+            6: _clean(record['customer_name']) or None,
+            7: _clean(record['information_category']) or None,
+            8: _clean(record['information_category_fy25']),      # FY25
+            9: _clean(record['asset_manager']),                  # FY25
+            10: _clean(record['owning_department']),
+            11: _clean(record['business_area']) or None,
+            12: _clean(record['purpose']),
+            13: _clean(record['media_form']) or None,
+            14: _clean(record['media_form_fy25']),               # FY25
+            15: _clean(record['stored_on']),                     # FY25
+            16: _clean(record['viewing_authority']),             # FY25
+            17: _clean(record['permitted_scope_of_use']) or None,
+            18: _clean(record['other_requirements']),
+            19: record['confidentiality'],
+            20: record['integrity'],
+            21: record['availability'],
+            23: record['threat_class'],
+            24: record['vulnerability_class'],
+            27: _clean(record['remarks']),
+        })
+
+    total = _write_rows(worksheet, rows, last_column)
+    return {'total': total, 'from_register': total, 'incomplete': incomplete}
 
 
 def _fill_worker_access(worksheet):
@@ -1229,16 +1303,7 @@ def build_ledger_workbook(template_path=None):
     summary['sheets']['F09-A Worker Access'] = _fill_worker_access(workbook[SHEET_WORKER_ACCESS])
     summary['sheets']['F09-B Software Users'] = _fill_software_users(workbook[SHEET_SOFTWARE_USERS])
 
-    # F02B carries hand-curated information assets Tracker does not hold, so its
-    # rows are left as filed -- but it shares the Importance formula defect, and
-    # that drives the Risk column, so the formula alone is corrected.
-    info_sheet = workbook[SHEET_INFO]
-    info_rows = sum(
-        1 for row in range(FIRST_DATA_ROW, info_sheet.max_row + 1)
-        if _clean(info_sheet.cell(row=row, column=3).value)
-    )
-    _fix_importance_column(info_sheet, FIRST_DATA_ROW + info_rows - 1)
-    summary['sheets']['F02B Information Assets (manual)'] = {'total': info_rows}
+    summary['sheets']['F02B Information Assets'] = _fill_information_assets(workbook[SHEET_INFO])
 
     # F03A (prototypes) is likewise not Tracker-held -- Cirque files no
     # prototype assets -- but carries the same Importance column.
@@ -1282,6 +1347,90 @@ def ledger_coverage():
         'licenses': len(_load_licenses()),
         'license_assignments': len(_load_license_assignments()),
     }
+
+
+# What ALAP requires as input on each generated sheet, and where it comes from.
+# Anything marked "no input required" (FY25 carry-over) or auto-calculated is
+# deliberately absent -- a blank there is correct, not a gap.
+READINESS_SPEC = {
+    SHEET_SUPPLEMENT: (3, [
+        (8, 'IT Operations Organization', None),
+        (9, 'Purpose of Using the Asset', None),
+        (11, 'Types of Assets', None),
+        (13, 'Permitted Scope of Use', None),
+        (15, 'Installation / Storage Location', None),
+        (20, 'Training Requirement', None),
+        (31, 'Latest Inspection Date', 'Defender vulnerability scan coverage'),
+        (32, 'Inspection Result', 'Defender vulnerability scan coverage'),
+    ]),
+    SHEET_PARTNERS: (3, [
+        (4, 'Contact Department at Partner', 'Vendors'),
+        (6, 'Overview of Transaction', 'Vendors'),
+        (9, 'xNDA-007 Execution Date', 'Vendors'),
+        (10, 'ISMS Announcement Date', 'Vendors'),
+        (11, 'Latest Audit Date', 'Vendors'),
+        (13, 'Next Audit Date', 'Vendors'),
+        (23, 'Required Availability', 'Vendors'),
+    ]),
+    SHEET_SOFTWARE: (3, [
+        (4, 'Software Version', 'Licenses'),
+        (5, 'Purpose of Using the Asset', 'Licenses'),
+        (9, 'License Type', 'Licenses'),
+        (10, 'Number of Licenses', 'Licenses'),
+    ]),
+    SHEET_WORKERS: (5, [
+        (6, 'Email address', 'Employees'),
+        (8, 'Relationship with our company', 'Employees'),
+        (9, 'AD Account ID', 'Employees'),
+        (10, 'Start Date of Employment', 'Employees'),
+        (12, 'Last ISMS Training Date', 'Security Training'),
+    ]),
+    SHEET_INFO: (3, [
+        (5, 'Critical Information Classification', 'Information Assets'),
+        (7, 'Information Category', 'Information Assets'),
+        (11, 'Primary Business Area', 'Information Assets'),
+        (13, 'Media form', 'Information Assets'),
+        (17, 'Permitted Scope of Use', 'Information Assets'),
+    ]),
+}
+
+
+def ledger_readiness(workbook=None):
+    """Per-column fill rate on a freshly generated workbook.
+
+    Answers "is this ready to file?" against ALAP's required-input columns,
+    rather than the generic gap count the page used to show.
+    """
+    if workbook is None:
+        output, _summary = build_ledger_workbook()
+        workbook = load_workbook(output)
+
+    report = []
+    for sheet_name, (key_column, columns) in READINESS_SPEC.items():
+        worksheet = workbook[sheet_name]
+        rows = [r for r in range(FIRST_DATA_ROW, worksheet.max_row + 1)
+                if _clean(worksheet.cell(row=r, column=key_column).value)]
+        if not rows:
+            continue
+        entries = []
+        for column, label, source in columns:
+            filled = sum(1 for r in rows
+                         if _clean(worksheet.cell(row=r, column=column).value))
+            entries.append({
+                'column': get_column_letter(column),
+                'label': label,
+                'source': source,
+                'filled': filled,
+                'total': len(rows),
+                'complete': filled == len(rows),
+            })
+        report.append({
+            'sheet': sheet_name,
+            'rows': len(rows),
+            'columns': entries,
+            'gaps': sum(1 for e in entries if not e['complete']),
+        })
+    return report
 
 
 def export_filename(today=None):

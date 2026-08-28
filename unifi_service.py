@@ -708,18 +708,29 @@ def sync_unifi_assets(app_instance, db, Asset, Setting, AssetHistory, Monitoring
                                         asset_id=asset.id, status='active'
                                     ).filter(MonitoringAlert.message.like('%went offline%')).first()
                                     if not existing:
+                                        # A core/aggregation device or gateway dropping off IS
+                                        # the power-event signal (building-wide internet/VPN
+                                        # impact) — page it CRITICAL even when the reboot-jump
+                                        # detection misses the uptime reset (e.g. it returns at
+                                        # uptime=0, which the transient-glitch guard skips). For
+                                        # a core switch, "went offline" is the reliable tell.
+                                        _core = _is_core_device(asset.name, getattr(asset, 'model', '') or '', device_type)
                                         alert = MonitoringAlert(
                                             asset_id=asset.id,
-                                            severity='warning',
+                                            severity='critical' if _core else 'warning',
                                             status='active',
                                             message=f'{asset.name} went offline',
-                                            details=f'UniFi device {device_type} lost connectivity',
+                                            details=(f'UniFi device {device_type} lost connectivity.'
+                                                     + (' CORE/aggregation device — a drop here blacks out the '
+                                                        'building access layer (internet/VPN). Check the rack '
+                                                        'UPS/PDU feeding it.' if _core else '')),
                                             triggered_at=now,
                                             first_failed_at=now,
                                             last_failed_at=now,
                                         )
                                         db.session.add(alert)
-                                        logger.warning('UniFi alert: %s went offline', asset.name)
+                                        logger.warning('UniFi alert: %s went offline%s', asset.name,
+                                                       ' (CRITICAL: core device)' if _core else '')
                                 elif online_state == 'Online' and prev_state == 'Offline':
                                     # Auto-resolve any open offline alerts
                                     open_alerts = MonitoringAlert.query.filter_by(

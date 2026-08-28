@@ -586,13 +586,28 @@ def _load_asset_operations():
                    AND v.severity = 'Critical') AS open_critical,
                (SELECT COUNT(*) FROM device_vulnerability v
                  WHERE v.asset_id = a.id AND v.status = 'Open'
-                   AND v.severity = 'High') AS open_high
+                   AND v.severity = 'High') AS open_high,
+               EXISTS (SELECT 1 FROM rmm_agent g
+                        WHERE g.asset_id = a.id AND g.enabled) AS has_agent
         FROM asset a
         WHERE a.category IN :categories
         """,
         {'categories': tuple(SUPPLEMENT_CATEGORIES)},
     )
     return {row['id']: row for row in rows}
+
+
+def _fleet_scan_date():
+    """Newest Defender sync across the estate.
+
+    Servers run Defender but are neither Intune-enrolled nor Entra-joined, and
+    the Defender reconciliation matches on Entra device id -- so they never get
+    per-device findings attributed to them in Tracker even though they are
+    scanned in the same sweep. For those, the fleet sync date is the honest
+    inspection date.
+    """
+    rows = _fetch('SELECT MAX(synced_at)::date AS d FROM device_vulnerability')
+    return rows[0]['d'] if rows else None
 
 
 def _next_quarter_start(today=None):
@@ -634,8 +649,13 @@ def _system_operation_record(operations):
             f'Microsoft Defender vulnerability assessment, last synchronised {last_scan}: '
             f"{operations['open_critical']} open Critical, {operations['open_high']} open High, "
             'tracked to remediation.')
+    elif operations and operations.get('has_agent'):
+        parts.append(
+            'Microsoft Defender deployed and managed under the CirqueRMM agent. '
+            'Per-device findings are not attributed in Tracker because the device is '
+            'not Entra-joined, so vulnerability response is tracked at fleet level.')
     else:
-        parts.append('Not yet enrolled in Defender vulnerability assessment.')
+        parts.append('No Defender vulnerability assessment recorded against this asset.')
     return ' '.join(parts)
 
 
@@ -782,6 +802,7 @@ def _fill_supplement(worksheet):
     excluded = _load_assets(stale=True)
     exclusion_patterns = ledger_exclusions()
     operations = _load_asset_operations()
+    fleet_scan = _fleet_scan_date()
     inspection_due = _next_quarter_start()
     # ALAP: "Continuous Defender vulnerability assessment" is the inspection of
     # record. No grade is asserted -- ALAP defines no scoring yardstick, and a
@@ -826,6 +847,11 @@ def _fill_supplement(worksheet):
 
         asset_ops = operations.get(asset['id'])
         last_scan = asset_ops.get('last_scan') if asset_ops else None
+        # Managed but not Entra-joined: covered by the same Defender sweep, just
+        # not reconciled per device. Agentless assets stay blank -- nothing
+        # confirms they were inspected at all.
+        if last_scan is None and asset_ops and asset_ops.get('has_agent'):
+            last_scan = fleet_scan
 
         rows.append({
             2: _carry(prior, 2),                                   # FY25 ledger number

@@ -61,6 +61,10 @@ LAST_SIGNAL_SQL = """
 """
 
 DEFAULT_SECURITY_MANAGER = 'Chris Wren'
+
+# Masters!M External_Public. The template's own rows read "No", which is not a
+# member of that list and fails the sheet's own validation.
+EXTERNAL_PUBLIC_DEFAULT = 'Not Publicly Available'
 DEFAULT_COMPANY = 'Cirque Corporation'
 
 # Masters!N "Types of Assets" values.
@@ -619,6 +623,17 @@ def _name_mail(name, email):
     return f'{_clean(name)}({_clean(email)})'
 
 
+def _planned_training_date(last_training, prior_planned):
+    """F09A column N. ALAP: "Required for those who have NOT attended training
+    in the past year due to extended leave, etc." -- so anyone current is left
+    blank, and only a stale or missing record carries a planned date."""
+    if last_training and last_training >= date.today() - timedelta(days=365):
+        return None
+    if last_training:
+        return last_training + timedelta(days=365)
+    return prior_planned
+
+
 def _worker_type(employee):
     return WORKER_TYPE_MAP.get(_clean(employee['work_type']).lower(), 'full-time employee')
 
@@ -686,28 +701,27 @@ def _fill_supplement(worksheet):
             remarks = note if not remarks else f'{remarks} | {note}'
             stats['retired'] += 1
 
-        manager = asset['employee_name'] or _carry(prior, 6) or DEFAULT_SECURITY_MANAGER
 
         rows.append({
-            2: _clean(asset['asset_tag']) or _carry(prior, 2),
+            2: _carry(prior, 2),                                   # FY25 ledger number
             3: _clean(asset['name']),
-            4: _carry(prior, 4, 'Normal'),
-            5: _carry(prior, 5, 'B'),
-            6: manager,
+            4: _carry(prior, 4),   # FY25
+            5: _carry(prior, 5),   # FY25
+            6: _carry(prior, 6),   # FY25 asset manager
             7: _carry(prior, 7, 'Cirque'),
-            8: _carry(prior, 8),
+            8: _carry(prior, 8, 'Cirque IT'),   # IT Operations Organization (required)
             9: _carry(prior, 9, PURPOSE_BY_CATEGORY.get(asset['category'], 'IT equipment')),
-            10: _carry(prior, 10, 'No'),
+            10: EXTERNAL_PUBLIC_DEFAULT,   # Masters External_Public; 'No' is not a valid member
             11: _carry(prior, 11, ASSET_TYPE_BY_CATEGORY.get(asset['category'], 'Physical Object')),
-            12: _carry(prior, 12, 'C'),
+            12: _carry(prior, 12),  # FY25
             13: _carry(prior, 13),
-            14: _carry(prior, 14, 'Physical'),
+            14: _carry(prior, 14),  # FY25
             15: _carry(prior, 15, _installation_location(asset)),
             16: _carry(prior, 16),
             17: _carry(prior, 17),
             18: _carry(prior, 18),
             19: _carry(prior, 19),
-            20: _carry(prior, 20),
+            20: _carry(prior, 20, 'No'),   # Training Requirement; F09-A auto-displays it
             21: _carry(prior, 21, 2),
             22: _carry(prior, 22, 1),
             23: _carry(prior, 23, 1),
@@ -734,6 +748,7 @@ def _fill_supplement(worksheet):
         row = {column: prior.get(column) for column in range(2, last_column + 1)
                if not (isinstance(prior.get(column), str) and str(prior.get(column)).startswith('='))}
         row[35] = note if not remarks else f'{remarks} | {note}'
+        row[10] = EXTERNAL_PUBLIC_DEFAULT
         for column in (31, 33):
             row[column] = _existing_date(row.get(column))
         rows.append(row)
@@ -774,13 +789,20 @@ def _fill_workers(worksheet):
         else:
             stats['without_training'] += 1
 
+        # Q/R/S are FY25-inventory carry-over. An FY25 row keeps whatever ALAP
+        # supplied, blanks included; only a worker with no FY25 row is filled
+        # from Tracker's current assignments.
         assigned = devices.get(employee['id'], {'pc': [], 'other': []})
-        pc_label = assigned['pc'][0][0] if assigned['pc'] else _carry(prior, 17, 'NA')
-        other_label = ', '.join(assigned['other']) if assigned['other'] else _carry(prior, 18, 'NA')
+        if prior is None:
+            pc_label = assigned['pc'][0][0] if assigned['pc'] else 'NA'
+            other_label = ', '.join(assigned['other']) if assigned['other'] else 'NA'
+        else:
+            pc_label = _carry(prior, 17)
+            other_label = _carry(prior, 18)
 
         rows.append({
             3: DEFAULT_COMPANY,
-            4: _carry(prior, 4, 'N/A'),
+            4: _carry(prior, 4),   # FY25 ALAP employee number
             5: _clean(employee['name']),
             6: _clean(employee['email']),
             8: _carry(prior, 8, _worker_type(employee)),
@@ -789,12 +811,12 @@ def _fill_workers(worksheet):
             11: _existing_date(_carry(prior, 11)) or CONTRACT_EXPIRE_PLACEHOLDER,
             12: last_training or _existing_date(_carry(prior, 12)),
             13: 'Pass' if last_training else _carry(prior, 13),
-            14: (last_training + timedelta(days=365)) if last_training else _existing_date(_carry(prior, 14)),
+            14: _planned_training_date(last_training, _existing_date(_carry(prior, 14))),
             15: _existing_date(_carry(prior, 15)),
-            16: _carry(prior, 16, DEFAULT_SECURITY_MANAGER),
+            16: _carry(prior, 16),  # FY25
             17: pc_label,
             18: other_label,
-            19: _carry(prior, 19, 'NA'),
+            19: _carry(prior, 19),  # FY25
             20: _carry(prior, 20, 'NA'),
             21: _carry(prior, 21, 'NA'),
             22: _carry(prior, 22, _clean(employee['name'])),
@@ -861,14 +883,14 @@ def _fill_partners(worksheet):
             4: _carry(prior, 4, _clean(vendor['vendor_type'])),
             5: _carry(prior, 5, 'IT'),
             6: _clean(vendor['service_description']) or _carry(prior, 6),
-            7: _carry(prior, 7, 'Cloud Based'),
+            7: _carry(prior, 7),   # FY25
             8: _carry(prior, 8, DEFAULT_SECURITY_MANAGER),
             9: _existing_date(_carry(prior, 9)),
             10: _existing_date(_carry(prior, 10)),
             11: vendor['last_review_date'] or _existing_date(_carry(prior, 11)),
             12: _carry(prior, 12, 'Pass' if vendor['assurance_status'] else None),
             13: vendor['next_review_date'] or _existing_date(_carry(prior, 13)),
-            14: _carry(prior, 14, 'none'),
+            14: _carry(prior, 14),  # FY25
             15: _carry(prior, 15, 3 if _clean(vendor['criticality']) in ('Critical', 'High') else 2),
             16: _carry(prior, 16, 1),
             18: _carry(prior, 18),
@@ -918,7 +940,7 @@ def _fill_software(worksheet):
             3: _clean(entry['software_name']),
             4: _clean(entry['common_version']) or _carry(prior, 4),
             5: _carry(prior, 5, _clean(entry['notes']) or 'Business / engineering tooling'),
-            6: _carry(prior, 6, DEFAULT_SECURITY_MANAGER),
+            6: _carry(prior, 6),   # FY25
             7: _carry(prior, 7),
             8: _carry(prior, 8),
             9: _license_type(entry['license_type']),

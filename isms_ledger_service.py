@@ -41,6 +41,25 @@ SUPPLEMENT_CATEGORIES = ('Laptop', 'Desktop', 'Workstation', 'Server', 'Computer
 
 RETIRED_ASSET_STATUSES = ('Retired', 'Disposed')
 
+# An asset only reaches F04C if something has seen it within this window.
+# "Seen" is the newest of the RMM heartbeat, the UniFi client record, the Intune
+# sync and the AD last-logon -- an asset with no agent still counts as live if
+# any other source has it. Assets with no signal from any source are excluded
+# rather than carried, so the ledger reflects kit actually in service.
+ONLINE_WITHIN_DAYS = 180
+
+# GREATEST ignores NULLs in Postgres, so this collapses to the newest signal
+# present. unifi_last_seen is stored as text and is not always a timestamp.
+LAST_SIGNAL_SQL = """
+        GREATEST(
+            a.last_seen,
+            (CASE WHEN a.unifi_last_seen ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                  THEN a.unifi_last_seen::timestamptz END),
+            a.intune_last_sync,
+            a.ad_last_logon::timestamptz
+        )
+"""
+
 DEFAULT_SECURITY_MANAGER = 'Chris Wren'
 DEFAULT_COMPANY = 'Cirque Corporation'
 
@@ -419,18 +438,32 @@ def _fetch(sql, params=None):
     return db.session.execute(db.text(sql), params or {}).mappings().all()
 
 
-def _load_assets():
+def _load_assets(*, stale=False):
+    """In-scope assets, split on whether anything has seen them recently.
+
+    ``stale=False`` returns the assets that belong on F04C; ``stale=True``
+    returns the ones excluded for having no signal inside ONLINE_WITHIN_DAYS
+    (including those that have never reported from any source).
+    """
+    comparison = '<' if stale else '>='
+    null_clause = 'OR {sig} IS NULL'.format(sig=LAST_SIGNAL_SQL) if stale else ''
     return _fetch(
         """
         SELECT a.id, a.asset_tag, a.name, a.category, a.status, a.location,
                a.serial_number, a.model, a.manufacturer, a.os_version,
-               e.name AS employee_name, e.department AS employee_department
+               e.name AS employee_name, e.department AS employee_department,
+               {signal} AS last_signal
         FROM asset a
         LEFT JOIN employee e ON e.id = a.employee_id
         WHERE a.category IN :categories
+          AND ({signal} {comparison} now() - make_interval(days => :window) {null_clause})
         ORDER BY a.name
-        """,
-        {'categories': tuple(SUPPLEMENT_CATEGORIES)},
+        """.format(
+            signal=LAST_SIGNAL_SQL,
+            comparison=comparison,
+            null_clause=null_clause,
+        ),
+        {'categories': tuple(SUPPLEMENT_CATEGORIES), 'window': ONLINE_WITHIN_DAYS},
     )
 
 
@@ -614,9 +647,23 @@ def _fill_supplement(worksheet):
 
     assets = _load_assets()
 
+    # Assets excluded for having no signal inside the window. A template row
+    # matching one of these must be dropped outright -- falling through to the
+    # carry-forward branch would put it straight back on the sheet, mislabelled
+    # as "no matching Tracker asset".
+    excluded = _load_assets(stale=True)
+    excluded_keys = {_key(asset['name']) for asset in excluded}
+    excluded_keys |= {
+        _key(asset['asset_tag']) for asset in excluded
+        if _key(asset['asset_tag']) not in ('', '0', 'NA')
+    }
+
     rows = []
     matched_keys = set()
-    stats = {'total': 0, 'new': 0, 'carried': 0, 'retired': 0, 'renamed': 0}
+    stats = {
+        'total': 0, 'new': 0, 'carried': 0, 'retired': 0, 'renamed': 0,
+        'excluded_offline': len(excluded),
+    }
 
     for asset in assets:
         key = _key(asset['name'])
@@ -678,6 +725,9 @@ def _fill_supplement(worksheet):
     # Template rows Tracker no longer knows about -- keep, stamp as retired.
     for key, prior in existing.items():
         if key in matched_keys:
+            continue
+        if key in excluded_keys or _key(prior.get(2)) in excluded_keys:
+            stats['excluded_from_template'] = stats.get('excluded_from_template', 0) + 1
             continue
         remarks = _carry(prior, 35)
         note = 'No matching Tracker asset at generation time - confirm still in service (renamed, retired, or a cloud service held outside the asset register)'
@@ -891,6 +941,9 @@ def _fill_worker_access(worksheet):
     last_column = 14  # N
     employees = {employee['id']: employee for employee in _load_employees()}
     devices = _load_assigned_devices()
+    # Column D is resolved against Supplement[Asset Name] by the sheet's
+    # XLOOKUP, so an endpoint excluded from F04C would render "Not Found".
+    on_supplement = {_key(asset['name']) for asset in _load_assets()}
 
     rows = []
     for employee_id, bucket in sorted(devices.items()):
@@ -898,7 +951,7 @@ def _fill_worker_access(worksheet):
         if employee is None:
             continue
         for _tag, asset_name in bucket['pc']:
-            if not asset_name:
+            if not asset_name or _key(asset_name) not in on_supplement:
                 continue
             rows.append({
                 1: _name_mail(employee['name'], employee['email']),
@@ -1025,6 +1078,8 @@ def ledger_coverage():
     assets = _load_assets()
     return {
         'assets': len(assets),
+        'assets_excluded_offline': len(_load_assets(stale=True)),
+        'online_window_days': ONLINE_WITHIN_DAYS,
         'assets_retired': sum(1 for a in assets if _clean(a['status']) in RETIRED_ASSET_STATUSES),
         'assets_unassigned': sum(1 for a in assets if not a['employee_name']),
         'employees': len(employees),

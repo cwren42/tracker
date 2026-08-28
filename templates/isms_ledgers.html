@@ -134,7 +134,7 @@
                     </tr>
                     <tr>
                         <td><div class="fw-semibold">F09-A Worker access</div></td>
-                        <td class="small">Device assignments from <code>asset.employee_id</code>.</td>
+                        <td class="small">Device assignments from <code>asset.employee_id</code>, plus partner-provided system accounts from <code>m365_user</code> (Microsoft 365). <span class="text-warning-emphasis">Accounts on other partner platforms and on customer-provided systems are not recorded in Tracker &mdash; see below.</span></td>
                         <td><span class="badge bg-success-subtle text-success-emphasis">Tracker</span></td>
                     </tr>
                     <tr>
@@ -170,12 +170,23 @@
     </div>
 </div>
 
+<div class="card mt-3 border-warning-subtle">
+    <div class="card-header bg-warning-subtle"><strong>Gap: partner- and customer-provided system accounts</strong></div>
+    <div class="card-body small">
+        <p>ALAP asks for every worker who uses a system <em>provided by a customer or business partner</em> to appear on F09A with their name and email, then on F09-A paired with that system and their account on it.</p>
+        <ul class="mb-0">
+            <li><strong>Covered.</strong> Every active employee is already on F09A with name and email. Microsoft 365 accounts are emitted on F09-A as <code>BP_Name</code> rows against the Microsoft partner row, with the UPN as the account ID and admin accounts marked <em>Adminstrator</em>.</li>
+            <li><strong>Not covered.</strong> Accounts on the other partner platforms &mdash; GitLab, Cadence, Altium, Cliosoft, Arena/Omnify, Asana, QuickBooks &mdash; and on any <em>customer</em>-provided system (a Dell or Lenovo portal an engineer was told to use) are not recorded anywhere in Tracker, so the generator cannot emit them. Those rows have to be added by hand, or a register built so they generate like the rest.</li>
+        </ul>
+    </div>
+</div>
+
 <div class="card mt-3">
     <div class="card-header"><strong>ALAP template revisions applied at generation</strong></div>
     <div class="card-body small">
         <p class="text-muted">ALAP issued a revision list against these ledgers. Each item is the same defect &mdash; row&nbsp;6 is correct and rows&nbsp;7+ were dragged out of step. They are applied every time the workbook is generated, so they hold for whichever template revision is uploaded and are a no-op on an already-corrected file.</p>
         <ul class="mb-0">
-            <li><strong>Importance formula</strong> (F02B, F04C, F08A) &mdash; <code>=MAX(L6:N[last row])</code> spans the whole table body instead of the row's own C/I/A triple, so one asset scored 4 drags every row above it to 4. Rewritten to <code>=MAX(L6:N6)</code> in the cells <em>and</em> in the table's stored calculated-column formula, which Excel otherwise re-broadcasts on open.</li>
+            <li><strong>Importance formula</strong> (F02B, F03A, F04C, F08A) &mdash; <code>=MAX(L6:N[last row])</code> spans the whole table body instead of the row's own C/I/A triple, so one asset scored 4 drags every row above it to 4. Rewritten to <code>=MAX(L6:N6)</code> in the cells <em>and</em> in the table's stored calculated-column formula, which Excel otherwise re-broadcasts on open.</li>
             <li><strong>F02-A area selection</strong> &mdash; the &ldquo;Area select&rdquo; dropdown sits in column&nbsp;E on row&nbsp;6 but column&nbsp;F from row&nbsp;7 down, with the dependent lookup one column out to match. Rows&nbsp;7+ are pulled back into line with row&nbsp;6 and the stray column&nbsp;G lookup is removed.</li>
             <li><strong>F09-A / F09-B column A</strong> &mdash; row&nbsp;6 validates against <code>Name_Mail</code> but rows&nbsp;7+ against <code>Worker_Name</code>. Both sheets' XLOOKUPs key on <em>Name (Mail)</em>, so the row-7+ rule rejected the only value that resolves. Now <code>Name_Mail</code> throughout.</li>
         </ul>

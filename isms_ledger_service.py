@@ -105,6 +105,7 @@ SHEET_PARTNERS = 'F06B BusinessPartner'
 SHEET_SOFTWARE = 'F08A Non-Std Software'
 SHEET_WORKER_ACCESS = 'F09-A'
 SHEET_ASSET_AREA = 'F02-A'
+SHEET_PROTOTYPE = 'F03A Asset - Prototype'
 SHEET_SOFTWARE_USERS = 'F09-B'
 SHEET_INFO = 'F02B Asset - Info'
 
@@ -258,9 +259,10 @@ def _shift_formula(formula, source_row, target_row):
 # table: one asset scored 4 drags every row above it to 4. ALAP's own wording:
 # "Incorrect: =MAX(L6:N[highest row]) / Correct: =MAX(L6:N6)".
 IMPORTANCE_FIXUPS = {
-    SHEET_INFO: {'column': 22, 'formula': '=MAX(S{row}:U{row})'},          # V
-    SHEET_SUPPLEMENT: {'column': 24, 'formula': '=MAX(U{row}:W{row})'},    # X
-    SHEET_SOFTWARE: {'column': 15, 'formula': '=MAX(L{row}:N{row})'},      # O
+    SHEET_INFO: {'column': 22, 'formula': '=MAX(S{row}:U{row})'},          # F02, V
+    SHEET_PROTOTYPE: {'column': 22, 'formula': '=MAX(S{row}:U{row})'},     # F03, V
+    SHEET_SUPPLEMENT: {'column': 24, 'formula': '=MAX(U{row}:W{row})'},    # F04, X
+    SHEET_SOFTWARE: {'column': 15, 'formula': '=MAX(L{row}:N{row})'},      # F08, O
 }
 
 
@@ -514,6 +516,34 @@ def _load_licenses():
         FROM license l
         WHERE l.status IS NULL OR l.status <> 'Retired'
         ORDER BY l.software_name
+        """
+    )
+
+
+def _load_partner_system_accounts():
+    """Accounts Cirque staff hold on a business-partner-provided system.
+
+    ALAP asks for these on F09-A: the worker, the partner system they were
+    instructed to use, and their account on it. Tracker only holds this for
+    Microsoft 365 (`m365_user`, linked to an employee and to the Microsoft row
+    on F06B). Accounts on the other partner platforms -- GitLab, Cadence,
+    Altium, Cliosoft, Arena/Omnify -- and on any customer-provided system are
+    not recorded anywhere in Tracker, so they cannot be emitted here.
+    """
+    return _fetch(
+        """
+        SELECT v.vendor_name,
+               e.name AS employee_name, e.email, e.sam_account_name,
+               e.department, e.start_date,
+               m.user_principal_name, m.is_admin
+        FROM m365_user m
+        JOIN employee e ON e.id = m.employee_id
+        JOIN soc2_vendor v ON v.vendor_name = 'Microsoft' AND v.is_active = TRUE
+        WHERE m.is_current = TRUE
+          AND m.account_enabled = TRUE
+          AND e.is_visible = TRUE
+          AND e.offboarded_at IS NULL
+        ORDER BY e.name
         """
     )
 
@@ -880,7 +910,26 @@ def _fill_worker_access(worksheet):
                 11: 'Assigned endpoint (Tracker asset register)',
             })
 
-    stats = {'total': _write_rows(worksheet, rows, last_column)}
+    # Partner-provided systems staff were instructed to use (ALAP's follow-up
+    # request). Column D must match Business_Partner_List[Business Partner Name]
+    # exactly -- the sheet's XLOOKUP resolves the partner's Auto_No from it.
+    partner_accounts = _load_partner_system_accounts()
+    for account in partner_accounts:
+        rows.append({
+            1: _name_mail(account['employee_name'], account['email']),
+            3: 'BP_Name',
+            4: _clean(account['vendor_name']),
+            6: _clean(account['user_principal_name']),
+            7: account['start_date'],
+            8: 'Adminstrator' if account['is_admin'] else 'User',
+            11: 'Microsoft 365 account (Entra ID, synced to Tracker)',
+        })
+
+    stats = {
+        'total': _write_rows(worksheet, rows, last_column),
+        'endpoints': len(rows) - len(partner_accounts),
+        'partner_systems': len(partner_accounts),
+    }
     return stats
 
 
@@ -944,6 +993,16 @@ def build_ledger_workbook(template_path=None):
     )
     _fix_importance_column(info_sheet, FIRST_DATA_ROW + info_rows - 1)
     summary['sheets']['F02B Information Assets (manual)'] = {'total': info_rows}
+
+    # F03A (prototypes) is likewise not Tracker-held -- Cirque files no
+    # prototype assets -- but carries the same Importance column.
+    prototype_sheet = workbook[SHEET_PROTOTYPE]
+    prototype_rows = sum(
+        1 for row in range(FIRST_DATA_ROW, prototype_sheet.max_row + 1)
+        if _clean(prototype_sheet.cell(row=row, column=3).value)
+    )
+    _fix_importance_column(prototype_sheet, max(FIRST_DATA_ROW, FIRST_DATA_ROW + prototype_rows - 1))
+    summary['sheets']['F03A Prototypes (manual)'] = {'total': prototype_rows}
 
     summary['revisions'] = _apply_validation_revisions(workbook)
 

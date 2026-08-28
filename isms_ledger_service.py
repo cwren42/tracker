@@ -1004,9 +1004,10 @@ def _fill_partners(worksheet):
                 existing.setdefault(key, snapshot)
 
     vendors = _load_vendors()
+    inspection_due = _next_quarter_start()
     rows = []
     matched_keys = set()
-    stats = {'total': 0, 'new': 0, 'carried': 0}
+    stats = {'total': 0, 'new': 0, 'carried': 0, 'renamed': 0}
 
     def _match_partner(vendor_key):
         """Prior rows name the tool, not the company ("Cadence Tools" for the
@@ -1028,7 +1029,10 @@ def _fill_partners(worksheet):
 
         rows.append({
             3: _clean(vendor['vendor_name']),
-            4: _carry(prior, 4, _clean(vendor['vendor_type'])),
+            # D is the partner's liaison department, which we do not hold --
+            # vendor_type is not that. ALAP marks it optional; leave it empty
+            # rather than filling it with the wrong thing.
+            4: None,
             5: _carry(prior, 5, 'IT'),
             6: _clean(vendor['service_description']) or _carry(prior, 6),
             7: _carry(prior, 7),   # FY25
@@ -1061,6 +1065,19 @@ def _fill_partners(worksheet):
                if not (isinstance(prior.get(column), str) and str(prior.get(column)).startswith('='))}
         for column in (9, 10, 11, 13, 19, 20):
             row[column] = _existing_date(row.get(column))
+        # FY25 filed these with our own company in "Business Partner Name" and
+        # the partner in "Contact Department at Business Partner". ALAP's guide
+        # is explicit that column C is the contracting party's official company
+        # name, so lift the partner name into C. Neither column is FY25
+        # carry-over, so correcting them is in scope.
+        partner_name = _clean(row.get(4))
+        if partner_name and _key(row.get(3)) == _key(DEFAULT_COMPANY):
+            row[3] = partner_name
+            row[4] = None
+            stats['renamed'] += 1
+        # No review is scheduled for these -- they are not in Tracker's vendor
+        # register -- so carry a due date rather than leaving the column empty.
+        row[13] = _existing_date(row.get(13)) or inspection_due
         row[26] = note if not remarks else f'{remarks} | {note}'
         row[5] = row.get(5) or 'IT'
         row[15] = row.get(15) or 2

@@ -26,6 +26,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import MultiCellRange
+from fnmatch import fnmatch
 
 from extensions import db
 
@@ -47,6 +48,15 @@ RETIRED_ASSET_STATUSES = ('Retired', 'Disposed')
 # any other source has it. Assets with no signal from any source are excluded
 # rather than carried, so the ledger reflects kit actually in service.
 ONLINE_WITHIN_DAYS = 180
+
+# Assets to keep off the ledger regardless of how live they are -- personal
+# machines, bench/test boxes, anything not a company information asset. Ledger
+# scope only: the asset stays untouched in Tracker. Case-insensitive, matched
+# against asset name or tag, and fnmatch globs are allowed (e.g. "IT-NUC*").
+# Editable at runtime via the `isms_ledger_excluded_assets` setting, one entry
+# per line, which replaces this default when set.
+LEDGER_EXCLUDED_ASSETS_DEFAULT = ('ChrisHome', 'ITWORKBENCH')
+LEDGER_EXCLUSION_SETTING = 'isms_ledger_excluded_assets'
 
 # GREATEST ignores NULLs in Postgres, so this collapses to the newest signal
 # present. unifi_last_seen is stored as text and is not always a timestamp.
@@ -442,6 +452,27 @@ def _fetch(sql, params=None):
     return db.session.execute(db.text(sql), params or {}).mappings().all()
 
 
+def ledger_exclusions():
+    """Patterns for assets held off the ledger. Setting overrides the default."""
+    from models import Setting
+    row = Setting.query.filter_by(key=LEDGER_EXCLUSION_SETTING).first()
+    if row is not None and _clean(row.value):
+        patterns = [line.strip() for line in str(row.value).replace(',', '\n').splitlines()]
+        return tuple(p for p in patterns if p)
+    return LEDGER_EXCLUDED_ASSETS_DEFAULT
+
+
+def _is_excluded(asset, patterns):
+    name, tag = _key(asset['name']), _key(asset['asset_tag'])
+    for pattern in patterns:
+        candidate = _key(pattern)
+        if name == candidate or (tag and tag == candidate):
+            return True
+        if fnmatch(name, candidate) or (tag and fnmatch(tag, candidate)):
+            return True
+    return False
+
+
 def _load_assets(*, stale=False):
     """In-scope assets, split on whether anything has seen them recently.
 
@@ -451,7 +482,7 @@ def _load_assets(*, stale=False):
     """
     comparison = '<' if stale else '>='
     null_clause = 'OR {sig} IS NULL'.format(sig=LAST_SIGNAL_SQL) if stale else ''
-    return _fetch(
+    rows = _fetch(
         """
         SELECT a.id, a.asset_tag, a.name, a.category, a.status, a.location,
                a.serial_number, a.model, a.manufacturer, a.os_version,
@@ -469,6 +500,10 @@ def _load_assets(*, stale=False):
         ),
         {'categories': tuple(SUPPLEMENT_CATEGORIES), 'window': ONLINE_WITHIN_DAYS},
     )
+    patterns = ledger_exclusions()
+    if not patterns:
+        return rows
+    return [row for row in rows if not _is_excluded(row, patterns)]
 
 
 def _load_employees():
@@ -667,6 +702,7 @@ def _fill_supplement(worksheet):
     # carry-forward branch would put it straight back on the sheet, mislabelled
     # as "no matching Tracker asset".
     excluded = _load_assets(stale=True)
+    exclusion_patterns = ledger_exclusions()
     excluded_keys = {_key(asset['name']) for asset in excluded}
     excluded_keys |= {
         _key(asset['asset_tag']) for asset in excluded
@@ -678,6 +714,7 @@ def _fill_supplement(worksheet):
     stats = {
         'total': 0, 'new': 0, 'carried': 0, 'retired': 0, 'renamed': 0,
         'excluded_offline': len(excluded),
+        'excluded_by_list': 0,
     }
 
     for asset in assets:
@@ -740,7 +777,8 @@ def _fill_supplement(worksheet):
     for key, prior in existing.items():
         if key in matched_keys:
             continue
-        if key in excluded_keys or _key(prior.get(2)) in excluded_keys:
+        if (key in excluded_keys or _key(prior.get(2)) in excluded_keys
+                or _is_excluded({'name': key, 'asset_tag': prior.get(2)}, exclusion_patterns)):
             stats['excluded_from_template'] = stats.get('excluded_from_template', 0) + 1
             continue
         remarks = _carry(prior, 35)

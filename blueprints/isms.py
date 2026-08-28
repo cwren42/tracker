@@ -954,6 +954,8 @@ def ledgers():
         template=template,
         coverage=coverage,
         template_dir=str(isms_ledger_service.LEDGER_TEMPLATE_DIR),
+        exclusions=isms_ledger_service.ledger_exclusions(),
+        exclusion_setting=isms_ledger_service.LEDGER_EXCLUSION_SETTING,
     )
 
 

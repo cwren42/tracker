@@ -569,6 +569,76 @@ def _load_assigned_devices():
     return devices
 
 
+def _load_asset_operations():
+    """Per-asset operational evidence for F04C's System Operation Record and
+    inspection columns: last patch installed, last Defender sync, and open
+    Critical/High findings."""
+    rows = _fetch(
+        """
+        SELECT a.id,
+               (SELECT MAX(p.installed_on)::date
+                  FROM rmm_patch p JOIN rmm_agent g ON g.agent_id = p.agent_id
+                 WHERE g.asset_id = a.id) AS last_patch,
+               (SELECT MAX(v.synced_at)::date
+                  FROM device_vulnerability v WHERE v.asset_id = a.id) AS last_scan,
+               (SELECT COUNT(*) FROM device_vulnerability v
+                 WHERE v.asset_id = a.id AND v.status = 'Open'
+                   AND v.severity = 'Critical') AS open_critical,
+               (SELECT COUNT(*) FROM device_vulnerability v
+                 WHERE v.asset_id = a.id AND v.status = 'Open'
+                   AND v.severity = 'High') AS open_high
+        FROM asset a
+        WHERE a.category IN :categories
+        """,
+        {'categories': tuple(SUPPLEMENT_CATEGORIES)},
+    )
+    return {row['id']: row for row in rows}
+
+
+def _next_quarter_start(today=None):
+    today = today or date.today()
+    quarter_month = ((today.month - 1) // 3 + 1) * 3 + 1
+    if quarter_month > 12:
+        return date(today.year + 1, 1, 1)
+    return date(today.year, quarter_month, 1)
+
+
+# F04C column M. ALAP: "Restrictions on members and locations authorized to use
+# the asset, etc."
+def _permitted_scope(asset, is_cloud=False):
+    if is_cloud:
+        return ('Licensed Cirque users only; access via corporate identity '
+                '(Entra ID) with multi-factor authentication.')
+    if asset['category'] in ('Server', 'Computer'):
+        return ('IT administrators only. Cirque server room; remote administration '
+                'over the company VPN.')
+    if not asset['employee_name']:
+        return 'IT department only; held as unissued stock at a Cirque site.'
+    return ('Assigned user only. Cirque offices and approved remote locations '
+            'over the company VPN.')
+
+
+# F04C column AD. Factual record of the operational activity actually run
+# against the asset -- ALAP asks for "records of activities such as
+# vulnerability response".
+def _system_operation_record(operations):
+    parts = []
+    last_patch = operations.get('last_patch') if operations else None
+    last_scan = operations.get('last_scan') if operations else None
+    if last_patch:
+        parts.append(f'Patch management via CirqueRMM agent; last update installed {last_patch}.')
+    else:
+        parts.append('Patch management via CirqueRMM agent.')
+    if last_scan:
+        parts.append(
+            f'Microsoft Defender vulnerability assessment, last synchronised {last_scan}: '
+            f"{operations['open_critical']} open Critical, {operations['open_high']} open High, "
+            'tracked to remediation.')
+    else:
+        parts.append('Not yet enrolled in Defender vulnerability assessment.')
+    return ' '.join(parts)
+
+
 def _load_vendors():
     return _fetch(
         """
@@ -708,6 +778,13 @@ def _fill_supplement(worksheet):
     # as "no matching Tracker asset".
     excluded = _load_assets(stale=True)
     exclusion_patterns = ledger_exclusions()
+    operations = _load_asset_operations()
+    inspection_due = _next_quarter_start()
+    # ALAP: "Continuous Defender vulnerability assessment" is the inspection of
+    # record. No grade is asserted -- ALAP defines no scoring yardstick, and a
+    # self-assigned score would be an invention rather than evidence.
+    inspection_result = ('Continuous Microsoft Defender vulnerability assessment; '
+                         'findings tracked to remediation.')
     excluded_keys = {_key(asset['name']) for asset in excluded}
     excluded_keys |= {
         _key(asset['asset_tag']) for asset in excluded
@@ -744,6 +821,9 @@ def _fill_supplement(worksheet):
             stats['retired'] += 1
 
 
+        asset_ops = operations.get(asset['id'])
+        last_scan = asset_ops.get('last_scan') if asset_ops else None
+
         rows.append({
             2: _carry(prior, 2),                                   # FY25 ledger number
             3: _clean(asset['name']),
@@ -756,10 +836,10 @@ def _fill_supplement(worksheet):
             10: EXTERNAL_PUBLIC_DEFAULT,   # Masters External_Public; 'No' is not a valid member
             11: _carry(prior, 11, ASSET_TYPE_BY_CATEGORY.get(asset['category'], 'Physical Object')),
             12: _carry(prior, 12),  # FY25
-            13: _carry(prior, 13),
+            13: _carry(prior, 13, _permitted_scope(asset)),
             14: _carry(prior, 14),  # FY25
             15: _carry(prior, 15, _installation_location(asset)),
-            16: _carry(prior, 16),
+            16: _carry(prior, 16, 'None'),
             17: _carry(prior, 17),
             18: _carry(prior, 18),
             19: _carry(prior, 19),
@@ -769,11 +849,12 @@ def _fill_supplement(worksheet):
             23: _carry(prior, 23, 1),
             25: _carry(prior, 25, 2),
             26: _carry(prior, 26, 3),
-            29: _carry(prior, 29),
-            30: _carry(prior, 30),
-            31: _existing_date(_carry(prior, 31)),
-            32: _carry(prior, 32),
-            33: _existing_date(_carry(prior, 33)),
+            29: _carry(prior, 29),   # FY25
+            30: _carry(prior, 30, _system_operation_record(asset_ops)),
+            31: _existing_date(_carry(prior, 31)) or last_scan,
+            32: _carry(prior, 32, inspection_result if last_scan else None),
+            33: (_existing_date(_carry(prior, 33))
+                 or (last_scan + timedelta(days=90) if last_scan else inspection_due)),
             34: _carry(prior, 34),
             35: remarks,
         })
@@ -797,6 +878,16 @@ def _fill_supplement(worksheet):
         row[11] = row.get(11) or ('SaaS' if is_cloud else 'Physical Object')
         row[15] = row.get(15) or ('Cloud service environment' if is_cloud else 'Cirque SLC office')
         row[20] = row.get(20) or 'No'
+        row[13] = row.get(13) or _permitted_scope(
+            {'category': 'Other', 'employee_name': None}, is_cloud=is_cloud)
+        row[16] = row.get(16) or ('SLA' if is_cloud else 'None')
+        row[30] = row.get(30) or (
+            'Vendor-managed service; patching and monitoring performed by the provider under contract.'
+            if is_cloud else 'No Tracker operational record at generation time.')
+        # No inspection has been performed on these, so no date or result is
+        # asserted -- only the scheduled next one. ALAP requires cloud services
+        # to be audited, so the gap is left visible rather than filled in.
+        row[33] = _existing_date(row.get(33)) or inspection_due
         for column in (31, 33):
             row[column] = _existing_date(row.get(column))
         rows.append(row)

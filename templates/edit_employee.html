@@ -56,6 +56,29 @@
                         </div>
                     </div>
 
+                    <!-- Direct upload: a plain form POST, no JavaScript.
+                         The crop tool relies on canvas + fetch; when any part of
+                         that chain fails it does so silently, so this is the
+                         path that always works. -->
+                    <form method="POST"
+                          action="{{ url_for('employees.upload_employee_photo', employee_id=employee.id) }}"
+                          enctype="multipart/form-data"
+                          class="d-flex align-items-end gap-2 mt-3 p-2 rounded"
+                          style="background:var(--surface-2,#f1f5f9);">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="flex-grow-1">
+                            <label class="form-label small text-muted mb-1" for="photo-direct">
+                                Or upload directly (no cropping)
+                            </label>
+                            <input class="form-control form-control-sm" type="file"
+                                   id="photo-direct" name="photo"
+                                   accept=".jpg,.jpeg,.png,.gif,.webp" required>
+                        </div>
+                        <button class="btn btn-primary btn-sm" type="submit">
+                            <i class="bi bi-upload"></i> Upload
+                        </button>
+                    </form>
+
                     <!-- State B: crop tool -->
                     <div id="photo-cropper" style="display:none;">
                         <div class="d-flex flex-wrap gap-4 align-items-start">

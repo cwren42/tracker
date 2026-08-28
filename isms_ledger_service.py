@@ -58,6 +58,11 @@ ONLINE_WITHIN_DAYS = 180
 LEDGER_EXCLUDED_ASSETS_DEFAULT = ('ChrisHome', 'ITWORKBENCH')
 LEDGER_EXCLUSION_SETTING = 'isms_ledger_excluded_assets'
 
+# Cloud services carried on F04C rather than in Tracker's asset register. ALAP's
+# F02 supplement is explicit that a cloud service storing customer or derived
+# data is registered as an F04 auxiliary asset, so these belong on the sheet.
+CLOUD_SERVICE_NAMES = {'OFFICE365', 'ASANA', 'TEAMVIEWER', 'PAYLOCITY'}
+
 # GREATEST ignores NULLs in Postgres, so this collapses to the newest signal
 # present. unifi_last_seen is stored as text and is not always a timestamp.
 LAST_SIGNAL_SQL = """
@@ -787,6 +792,11 @@ def _fill_supplement(worksheet):
                if not (isinstance(prior.get(column), str) and str(prior.get(column)).startswith('='))}
         row[35] = note if not remarks else f'{remarks} | {note}'
         row[10] = EXTERNAL_PUBLIC_DEFAULT
+        is_cloud = key in CLOUD_SERVICE_NAMES
+        row[8] = row.get(8) or 'Cirque IT'
+        row[11] = row.get(11) or ('SaaS' if is_cloud else 'Physical Object')
+        row[15] = row.get(15) or ('Cloud service environment' if is_cloud else 'Cirque SLC office')
+        row[20] = row.get(20) or 'No'
         for column in (31, 33):
             row[column] = _existing_date(row.get(column))
         rows.append(row)
@@ -961,6 +971,12 @@ def _fill_partners(worksheet):
         for column in (9, 10, 11, 13, 19, 20):
             row[column] = _existing_date(row.get(column))
         row[26] = note if not remarks else f'{remarks} | {note}'
+        row[5] = row.get(5) or 'IT'
+        row[15] = row.get(15) or 2
+        row[16] = row.get(16) or 1
+        row[23] = row.get(23) or 2
+        row[24] = row.get(24) or 'Yes'
+        row[25] = row.get(25) or 'Yes'
         rows.append(row)
         stats['carried'] += 1
 

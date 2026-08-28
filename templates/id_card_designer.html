@@ -196,7 +196,8 @@ const EMPLOYEES = [
         photoUrl: {% if emp.photo %}{{ photo_url(emp.photo) | tojson }}{% else %}null{% endif %},
         // Partner staff carry their own organization's logo and name.
         badgeCompany: {{ (badge_profiles[emp.id][0] if badge_profiles and emp.id in badge_profiles else company_name) | tojson }},
-        badgeLogoUrl: {{ (badge_profiles[emp.id][1] if badge_profiles and emp.id in badge_profiles else company_logo_url) | tojson }}
+        badgeLogoUrl: {{ (badge_profiles[emp.id][1] if badge_profiles and emp.id in badge_profiles else company_logo_url) | tojson }},
+        badgeOrg: {{ (badge_profiles[emp.id][3] if badge_profiles and emp.id in badge_profiles else '__default__') | tojson }}
     }{% if not loop.last %},{% endif %}
     {% endfor %}
 ];
@@ -276,12 +277,31 @@ const EMPLOYEES = [
                 </form>
             </details>
             <div id="logo-controls" style="display:none">
+                <!-- Each organization's logo has its own shape, so scale,
+                     position and rotation are stored and edited per org. -->
+                <label class="fw-semibold">Editing badge for</label>
+                <select id="ctrl-org" class="form-select form-select-sm mb-2" onchange="selectOrg(this.value)">
+                    {% for o in editable_orgs or [] %}
+                    <option value="{{ o.key }}">{{ o.label }}</option>
+                    {% endfor %}
+                </select>
+
                 <label>Scale (<span id="logo-scale-val">100</span>%)</label>
-                <input type="range" id="ctrl-logo-scale" min="0.5" max="3" step="0.1" value="1" oninput="applyConfig(); document.getElementById('logo-scale-val').textContent=Math.round(this.value*100)">
+                <input type="range" id="ctrl-logo-scale" min="0.1" max="3" step="0.05" value="1" oninput="applyConfig(); document.getElementById('logo-scale-val').textContent=Math.round(this.value*100)">
                 <label>X Position (<span id="logo-x-val">-10</span>mm)</label>
                 <input type="range" id="ctrl-logo-x" min="-50" max="50" step="1" value="-10" oninput="applyConfig(); document.getElementById('logo-x-val').textContent=this.value">
                 <label>Y Position (<span id="logo-y-val">2</span>mm)</label>
                 <input type="range" id="ctrl-logo-y" min="-50" max="80" step="1" value="2" oninput="applyConfig(); document.getElementById('logo-y-val').textContent=this.value">
+                <label>Rotation (<span id="logo-rotate-val">0</span>&deg;)</label>
+                <input type="range" id="ctrl-logo-rotate" min="-180" max="180" step="90" value="0" oninput="applyConfig(); document.getElementById('logo-rotate-val').textContent=this.value">
+                <div class="d-flex gap-1 mb-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" onclick="setRotate(-90)">&#8630; Down left side</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" onclick="setRotate(0)">Flat</button>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm w-100 mb-2" onclick="saveOrgLayout()">
+                    <i class="bi bi-save"></i> Save layout for this organization
+                </button>
+                <div id="org-save-msg" class="small text-success" style="display:none"></div>
                 <button type="button" class="btn btn-outline-secondary btn-sm mt-1 w-100" onclick="removeLogo()">
                     <i class="bi bi-x-circle"></i> Remove Logo
                 </button>
@@ -364,6 +384,16 @@ const EMPLOYEES = [
 const DEFAULT_LOGO_URL = {{ company_logo_url | tojson }};
 let logoDataUrl = DEFAULT_LOGO_URL;
 
+// Per-organization logo layout, loaded from the server so it is shared across
+// machines rather than living in one browser's localStorage.
+const ORG_LAYOUTS = {
+    {% for o in editable_orgs or [] %}{{ o.key | tojson }}: {{ o.layout | tojson }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+};
+let currentOrg = '__default__';
+const LAYOUT_SAVE_URL = {{ url_for('employees.save_badge_layout') | tojson }};
+const CSRF_TOKEN = {{ csrf_token() | tojson }};
+
 let cfg = {
     orientation: 'vertical',
     bgColor: '#ffffff',
@@ -386,6 +416,61 @@ try {
         if (savedLogo) logoDataUrl = savedLogo;
     }
 } catch(e) {}
+
+// ── Per-organization logo layout ────────────────────────────────────────────
+function layoutFor(org) {
+    return ORG_LAYOUTS[org] || { scale: 1, x: -10, y: 2, rotate: 0 };
+}
+
+function selectOrg(org) {
+    currentOrg = org;
+    const L = layoutFor(org);
+    const set = (id, v, lbl, fmt) => {
+        const e = document.getElementById(id); if (!e) return;
+        e.value = v;
+        const s = document.getElementById(lbl); if (s) s.textContent = fmt ? fmt(v) : v;
+    };
+    set('ctrl-logo-scale',  L.scale,  'logo-scale-val',  v => Math.round(v * 100));
+    set('ctrl-logo-x',      L.x,      'logo-x-val');
+    set('ctrl-logo-y',      L.y,      'logo-y-val');
+    set('ctrl-logo-rotate', L.rotate, 'logo-rotate-val');
+    applyConfig();
+}
+
+function setRotate(deg) {
+    const e = document.getElementById('ctrl-logo-rotate');
+    if (e) { e.value = deg; document.getElementById('logo-rotate-val').textContent = deg; }
+    applyConfig();
+}
+
+// Mirror the live control values into the selected organization's layout so the
+// preview updates as you drag, before anything is saved.
+function captureOrgLayout() {
+    const num = id => parseFloat((document.getElementById(id) || {}).value);
+    ORG_LAYOUTS[currentOrg] = {
+        scale:  isNaN(num('ctrl-logo-scale'))  ? 1   : num('ctrl-logo-scale'),
+        x:      isNaN(num('ctrl-logo-x'))      ? -10 : num('ctrl-logo-x'),
+        y:      isNaN(num('ctrl-logo-y'))      ? 2   : num('ctrl-logo-y'),
+        rotate: isNaN(num('ctrl-logo-rotate')) ? 0   : num('ctrl-logo-rotate')
+    };
+}
+
+function saveOrgLayout() {
+    captureOrgLayout();
+    const L = ORG_LAYOUTS[currentOrg];
+    const fd = new FormData();
+    fd.append('org', currentOrg);
+    fd.append('scale', L.scale); fd.append('x', L.x);
+    fd.append('y', L.y);         fd.append('rotate', L.rotate);
+    fetch(LAYOUT_SAVE_URL, { method: 'POST', headers: { 'X-CSRFToken': CSRF_TOKEN }, body: fd })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(() => {
+            const m = document.getElementById('org-save-msg');
+            m.textContent = 'Saved.'; m.style.display = '';
+            setTimeout(() => { m.style.display = 'none'; }, 2500);
+        })
+        .catch(e => alert('Could not save layout: ' + e.message));
+}
 
 // Apply loaded config to controls
 function syncControlsToState() {
@@ -426,6 +511,11 @@ function buildCard(emp) {
     const manualLogo = (logoDataUrl && logoDataUrl !== DEFAULT_LOGO_URL) ? logoDataUrl : null;
     const cardLogo    = manualLogo || emp.badgeLogoUrl || logoDataUrl;
     const cardCompany = emp.badgeCompany || cfg.companyName;
+    // Layout comes from the card's own organization, so Cirque and partner
+    // badges can be positioned independently in the same batch.
+    const orgKey = (emp.badgeOrg && ORG_LAYOUTS[emp.badgeOrg]) ? emp.badgeOrg : '__default__';
+    const L = layoutFor(orgKey);
+    const rot = L.rotate ? ` transform:rotate(${L.rotate}deg); transform-origin:center center;` : '';
 
     let inner = '';
 
@@ -445,7 +535,7 @@ function buildCard(emp) {
         // ── Vertical normal ──
         // Logo watermark: direct <img> absolutely positioned (matches original exactly)
         const logoWm = cardLogo
-            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${L.x}mm;top:${L.y}mm;width:${(80*L.scale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;${rot}">`
             : '';
 
         const photoEl = emp.photoUrl
@@ -468,7 +558,7 @@ function buildCard(emp) {
     } else {
         // ── Horizontal normal ──
         const logoWm = cardLogo
-            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${cfg.logoOffsetX}mm;top:${cfg.logoOffsetY}mm;width:${(80*cfg.logoScale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;">`
+            ? `<img src="${cardLogo}" alt="" style="position:absolute;left:${L.x}mm;top:${L.y}mm;width:${(80*L.scale).toFixed(1)}mm;object-fit:contain;z-index:1;opacity:0.95;${rot}">`
             : '';
 
         const photoEl = emp.photoUrl
@@ -505,6 +595,9 @@ function applyConfig() {
     cfg.textColor   = el('ctrl-textcolor')?.value ?? cfg.textColor;
     cfg.companyName = el('ctrl-company')?.value ?? cfg.companyName;
     cfg.logoScale   = parseFloat(el('ctrl-logo-scale')?.value) || cfg.logoScale;
+    // Keep the selected organization's layout in step with the sliders so the
+    // preview reflects the edit before it is saved.
+    if (el('ctrl-org')) captureOrgLayout();
     cfg.logoOffsetX = parseInt(el('ctrl-logo-x')?.value) || cfg.logoOffsetX;
     cfg.logoOffsetY = parseInt(el('ctrl-logo-y')?.value) || cfg.logoOffsetY;
     if (el('ctrl-textcolor-val')) el('ctrl-textcolor-val').textContent = cfg.textColor;

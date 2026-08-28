@@ -1451,17 +1451,39 @@ def _badge_logo_map():
         return {}
 
 
+# Layout of the logo on the card, per organization. A partner logo rarely has
+# the same aspect ratio as ours, so scale/position/rotation have to be settable
+# independently or one organization's logo overflows the card.
+BADGE_LAYOUT_DEFAULT = {'scale': 1.0, 'x': -10, 'y': 2, 'rotate': 0}
+
+
+def _badge_entry(department):
+    """The badge_logo_map entry matching this department, or None."""
+    key = (department or '').strip().lower()
+    for name, cfg in _badge_logo_map().items():
+        if name.strip().lower() == key:
+            return name, cfg
+    return None, None
+
+
+def _badge_layout(entry):
+    layout = dict(BADGE_LAYOUT_DEFAULT)
+    for field in layout:
+        if entry and entry.get(field) is not None:
+            try:
+                layout[field] = float(entry[field])
+            except (TypeError, ValueError):
+                pass
+    return layout
+
+
 def _badge_profile_for(employee, default_company, default_logo_url):
-    """(company_name, logo_url) for this employee's badge."""
-    mapping = _badge_logo_map()
-    key = (employee.department or '').strip()
-    entry = None
-    for name, cfg in mapping.items():
-        if name.strip().lower() == key.lower():
-            entry = cfg
-            break
+    """(company_name, logo_url, layout) for this employee's badge."""
+    name, entry = _badge_entry(employee.department)
     if not entry:
-        return default_company, default_logo_url
+        # Unmatched staff use the house badge, which is itself editable.
+        return (default_company, default_logo_url,
+                _badge_layout(_badge_logo_map().get('__default__')), '__default__')
     filename = (entry.get('logo') or '').strip()
     logo_url = default_logo_url
     if filename:
@@ -1469,7 +1491,42 @@ def _badge_profile_for(employee, default_company, default_logo_url):
                                 BADGE_LOGO_DIR, filename)
         if os.path.exists(abs_path):
             logo_url = url_for('static', filename=f'images/{BADGE_LOGO_DIR}/{filename}')
-    return (entry.get('company') or default_company), logo_url
+    return ((entry.get('company') or default_company), logo_url,
+            _badge_layout(entry), name)
+
+
+@bp.route('/employees/id-cards/logo-layout', methods=['POST'])
+@login_required
+@manager_required
+@license_required
+def save_badge_layout():
+    """Persist the logo scale/position/rotation for one organization."""
+    import json as _json
+    org = (request.form.get('org') or '').strip()
+    if not org:
+        return jsonify(ok=False, error='organization required'), 400
+
+    mapping = _badge_logo_map()
+    match = next((n for n in mapping if n.strip().lower() == org.lower()), org)
+    entry = dict(mapping.get(match) or {})
+    for field, caster in (('scale', float), ('x', float), ('y', float), ('rotate', float)):
+        raw = request.form.get(field)
+        if raw not in (None, ''):
+            try:
+                entry[field] = caster(raw)
+            except ValueError:
+                pass
+    entry.setdefault('company', org)
+    mapping[match] = entry
+
+    row = Setting.query.filter_by(key=BADGE_LOGO_SETTING).first()
+    if row is None:
+        row = Setting(key=BADGE_LOGO_SETTING)
+        db.session.add(row)
+    row.value = _json.dumps(mapping, indent=2)
+    db.session.commit()
+    current_app.logger.info('badge layout saved for %s: %s', match, entry)
+    return jsonify(ok=True, org=match, layout=_badge_layout(entry))
 
 
 @bp.route('/employees/id-cards/logo', methods=['POST'])
@@ -1546,13 +1603,30 @@ def id_card_designer():
     default_company = company_name.value if company_name else 'Cirque Corporation'
     badge_profiles = {e.id: _badge_profile_for(e, default_company, company_logo_url)
                       for e in employees}
+    # Organizations that can be selected and edited: the default (everyone not
+    # matched by a partner entry) plus each configured partner.
+    mapping = _badge_logo_map()
+    editable_orgs = [{'key': '__default__', 'label': f'{default_company} (default)',
+                      'logo': company_logo_url,
+                      'layout': _badge_layout(mapping.get('__default__'))}]
+    for name, cfg in sorted(mapping.items()):
+        if name == '__default__':
+            continue
+        filename = (cfg.get('logo') or '').strip()
+        logo_url = (url_for('static', filename=f'images/{BADGE_LOGO_DIR}/{filename}')
+                    if filename and os.path.exists(os.path.join(
+                        current_app.root_path, 'static', 'images', BADGE_LOGO_DIR, filename))
+                    else None)
+        editable_orgs.append({'key': name, 'label': name, 'logo': logo_url,
+                              'layout': _badge_layout(cfg)})
     known_orgs = sorted({(e.department or '').strip() for e in employees
                          if (e.department or '').strip()})
     return render_template('id_card_designer.html', employees=employees,
                            company_name=default_company,
                            company_logo_url=company_logo_url,
                            badge_profiles=badge_profiles,
-                           badge_logo_map=_badge_logo_map(),
+                           badge_logo_map=mapping,
+                           editable_orgs=editable_orgs,
                            known_orgs=known_orgs,
                            locations=locations)
 
@@ -1580,4 +1654,4 @@ def employee_id_card(employee_id):
                            badge_profiles={employee.id: _badge_profile_for(
                                employee, default_company, company_logo_url)},
                            badge_logo_map=_badge_logo_map(),
-                           known_orgs=[])
+                           editable_orgs=[], known_orgs=[])

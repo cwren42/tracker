@@ -789,13 +789,24 @@ def _fill_workers(worksheet):
         else:
             stats['without_training'] += 1
 
-        # ALAP marks Q/R/S as FY25-inventory carry-over, but the FY25 laptops are
-        # machines since replaced in the annual refresh, so the carried value
-        # names hardware the worker no longer has. Current Tracker assignment
-        # wins here and the FY25 value is only a fallback. The primary PC is the
-        # most recently seen one, not the alphabetically first.
+        # ALAP marks Q/R/S as FY25-inventory carry-over, but the annual refresh
+        # means the carried laptop is often one the worker no longer has. So:
+        # keep the FY25 machine while they still actively hold it, and fall to
+        # their newest-seen machine once it is gone (replaced or retired).
+        #
+        # Picking "newest seen" unconditionally is not an option -- for someone
+        # holding several machines that all heartbeat constantly the winner
+        # churns between generations, and a ledger column must not move on its
+        # own between filings.
         assigned = devices.get(employee['id'], {'pc': [], 'other': []})
-        pc_label = assigned['pc'][0][0] if assigned['pc'] else _carry(prior, 17, 'NA')
+        held_tags = {tag for tag, _name in assigned['pc'] if tag}
+        fy25_pc = _clean(_carry(prior, 17))
+        if fy25_pc and fy25_pc in held_tags:
+            pc_label = fy25_pc
+        elif assigned['pc']:
+            pc_label = assigned['pc'][0][0]
+        else:
+            pc_label = fy25_pc or 'NA'
         other_label = ', '.join(assigned['other']) if assigned['other'] else _carry(prior, 18, 'NA')
 
         rows.append({

@@ -591,9 +591,9 @@ def _load_employees():
                e.ad_enabled, e.offboarded_at
         FROM employee e
         WHERE e.is_visible = TRUE AND e.offboarded_at IS NULL
-          -- Service accounts and shared mailboxes are not workers; they must
-          -- never reach the ISMS worker ledger even if made visible.
-          AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared'))
+          -- Service accounts, shared mailboxes and partner staff are not our
+          -- workers and must never reach the ledger even if made visible.
+          AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared', 'partner'))
         ORDER BY e.name
         """
     )
@@ -792,6 +792,7 @@ def _load_partner_system_accounts():
           AND m.account_enabled = TRUE
           AND e.is_visible = TRUE
           AND e.offboarded_at IS NULL
+          AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared', 'partner'))
         ORDER BY e.name
         """
     )
@@ -1111,7 +1112,8 @@ def _fill_workers(worksheet):
         """SELECT a.asset_tag, e.name AS holder
              FROM asset a JOIN employee e ON e.id = a.employee_id
             WHERE a.asset_tag IS NOT NULL AND a.asset_tag <> ''
-              AND e.is_visible = TRUE AND e.offboarded_at IS NULL"""):
+              AND e.is_visible = TRUE AND e.offboarded_at IS NULL
+              AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared', 'partner'))"""):
         reassigned[_key(row['asset_tag'])] = row['holder']
 
     for key, prior in existing.items():

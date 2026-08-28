@@ -1441,7 +1441,8 @@ def _eval_compliance_alerts(con, rules_by_type):
                       (SELECT MAX(r.training_date) FROM soc2_security_training_record r
                         WHERE r.employee_id = e.id) AS last_training
                  FROM employee e
-                WHERE e.is_visible = true AND e.offboarded_at IS NULL"""
+                WHERE e.is_visible = true AND e.offboarded_at IS NULL
+                  AND (e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared', 'partner'))"""
         ).fetchall()
     except Exception as exc:
         logger.debug(f'compliance: worker query failed ({exc})')

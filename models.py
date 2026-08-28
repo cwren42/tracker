@@ -62,6 +62,20 @@ class AzureIntegrationConfig(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+# Account types that are not our own people and must never appear in a ledger,
+# an evidence pack or a headcount:
+#   service - runs something (gitlab-runner, Scans, Darth Vader...)
+#   shared  - a shared mailbox or non-person directory object
+#   partner - external staff present only so their access badge can be printed
+#             (Netstar). They are real people, but not Cirque workers.
+NON_REPORTABLE_ACCOUNT_TYPES = ('service', 'shared', 'partner')
+
+# Same rule for the raw-SQL call sites. `e` is the employee alias.
+REPORTABLE_EMPLOYEE_SQL = (
+    "(e.account_type IS NULL OR e.account_type NOT IN ('service', 'shared', 'partner'))"
+)
+
+
 class Employee(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -102,6 +116,13 @@ class Employee(db.Model):
     # distinction implicitly, which conflated departures with service accounts.
     account_type = db.Column(db.String(20))
     assets = db.relationship('Asset', backref='assigned_employee', lazy=True)
+
+    @classmethod
+    def reportable(cls):
+        """Employees that count as our own people for ledgers and reports."""
+        return cls.query.filter(
+            db.or_(cls.account_type.is_(None),
+                   ~cls.account_type.in_(NON_REPORTABLE_ACCOUNT_TYPES)))
 
 class Asset(db.Model):
     def restore_asset_108():

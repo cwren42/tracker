@@ -214,7 +214,8 @@ def employees():
     locations = [loc[0] for loc in all_locations]
     
     # Calculate statistics
-    total_employees = Employee.query.filter(Employee.is_visible == True).count()
+    # Partner staff and service accounts are not our headcount.
+    total_employees = Employee.reportable().filter(Employee.is_visible == True).count()
     total_assets_assigned = db.session.query(Asset).filter(Asset.employee_id.isnot(None)).count()
     total_licenses_assigned = LicenseAssignment.query.filter_by(status='Active').filter(
         LicenseAssignment.employee_id.isnot(None)

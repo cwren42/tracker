@@ -109,7 +109,10 @@ def _markdown_to_docx_paragraphs(document, markdown_content):
 
 
 def get_training_completion_snapshot(cycle_days=QUARTERLY_TRAINING_DAYS):
-    employees = Employee.query.order_by(Employee.name.asc()).all()
+    # Only our own people are in scope for security-awareness training.
+    # Partner staff (badge access only) have no AD account, so an ad_enabled
+    # test alone would have counted them and reported them overdue.
+    employees = Employee.reportable().order_by(Employee.name.asc()).all()
     active_employees = [employee for employee in employees if employee.ad_enabled is not False]
     cutoff_date = datetime.utcnow().date() - timedelta(days=cycle_days)
     records = SOC2SecurityTrainingRecord.query.order_by(

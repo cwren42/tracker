@@ -1073,7 +1073,9 @@ def _fill_workers(worksheet):
             19: _carry(prior, 19),  # FY25
             20: _carry(prior, 20, 'NA'),
             21: _carry(prior, 21, 'NA'),
-            22: _carry(prior, 22, _clean(employee['name'])),
+            # The worker's own name -- Tracker is authoritative, so an
+            # alias-matched row must not keep the template's older spelling.
+            22: _clean(employee['name']),
             23: _carry(prior, 23, 'NA'),
             24: _carry(prior, 24),
         })

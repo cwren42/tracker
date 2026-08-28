@@ -514,8 +514,8 @@ def _load_assigned_devices():
         FROM asset a
         WHERE a.employee_id IS NOT NULL
           AND (a.status IS NULL OR a.status NOT IN :retired)
-        ORDER BY a.name
-        """,
+        ORDER BY a.employee_id, {signal} DESC NULLS LAST, a.name
+        """.format(signal=LAST_SIGNAL_SQL),
         {'retired': RETIRED_ASSET_STATUSES},
     )
     devices = {}
@@ -789,16 +789,14 @@ def _fill_workers(worksheet):
         else:
             stats['without_training'] += 1
 
-        # Q/R/S are FY25-inventory carry-over. An FY25 row keeps whatever ALAP
-        # supplied, blanks included; only a worker with no FY25 row is filled
-        # from Tracker's current assignments.
+        # ALAP marks Q/R/S as FY25-inventory carry-over, but the FY25 laptops are
+        # machines since replaced in the annual refresh, so the carried value
+        # names hardware the worker no longer has. Current Tracker assignment
+        # wins here and the FY25 value is only a fallback. The primary PC is the
+        # most recently seen one, not the alphabetically first.
         assigned = devices.get(employee['id'], {'pc': [], 'other': []})
-        if prior is None:
-            pc_label = assigned['pc'][0][0] if assigned['pc'] else 'NA'
-            other_label = ', '.join(assigned['other']) if assigned['other'] else 'NA'
-        else:
-            pc_label = _carry(prior, 17)
-            other_label = _carry(prior, 18)
+        pc_label = assigned['pc'][0][0] if assigned['pc'] else _carry(prior, 17, 'NA')
+        other_label = ', '.join(assigned['other']) if assigned['other'] else _carry(prior, 18, 'NA')
 
         rows.append({
             3: DEFAULT_COMPANY,

@@ -216,7 +216,7 @@
             <li><strong>ISMS judgement calls are carried forward per row.</strong> Confidentiality / Integrity / Availability scores, threat and vulnerability classes, protect class and purpose text stay as filed. Only Tracker-owned fields (asset tag, hostname, owner, location, training dates, seat counts) are refreshed.</li>
             <li><strong>Only kit in service reaches F04C.</strong> An asset must have been seen within 180 days by at least one of: the RMM heartbeat, the UniFi client record, the Intune sync, or its AD last-logon. Assets with no signal from any of those are left off the sheet entirely &mdash; including template rows that match them, which would otherwise reappear mislabelled. F09-A endpoint rows are filtered to match, since column D is resolved against <code>Supplement[Asset Name]</code> and would read <em>Not Found</em> otherwise. Note this also drops live servers that run no agent and hold no AD/Intune/UniFi record.</li>
             <li><strong>Nothing else is deleted.</strong> Assets and workers the template lists that Tracker no longer has active are kept and stamped in Remarks as retired / departed, so the ledger keeps its history.</li>
-            <li><strong>Dates are normalised.</strong> The template stores raw Excel serials (<code>45512</code>); generated rows write real dates formatted <code>yyyy/mm/dd</code>.</li>
+            <li><strong>Dates are normalized.</strong> The template stores raw Excel serials (<code>45512</code>); generated rows write real dates formatted <code>yyyy/mm/dd</code>.</li>
         </ul>
     </div>
 </div>

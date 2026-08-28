@@ -108,7 +108,7 @@ PURPOSE_BY_CATEGORY = {
     'Computer': 'Server',
 }
 
-# Tracker's free-text asset.location values normalised onto the phrasing the
+# Tracker's free-text asset.location values normalized onto the phrasing the
 # ledger already uses for installation/storage location.
 LOCATION_MAP = {
     'cirque-us': 'Cirque SLC office',
@@ -147,7 +147,7 @@ WORKER_TYPE_MAP = {
 # The template names workers formally ("Douglas A. Steck") where Tracker uses
 # what they go by ("Doug Steck"). Matching on the exact string put the same
 # person on F09A twice -- once as a live row and once as a stale "departed" row
-# with no email. Normalising middle initials plus a first-name prefix test
+# with no email. Normalizing middle initials plus a first-name prefix test
 # resolves most; genuine nicknames that share no prefix (Michael/Mike) need an
 # explicit alias. Extend via the `isms_ledger_worker_aliases` setting, one
 # "Template Name = Tracker Name" per line.
@@ -227,7 +227,7 @@ def _set(worksheet, row, column, value, *, number_format=None):
 
 def _set_date(worksheet, row, column, value):
     """Write a real date. The template stores raw Excel serials with a General
-    format, which renders as ``45512``; normalising every date cell we own is
+    format, which renders as ``45512``; normalizing every date cell we own is
     strictly more readable and Excel reads it the same."""
     if value is None:
         return _set(worksheet, row, column, None)
@@ -725,7 +725,7 @@ def _system_operation_record(operations):
         parts.append('Patch management via CirqueRMM agent.')
     if last_scan:
         parts.append(
-            f'Microsoft Defender vulnerability assessment, last synchronised {last_scan}: '
+            f'Microsoft Defender vulnerability assessment, last synchronized {last_scan}: '
             f"{operations['open_critical']} open Critical, {operations['open_high']} open High, "
             'tracked to remediation.')
     elif operations and operations.get('has_agent'):

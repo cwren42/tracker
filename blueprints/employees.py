@@ -1431,7 +1431,7 @@ def upload_employee_photo(employee_id):
 
 
 # ── Badge logos ─────────────────────────────────────────────────────────────
-# Staff from partner organisations (Netstar) carry their own logo on their
+# Staff from partner organizations (Netstar) carry their own logo on their
 # access badge. Mapping lives in the `badge_logo_map` setting so new partners
 # can be added without a code change: {"Netstar": {"logo": "netstar.png",
 # "company": "Netstar"}}.
@@ -1477,12 +1477,12 @@ def _badge_profile_for(employee, default_company, default_logo_url):
 @manager_required
 @license_required
 def upload_badge_logo():
-    """Upload the badge logo for a partner organisation."""
+    """Upload the badge logo for a partner organization."""
     import json as _json
     org = (request.form.get('org') or '').strip()
     file = request.files.get('logo')
     if not org or not file or not file.filename:
-        flash('Pick an organisation and a logo file.', 'warning')
+        flash('Pick an organization and a logo file.', 'warning')
         return redirect(url_for('employees.id_card_designer'))
 
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''

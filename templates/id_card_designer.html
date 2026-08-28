@@ -194,7 +194,7 @@ const EMPLOYEES = [
         location: {{ (emp.location or '') | tojson }},
         isVisible: {{ (emp.is_visible != False) | tojson }},
         photoUrl: {% if emp.photo %}{{ photo_url(emp.photo) | tojson }}{% else %}null{% endif %},
-        // Partner staff carry their own organisation's logo and name.
+        // Partner staff carry their own organization's logo and name.
         badgeCompany: {{ (badge_profiles[emp.id][0] if badge_profiles and emp.id in badge_profiles else company_name) | tojson }},
         badgeLogoUrl: {{ (badge_profiles[emp.id][1] if badge_profiles and emp.id in badge_profiles else company_logo_url) | tojson }}
     }{% if not loop.last %},{% endif %}
@@ -245,11 +245,11 @@ const EMPLOYEES = [
             <label>Background Logo / Watermark</label>
             <input type="file" id="ctrl-logo" accept="image/*" onchange="handleLogoUpload(this)" class="form-control form-control-sm mb-2">
 
-            <!-- Partner organisation logos. Saved server-side and applied to
-                 that organisation's staff automatically, so a mixed batch
+            <!-- Partner organization logos. Saved server-side and applied to
+                 that organization's staff automatically, so a mixed batch
                  prints each person with the right badge in one run. -->
             <details class="mb-2">
-                <summary class="small fw-semibold" style="cursor:pointer">Partner organisation logos</summary>
+                <summary class="small fw-semibold" style="cursor:pointer">Partner organization logos</summary>
                 {% if badge_logo_map %}
                 <ul class="small text-muted mt-2 mb-2 ps-3">
                     {% for org, cfg in badge_logo_map.items() %}
@@ -262,7 +262,7 @@ const EMPLOYEES = [
                 <form method="POST" action="{{ url_for('employees.upload_badge_logo') }}"
                       enctype="multipart/form-data">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <label class="form-label small mb-1">Organisation (matches the employee's Department)</label>
+                    <label class="form-label small mb-1">Organization (matches the employee's Department)</label>
                     <input class="form-control form-control-sm mb-2" type="text" name="org"
                            list="known-orgs" placeholder="Netstar" required>
                     <datalist id="known-orgs">
@@ -271,7 +271,7 @@ const EMPLOYEES = [
                     <input class="form-control form-control-sm mb-2" type="file" name="logo"
                            accept=".png,.jpg,.jpeg,.gif,.webp,.svg" required>
                     <button class="btn btn-primary btn-sm w-100" type="submit">
-                        <i class="bi bi-upload"></i> Save organisation logo
+                        <i class="bi bi-upload"></i> Save organization logo
                     </button>
                 </form>
             </details>
@@ -420,7 +420,7 @@ function buildCard(emp) {
     const firstName = spaceIdx > -1 ? emp.name.slice(0, spaceIdx) : emp.name;
     const lastName  = spaceIdx > -1 ? emp.name.slice(spaceIdx + 1) : '';
 
-    // Each card uses its own organisation's logo and name, so a mixed batch
+    // Each card uses its own organization's logo and name, so a mixed batch
     // (Cirque + partner staff) prints correctly in one run. A logo uploaded in
     // the designer overrides everything, which is what a manual override means.
     const manualLogo = (logoDataUrl && logoDataUrl !== DEFAULT_LOGO_URL) ? logoDataUrl : null;

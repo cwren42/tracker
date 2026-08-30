@@ -49,27 +49,84 @@ def _load_alert_networks(con):
     return DEFAULT_ALERT_NETWORKS
 
 
-# ── Option 2 (fast-follow, NOT yet active): auto-quarantine on sensitive VLANs ──
-# Chris approved building this after option 1 ships. When enabled, a *new* unknown
-# appearing on a sensitive VLAN gets auto-blocked on sight (pending review) instead
-# of only alerting. Everything below is inert until AUTO_QUARANTINE_ENABLED is set.
-AUTO_QUARANTINE_ENABLED = False   # flip on (or read from Setting) when option 2 lands
-SENSITIVE_VLANS = (10, 50)         # Servers (v10), IT (v50)
+# ── Auto-block (rogue quarantine) ──────────────────────────────────────────────
+# When armed via Setting `nac_auto_block_enabled`, a *new* unknown appearing on any
+# NON-GUEST network is blocked at the controller (UniFi block-sta — an instant,
+# reversible L2 kill) the moment it's detected, in addition to alerting. Guest is
+# NEVER blocked (visitors live there by design). Optional `nac_auto_block_until`
+# (ISO-8601) closes the window automatically so a temporary lockdown can't linger.
+def _is_guest_network(network_name):
+    return 'guest' in (network_name or '').lower()
 
 
-def _maybe_auto_quarantine(con, mac_norm, cl):
-    """SCAFFOLD ONLY — not wired into run_scan yet. When option 2 is built, call
-    this for each new unknown: if AUTO_QUARANTINE_ENABLED and the device is on a
-    SENSITIVE_VLAN, block it immediately via UnifiService.block_client() and stamp
-    network_client.blocked, then still alert (as a block notification). Left inert
-    so nothing auto-blocks until this is deliberately turned on and reviewed."""
-    if not AUTO_QUARANTINE_ENABLED:
-        return False
-    if cl.get('vlan') not in SENSITIVE_VLANS:
-        return False
-    # TODO(option-2): UnifiService.block_client(cl['mac']); UPDATE ... blocked=TRUE;
-    #                 fire alert as an auto-block notice; audit-log the action.
-    return False
+def _load_auto_block(con):
+    """Return {'enabled': bool}. Reads Setting nac_auto_block_enabled; if
+    nac_auto_block_until is set and already past, the window is treated as closed."""
+    def _get(k):
+        r = con.execute("SELECT value FROM setting WHERE key = ?", (k,)).fetchone()
+        return (r['value'] if r and r['value'] is not None else '')
+    enabled = _get('nac_auto_block_enabled').strip().lower() in ('1', 'true', 'yes', 'on')
+    if enabled:
+        until = _get('nac_auto_block_until').strip()
+        if until:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(until.replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > dt:
+                    logger.info('network_scan: auto-block window closed (until=%s); not blocking', until)
+                    enabled = False
+            except Exception as e:
+                logger.warning('network_scan: bad nac_auto_block_until %r: %s', until, e)
+    return {'enabled': enabled}
+
+
+def _auto_block_clients(con, to_block):
+    """Block each (mac_norm, client) at the UniFi controller and stamp
+    network_client.blocked. Opens its own UniFi session (the scan's is already
+    logged out by here). Returns the set of mac_norms actually blocked. Never
+    raises — a controller hiccup must not abort the scan."""
+    from models import Setting
+    from unifi_service import load_unifi_config, UnifiService
+    cfg = load_unifi_config(Setting)
+    if not cfg:
+        return set()
+    svc = UnifiService(**cfg)
+    try:
+        svc.login()
+    except Exception as e:
+        logger.warning('network_scan: auto-block UniFi login failed: %s', e)
+        return set()
+    blocked = set()
+    try:
+        for mn, cl in to_block:
+            net = cl['network_name'] or 'unknown network'
+            try:
+                svc.block_client(cl['mac'])
+                con.execute("SAVEPOINT ab_row")
+                con.execute(
+                    "UPDATE network_client SET blocked = TRUE, blocked_at = NOW(), "
+                    "block_note = ? WHERE mac_norm = ?",
+                    (f"auto-blocked (visitor lockdown): rogue on {net}", mn))
+                con.execute("RELEASE SAVEPOINT ab_row")
+                con.commit()
+                blocked.add(mn)
+                logger.warning(
+                    'network_scan: AUTO-BLOCKED %s host=%s net=%s where=%s/%s',
+                    cl['mac'], cl['hostname'], net, cl['ap_name'], cl['sw_port'])
+            except Exception as e:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                logger.warning('network_scan: auto-block FAILED for %s: %s', cl['mac'], e)
+    finally:
+        try:
+            svc.logout()
+        except Exception:
+            pass
+    return blocked
 
 
 def _mac_norm(mac: str) -> str:
@@ -199,6 +256,7 @@ def run_scan(flask_app=None):
             "SELECT mac_norm FROM network_client WHERE acknowledged = TRUE").fetchall()}
 
         alert_networks = _load_alert_networks(con)
+        auto_block = _load_auto_block(con)
 
         pre_count = con.execute(
             "SELECT COUNT(*) AS n FROM network_client").fetchone()['n']
@@ -269,7 +327,12 @@ def run_scan(flask_app=None):
             # on the initial fleet so the first populate doesn't flood — only
             # genuinely-new MACs on monitored networks alert after. Out-of-scope
             # networks (Guest/Lab/infra) are inventoried on the page but never page.
+            # When auto-block is armed, alert scope widens to EVERY non-guest
+            # network (anything we might block must also be surfaced); otherwise
+            # the configured alert_networks set governs. Guest is never in scope.
             in_scope = (cl['network_name'] or '').strip().lower() in alert_networks
+            if auto_block['enabled'] and not _is_guest_network(cl['network_name']):
+                in_scope = True
             if (classification == 'unknown' and res
                     and res['alerted_at'] is None and in_scope):
                 new_unknowns.append((mn, cl))
@@ -280,6 +343,16 @@ def run_scan(flask_app=None):
                     "WHERE updated_at > NOW() - INTERVAL '2 minutes')")
         con.commit()
 
+        # Auto-block new unknowns on non-guest networks (if armed), BEFORE alerting
+        # so the alert can announce the block. Enforcement is independent of the
+        # alert cooldown — every rogue is blocked even if its email is throttled.
+        blocked_macs = set()
+        if auto_block['enabled'] and not baseline and new_unknowns:
+            to_block = [(mn, cl) for mn, cl in new_unknowns
+                        if not _is_guest_network(cl['network_name'])]
+            if to_block:
+                blocked_macs = _auto_block_clients(con, to_block)
+
         alerted = 0
         if baseline:
             # Suppress the initial fleet: stamp alerted_at so the pre-existing
@@ -288,13 +361,14 @@ def run_scan(flask_app=None):
                         "WHERE classification = 'unknown' AND alerted_at IS NULL")
             con.commit()
         elif new_unknowns:
-            alerted = _alert_new_unknowns(con, new_unknowns)
+            alerted = _alert_new_unknowns(con, new_unknowns, blocked_macs)
 
         summary = {
             'clients_seen': seen,
             'known_asset_macs': len(asset_by_mac),
             'unifi_allowlist': len(unifi_allow),
             'new_unknowns': len(new_unknowns),
+            'auto_blocked': len(blocked_macs),
             'alerted': alerted,
             'baseline': baseline,
         }
@@ -304,8 +378,10 @@ def run_scan(flask_app=None):
         con.close()
 
 
-def _alert_new_unknowns(con, new_unknowns):
-    """Fire a rogue_device alert for each new unknown; stamp alerted_at."""
+def _alert_new_unknowns(con, new_unknowns, blocked_macs=None):
+    """Fire a rogue_device alert for each new unknown; stamp alerted_at. MACs in
+    blocked_macs were just auto-blocked, so their alert announces the block."""
+    blocked_macs = blocked_macs or set()
     try:
         from alert_service import _fire_alert
     except Exception as e:
@@ -335,19 +411,33 @@ def _alert_new_unknowns(con, new_unknowns):
         else:
             where = f"Wi-Fi via {cl['ap_name'] or 'AP'}"
             lead = f"📶 Unknown Wi-Fi device on {cl['ap_name'] or 'the wireless'}"
+        was_blocked = mn in blocked_macs
+        if was_blocked:
+            lead = "🚫 AUTO-BLOCKED — " + lead
         msg = (f"{lead}: {cl['hostname'] or cl['mac']} ({vendor}) — "
                f"{cl['ip'] or 'no IP'} on VLAN {vlan} ({net}).")
+        action_html = (
+            '<p><strong>Action:</strong> 🚫 Auto-blocked at the controller '
+            '(visitor lockdown). <a href="/network">Review / unblock →</a></p>'
+            if was_blocked else
+            '<p><a href="/network">Review &amp; block on the Network page →</a></p>'
+        )
         extra = (
             f'<p><strong>Connection:</strong> {"WIRED — " + where if cl["is_wired"] else where}<br>'
             f'<strong>MAC:</strong> {cl["mac"]}<br>'
             f'<strong>Vendor:</strong> {vendor}<br>'
             f'<strong>VLAN:</strong> {vlan} ({net})<br>'
             f'<strong>IP:</strong> {cl["ip"] or "—"}</p>'
-            f'<p><a href="/network">Review & block on the Network page →</a></p>'
+            f'{action_html}'
         )
         try:
-            _fire_alert(con, rule, msg, hostname=(cl['hostname'] or cl['mac']),
-                        extra_html=extra, dedup_token=mn)
+            # Per-device keying: agent_id=MAC + cooldown_key=MAC so distinct
+            # rogues each alert instead of collapsing onto the shared
+            # (asset_id=0) cooldown bucket. asset_id stays NULL — support_ticket
+            # has an FK to asset, so a synthetic id there would abort the insert.
+            _fire_alert(con, rule, msg, agent_id=mn, asset_id=None,
+                        hostname=(cl['hostname'] or cl['mac']),
+                        extra_html=extra, dedup_token=mn, cooldown_key=mn)
             con.execute("UPDATE network_client SET alerted_at = NOW() "
                         "WHERE mac_norm = ?", (mn,))
             con.commit()

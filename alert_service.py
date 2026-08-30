@@ -809,7 +809,7 @@ def _dispatch_disk_cleanup(agent_id, asset_id, host, letter, ticket_id):
 
 
 def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
-                hostname=None, extra_html='', dedup_token=None):
+                hostname=None, extra_html='', dedup_token=None, cooldown_key=None):
     """
     Create alert_log row, optional ticket, email, Teams notification, bell.
     `rule` is a sqlite3.Row from alert_rule.
@@ -817,6 +817,13 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
     `dedup_token` (e.g. a CVE id) gives token-keyed alert types a stable
     per-event identity so repeated detections of the SAME event collapse onto
     one evolving ticket instead of spawning a new one each cooldown cycle.
+
+    `cooldown_key` (optional): when set, the cooldown is scoped to alert_log
+    rows whose agent_id equals this key (per-device), instead of the default
+    (rule_id, agent_id OR asset_id). Host-less alert types (e.g. rogue-device,
+    which carry no asset_id) otherwise all share the asset_id=0 bucket and
+    collapse onto one alert per cooldown; pass the MAC as agent_id AND
+    cooldown_key so each distinct device alerts. Default None = unchanged.
     """
     rule_id       = rule['id']
     category      = rule['category']
@@ -842,7 +849,14 @@ def _fire_alert(con, rule, message, agent_id=None, asset_id=None,
         except Exception:
             assigned_uid = None
 
-    if not _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown):
+    if cooldown_key is not None:
+        _since = (_now() - timedelta(minutes=cooldown)).strftime('%Y-%m-%d %H:%M:%S')
+        _cd_ok = con.execute(
+            "SELECT id FROM alert_log WHERE rule_id=? AND agent_id=? AND fired_at > ?",
+            (rule_id, cooldown_key, _since)).fetchone() is None
+    else:
+        _cd_ok = _cooldown_ok(con, rule_id, agent_id, asset_id, cooldown)
+    if not _cd_ok:
         # Condition still active — refresh last_seen_at so state doesn't get
         # auto-resolved while we're in the cooldown window. NOT a new occurrence.
         try:

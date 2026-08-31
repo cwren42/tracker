@@ -43,6 +43,13 @@ NETWORK_SCAN_LOCK_PATH = os.environ.get('TRACKER_NETWORK_SCAN_LOCK_PATH', '/tmp/
 NETWORK_SCAN_INTERVAL_MINUTES = int(os.environ.get('NETWORK_SCAN_INTERVAL_MINUTES', '2'))
 DISABLE_NETWORK_SCAN = os.environ.get('DISABLE_NETWORK_SCAN', '').strip() in ('1', 'true', 'yes', 'on')
 
+# UniFi static-route monitor: alert when a watched route (e.g. the VPN pool return
+# route) is found disabled. Runtime on/off is Setting 'route_monitor_enabled' (site
+# toggle); these env knobs only gate the job's existence / cadence.
+ROUTE_MONITOR_LOCK_PATH = os.environ.get('TRACKER_ROUTE_MONITOR_LOCK_PATH', '/tmp/tracker_route_monitor.lock')
+ROUTE_MONITOR_INTERVAL_MINUTES = int(os.environ.get('ROUTE_MONITOR_INTERVAL_MINUTES', '5'))
+DISABLE_ROUTE_MONITOR = os.environ.get('DISABLE_ROUTE_MONITOR', '').strip() in ('1', 'true', 'yes', 'on')
+
 # On-prem AD computer sync (AD = source of truth for assets). Daily.
 AD_ASSET_SYNC_LOCK_PATH = os.environ.get('TRACKER_AD_ASSET_SYNC_LOCK_PATH', '/tmp/tracker_ad_asset_sync.lock')
 AD_ASSET_SYNC_INTERVAL_HOURS = int(os.environ.get('AD_ASSET_SYNC_INTERVAL_HOURS', '24'))
@@ -206,6 +213,19 @@ def start_sync_scheduler(flask_app):
             minutes=max(NET_UPTIME_MONITOR_INTERVAL_MINUTES, 1),
             id='net_uptime_monitor',
             name='Network device reboot/power-loss monitor (core switches & gateways)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
+    if not DISABLE_ROUTE_MONITOR:
+        _scheduler.add_job(
+            func=lambda: run_route_monitor_job(flask_app),
+            trigger='interval',
+            minutes=max(ROUTE_MONITOR_INTERVAL_MINUTES, 1),
+            id='route_monitor',
+            name='UniFi static-route monitor (VPN return routes)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -1115,6 +1135,22 @@ def run_net_uptime_monitor_job(flask_app_instance):
                     db.session.remove()
                 except Exception:
                     pass
+
+
+def run_route_monitor_job(flask_app_instance):
+    """Run the UniFi static-route monitor with a cross-process lock."""
+    with _file_lock(ROUTE_MONITOR_LOCK_PATH) as acquired:
+        if not acquired:
+            return
+        try:
+            with flask_app_instance.app_context():
+                from models import db, MonitoringAlert, Asset, Setting
+                import unifi_service
+                res = unifi_service.run_route_monitor(
+                    flask_app_instance, db, Setting, MonitoringAlert, Asset)
+                logger.info(f"route_monitor: {res}")
+        except Exception as e:
+            logger.error(f"route_monitor job failed: {e}")
 
 
 def run_network_scan_job(flask_app_instance):

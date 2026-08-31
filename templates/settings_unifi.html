@@ -89,9 +89,28 @@
                         Automatically sync devices, networks, and clients from your UniFi controller to the asset database.
                     </p>
                     <hr>
-                    <p class="small mb-0"><strong>Status:</strong> 
+                    <p class="small mb-0"><strong>Status:</strong>
                         {% if unifi_config.host %}<span class="badge bg-success">Configured</span>{% else %}<span class="badge bg-warning">Not Configured</span>{% endif %}
                     </p>
+                </div>
+            </div>
+
+            <div class="card bg-light shadow-sm mt-3">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-signpost-split me-2"></i>VPN / Static-Route Monitor</h6>
+                    <p class="small text-muted mb-2">
+                        Raises a <strong>critical alert</strong> if a watched UniFi static route is found
+                        <strong>disabled</strong> — e.g. the VPN pool return route silently flipping off and
+                        cutting every VPN user's LAN access. Checks every few minutes; auto-resolves when the route returns.
+                    </p>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="routeMonitorToggle"
+                               {% if (unifi_config.route_monitor_enabled or '')|lower in ['1','true','yes','on'] %}checked{% endif %}
+                               onchange="toggleRouteMonitor(this.checked)">
+                        <label class="form-check-label" for="routeMonitorToggle">Enable route monitor</label>
+                        <span id="routeMonitorStatus" class="small ms-2"></span>
+                    </div>
+                    <p class="small text-muted mb-0 mt-2">Watching: <code>{{ unifi_config.route_monitor_watch }}</code></p>
                 </div>
             </div>
         </div>
@@ -110,6 +129,23 @@ function testUnifiConnection() {
             }
         })
         .catch(err => alert('Error: ' + err));
+}
+
+function toggleRouteMonitor(on) {
+    var status = document.getElementById('routeMonitorStatus');
+    status.textContent = '…';
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'route_monitor_enabled', value: on ? 'true' : 'false' })
+    })
+    .then(r => r.json())
+    .then(d => {
+        status.textContent = d.ok ? '✓ saved' : ('✗ ' + (d.error || 'error'));
+        status.className = 'small ms-2 ' + (d.ok ? 'text-success' : 'text-danger');
+        setTimeout(function () { status.textContent = ''; }, 2500);
+    })
+    .catch(e => { status.textContent = '✗ ' + e; status.className = 'small ms-2 text-danger'; });
 }
 </script>
 {% endblock %}

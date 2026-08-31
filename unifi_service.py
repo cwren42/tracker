@@ -594,6 +594,84 @@ class UnifiService:
         return self._stamgr('unblock-sta', mac)
 
 
+def run_route_monitor(flask_app, db, Setting, MonitoringAlert, Asset=None):
+    """Poll UniFi static routes and raise a CRITICAL MonitoringAlert whenever a
+    WATCHED route is found DISABLED (auto-resolving when it comes back). Guards the
+    silent "SSTP pool return route flipped off → every VPN user keeps a tunnel but
+    loses all LAN access" outage class (hit both US and Taiwan).
+
+    Runtime on/off via Setting `route_monitor_enabled` (the site toggle). The
+    watchlist is Setting `route_monitor_watch` — comma-separated destination
+    networks, default the US SSTP pool. READ-ONLY against UniFi: it only alerts,
+    never re-enables the route (so it can't mask whatever is disabling it)."""
+    def _get(key, default=None):
+        s = Setting.query.filter_by(key=key).first()
+        return s.value if s and s.value is not None else default
+
+    if str(_get('route_monitor_enabled', '') or '').strip().lower() not in ('1', 'true', 'yes', 'on'):
+        return {'skipped': 'disabled'}
+    watch = [w.strip() for w in (_get('route_monitor_watch', '10.15.7.128/25') or '').split(',') if w.strip()]
+    if not watch:
+        return {'skipped': 'no-watchlist'}
+
+    cfg = load_unifi_config(Setting)
+    if not cfg:
+        return {'skipped': 'unifi-not-configured'}
+    svc = UnifiService(**cfg)
+    try:
+        svc.login()
+        import urllib.parse
+        site = urllib.parse.quote(svc.site, safe='')
+        routes = svc._session.get(
+            f"{svc.host}/proxy/network/api/s/{site}/rest/routing", timeout=25
+        ).json().get('data', [])
+    finally:
+        try:
+            svc.logout()
+        except Exception:
+            pass
+
+    now = datetime.utcnow()
+    gw_id = None
+    if Asset is not None:
+        gw = Asset.query.filter(Asset.name.ilike('%UDM%')).first()
+        gw_id = gw.id if gw else None
+
+    created = resolved = 0
+    for net in watch:
+        r = next((x for x in routes if x.get('static-route_network') == net), None)
+        if r is None:
+            continue  # route not present at all — don't invent an alert for a typo'd watch entry
+        nh = r.get('static-route_nexthop')
+        label = r.get('name') or net
+        marker = f"[route:{net}]"  # stable dedup/resolve key embedded in the message
+        if not r.get('enabled'):
+            existing = (MonitoringAlert.query
+                        .filter_by(status='active')
+                        .filter(MonitoringAlert.message.like(f"%{marker}%"))
+                        .first())
+            if not existing:
+                db.session.add(MonitoringAlert(
+                    asset_id=gw_id, severity='critical', status='active',
+                    message=f"{marker} Static route '{label}' ({net} → {nh}) is DISABLED",
+                    details=(
+                        "A watched UniFi static route is disabled on the gateway. If this is a VPN "
+                        "pool return route, every user on that VPN keeps a tunnel but loses ALL LAN "
+                        "access (connected, can't reach anything). Re-enable it in UniFi → "
+                        "Settings → Routing. This route has silently flipped off before (US + "
+                        "Taiwan SSTP), so treat a recurrence as the same class of incident."),
+                    triggered_at=now, first_failed_at=now, last_failed_at=now, failure_count=1))
+                created += 1
+        else:
+            for a in (MonitoringAlert.query.filter_by(status='active')
+                      .filter(MonitoringAlert.message.like(f"%{marker}%")).all()):
+                a.status = 'resolved'
+                a.resolved_at = now
+                resolved += 1
+    db.session.commit()
+    return {'created': created, 'resolved': resolved, 'watched': len(watch)}
+
+
 def load_unifi_config(Setting) -> dict | None:
     """Load UniFi credentials from the Setting table. Returns None if not configured."""
     def get(key):

@@ -258,6 +258,26 @@ def run_scan(flask_app=None):
         alert_networks = _load_alert_networks(con)
         auto_block = _load_auto_block(con)
 
+        # Self-baseline on arm transition (OFF->ON): stamp the current unknown
+        # backlog so only NEW arrivals block. Arming widens scope to all-non-guest
+        # and would otherwise mass-block devices that were merely out of the prior
+        # alert scope. Makes the /settings toggle safe however it's flipped.
+        _la = con.execute("SELECT value FROM setting WHERE key = 'nac_auto_block_last_armed'").fetchone()
+        _was_armed = bool(_la and str(_la['value'] or '').strip().lower() in ('1', 'true', 'yes', 'on'))
+        if auto_block['enabled'] and not _was_armed:
+            con.execute("UPDATE network_client SET alerted_at = NOW() "
+                        "WHERE classification = 'unknown' AND alerted_at IS NULL")
+            con.execute("INSERT INTO setting(key,value) VALUES(?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+                        ('nac_auto_block_last_armed', 'true'))
+            con.commit()
+            logger.info('network_scan: auto-block ARMED via toggle/setting — baselined existing unknown backlog')
+        elif (not auto_block['enabled']) and _was_armed:
+            con.execute("INSERT INTO setting(key,value) VALUES(?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+                        ('nac_auto_block_last_armed', 'false'))
+            con.commit()
+
         pre_count = con.execute(
             "SELECT COUNT(*) AS n FROM network_client").fetchone()['n']
         baseline = pre_count == 0

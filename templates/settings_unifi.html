@@ -110,7 +110,28 @@
                         <label class="form-check-label" for="routeMonitorToggle">Enable route monitor</label>
                         <span id="routeMonitorStatus" class="small ms-2"></span>
                     </div>
-                    <p class="small text-muted mb-0 mt-2">Watching: <code>{{ unifi_config.route_monitor_watch }}</code></p>
+                    <p class="small text-muted mb-0 mt-2">Watching:
+                        {% if (unifi_config.route_monitor_watch or '')|lower in ['all','*'] %}<code>all static routes</code>{% else %}<code>{{ unifi_config.route_monitor_watch }}</code>{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <div class="card bg-light shadow-sm mt-3">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-shield-lock me-2"></i>Unknown-Device Lockout</h6>
+                    <p class="small text-muted mb-2">
+                        When ON, any <strong>new unrecognized device</strong> on a non-guest network (a wall-jack
+                        plug-in or corporate Wi-Fi) is <strong>auto-blocked</strong> at the controller on sight and
+                        alerts you. Guest Wi-Fi is never blocked, and existing devices are left alone. Use during
+                        visitor days / lockdowns; leave OFF for normal operation so staff devices aren't caught.
+                    </p>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="nacLockoutToggle"
+                               {% if (unifi_config.nac_auto_block_enabled or '')|lower in ['1','true','yes','on'] %}checked{% endif %}
+                               onchange="toggleNacLockout(this.checked)">
+                        <label class="form-check-label" for="nacLockoutToggle">Enable unknown-device auto-block</label>
+                        <span id="nacLockoutStatus" class="small ms-2"></span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -144,6 +165,26 @@ function toggleRouteMonitor(on) {
         status.textContent = d.ok ? '✓ saved' : ('✗ ' + (d.error || 'error'));
         status.className = 'small ms-2 ' + (d.ok ? 'text-success' : 'text-danger');
         setTimeout(function () { status.textContent = ''; }, 2500);
+    })
+    .catch(e => { status.textContent = '✗ ' + e; status.className = 'small ms-2 text-danger'; });
+}
+
+function toggleNacLockout(on) {
+    var status = document.getElementById('nacLockoutStatus');
+    if (on && !confirm('Turn ON unknown-device auto-block?\n\nNew unrecognized devices on non-guest networks will be blocked automatically. Make sure no new company devices are being enrolled right now.')) {
+        document.getElementById('nacLockoutToggle').checked = false;
+        return;
+    }
+    status.textContent = '…';
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'nac_auto_block_enabled', value: on ? 'true' : 'false' })
+    })
+    .then(r => r.json())
+    .then(d => {
+        status.textContent = d.ok ? (on ? '✓ lockout ON' : '✓ lockout OFF') : ('✗ ' + (d.error || 'error'));
+        status.className = 'small ms-2 ' + (d.ok ? (on ? 'text-danger' : 'text-success') : 'text-danger');
     })
     .catch(e => { status.textContent = '✗ ' + e; status.className = 'small ms-2 text-danger'; });
 }

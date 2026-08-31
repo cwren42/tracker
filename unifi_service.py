@@ -610,8 +610,10 @@ def run_route_monitor(flask_app, db, Setting, MonitoringAlert, Asset=None):
 
     if str(_get('route_monitor_enabled', '') or '').strip().lower() not in ('1', 'true', 'yes', 'on'):
         return {'skipped': 'disabled'}
-    watch = [w.strip() for w in (_get('route_monitor_watch', '10.15.7.128/25') or '').split(',') if w.strip()]
-    if not watch:
+    watch_raw = (_get('route_monitor_watch', '10.15.7.128/25') or '').strip()
+    watch_all = watch_raw.lower() in ('*', 'all')  # auto-cover every static route
+    watch = [] if watch_all else [w.strip() for w in watch_raw.split(',') if w.strip()]
+    if not watch_all and not watch:
         return {'skipped': 'no-watchlist'}
 
     cfg = load_unifi_config(Setting)
@@ -637,11 +639,16 @@ def run_route_monitor(flask_app, db, Setting, MonitoringAlert, Asset=None):
         gw = Asset.query.filter(Asset.name.ilike('%UDM%')).first()
         gw_id = gw.id if gw else None
 
+    if watch_all:
+        target_routes = [x for x in routes if x.get('type') == 'static-route']
+    else:
+        target_routes = [x for net in watch
+                         for x in [next((y for y in routes if y.get('static-route_network') == net), None)]
+                         if x is not None]  # skip typo'd/absent watch entries
+
     created = resolved = 0
-    for net in watch:
-        r = next((x for x in routes if x.get('static-route_network') == net), None)
-        if r is None:
-            continue  # route not present at all — don't invent an alert for a typo'd watch entry
+    for r in target_routes:
+        net = r.get('static-route_network')
         nh = r.get('static-route_nexthop')
         label = r.get('name') or net
         marker = f"[route:{net}]"  # stable dedup/resolve key embedded in the message
@@ -669,7 +676,8 @@ def run_route_monitor(flask_app, db, Setting, MonitoringAlert, Asset=None):
                 a.resolved_at = now
                 resolved += 1
     db.session.commit()
-    return {'created': created, 'resolved': resolved, 'watched': len(watch)}
+    return {'created': created, 'resolved': resolved,
+            'watched': len(target_routes), 'mode': 'all' if watch_all else 'list'}
 
 
 def load_unifi_config(Setting) -> dict | None:

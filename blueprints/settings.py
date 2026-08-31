@@ -471,6 +471,7 @@ def settings_unifi():
         'last_sync_time': get_setting_value('unifi_last_sync_time', ''),
         'route_monitor_enabled': get_setting_value('route_monitor_enabled', ''),
         'route_monitor_watch': get_setting_value('route_monitor_watch', '10.15.7.128/25'),
+        'nac_auto_block_enabled': get_setting_value('nac_auto_block_enabled', ''),
     }
 
     return render_template('settings_unifi.html', unifi_config=unifi_config)
@@ -1128,7 +1129,8 @@ def remove_license_key(license_id):
 @login_required
 @admin_required
 def api_setting_get(key):
-    allowed = {'teams_webhook_url', 'route_monitor_enabled', 'route_monitor_watch'}
+    allowed = {'teams_webhook_url', 'route_monitor_enabled', 'route_monitor_watch',
+               'nac_auto_block_enabled'}
     if key not in allowed:
         return jsonify(ok=False, error='Not allowed'), 403
     s = db.session.execute(text("SELECT value FROM setting WHERE key=:k"), {'k': key}).fetchone()
@@ -1142,7 +1144,8 @@ def api_setting_set():
     data = request.get_json(force=True) or {}
     key  = data.get('key', '')
     val  = data.get('value', '')
-    allowed = {'teams_webhook_url', 'route_monitor_enabled', 'route_monitor_watch'}
+    allowed = {'teams_webhook_url', 'route_monitor_enabled', 'route_monitor_watch',
+               'nac_auto_block_enabled'}
     if key not in allowed:
         return jsonify(ok=False, error='Not allowed'), 403
     existing = db.session.execute(text("SELECT id FROM setting WHERE key=:k"), {'k': key}).fetchone()

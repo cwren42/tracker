@@ -14,10 +14,10 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from werkzeug.utils import secure_filename
 
 from extensions import db
@@ -302,6 +302,34 @@ def _strip_inline_md(text_value):
     return s
 
 
+def _is_horizontal_rule(line):
+    return bool(re.fullmatch(r'(-{3,}|\*{3,}|_{3,})', line.strip()))
+
+
+def _is_block_boundary(line):
+    """A line that begins a new block, i.e. cannot be a soft-wrapped continuation
+    of the paragraph above it."""
+    s = line.strip()
+    return (not s) or _is_table_row(s) or _is_horizontal_rule(s) \
+        or s.startswith('### ') or s.startswith('## ') or s.startswith('# ') \
+        or s.startswith('- ') or s.startswith('> ')
+
+
+def _docx_add_inline(paragraph, text_value):
+    """Add text to a docx paragraph, rendering **bold** and `code` as runs and
+    reducing links to their label (rather than dropping the formatting)."""
+    text = re.sub(r'\[(.+?)\]\((https?://[^\s)]+)\)', r'\1', text_value)
+    for part in re.split(r'(\*\*.+?\*\*|`[^`]+`)', text):
+        if not part:
+            continue
+        if part.startswith('**') and part.endswith('**'):
+            paragraph.add_run(part[2:-2]).bold = True
+        elif part.startswith('`') and part.endswith('`'):
+            paragraph.add_run(part[1:-1])
+        else:
+            paragraph.add_run(part)
+
+
 def _iter_markdown_blocks(markdown_body):
     lines = markdown_body.replace('\r\n', '\n').split('\n')
     i, n = 0, len(lines)
@@ -318,18 +346,31 @@ def _iter_markdown_blocks(markdown_body):
                 yield ('table', rows)
             continue
         if not line:
-            yield ('blank', '')
-        elif line.startswith('### '):
-            yield ('heading3', line[4:].strip())
-        elif line.startswith('## '):
-            yield ('heading2', line[3:].strip())
-        elif line.startswith('# '):
-            yield ('heading1', line[2:].strip())
-        elif line.startswith('- '):
-            yield ('bullet', line[2:].strip())
-        else:
-            yield ('paragraph', line)
-        i += 1
+            yield ('blank', ''); i += 1; continue
+        if _is_horizontal_rule(line):
+            yield ('rule', ''); i += 1; continue
+        if line.startswith('### '):
+            yield ('heading3', line[4:].strip()); i += 1; continue
+        if line.startswith('## '):
+            yield ('heading2', line[3:].strip()); i += 1; continue
+        if line.startswith('# '):
+            yield ('heading1', line[2:].strip()); i += 1; continue
+        if line.startswith('- '):
+            yield ('bullet', line[2:].strip()); i += 1; continue
+        if line.startswith('> '):
+            quote = []
+            while i < n and lines[i].strip().startswith('> '):
+                quote.append(lines[i].strip()[2:].strip())
+                i += 1
+            yield ('quote', ' '.join(quote))
+            continue
+        # paragraph: join soft-wrapped continuation lines into one paragraph
+        para = []
+        while i < n and not _is_block_boundary(lines[i]):
+            para.append(lines[i].strip())
+            i += 1
+        if para:
+            yield ('paragraph', ' '.join(para))
 
 
 def _create_export_run(document, version, export_format):
@@ -371,7 +412,15 @@ def _build_docx_export(document, version):
         elif block_type == 'heading3':
             doc.add_heading(text_value, level=3)
         elif block_type == 'bullet':
-            doc.add_paragraph(_strip_inline_md(text_value), style='List Bullet')
+            _docx_add_inline(doc.add_paragraph(style='List Bullet'), text_value)
+        elif block_type == 'quote':
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0.3)
+            _docx_add_inline(p, text_value)
+            for run in p.runs:
+                run.italic = True
+        elif block_type == 'rule':
+            continue
         elif block_type == 'table':
             rows, has_header = _normalize_table_rows(text_value)
             if not rows:
@@ -391,7 +440,7 @@ def _build_docx_export(document, version):
                                 run.bold = True
             doc.add_paragraph()
         else:
-            doc.add_paragraph(_strip_inline_md(text_value))
+            _docx_add_inline(doc.add_paragraph(), text_value)
 
     output = io.BytesIO()
     doc.save(output)
@@ -454,6 +503,10 @@ def _build_pdf_export(document, version):
     table_header_style = ParagraphStyle(
         'ISMSExportTableHeader', parent=table_cell_style, fontName='Helvetica-Bold',
     )
+    quote_style = ParagraphStyle(
+        'ISMSExportQuote', parent=body_style, leftIndent=16, fontName='Helvetica-Oblique',
+        textColor=colors.HexColor('#39434F'), spaceBefore=4, spaceAfter=8,
+    )
 
     story = [
         Paragraph(html.escape(document.title), title_style),
@@ -472,6 +525,11 @@ def _build_pdf_export(document, version):
             story.append(Paragraph(_render_inline(text_value), body_style))
         elif block_type == 'bullet':
             story.append(Paragraph(f'&bull; {_render_inline(text_value)}', bullet_style))
+        elif block_type == 'quote':
+            story.append(Paragraph(_render_inline(text_value), quote_style))
+        elif block_type == 'rule':
+            story.append(HRFlowable(width='100%', thickness=0.5,
+                                    color=colors.HexColor('#C3CBD5'), spaceBefore=6, spaceAfter=8))
         elif block_type == 'table':
             rows, has_header = _normalize_table_rows(text_value)
             if rows:

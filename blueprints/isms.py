@@ -2,6 +2,7 @@ import html
 import io
 import re
 from difflib import HtmlDiff, SequenceMatcher
+from functools import partial
 from pathlib import Path
 
 from datetime import datetime
@@ -11,13 +12,20 @@ from flask_login import login_required, current_user
 import markdown as markdown_lib
 from openpyxl import load_workbook
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    HRFlowable, Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+)
 
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Pt, Inches, RGBColor
 from werkzeug.utils import secure_filename
 
 from extensions import db
@@ -316,18 +324,31 @@ def _is_block_boundary(line):
 
 
 def _docx_add_inline(paragraph, text_value):
-    """Add text to a docx paragraph, rendering **bold** and `code` as runs and
+    """Add text to a docx paragraph, rendering **bold**, *italic*/_italic_ and
+    `code` as runs, decoding HTML entities, honoring hard-break newlines, and
     reducing links to their label (rather than dropping the formatting)."""
-    text = re.sub(r'\[(.+?)\]\((https?://[^\s)]+)\)', r'\1', text_value)
-    for part in re.split(r'(\*\*.+?\*\*|`[^`]+`)', text):
-        if not part:
-            continue
-        if part.startswith('**') and part.endswith('**'):
-            paragraph.add_run(part[2:-2]).bold = True
-        elif part.startswith('`') and part.endswith('`'):
-            paragraph.add_run(part[1:-1])
-        else:
-            paragraph.add_run(part)
+    text = html.unescape(text_value)
+    text = re.sub(r'\[(.+?)\]\((https?://[^\s)]+)\)', r'\1', text)
+    split_pattern = (
+        r'(\*\*.+?\*\*|\*(?!\s)[^*\n]+?(?<!\s)\*|(?<![\w])_(?!\s)[^_\n]+?(?<!\s)_(?![\w])|`[^`]+`)'
+    )
+    lines = text.split('\n')
+    for line_index, line in enumerate(lines):
+        if line_index:
+            paragraph.add_run().add_break()
+        for part in re.split(split_pattern, line):
+            if not part:
+                continue
+            if part.startswith('**') and part.endswith('**'):
+                paragraph.add_run(part[2:-2]).bold = True
+            elif part.startswith('`') and part.endswith('`'):
+                paragraph.add_run(part[1:-1])
+            elif len(part) >= 2 and part[0] == '*' and part[-1] == '*':
+                paragraph.add_run(part[1:-1]).italic = True
+            elif len(part) >= 2 and part[0] == '_' and part[-1] == '_':
+                paragraph.add_run(part[1:-1]).italic = True
+            else:
+                paragraph.add_run(part)
 
 
 def _iter_markdown_blocks(markdown_body):
@@ -356,7 +377,13 @@ def _iter_markdown_blocks(markdown_body):
         if line.startswith('# '):
             yield ('heading1', line[2:].strip()); i += 1; continue
         if line.startswith('- '):
-            yield ('bullet', line[2:].strip()); i += 1; continue
+            bullet_parts = [line[2:].strip()]
+            i += 1
+            while i < n and lines[i].strip() and not _is_block_boundary(lines[i]):
+                bullet_parts.append(lines[i].strip())
+                i += 1
+            yield ('bullet', ' '.join(bullet_parts))
+            continue
         if line.startswith('> '):
             quote = []
             while i < n and lines[i].strip().startswith('> '):
@@ -364,13 +391,22 @@ def _iter_markdown_blocks(markdown_body):
                 i += 1
             yield ('quote', ' '.join(quote))
             continue
-        # paragraph: join soft-wrapped continuation lines into one paragraph
-        para = []
+        # paragraph: join soft-wrapped continuation lines into one paragraph,
+        # but preserve markdown hard breaks (trailing two spaces / <br>) as newlines
+        para_parts = []
         while i < n and not _is_block_boundary(lines[i]):
-            para.append(lines[i].strip())
+            raw = lines[i].rstrip('\n')
+            hard_break = bool(re.search(r'(  +$|<br\s*/?>\s*$)', raw))
+            segment = re.sub(r'\s*<br\s*/?>\s*$', '', raw.strip())
+            para_parts.append((segment, hard_break))
             i += 1
-        if para:
-            yield ('paragraph', ' '.join(para))
+        if para_parts:
+            buffer = ''
+            for part_index, (segment, hard_break) in enumerate(para_parts):
+                buffer += segment
+                if part_index < len(para_parts) - 1:
+                    buffer += '\n' if hard_break else ' '
+            yield ('paragraph', buffer)
 
 
 def _create_export_run(document, version, export_format):
@@ -397,10 +433,308 @@ def _build_markdown_export(document, version):
     )
 
 
+# ---------------------------------------------------------------------------
+# Controlled-document export presentation (cover, TOC, running header/footer).
+# Presentation only — never mutates document markdown.
+# ---------------------------------------------------------------------------
+
+_LOGO_PATH = Path(__file__).resolve().parent.parent / 'static' / 'images' / 'company_logo.png'
+_SLATE = '#222A35'
+_SLATE_MUTED = '#5B6370'
+_MUTED = '#6B7480'
+_RULE = '#C3CBD5'
+
+
+def _export_document_meta(document, version):
+    """Assemble the title-block/header metadata for a controlled document,
+    reading whatever fields the document row and its markdown actually carry.
+    Missing fields are returned as None and simply omitted downstream."""
+    markdown_body = version.markdown_body or ''
+
+    def clean(value):
+        value = html.unescape(value)
+        value = re.sub(r'\*\*(.+?)\*\*', r'\1', value)
+        value = re.sub(r'`([^`]+)`', r'\1', value)
+        value = re.sub(r'\s+', ' ', value).strip().strip('·').strip()
+        return value or None
+
+    def lookup(*labels):
+        for label in labels:
+            escaped = re.escape(label)
+            inline = re.search(
+                r'\*\*\s*' + escaped + r'\s*:?\s*\*\*\s*:?\s*([^\n*|]+)', markdown_body, re.IGNORECASE)
+            if inline:
+                value = clean(inline.group(1))
+                if value:
+                    return value
+            table = re.search(
+                r'\|\s*\*\*\s*' + escaped + r'\s*\*\*\s*\|\s*([^\n|]+?)\s*\|', markdown_body, re.IGNORECASE)
+            if table:
+                value = clean(table.group(1))
+                if value:
+                    return value
+        return None
+
+    status = lookup('status') or (document.status.title() if document.status else None)
+    doc_type = (document.doc_type or '').strip()
+    return {
+        'code': (document.slug or 'isms-document').upper(),
+        'title': document.title or 'Untitled Document',
+        'doc_type_label': doc_type.title() if doc_type else None,
+        'revision_number': version.version_number,
+        'version_label': lookup('version'),
+        'status': status,
+        'category': document.category or lookup('category'),
+        'effective_date': lookup('effective date', 'effective'),
+        'classification': lookup('classification'),
+        'owner': lookup('owner', 'document owner', 'prepared by', 'prepared'),
+        'approver': lookup('approver', 'approved by'),
+        'review': lookup('review cycle', 'review date', 'next review'),
+        'footer_left': f'Exported from Tracker on {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}',
+    }
+
+
+def _export_meta_rows(meta):
+    """Ordered (label, value) pairs for the cover title block, present fields only."""
+    version_display = meta['version_label'] or f"v{meta['revision_number']}"
+    candidates = [
+        ('Document code', meta['code']),
+        ('Version', version_display),
+        ('Status', meta['status']),
+        ('Effective date', meta['effective_date']),
+        ('Classification', meta['classification']),
+        ('Category', meta['category']),
+        ('Owner', meta['owner']),
+        ('Approver', meta['approver']),
+        ('Review cycle', meta['review']),
+        ('Tracker revision', f"v{meta['revision_number']}"),
+    ]
+    return [(label, value) for label, value in candidates if value]
+
+
+class _NumberedCanvas(canvas.Canvas):
+    """Two-pass canvas so every non-cover page carries a running header
+    (doc code / version + rule) and footer (export note / Page X of Y)."""
+
+    def __init__(self, *args, header_left='', header_right='', footer_left='', **kwargs):
+        self._header_left = header_left
+        self._header_right = header_right
+        self._footer_left = footer_left
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total_pages = len(self._saved_page_states)
+        for index, state in enumerate(self._saved_page_states):
+            self.__dict__.update(state)
+            self._draw_decorations(index + 1, total_pages)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def _draw_decorations(self, page_number, total_pages):
+        if page_number == 1:
+            return
+        width, height = letter
+        left = 0.85 * inch
+        right = width - 0.85 * inch
+        self.saveState()
+        self.setFont('Helvetica', 8)
+        self.setFillColor(colors.HexColor(_MUTED))
+        self.drawString(left, height - 0.6 * inch, self._header_left)
+        self.drawRightString(right, height - 0.6 * inch, self._header_right)
+        self.setStrokeColor(colors.HexColor(_RULE))
+        self.setLineWidth(0.5)
+        self.line(left, height - 0.66 * inch, right, height - 0.66 * inch)
+        self.line(left, 0.62 * inch, right, 0.62 * inch)
+        self.drawString(left, 0.48 * inch, self._footer_left)
+        self.drawRightString(right, 0.48 * inch, f'Page {page_number} of {total_pages}')
+        self.restoreState()
+
+
+def _docx_apply_base_styles(doc):
+    normal = doc.styles['Normal']
+    normal.font.name = 'Cambria'
+    normal.font.size = Pt(10.5)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.15
+    slate = RGBColor(0x22, 0x2A, 0x35)
+    for name, size in (('Heading 1', 15), ('Heading 2', 12.5), ('Heading 3', 11)):
+        try:
+            style = doc.styles[name]
+        except KeyError:
+            continue
+        style.font.name = 'Calibri'
+        style.font.size = Pt(size)
+        style.font.bold = True
+        style.font.color.rgb = slate
+
+
+def _docx_paragraph_bottom_border(paragraph, color='C3CBD5'):
+    p_pr = paragraph._p.get_or_add_pPr()
+    borders = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '4')
+    bottom.set(qn('w:space'), '2')
+    bottom.set(qn('w:color'), color)
+    borders.append(bottom)
+    p_pr.append(borders)
+
+
+def _docx_add_page_field(paragraph):
+    muted = RGBColor(0x6B, 0x74, 0x80)
+
+    def add_text(text):
+        run = paragraph.add_run(text)
+        run.font.size = Pt(8)
+        run.font.color.rgb = muted
+
+    def add_field(instruction):
+        run = paragraph.add_run()
+        run.font.size = Pt(8)
+        run.font.color.rgb = muted
+        begin = OxmlElement('w:fldChar')
+        begin.set(qn('w:fldCharType'), 'begin')
+        instr = OxmlElement('w:instrText')
+        instr.set(qn('xml:space'), 'preserve')
+        instr.text = f' {instruction} '
+        end = OxmlElement('w:fldChar')
+        end.set(qn('w:fldCharType'), 'end')
+        run._r.append(begin)
+        run._r.append(instr)
+        run._r.append(end)
+
+    add_text('Page ')
+    add_field('PAGE')
+    add_text(' of ')
+    add_field('NUMPAGES')
+
+
+def _docx_setup_running_headers(doc, meta):
+    section = doc.sections[0]
+    section.different_first_page_header_footer = True
+    content_width = section.page_width - section.left_margin - section.right_margin
+    muted = RGBColor(0x6B, 0x74, 0x80)
+
+    header = section.header
+    header.is_linked_to_previous = False
+    header_paragraph = header.paragraphs[0]
+    header_paragraph.text = ''
+    header_paragraph.paragraph_format.tab_stops.add_tab_stop(content_width, WD_TAB_ALIGNMENT.RIGHT)
+    left_run = header_paragraph.add_run(meta['code'])
+    left_run.font.size = Pt(8)
+    left_run.font.color.rgb = muted
+    header_paragraph.add_run('\t')
+    right_run = header_paragraph.add_run(f"v{meta['revision_number']}")
+    right_run.font.size = Pt(8)
+    right_run.font.color.rgb = muted
+    _docx_paragraph_bottom_border(header_paragraph)
+
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    footer_paragraph = footer.paragraphs[0]
+    footer_paragraph.text = ''
+    footer_paragraph.paragraph_format.tab_stops.add_tab_stop(content_width, WD_TAB_ALIGNMENT.RIGHT)
+    note_run = footer_paragraph.add_run(meta['footer_left'])
+    note_run.font.size = Pt(8)
+    note_run.font.color.rgb = muted
+    footer_paragraph.add_run('\t')
+    _docx_add_page_field(footer_paragraph)
+
+
+def _docx_build_cover(doc, meta):
+    if _LOGO_PATH.exists():
+        logo_paragraph = doc.add_paragraph()
+        logo_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        logo_paragraph.add_run().add_picture(str(_LOGO_PATH), width=Inches(0.95))
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    code_paragraph = doc.add_paragraph()
+    code_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    code_run = code_paragraph.add_run(meta['code'])
+    code_run.bold = True
+    code_run.font.name = 'Calibri'
+    code_run.font.size = Pt(11)
+    code_run.font.color.rgb = RGBColor(0x5B, 0x63, 0x70)
+
+    title_paragraph = doc.add_paragraph()
+    title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_run = title_paragraph.add_run(meta['title'])
+    title_run.bold = True
+    title_run.font.name = 'Calibri'
+    title_run.font.size = Pt(24)
+    title_run.font.color.rgb = RGBColor(0x22, 0x2A, 0x35)
+
+    if meta['doc_type_label']:
+        subtitle_paragraph = doc.add_paragraph()
+        subtitle_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        subtitle_run = subtitle_paragraph.add_run(meta['doc_type_label'])
+        subtitle_run.italic = True
+        subtitle_run.font.size = Pt(11)
+        subtitle_run.font.color.rgb = RGBColor(0x6B, 0x74, 0x80)
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    rows = _export_meta_rows(meta)
+    if rows:
+        table = doc.add_table(rows=len(rows), cols=2)
+        for row_index, (label, value) in enumerate(rows):
+            label_cell = table.rows[row_index].cells[0]
+            value_cell = table.rows[row_index].cells[1]
+            label_cell.width = Inches(1.9)
+            value_cell.width = Inches(3.9)
+            label_run = label_cell.paragraphs[0].add_run(label)
+            label_run.bold = True
+            label_run.font.size = Pt(10)
+            label_run.font.color.rgb = RGBColor(0x39, 0x43, 0x4F)
+            # value is already plain text (entities decoded, markdown stripped) from
+            # _export_document_meta.clean(); add it as a single run to avoid a second decode.
+            value_run = value_cell.paragraphs[0].add_run(value)
+            value_run.font.size = Pt(10)
+
+    doc.add_page_break()
+
+
+def _docx_build_toc(doc, version):
+    toc_items = render_markdown_with_toc(version.markdown_body).get('toc') or []
+    if not toc_items:
+        return
+    heading = doc.add_paragraph()
+    heading_run = heading.add_run('Contents')
+    heading_run.bold = True
+    heading_run.font.name = 'Calibri'
+    heading_run.font.size = Pt(15)
+    heading_run.font.color.rgb = RGBColor(0x22, 0x2A, 0x35)
+    heading.paragraph_format.space_after = Pt(8)
+    for item in toc_items:
+        level = item.get('level', 1)
+        entry = doc.add_paragraph()
+        entry.paragraph_format.left_indent = Inches(0.28 * (level - 1))
+        entry.paragraph_format.space_after = Pt(2)
+        entry_run = entry.add_run(item.get('title', ''))
+        if level == 1:
+            entry_run.bold = True
+            entry_run.font.size = Pt(11)
+        else:
+            entry_run.font.size = Pt(10)
+            entry_run.font.color.rgb = RGBColor(0x39, 0x43, 0x4F)
+    doc.add_page_break()
+
+
 def _build_docx_export(document, version):
+    meta = _export_document_meta(document, version)
     doc = Document()
-    doc.add_heading(document.title, level=0)
-    doc.add_paragraph(f'Exported from Tracker on {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}')
+    _docx_apply_base_styles(doc)
+    _docx_setup_running_headers(doc, meta)
+    _docx_build_cover(doc, meta)
+    _docx_build_toc(doc, version)
 
     for block_type, text_value in _iter_markdown_blocks(version.markdown_body):
         if block_type == 'blank':
@@ -454,96 +788,151 @@ def _build_docx_export(document, version):
 
 
 def _build_pdf_export(document, version):
+    meta = _export_document_meta(document, version)
     output = io.BytesIO()
+    content_width = letter[0] - (2 * 0.85 * inch)
     pdf = SimpleDocTemplate(
         output,
         pagesize=letter,
-        topMargin=0.75 * inch,
-        bottomMargin=0.75 * inch,
-        leftMargin=0.75 * inch,
-        rightMargin=0.75 * inch,
+        topMargin=0.95 * inch,
+        bottomMargin=0.85 * inch,
+        leftMargin=0.85 * inch,
+        rightMargin=0.85 * inch,
+        title=meta['title'],
+        author='Cirque Corporation',
+        subject=meta['code'],
     )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'ISMSExportTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        spaceAfter=16,
-    )
     heading1_style = ParagraphStyle(
-        'ISMSExportHeading1',
-        parent=styles['Heading2'],
-        fontSize=14,
-        spaceBefore=12,
-        spaceAfter=8,
+        'ISMSExportHeading1', parent=styles['Heading2'], fontName='Helvetica-Bold',
+        fontSize=14, leading=17, textColor=colors.HexColor(_SLATE), spaceBefore=12, spaceAfter=7,
     )
     heading2_style = ParagraphStyle(
-        'ISMSExportHeading2',
-        parent=styles['Heading3'],
-        fontSize=12,
-        spaceBefore=10,
-        spaceAfter=6,
+        'ISMSExportHeading2', parent=styles['Heading3'], fontName='Helvetica-Bold',
+        fontSize=12, leading=15, textColor=colors.HexColor(_SLATE), spaceBefore=10, spaceAfter=5,
+    )
+    heading3_style = ParagraphStyle(
+        'ISMSExportHeading3', parent=styles['Heading4'], fontName='Helvetica-Bold',
+        fontSize=10.5, leading=13, textColor=colors.HexColor('#39434F'), spaceBefore=8, spaceAfter=4,
     )
     body_style = ParagraphStyle(
-        'ISMSExportBody',
-        parent=styles['BodyText'],
-        fontSize=10,
-        leading=14,
-        spaceAfter=8,
+        'ISMSExportBody', parent=styles['BodyText'], fontName='Times-Roman',
+        fontSize=10.5, leading=14.5, spaceAfter=8,
     )
     bullet_style = ParagraphStyle(
-        'ISMSExportBullet',
-        parent=body_style,
-        leftIndent=18,
-        firstLineIndent=-8,
+        'ISMSExportBullet', parent=body_style, leftIndent=18, firstLineIndent=-8, spaceAfter=5,
     )
     table_cell_style = ParagraphStyle(
         'ISMSExportTableCell', parent=body_style, fontSize=8.5, leading=11, spaceAfter=0,
     )
     table_header_style = ParagraphStyle(
-        'ISMSExportTableHeader', parent=table_cell_style, fontName='Helvetica-Bold',
+        'ISMSExportTableHeader', parent=table_cell_style, fontName='Times-Bold',
     )
     quote_style = ParagraphStyle(
-        'ISMSExportQuote', parent=body_style, leftIndent=16, fontName='Helvetica-Oblique',
+        'ISMSExportQuote', parent=body_style, leftIndent=16, fontName='Times-Italic',
         textColor=colors.HexColor('#39434F'), spaceBefore=4, spaceAfter=8,
     )
+    cover_code_style = ParagraphStyle(
+        'ISMSCoverCode', parent=body_style, fontName='Helvetica-Bold', fontSize=11,
+        textColor=colors.HexColor(_SLATE_MUTED), alignment=TA_CENTER, spaceAfter=6,
+    )
+    cover_title_style = ParagraphStyle(
+        'ISMSCoverTitle', parent=body_style, fontName='Helvetica-Bold', fontSize=24, leading=28,
+        textColor=colors.HexColor(_SLATE), alignment=TA_CENTER, spaceAfter=4,
+    )
+    cover_subtitle_style = ParagraphStyle(
+        'ISMSCoverSubtitle', parent=body_style, fontName='Helvetica-Oblique', fontSize=11,
+        textColor=colors.HexColor(_MUTED), alignment=TA_CENTER, spaceAfter=4,
+    )
+    cover_label_style = ParagraphStyle(
+        'ISMSCoverLabel', parent=body_style, fontName='Helvetica-Bold', fontSize=9.5, leading=13,
+        textColor=colors.HexColor('#39434F'), spaceAfter=0,
+    )
+    cover_value_style = ParagraphStyle(
+        'ISMSCoverValue', parent=body_style, fontSize=9.5, leading=13, spaceAfter=0,
+    )
+    toc_title_style = ParagraphStyle(
+        'ISMSTocTitle', parent=heading1_style, fontSize=15, spaceBefore=0, spaceAfter=8,
+    )
+    toc_level_styles = {
+        1: ParagraphStyle('ISMSToc1', parent=body_style, fontName='Helvetica-Bold', fontSize=10.5,
+                          leading=15, spaceAfter=1),
+        2: ParagraphStyle('ISMSToc2', parent=body_style, fontSize=10, leading=14, leftIndent=16,
+                          textColor=colors.HexColor('#39434F'), spaceAfter=1),
+        3: ParagraphStyle('ISMSToc3', parent=body_style, fontSize=9.5, leading=13, leftIndent=32,
+                          textColor=colors.HexColor(_SLATE_MUTED), spaceAfter=1),
+    }
 
-    story = [
-        Paragraph(html.escape(document.title), title_style),
-        Paragraph(html.escape(f'Exported from Tracker on {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}'), body_style),
-        Spacer(1, 0.15 * inch),
-    ]
+    # --- Cover page ---
+    story = []
+    if _LOGO_PATH.exists():
+        logo = Image(str(_LOGO_PATH), width=0.95 * inch, height=0.95 * inch * (174.0 / 187.0))
+        logo.hAlign = 'CENTER'
+        story.append(logo)
+        story.append(Spacer(1, 0.35 * inch))
+    else:
+        story.append(Spacer(1, 1.2 * inch))
+    story.append(Paragraph(html.escape(meta['code']), cover_code_style))
+    story.append(Paragraph(html.escape(meta['title']), cover_title_style))
+    if meta['doc_type_label']:
+        story.append(Paragraph(html.escape(meta['doc_type_label']), cover_subtitle_style))
+    story.append(Spacer(1, 0.4 * inch))
+    meta_rows = _export_meta_rows(meta)
+    if meta_rows:
+        data = [[Paragraph(html.escape(label), cover_label_style),
+                 Paragraph(html.escape(value), cover_value_style)] for label, value in meta_rows]
+        meta_table = Table(data, colWidths=[1.7 * inch, 3.9 * inch], hAlign='CENTER')
+        meta_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LINEBELOW', (0, 0), (-1, -2), 0.4, colors.HexColor('#E2E7ED')),
+        ]))
+        story.append(meta_table)
+    story.append(PageBreak())
 
+    # --- Table of contents ---
+    toc_items = render_markdown_with_toc(version.markdown_body).get('toc') or []
+    if toc_items:
+        story.append(Paragraph('Contents', toc_title_style))
+        for item in toc_items:
+            level = min(item.get('level', 1), 3)
+            story.append(Paragraph(_render_inline_export(item.get('title', '')), toc_level_styles[level]))
+        story.append(PageBreak())
+
+    # --- Body ---
     for block_type, text_value in _iter_markdown_blocks(version.markdown_body):
         if block_type == 'blank':
-            story.append(Spacer(1, 0.08 * inch))
+            story.append(Spacer(1, 0.06 * inch))
         elif block_type == 'heading1':
-            story.append(Paragraph(_render_inline(text_value), heading1_style))
+            story.append(Paragraph(_render_inline_export(text_value), heading1_style))
         elif block_type == 'heading2':
-            story.append(Paragraph(_render_inline(text_value), heading2_style))
+            story.append(Paragraph(_render_inline_export(text_value), heading2_style))
         elif block_type == 'heading3':
-            story.append(Paragraph(_render_inline(text_value), body_style))
+            story.append(Paragraph(_render_inline_export(text_value), heading3_style))
         elif block_type == 'bullet':
-            story.append(Paragraph(f'&bull; {_render_inline(text_value)}', bullet_style))
+            story.append(Paragraph(f'&bull;&nbsp; {_render_inline_export(text_value)}', bullet_style))
         elif block_type == 'quote':
-            story.append(Paragraph(_render_inline(text_value), quote_style))
+            story.append(Paragraph(_render_inline_export(text_value), quote_style))
         elif block_type == 'rule':
             story.append(HRFlowable(width='100%', thickness=0.5,
-                                    color=colors.HexColor('#C3CBD5'), spaceBefore=6, spaceAfter=8))
+                                    color=colors.HexColor(_RULE), spaceBefore=6, spaceAfter=8))
         elif block_type == 'table':
             rows, has_header = _normalize_table_rows(text_value)
             if rows:
                 ncols = max(len(r) for r in rows)
-                col_w = (7.0 * inch) / ncols
+                col_w = content_width / ncols
                 data = []
                 for row in rows:
                     row_style = table_header_style if (has_header and not data) else table_cell_style
-                    cells = [Paragraph(_render_inline(row[ci] if ci < len(row) else ''), row_style)
+                    cells = [Paragraph(_render_inline_export(row[ci] if ci < len(row) else ''), row_style)
                              for ci in range(ncols)]
                     data.append(cells)
                 tbl = Table(data, colWidths=[col_w] * ncols, repeatRows=1 if has_header else 0)
                 tstyle = [
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#C3CBD5')),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor(_RULE)),
                     ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING', (0, 0), (-1, -1), 5),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 5),
@@ -552,15 +941,22 @@ def _build_pdf_export(document, version):
                 ]
                 if has_header:
                     tstyle.append(('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#EEF2F6')))
+                    tstyle.append(('ROWBACKGROUNDS', (0, 1), (-1, -1),
+                                   [colors.white, colors.HexColor('#F7F9FB')]))
                 else:
                     tstyle.append(('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F6F8FA')))
                 tbl.setStyle(TableStyle(tstyle))
                 story.append(tbl)
                 story.append(Spacer(1, 0.12 * inch))
         else:
-            story.append(Paragraph(_render_inline(text_value), body_style))
+            story.append(Paragraph(_render_inline_export(text_value), body_style))
 
-    pdf.build(story)
+    pdf.build(story, canvasmaker=partial(
+        _NumberedCanvas,
+        header_left=meta['code'],
+        header_right=f"v{meta['revision_number']}",
+        footer_left=meta['footer_left'],
+    ))
     output.seek(0)
     return send_file(
         output,
@@ -864,10 +1260,43 @@ def _resolve_diff_versions(document, selected_version_id=None, target_version_id
 
 
 def _render_inline(text_value):
+    """Reader/metadata-card inline renderer. MUST stay byte-identical to its
+    historical behavior — the on-screen isms-section-meta-value blocks depend on
+    it. Handles **bold** and links only (no italics, no entity decoding). The
+    export path uses _render_inline_export instead."""
     rendered = html.escape(text_value)
     rendered = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', rendered)
     rendered = re.sub(r'\[(.+?)\]\((https?://[^\s)]+)\)', r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>', rendered)
     return rendered
+
+
+def _emphasize_export(fragment):
+    """Apply **bold** and *italic*/_italic_ to a non-link text fragment."""
+    fragment = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', fragment)
+    fragment = re.sub(r'(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])', r'<em>\1</em>', fragment)
+    fragment = re.sub(r'(?<![\w_])_(?!\s)([^_\n]+?)(?<!\s)_(?![\w_])', r'<em>\1</em>', fragment)
+    return fragment
+
+
+def _render_inline_export(text_value):
+    """Inline renderer for DOCX/PDF export only: decodes HTML entities, renders
+    **bold**, *italic*/_italic_ and links, and preserves hard-break newlines.
+    Emphasis is applied only OUTSIDE link href spans, so URLs containing
+    underscores (e.g. /_a_/) are never corrupted with <em> tags."""
+    text = html.escape(html.unescape(text_value))
+    link_re = re.compile(r'\[(.+?)\]\((https?://[^\s)]+)\)')
+    parts = []
+    cursor = 0
+    for match in link_re.finditer(text):
+        parts.append(_emphasize_export(text[cursor:match.start()]))
+        label = _emphasize_export(match.group(1))
+        href = match.group(2)
+        # reportlab's Paragraph parser only accepts href/color (not rel/target),
+        # so emit a minimal link tag; the href stays intact including underscores.
+        parts.append(f'<a href="{href}" color="#1A4FC4">{label}</a>')
+        cursor = match.end()
+    parts.append(_emphasize_export(text[cursor:]))
+    return ''.join(parts).replace('\n', '<br/>')
 
 
 def render_markdown_with_toc(markdown_body):

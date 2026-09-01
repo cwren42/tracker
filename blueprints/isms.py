@@ -10,12 +10,14 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, s
 from flask_login import login_required, current_user
 import markdown as markdown_lib
 from openpyxl import load_workbook
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from docx import Document
+from docx.shared import Pt
 from werkzeug.utils import secure_filename
 
 from extensions import db
@@ -270,9 +272,51 @@ def _prepare_reader_markdown(markdown_body):
     return '\n'.join(prepared)
 
 
+def _is_table_row(line):
+    s = line.strip()
+    return len(s) > 1 and s.startswith('|') and s.endswith('|')
+
+
+def _is_table_separator(line):
+    cells = [c.strip() for c in line.strip().strip('|').split('|')]
+    return bool(cells) and all(re.fullmatch(r':?-+:?', c) for c in cells)
+
+
+def _split_table_row(line):
+    return [c.strip() for c in line.strip().strip('|').split('|')]
+
+
+def _normalize_table_rows(rows):
+    """Return (rows, has_header). A leading all-empty row is the markdown
+    table's empty header (used for key/value tables); drop it and treat the
+    table as headerless so the first column is emphasized instead."""
+    if rows and not any(c.strip() for c in rows[0]):
+        return rows[1:], False
+    return rows, True
+
+
+def _strip_inline_md(text_value):
+    s = re.sub(r'\*\*(.+?)\*\*', r'\1', text_value)
+    s = re.sub(r'`([^`]+)`', r'\1', s)
+    s = re.sub(r'\[(.+?)\]\((https?://[^\s)]+)\)', r'\1 (\2)', s)
+    return s
+
+
 def _iter_markdown_blocks(markdown_body):
-    for raw_line in markdown_body.replace('\r\n', '\n').split('\n'):
-        line = raw_line.strip()
+    lines = markdown_body.replace('\r\n', '\n').split('\n')
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if _is_table_row(line):
+            rows = []
+            while i < n and _is_table_row(lines[i].strip()):
+                current = lines[i].strip()
+                if not _is_table_separator(current):
+                    rows.append(_split_table_row(current))
+                i += 1
+            if rows:
+                yield ('table', rows)
+            continue
         if not line:
             yield ('blank', '')
         elif line.startswith('### '):
@@ -285,6 +329,7 @@ def _iter_markdown_blocks(markdown_body):
             yield ('bullet', line[2:].strip())
         else:
             yield ('paragraph', line)
+        i += 1
 
 
 def _create_export_run(document, version, export_format):
@@ -326,9 +371,27 @@ def _build_docx_export(document, version):
         elif block_type == 'heading3':
             doc.add_heading(text_value, level=3)
         elif block_type == 'bullet':
-            doc.add_paragraph(text_value, style='List Bullet')
+            doc.add_paragraph(_strip_inline_md(text_value), style='List Bullet')
+        elif block_type == 'table':
+            rows, has_header = _normalize_table_rows(text_value)
+            if not rows:
+                continue
+            ncols = max(len(r) for r in rows)
+            table = doc.add_table(rows=len(rows), cols=ncols)
+            table.style = 'Table Grid'
+            for ri, row in enumerate(rows):
+                for ci in range(ncols):
+                    cell = table.rows[ri].cells[ci]
+                    cell.text = _strip_inline_md(row[ci]) if ci < len(row) else ''
+                    emphasize = (ri == 0 and has_header) or (not has_header and ci == 0)
+                    for para in cell.paragraphs:
+                        for run in para.runs:
+                            run.font.size = Pt(9)
+                            if emphasize:
+                                run.bold = True
+            doc.add_paragraph()
         else:
-            doc.add_paragraph(text_value)
+            doc.add_paragraph(_strip_inline_md(text_value))
 
     output = io.BytesIO()
     doc.save(output)
@@ -385,6 +448,12 @@ def _build_pdf_export(document, version):
         leftIndent=18,
         firstLineIndent=-8,
     )
+    table_cell_style = ParagraphStyle(
+        'ISMSExportTableCell', parent=body_style, fontSize=8.5, leading=11, spaceAfter=0,
+    )
+    table_header_style = ParagraphStyle(
+        'ISMSExportTableHeader', parent=table_cell_style, fontName='Helvetica-Bold',
+    )
 
     story = [
         Paragraph(html.escape(document.title), title_style),
@@ -403,6 +472,33 @@ def _build_pdf_export(document, version):
             story.append(Paragraph(_render_inline(text_value), body_style))
         elif block_type == 'bullet':
             story.append(Paragraph(f'&bull; {_render_inline(text_value)}', bullet_style))
+        elif block_type == 'table':
+            rows, has_header = _normalize_table_rows(text_value)
+            if rows:
+                ncols = max(len(r) for r in rows)
+                col_w = (7.0 * inch) / ncols
+                data = []
+                for row in rows:
+                    row_style = table_header_style if (has_header and not data) else table_cell_style
+                    cells = [Paragraph(_render_inline(row[ci] if ci < len(row) else ''), row_style)
+                             for ci in range(ncols)]
+                    data.append(cells)
+                tbl = Table(data, colWidths=[col_w] * ncols, repeatRows=1 if has_header else 0)
+                tstyle = [
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#C3CBD5')),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ]
+                if has_header:
+                    tstyle.append(('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#EEF2F6')))
+                else:
+                    tstyle.append(('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F6F8FA')))
+                tbl.setStyle(TableStyle(tstyle))
+                story.append(tbl)
+                story.append(Spacer(1, 0.12 * inch))
         else:
             story.append(Paragraph(_render_inline(text_value), body_style))
 

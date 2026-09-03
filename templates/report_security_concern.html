@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Report a Security Concern{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <h1 class="mb-1"><i class="bi bi-shield-exclamation me-2"></i>Report a Security Concern</h1>
+    <p class="text-muted mb-0">
+        If something looks wrong, report it. You will never be criticised for reporting something
+        that turns out to be harmless &mdash; we would much rather look at ten false alarms than
+        miss one real problem.
+    </p>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header"><strong>Tell us what happened</strong></div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('tickets.new_ticket') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="category" value="Security">
+
+                    <div class="mb-3">
+                        <label class="form-label" for="subject">What happened?</label>
+                        <input class="form-control" id="subject" name="subject" required
+                               placeholder="e.g. I clicked a link in an email that now looks fake">
+                        <div class="form-text">A short summary is fine.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="priority">How urgent does it feel?</label>
+                        <select class="form-select" id="priority" name="priority">
+                            <option value="Urgent">Urgent &mdash; it is happening right now</option>
+                            <option value="High" selected>High &mdash; needs looking at today</option>
+                            <option value="Normal">Normal &mdash; worth checking, not urgent</option>
+                            <option value="Low">Low &mdash; just letting you know</option>
+                        </select>
+                        <div class="form-text">Your best guess is good enough. IT will re-assess it.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="description">Any details you can give</label>
+                        <textarea class="form-control" id="description" name="description" rows="7" required
+                                  placeholder="What did you see? When? What were you doing at the time? If it was an email, who did it appear to come from? If you clicked or entered anything, please say so &mdash; it helps us act faster and you will not be in trouble."></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="reporter_name">Your name</label>
+                        <input class="form-control" id="reporter_name" name="reporter_name"
+                               value="{{ current_user.full_name or current_user.username }}">
+                    </div>
+
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-send"></i> Send to IT
+                    </button>
+                    <a href="{{ url_for('tickets.tickets') }}" class="btn btn-link">View my previous reports</a>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header"><strong>Report it if you see&hellip;</strong></div>
+            <div class="card-body small">
+                <ul class="mb-0 ps-3">
+                    <li class="mb-2">An email asking you to log in, pay something, or open an unexpected attachment</li>
+                    <li class="mb-2">A message that looks like it is from a colleague or an executive but feels off</li>
+                    <li class="mb-2">You clicked a link or entered a password somewhere you now doubt</li>
+                    <li class="mb-2">A lost or stolen laptop, phone or badge</li>
+                    <li class="mb-2">Someone asking for information or access they should not need</li>
+                    <li class="mb-2">A device behaving strangely &mdash; unexpected pop-ups, files you did not change</li>
+                    <li class="mb-0">Anything else that just does not look right</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card border-warning-subtle">
+            <div class="card-header bg-warning-subtle"><strong>If it is urgent</strong></div>
+            <div class="card-body small mb-0">
+                Send this form and then contact IT directly so someone picks it up immediately.
+                Do not wait for a reply if you believe data or an account is actively at risk.
+                <hr>
+                Your responsibilities during an incident are set out in the Incident Response
+                Procedure, available under
+                <a href="{{ url_for('isms.policy_library') }}">Company Policies</a>.
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

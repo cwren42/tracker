@@ -90,6 +90,16 @@
         </a>
         {% endif %}
 
+        {# Report a Security Concern: named employee reporting channel for SOC 2
+           CC.7.3/CC.7.4. Visible to EVERY role -- an incident reporting route that
+           only IT can find is not a reporting channel. #}
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer', 'hr'] %}
+        <a class="sidebar-link {% if request.endpoint == 'tickets.report_security_concern' %}active{% endif %}"
+           href="{{ url_for('tickets.report_security_concern') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Report a Security Concern">
+            <i class="bi bi-shield-exclamation" style="color:#e8896c"></i><span class="link-label">Report a Concern</span>
+        </a>
+        {% endif %}
+
         {% if current_user.role in ['admin', 'eagle_eyes'] %}
         <a class="sidebar-link {% if request.endpoint == 'rmm.rmm_eagle_eyes_fleet' %}active{% endif %}"
            href="{{ url_for('rmm.rmm_eagle_eyes_fleet') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eyes">

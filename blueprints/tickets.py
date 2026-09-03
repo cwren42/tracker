@@ -356,6 +356,21 @@ def new_ticket():
         if priority not in ['Low', 'Normal', 'High', 'Urgent']:
             priority = 'Normal'
 
+        # Category was never read here, so every web-submitted ticket fell back to
+        # the model default 'General' -- which is why employee-reported security
+        # concerns were indistinguishable from general requests. Whitelisted so a
+        # posted value cannot invent categories and fragment reporting.
+        category = (request.form.get('category') or 'General').strip()
+        # Must cover BOTH the options offered by add_ticket.html (General, Hardware,
+        # Software, Network, Email, Account, Other) and the categories already in
+        # use in the data (Security, Asset Management, HR / Onboarding, HR /
+        # Offboarding) -- omitting any of them would silently downgrade a user's
+        # choice back to 'General', which is the bug being fixed here.
+        if category not in ['General', 'Hardware', 'Software', 'Network', 'Email',
+                            'Account', 'Other', 'Security', 'Asset Management',
+                            'HR / Onboarding', 'HR / Offboarding']:
+            category = 'General'
+
         reporter_name = (request.form.get('reporter_name') or '').strip() or None
         reporter_email = (request.form.get('reporter_email') or '').strip() or None
 
@@ -375,6 +390,7 @@ def new_ticket():
             status='Open',
             priority=priority,
             source='web',
+            category=category,
             subject=subject,
             description=description,
             reporter_name=reporter_name,
@@ -498,6 +514,28 @@ def new_ticket():
 
     assets = Asset.query.order_by(Asset.asset_tag.asc()).all()
     return render_template('add_ticket.html', assets=assets)
+
+
+@bp.route('/report-security-concern')
+@login_required
+@ticket_access_required
+@license_required
+def report_security_concern():
+    """Named entry point for employees to report a suspected security incident.
+
+    SOC 2 control "Incident Response: Employee Responsibility" (CC.2.2, CC.7.3,
+    CC.7.4) requires evidence that employees can and do report suspected
+    security events. The capability already existed -- any employee can raise a
+    ticket -- but it was unnamed and unused for this purpose: of 2,821 tickets,
+    exactly ONE had ever been submitted through the web form, and the 184
+    "Security" category tickets were almost entirely machine-generated alerts.
+
+    This is a GET-only form that posts to the normal new_ticket handler with
+    category=Security, so it inherits asset linking, reporter resolution,
+    admin notification and assignment rather than duplicating them. Nothing
+    here bypasses the ordinary ticket path.
+    """
+    return render_template('report_security_concern.html')
 
 
 @bp.route('/tickets/<int:ticket_id>')

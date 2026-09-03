@@ -937,6 +937,36 @@ def export_type1_pack():
     return send_file(pack_buffer, as_attachment=True, download_name=filename, mimetype='application/zip')
 
 
+@bp.route('/soc2/readiness/export/smoke-test-bundle')
+@login_required
+@admin_required
+def export_smoke_test_bundle():
+    """Download the auditor smoke-test remediation evidence bundle.
+
+    These bundles are built on disk in the application root as
+    Cirque_SOC2_Evidence_<date>.zip. They are deliberately NOT placed under
+    static/ -- Flask serves /static with no authentication at all, and the
+    bundle contains the Active Directory password policy, the file-share
+    permissions matrix, the full asset inventory and the risk assessment.
+    """
+    import glob
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Fixed pattern in a fixed directory: the filename never comes from the
+    # request, so there is no traversal surface here.
+    candidates = sorted(glob.glob(os.path.join(root, 'Cirque_SOC2_Evidence_*.zip')))
+    if not candidates:
+        flash('No evidence bundle has been generated yet.', 'warning')
+        return redirect(url_for('readiness.readiness_dashboard'))
+
+    newest = max(candidates, key=os.path.getmtime)
+    return send_file(
+        newest,
+        as_attachment=True,
+        download_name=os.path.basename(newest),
+        mimetype='application/zip',
+    )
+
+
 @bp.route('/soc2/readiness/<int:item_id>')
 @login_required
 @admin_required

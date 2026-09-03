@@ -1356,6 +1356,67 @@ def document_detail(document_id):
     )
 
 
+# ---------------------------------------------------------------------------
+# Employee-facing policy library (read-only, deliberately NOT admin-gated)
+# ---------------------------------------------------------------------------
+# SOC 2 control "Employee Shared Drive" (CC.2.2) requires that entity policies
+# are accessible to all employees. The ISMS manual is maintained here in the
+# Tracker and is the system of record -- but every other /isms route is
+# @admin_required, so only the single admin account could actually read it,
+# against 73 enabled employees. Copying the documents to a file share was
+# rejected: a stale duplicate of this manual already exists in a personal
+# OneDrive and had drifted, which is exactly the failure mode to avoid.
+#
+# These two routes therefore expose the PUBLISHED documents to any
+# authenticated user. Microsoft SSO auto-provisions employees as role
+# 'viewer' on first login (see blueprints/auth.py), so no account
+# pre-provisioning is required.
+#
+# Read-only by construction: no edit, history, diff, restore, export or
+# ledger access is reachable from here, and drafts are never served.
+
+@bp.route('/policies')
+@login_required
+def policy_library():
+    """Employee-readable index of published ISMS documents."""
+    documents = (
+        ISMSDocument.query
+        .filter(ISMSDocument.status == 'published')
+        .order_by(ISMSDocument.title.asc())
+        .all()
+    )
+    return render_template('policy_library.html', documents=documents)
+
+
+@bp.route('/policies/<int:document_id>')
+@login_required
+def policy_document(document_id):
+    """Read-only render of a single PUBLISHED ISMS document."""
+    document = ISMSDocument.query.get_or_404(document_id)
+    # Never serve a draft or retired document through the employee library,
+    # even to an admin following a stale link -- this library IS the published
+    # set, and a draft leaking here would become de facto company policy.
+    if (document.status or 'draft') != 'published':
+        abort(404)
+
+    version = _get_current_version(document)
+    if version is None:
+        abort(404)
+
+    rendered_document = render_markdown_with_toc(version.markdown_body)
+    return render_template(
+        'isms_document_detail.html',
+        document=document,
+        version=version,
+        rendered_html=rendered_document['html'],
+        toc_items=rendered_document['toc'],
+        current_actor=_current_actor(),
+        read_only=True,
+        back_url=url_for('isms.policy_library'),
+        back_label='Back to Policies',
+    )
+
+
 @bp.route('/isms/<int:document_id>/edit', methods=['GET', 'POST'])
 @login_required
 @admin_required

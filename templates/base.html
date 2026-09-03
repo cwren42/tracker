@@ -80,6 +80,16 @@
         </a>
         {% endif %}
 
+        {# Company Policies: employee-readable ISMS library. Visible to EVERY role on
+           purpose -- SOC 2 CC.2.2 requires entity policies to be accessible to all
+           employees, and the route itself is @login_required (not admin-gated). #}
+        {% if current_user.role in ['admin', 'manager', 'eagle_eyes', 'base_user', 'viewer', 'hr'] %}
+        <a class="sidebar-link {% if request.endpoint in ['isms.policy_library', 'isms.policy_document'] %}active{% endif %}"
+           href="{{ url_for('isms.policy_library') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Company Policies">
+            <i class="bi bi-shield-check" style="color:#8b9dc3"></i><span class="link-label">Company Policies</span>
+        </a>
+        {% endif %}
+
         {% if current_user.role in ['admin', 'eagle_eyes'] %}
         <a class="sidebar-link {% if request.endpoint == 'rmm.rmm_eagle_eyes_fleet' %}active{% endif %}"
            href="{{ url_for('rmm.rmm_eagle_eyes_fleet') }}" data-bs-toggle="tooltip" data-bs-placement="right" title="Eagle Eyes">

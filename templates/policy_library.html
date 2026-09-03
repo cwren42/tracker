@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Company Policies{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h1 class="mb-0"><i class="bi bi-shield-check me-2"></i>Company Policies</h1>
+        <p class="text-muted mb-0">Cirque's approved information security policies and procedures, available to all employees.</p>
+    </div>
+    <span class="badge bg-secondary">{{ documents|length }} published</span>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body small text-muted mb-0">
+        These are the current approved versions, maintained in the Tracker as the single system of
+        record — so what you read here is always the live document, never a stale copy. If you have a
+        question about a policy, or think something is out of date, raise it with IT.
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header"><strong>Published documents</strong></div>
+    <div class="card-body p-0">
+        {% if documents %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th>Document</th>
+                        <th>Type</th>
+                        <th>Version</th>
+                        <th>Last updated</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for document in documents %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ document.title }}</div>
+                            {% if document.category %}
+                            <div class="text-muted small">{{ document.category }}</div>
+                            {% endif %}
+                        </td>
+                        <td>{{ document.doc_type or 'document' }}</td>
+                        <td>
+                            {% if document.current_version %}
+                            v{{ document.current_version.version_number }}
+                            {% else %}
+                            &mdash;
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if document.updated_at %}
+                            {{ document.updated_at.strftime('%Y-%m-%d') }}
+                            {% else %}
+                            &mdash;
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('isms.policy_document', document_id=document.id) }}">
+                                <i class="bi bi-book"></i> Read
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-4 text-muted">
+            No published policies are available yet. Documents appear here once they have been
+            approved and published.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

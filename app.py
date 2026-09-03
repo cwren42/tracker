@@ -86,6 +86,23 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 app = Flask(__name__)
 
+# ── Trust the one nginx hop in front of us ──────────────────────────────────
+# gunicorn binds 127.0.0.1:8000 and nginx is the ONLY thing that can reach it
+# (proxy_pass http://127.0.0.1:8000), so the forwarded headers it sets cannot
+# be spoofed by a client. Without this, every request looked like plain HTTP
+# from 127.0.0.1, which broke three things:
+#   * audit_trail.ip_address recorded nginx's loopback for every action, so
+#     the "who did this from where" column was worthless for forensics
+#   * flask-limiter keys on get_remote_address, so ALL clients shared a single
+#     rate-limit bucket and one user could exhaust everyone's allowance
+#   * notification emails built links from request.host_url as http://, which
+#     only worked because nginx 301s port 80 to https
+# x_host is deliberately NOT set: nginx passes the real Host directly
+# (proxy_set_header Host $host) and never sets X-Forwarded-Host, so enabling
+# it would trust a header that is not there.
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
 # ── Configuration (centralized in config.py; secrets required from env) ─────
 from config import Config
 app.config.from_object(Config)

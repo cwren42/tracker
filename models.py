@@ -92,6 +92,12 @@ class Employee(db.Model):
     ad_dn = db.Column(db.String(500))
     ad_enabled = db.Column(db.Boolean, nullable=True)   # True=active, False=disabled in AD
     ad_last_sync = db.Column(db.DateTime)
+    # Password expiry, populated from AD by the employee sync. pwd_expires_at comes from
+    # AD's own constructed msDS-UserPasswordExpiryTimeComputed, so it already honours
+    # fine-grained policies; pwd_never_expires is True when AD returns the never sentinel.
+    pwd_last_set = db.Column(db.DateTime)
+    pwd_expires_at = db.Column(db.DateTime, index=True)
+    pwd_never_expires = db.Column(db.Boolean, default=False)
     # Microsoft 365 validation fields
     m365_id = db.Column(db.String(100))
     m365_account_enabled = db.Column(db.Boolean, nullable=True)

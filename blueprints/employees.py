@@ -474,6 +474,14 @@ def run_ad_employee_sync():
                 if (emp.onboard_status or '').lower() == 'deleted':
                     emp.onboard_status = None
             emp.ad_last_sync     = now
+            # Password expiry, mirrored from AD. Guarded on key presence so an older
+            # ldap_service that does not emit these cannot silently null them out; within
+            # the branch we mirror AD faithfully, INCLUDING None (a user switching to
+            # "password never expires" legitimately clears pwd_expires_at).
+            if 'pwd_expires_at' in u:
+                emp.pwd_last_set      = u.get('pwd_last_set')
+                emp.pwd_expires_at    = u.get('pwd_expires_at')
+                emp.pwd_never_expires = bool(u.get('pwd_never_expires'))
             if email:
                 emp.email = email
             if u.get('department'):

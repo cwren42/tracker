@@ -517,6 +517,35 @@ class LDAPService:
     # Bulk user enumeration — used for employee sync (AD is master)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _filetime_to_dt(value):
+        """Convert an AD FILETIME (100-ns ticks since 1601-01-01 UTC) to a datetime.
+
+        Returns (datetime|None, never_expires: bool). ldap3 sometimes pre-converts AD
+        time attributes to datetime, so accept that too. Sentinels:
+          0                    -> not set / must change at next logon
+          0x7FFFFFFFFFFFFFFF   -> never expires
+        """
+        NEVER = 0x7FFFFFFFFFFFFFFF
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if value is None or value == '':
+            return None, False
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None), False
+        try:
+            ticks = int(value)
+        except (TypeError, ValueError):
+            return None, False
+        if ticks >= NEVER:
+            return None, True
+        if ticks <= 0:
+            return None, False
+        try:
+            return datetime(1601, 1, 1) + timedelta(microseconds=ticks // 10), False
+        except (OverflowError, OSError, ValueError):
+            return None, False
+
     def get_all_users(self) -> list:
         """Return all user objects from AD as a list of plain dicts.
 
@@ -561,6 +590,13 @@ class LDAPService:
             'mobile',
             'userAccountControl',
             'thumbnailPhoto',
+            # Password expiry. pwdLastSet is informational; the authoritative value is
+            # msDS-UserPasswordExpiryTimeComputed -- a CONSTRUCTED attribute AD calculates
+            # itself, so it already accounts for fine-grained password policies and for
+            # "password never expires" (it returns the int64 max sentinel in that case).
+            # It must be requested explicitly; it is never returned by a wildcard.
+            'pwdLastSet',
+            'msDS-UserPasswordExpiryTimeComputed',
         ]
 
         # Exclude disabled accounts at the query level (UAC bit 2 = ACCOUNTDISABLE)
@@ -632,6 +668,12 @@ class LDAPService:
             ad_dept  = _str(attrs.get('department')) or None
             ad_title = _str(attrs.get('title')) or None
 
+            # --- password expiry ---
+            pwd_last_set, _ = self._filetime_to_dt(attrs.get('pwdLastSet'))
+            pwd_expires_at, pwd_never_expires = self._filetime_to_dt(
+                attrs.get('msDS-UserPasswordExpiryTimeComputed')
+            )
+
             # --- OU-based department / location inference ---
             ou_dept, ou_location = self._parse_ou_dept_location(dn)
             department = ad_dept or (ou_dept if self.config.ou_as_department else None)
@@ -652,6 +694,9 @@ class LDAPService:
                 'ad_enabled':        enabled,
                 'thumbnail_photo':   thumb,
                 'ou_location':       location,   # inferred region from OU path
+                'pwd_last_set':      pwd_last_set,
+                'pwd_expires_at':    pwd_expires_at,
+                'pwd_never_expires': pwd_never_expires,
             })
 
         return results

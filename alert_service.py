@@ -1543,6 +1543,66 @@ def _eval_compliance_alerts(con, rules_by_type):
                             f'before generating.', dedup_token='ledger_filing')
 
 
+    # ── Identity: AD password expiry ────────────────────────────────────────
+    # Why this exists: on 2026-09-08 four VPN users were locked out by expired
+    # passwords and nobody knew until they phoned in. Users DO get the Windows
+    # expiry toast and ignore it, so the warning has to reach IT, not just them.
+    # Remote users are the acute case -- historically they could not self-serve,
+    # because changing the password needed the VPN and the VPN needed the
+    # password. (Entra SSPR + AD Connect password writeback was enabled the same
+    # day, so aka.ms/sspr is now the remedy; these alerts are the early warning.)
+    #
+    # Source of truth is employee.pwd_expires_at, mirrored from AD's constructed
+    # msDS-UserPasswordExpiryTimeComputed, so fine-grained policies and
+    # never-expires accounts are already handled upstream.
+    if rules_by_type.get('pwd_expired') or rules_by_type.get('pwd_expiring'):
+        try:
+            pw_rows = con.execute(
+                """SELECT name, sam_account_name,
+                          EXTRACT(EPOCH FROM (pwd_expires_at - NOW())) / 86400.0 AS days_left
+                     FROM employee
+                    WHERE pwd_expires_at IS NOT NULL
+                      AND COALESCE(pwd_never_expires, FALSE) = FALSE
+                      AND COALESCE(ad_enabled, TRUE) = TRUE
+                    ORDER BY pwd_expires_at"""
+            ).fetchall()
+        except Exception as exc:
+            logger.debug(f'compliance: password expiry query failed ({exc})')
+            pw_rows = []
+
+        def _who(row):
+            return (row['sam_account_name'] or row['name'] or '?').strip()
+
+        rule = rules_by_type.get('pwd_expired')
+        if rule and rule['enabled']:
+            expired = [r for r in pw_rows if (r['days_left'] or 0) < 0]
+            if expired:
+                names = ', '.join(
+                    f'{_who(r)} ({abs(r["days_left"]):.0f}d ago)' for r in expired[:10]
+                )
+                _fire_alert(con, rule,
+                            f'{len(expired)} enabled AD account(s) have an EXPIRED password '
+                            f'and cannot authenticate to the VPN or the domain: {names}'
+                            f'{" and others" if len(expired) > 10 else ""}. '
+                            f'They can self-recover at aka.ms/sspr (password writeback is '
+                            f'enabled); a helpdesk reset is only needed if SSPR fails.',
+                            dedup_token='pwd_expired')
+
+        rule = rules_by_type.get('pwd_expiring')
+        if rule and rule['enabled']:
+            threshold = (rule['threshold_value'] if rule else 14) or 14
+            soon = [r for r in pw_rows if 0 <= (r['days_left'] or 0) <= threshold]
+            if soon:
+                names = ', '.join(f'{_who(r)} ({r["days_left"]:.1f}d)' for r in soon[:10])
+                _fire_alert(con, rule,
+                            f'{len(soon)} AD password(s) expire within {int(threshold)} days: '
+                            f'{names}{" and others" if len(soon) > 10 else ""}. '
+                            f'Remote users should change it BEFORE it lapses, or reset at '
+                            f'aka.ms/sspr afterwards.',
+                            dedup_token='pwd_expiring')
+
+
+
 def run_evaluator():
     """Blocking loop – run in a daemon thread.
     Uses a timestamp file + exclusive lock so only ONE of the Gunicorn workers

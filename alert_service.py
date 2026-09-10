@@ -1601,6 +1601,23 @@ def _eval_compliance_alerts(con, rules_by_type):
                             f'aka.ms/sspr afterwards.',
                             dedup_token='pwd_expiring')
 
+        # Tell the PERSON, not just IT. The alerts above stop the surprise but
+        # not the work: someone still has to chase each user. This mails the
+        # affected employee directly at 14/7/3/1 days and on expiry, including
+        # the VPN re-save step that is the actual cause of the repeat calls.
+        # Gated by Setting `pwd_expiry_notify_users` ('off' default | 'dry' |
+        # 'on') and capped per run, so it cannot mail the company by accident.
+        try:
+            import pwd_expiry_notice
+            notice = pwd_expiry_notice.run(con)
+            if notice.get('sent'):
+                logger.info(
+                    'pwd expiry notices: mode=%s due=%s sent=%s already=%s failed=%s',
+                    notice['mode'], notice['due'], notice['sent'],
+                    notice['skipped_already'], notice['failed'])
+        except Exception as exc:
+            logger.warning(f'compliance: password expiry notices failed ({exc})')
+
 
 
 def run_evaluator():

@@ -82,6 +82,14 @@ def _endpoint(side, zone_names, group_names):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=None)
+    # Sign-off arguments. The review is a human act, so these are only ever
+    # passed when a named person has actually reviewed the ruleset -- never
+    # defaulted, and never backdated: --review-date defaults to today because
+    # the record is of an approval happening now.
+    ap.add_argument('--reviewer', default=None, help='who reviewed the ruleset')
+    ap.add_argument('--approved-by', default=None, help='who approved it')
+    ap.add_argument('--review-date', default=None, help='YYYY-MM-DD (default: today)')
+    ap.add_argument('--review-note', default=None)
     args = ap.parse_args()
 
     stamp = datetime.now().strftime('%Y%m%d')
@@ -173,9 +181,21 @@ def main():
     ws = _sheet(wb, 'Review Record', ['Review date', 'Reviewer', 'Rules reviewed',
                                       'Changes required', 'Change ticket / ref',
                                       'Approved by', 'Approval date', 'Notes'])
-    ws.append(['', '', f'{len(custom)} custom rules as at {stamp}', '', '', '', '',
-               'CC-024 requires a PERIODIC review record. Tracker generates the ruleset; '
-               'this sheet is the sign-off and must be completed by the reviewer.'])
+    if args.reviewer or args.approved_by:
+        rdate = args.review_date or datetime.now().strftime('%Y-%m-%d')
+        ws.append([rdate, args.reviewer or args.approved_by,
+                   f'{len(custom)} custom rules as at {stamp}',
+                   'None', '', args.approved_by or args.reviewer, rdate,
+                   args.review_note or
+                   f'Quarterly review of the UniFi zone-based firewall ruleset. '
+                   f'{len(custom)} team-authored rules reviewed ({sum(1 for p in custom if not p.get("enabled"))} '
+                   f'disabled); {len(predefined)} automatic per-zone-pair defaults not '
+                   f'individually reviewed. Ruleset exported directly from the controller '
+                   f'by Tracker at generation time.'])
+    else:
+        ws.append(['', '', f'{len(custom)} custom rules as at {stamp}', '', '', '', '',
+                   'CC-024 requires a PERIODIC review record. Tracker generates the ruleset; '
+                   'this sheet is the sign-off and must be completed by the reviewer.'])
     for cell in ws[2]:
         cell.alignment = Alignment(vertical='top', wrap_text=True)
     ws.row_dimensions[2].height = 46
@@ -189,7 +209,13 @@ def main():
     print(f"  zones          {len(zones)}")
     print(f"  groups         {len(groups)}")
     print(f"  disabled rules {sum(1 for p in custom if not p.get('enabled'))} of {len(custom)} custom")
-    print("  NOTE: the Review Record sheet is intentionally blank -- the review is a human act.")
+    if args.reviewer or args.approved_by:
+        print(f"  SIGNED OFF: reviewer={args.reviewer or args.approved_by} "
+              f"approved_by={args.approved_by or args.reviewer} "
+              f"date={args.review_date or datetime.now().strftime('%Y-%m-%d')}")
+    else:
+        print("  NOTE: the Review Record sheet is blank -- the review is a human act. "
+              "Pass --reviewer/--approved-by once a named person has reviewed it.")
 
 
 if __name__ == '__main__':

@@ -1543,6 +1543,95 @@ def _eval_compliance_alerts(con, rules_by_type):
                             f'before generating.', dedup_token='ledger_filing')
 
 
+    # ── SOC 2: control reviews needing sign-off ─────────────────────────────
+    # Why: a control is not the implementation, it is the implementation PLUS
+    # the evidence that it operated. CC-024 Firewall Rules is the worked
+    # example -- Tracker exports the UniFi ruleset any time, but the control
+    # stays Not In Place until a human reviews it and signs. Nothing was
+    # computing "due", so the only way anyone learned a sign-off was needed was
+    # if IT happened to look. Chris asked to be emailed instead.
+    #
+    # next_evidence_date is populated on 0 of 58 controls, so the due date is
+    # derived from last_evidence_date + the control_frequency period. Controls
+    # with no last_evidence_date at all have never been evidenced, which is
+    # reported separately -- it is a different problem from a lapsed review.
+    #
+    # 'Continuous' and 'As Needed' carry no cadence and are deliberately
+    # skipped: alerting on them would be permanent noise.
+    if rules_by_type.get('control_review_due') or rules_by_type.get('control_review_overdue'):
+        PERIOD_DAYS = {'daily': 1, 'weekly': 7, 'monthly': 30,
+                       'quarterly': 90, 'annually': 365, 'annual': 365}
+        try:
+            ctrl_rows = con.execute(
+                """SELECT id, control_name, soa_control_ref, control_frequency,
+                          control_owner, control_progress, last_evidence_date
+                     FROM soc2_control
+                    WHERE COALESCE(is_active, TRUE) = TRUE
+                    ORDER BY control_name"""
+            ).fetchall()
+        except Exception as exc:
+            logger.debug(f'compliance: control review query failed ({exc})')
+            ctrl_rows = []
+
+        today = _now().date()
+        due, overdue, never = [], [], []
+        for c in ctrl_rows:
+            period = PERIOD_DAYS.get((c['control_frequency'] or '').strip().lower())
+            if not period:
+                continue
+            label = f"{c['soa_control_ref'] or 'CC-?'} {c['control_name']}"
+            last = c['last_evidence_date']
+            if last is None:
+                never.append(f"{label} ({c['control_frequency']})")
+                continue
+            last_d = last.date() if hasattr(last, 'date') else last
+            days_left = (last_d + timedelta(days=period) - today).days
+            if days_left < 0:
+                overdue.append(f'{label} ({abs(days_left)}d overdue)')
+                continue
+            # The pre-warning window must scale to the cadence. A flat 30-day
+            # notice on a DAILY control fires every single day forever -- it is
+            # always "due within 30 days" -- which is how CC-056 Administrator
+            # Access and CC-057 Antivirus first appeared to need sign-off when
+            # they were simply operating normally, evidenced the day before.
+            # Short-cadence controls are self-evidencing automation; only a
+            # genuine lapse (days_left < 0) is worth an email.
+            notice = min(period // 3, 90)
+            if notice >= 1 and days_left <= notice:
+                due.append((days_left, f'{label} (in {days_left}d)'))
+
+        rule = rules_by_type.get('control_review_overdue')
+        if rule and rule['enabled'] and (overdue or never):
+            parts = []
+            if overdue:
+                parts.append(f"{len(overdue)} lapsed: " + ', '.join(overdue[:6]))
+            if never:
+                parts.append(f"{len(never)} never evidenced: " + ', '.join(never[:6]))
+            _fire_alert(con, rule,
+                        'SOC 2 control review sign-off needed. ' + ' | '.join(parts) +
+                        '. Review the control and record the sign-off on /soc2 so the '
+                        'control can move to In Place; a control with no evidence of '
+                        'operating is a finding even when the underlying implementation '
+                        'is sound.',
+                        dedup_token='control_review_overdue')
+
+        rule = rules_by_type.get('control_review_due')
+        if rule and rule['enabled'] and due:
+            # threshold is the OUTER cap; the per-control notice window above is
+            # the tighter of the two, so a quarterly control warns ~30d out and a
+            # weekly one only ~2d out.
+            threshold = (rule['threshold_value'] or 30)
+            soon = sorted(d for d in due if d[0] <= threshold)
+            if soon:
+                _fire_alert(con, rule,
+                            f'{len(soon)} SOC 2 control review(s) fall due within '
+                            f'{int(threshold)} days: ' +
+                            ', '.join(t for _, t in soon[:8]) +
+                            ('' if len(soon) <= 8 else ' and others') +
+                            '. Each needs a reviewer and a recorded sign-off.',
+                            dedup_token='control_review_due')
+
+
     # ── Identity: AD password expiry ────────────────────────────────────────
     # Why this exists: on 2026-09-08 four VPN users were locked out by expired
     # passwords and nobody knew until they phoned in. Users DO get the Windows

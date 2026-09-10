@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Generate the CC-024 Firewall Rules evidence workbook from the live UniFi controller.
+
+The auditor asks for two things under CC-024 (ISO A.13.1.3 / SOC 2 CC.6.6):
+  1. the current firewall ruleset, and
+  2. a periodic review record.
+
+This produces (1) from the controller so it is never stale, and lays out (2) as
+a sheet for a human to sign. Tracker cannot manufacture a review record -- the
+review is the human act -- but it can put the ruleset in front of the reviewer
+and give the sign-off a fixed home.
+
+WHY THE SPLIT BETWEEN CUSTOM AND PREDEFINED:
+The controller reports 616 policies, but most carry predefined=true -- they are
+the automatic per-zone-pair defaults UniFi creates (each zone pair gets a
+"Block All Traffic" at index 2147483647). An auditor reviewing "your firewall
+rules" means the ones your team authored. Burying ~40 real rules in 616 rows
+makes the evidence unreviewable, so custom rules get their own sheet first.
+
+Read-only: it never writes to the controller.
+
+    python generate_firewall_ruleset_evidence.py
+    python generate_firewall_ruleset_evidence.py --out /tmp/fw.xlsx
+"""
+import argparse
+import os
+import sys
+import urllib.parse
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+
+from app import app
+from models import Setting
+from unifi_service import load_unifi_config, UnifiService
+
+HDR_FILL = PatternFill('solid', fgColor='1F3864')
+HDR_FONT = Font(color='FFFFFF', bold=True)
+
+
+def _sheet(wb, title, headers, first=False):
+    ws = wb.active if first else wb.create_sheet()
+    ws.title = title
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = HDR_FILL
+        cell.font = HDR_FONT
+        cell.alignment = Alignment(vertical='center', wrap_text=True)
+    ws.freeze_panes = 'A2'
+    return ws
+
+
+def _autosize(ws, cap=58):
+    for col in ws.columns:
+        width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), cap)
+
+
+def _endpoint(side, zone_names, group_names):
+    """Render a policy source/destination as one readable cell."""
+    if not isinstance(side, dict):
+        return ''
+    bits = [zone_names.get(side.get('zone_id'), side.get('zone_id') or 'ANY')]
+    target = side.get('matching_target')
+    if target and target != 'ANY':
+        vals = side.get('ips') or side.get('ip_group_id') or side.get('client_macs') or ''
+        if isinstance(vals, list):
+            vals = ', '.join(str(v) for v in vals)
+        if side.get('ip_group_id'):
+            vals = group_names.get(side['ip_group_id'], side['ip_group_id'])
+        bits.append(f"{target}:{vals}" if vals else str(target))
+    pmt = side.get('port_matching_type')
+    if pmt and pmt != 'ANY':
+        port = side.get('port') or group_names.get(side.get('port_group_id'), side.get('port_group_id')) or ''
+        bits.append(f"ports {port}" if port else f"ports {pmt}")
+    return '  |  '.join(str(b) for b in bits if b)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', default=None)
+    args = ap.parse_args()
+
+    stamp = datetime.now().strftime('%Y%m%d')
+    out = args.out or os.path.join('soc2_evidence', f'Firewall_Ruleset_{stamp}.xlsx')
+
+    with app.app_context():
+        cfg = load_unifi_config(Setting)
+        client = UnifiService(**cfg)
+        client.login()
+        try:
+            site = urllib.parse.quote(client.site, safe='')
+            base = f"{client.host}/proxy/network/api/s/{site}"
+            v2 = f"{client.host}/proxy/network/v2/api/site/{site}"
+            # /v2 returns a BARE list; /rest wraps in {'data': [...]}
+            policies = client._session.get(f"{v2}/firewall-policies", timeout=30).json()
+            zones = client._session.get(f"{v2}/firewall/zone", timeout=30).json()
+            groups = client._session.get(f"{base}/rest/firewallgroup", timeout=30).json().get('data', [])
+            networks = client._session.get(f"{base}/rest/networkconf", timeout=30).json().get('data', [])
+        finally:
+            client.logout()
+
+    zone_names = {z.get('_id'): z.get('name') for z in zones}
+    group_names = {g.get('_id'): g.get('name') for g in groups}
+    net_names = {n.get('_id'): n.get('name') for n in networks}
+
+    custom = [p for p in policies if not p.get('predefined')]
+    predefined = [p for p in policies if p.get('predefined')]
+
+    wb = Workbook()
+
+    ws = _sheet(wb, 'Summary', ['Item', 'Value'], first=True)
+    for row in [
+        ('Evidence for', 'CC-024 Firewall Rules (ISO A.13.1.3 / SOC 2:2022 CC.6.6)'),
+        ('Source', f"UniFi controller {cfg.get('host', '')} site {cfg.get('site', '')}"),
+        ('Generated', datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z').strip()),
+        ('Generated by', 'Tracker generate_firewall_ruleset_evidence.py (read-only)'),
+        ('Firewall model', 'Zone-based (UniFi). Each zone pair carries an automatic default rule.'),
+        ('Total policies', len(policies)),
+        ('Custom (team-authored)', len(custom)),
+        ('Predefined (auto defaults)', len(predefined)),
+        ('Custom rules disabled', sum(1 for p in custom if not p.get('enabled'))),
+        ('Custom rules with logging on', sum(1 for p in custom if p.get('logging'))),
+        ('Zones', len(zones)),
+        ('Address/port groups', len(groups)),
+        ('Networks / VLANs', len(networks)),
+    ]:
+        ws.append(list(row))
+    _autosize(ws)
+
+    cols = ['Index', 'Name', 'Action', 'Enabled', 'IP ver', 'Protocol',
+            'Source', 'Destination', 'Logging', 'Connection states', 'Schedule']
+
+    def add_policies(sheet, rows):
+        for p in sorted(rows, key=lambda r: (r.get('index') or 0)):
+            sched = (p.get('schedule') or {}).get('mode', '')
+            states = p.get('connection_state_type') or ''
+            if p.get('connection_states'):
+                states += ' (' + ', '.join(p['connection_states']) + ')'
+            sheet.append([
+                p.get('index'), p.get('name'), p.get('action'),
+                'yes' if p.get('enabled') else 'NO',
+                p.get('ip_version'), p.get('protocol'),
+                _endpoint(p.get('source'), zone_names, group_names),
+                _endpoint(p.get('destination'), zone_names, group_names),
+                'yes' if p.get('logging') else 'no', states, sched,
+            ])
+
+    ws = _sheet(wb, 'Custom Rules', cols)
+    add_policies(ws, custom)
+    _autosize(ws)
+
+    ws = _sheet(wb, 'Predefined Defaults', cols)
+    add_policies(ws, predefined)
+    _autosize(ws)
+
+    ws = _sheet(wb, 'Zones', ['Zone', 'Networks'])
+    for z in sorted(zones, key=lambda z: (z.get('name') or '')):
+        nets = [net_names.get(i, i) for i in (z.get('network_ids') or [])]
+        ws.append([z.get('name'), ', '.join(str(n) for n in nets)])
+    _autosize(ws)
+
+    ws = _sheet(wb, 'Address & Port Groups', ['Group', 'Type', 'Members'])
+    for g in sorted(groups, key=lambda g: (g.get('name') or '')):
+        members = g.get('group_members') or []
+        ws.append([g.get('name'), g.get('group_type'),
+                   ', '.join(str(m) for m in members)])
+    _autosize(ws)
+
+    ws = _sheet(wb, 'Review Record', ['Review date', 'Reviewer', 'Rules reviewed',
+                                      'Changes required', 'Change ticket / ref',
+                                      'Approved by', 'Approval date', 'Notes'])
+    ws.append(['', '', f'{len(custom)} custom rules as at {stamp}', '', '', '', '',
+               'CC-024 requires a PERIODIC review record. Tracker generates the ruleset; '
+               'this sheet is the sign-off and must be completed by the reviewer.'])
+    for cell in ws[2]:
+        cell.alignment = Alignment(vertical='top', wrap_text=True)
+    ws.row_dimensions[2].height = 46
+    _autosize(ws)
+
+    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+    wb.save(out)
+
+    print(f"wrote {out}")
+    print(f"  policies       {len(policies)}  (custom {len(custom)} / predefined {len(predefined)})")
+    print(f"  zones          {len(zones)}")
+    print(f"  groups         {len(groups)}")
+    print(f"  disabled rules {sum(1 for p in custom if not p.get('enabled'))} of {len(custom)} custom")
+    print("  NOTE: the Review Record sheet is intentionally blank -- the review is a human act.")
+
+
+if __name__ == '__main__':
+    main()

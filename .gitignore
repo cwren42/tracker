@@ -86,3 +86,9 @@ rmm_agent/deps/
 # graphify code knowledge graph (local, regenerated)
 graphify-out/
 private_evidence/
+
+# Generated SOC 2 evidence. Regenerated on demand from live data, so a committed
+# copy is stale the moment it lands -- and some of it (firewall rulesets, user
+# lists, share permissions) is configuration detail that does not belong in git.
+soc2_evidence/
+Cirque_SOC2_Evidence_*.zip

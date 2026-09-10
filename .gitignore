@@ -90,5 +90,9 @@ private_evidence/
 # Generated SOC 2 evidence. Regenerated on demand from live data, so a committed
 # copy is stale the moment it lands -- and some of it (firewall rulesets, user
 # lists, share permissions) is configuration detail that does not belong in git.
-soc2_evidence/
+# Exclude the CONTENTS, not the directory: git cannot re-include a file whose
+# parent directory is excluded, so `soc2_evidence/` would defeat the negation below.
+soc2_evidence/*
 Cirque_SOC2_Evidence_*.zip
+# Hand-authored drafts are NOT generated output and must be versioned:
+!soc2_evidence/*_DRAFT.md

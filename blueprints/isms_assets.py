@@ -1,3 +1,5 @@
+import logging
+import json
 """The F02B information-asset register.
 
 Customer and engineering information assets — documents, datasets, records —
@@ -44,14 +46,32 @@ INT_FIELDS = ('confidentiality', 'integrity', 'availability',
 
 
 def _log(record, action, details):
+    """Record an information-asset action to the audit trail.
+
+    Same defect as blueprints/isms._log_action: the old kwargs
+    (asset_id/table_name/record_id/old_values/new_values/changed_by) are not
+    AuditTrail fields, so every call raised TypeError into the bare `except`
+    and nothing was ever written. user_id is NOT NULL, so unattributed actions
+    fall back to the system user (id 1).
+    """
     try:
-        db.session.add(AuditTrail(
-            asset_id=None, action=action, table_name='isms_information_asset',
-            record_id=record.id if record else None,
-            old_values=None, new_values=details,
-            changed_by=getattr(__import__('flask_login').current_user, 'username', None)))
+        from flask import has_request_context, request
+        from flask_login import current_user
+        actor_id = getattr(current_user, 'id', None)
+        entry = AuditTrail(
+            entity_type='ISMSInformationAsset',
+            entity_id=record.id if record else None,
+            action=action,
+            changes=json.dumps({'detail': details,
+                                'actor': getattr(current_user, 'username', None)}),
+            user_id=int(actor_id) if actor_id else 1,
+        )
+        if has_request_context():
+            entry.ip_address = request.remote_addr
+            entry.user_agent = (request.user_agent.string or '')[:500]
+        db.session.add(entry)
     except Exception:
-        pass
+        logging.getLogger(__name__).warning('ISMS asset audit log failed', exc_info=True)
 
 
 def _apply_form(record, form):

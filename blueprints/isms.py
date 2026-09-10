@@ -1,5 +1,7 @@
 import html
 import io
+import logging
+import json
 import re
 from difflib import HtmlDiff, SequenceMatcher
 from functools import partial
@@ -7,7 +9,8 @@ from pathlib import Path
 
 from datetime import datetime
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, send_file, url_for
+from flask import (Blueprint, abort, flash, has_request_context, redirect, render_template,
+                   request, send_file, url_for)
 from flask_login import login_required, current_user
 import markdown as markdown_lib
 from openpyxl import load_workbook
@@ -34,11 +37,13 @@ from utils import admin_required
 import isms_ledger_service
 
 
+logger = logging.getLogger(__name__)
+
 bp = Blueprint('isms', __name__)
 
 
 GLOCALIZATION_SURVEY_TEMPLATE_PATH = Path(
-    '/var/www/tracker/templates/ISMS-MANUAL/_Temp-Files/Glocalization-Survey-Cirque-Filled-V7-2026-05-08.xlsx'
+    '/var/www/tracker/archive/isms-manual-preimport-2026-09-10/_Temp-Files/Glocalization-Survey-Cirque-Filled-V7-2026-05-08.xlsx'
 )
 
 GLOCALIZATION_SURVEY_OVERRIDES = {
@@ -95,20 +100,36 @@ def _create_version(document, markdown_body, change_summary, *, is_restore=False
 
 
 def _log_action(document, action, details):
+    """Record an ISMS document action to the audit trail.
+
+    This previously passed asset_id/table_name/record_id/old_values/new_values/
+    changed_by -- none of which exist on AuditTrail (entity_type, entity_id,
+    action, changes, user_id, ip_address, user_agent). Every call raised
+    TypeError straight into the bare `except`, so ISMS document control had NO
+    audit record at all despite appearing to log one. user_id is NOT NULL with
+    an FK to user, so unattributed actions fall back to the system user (id 1),
+    matching the convention in blueprints/auth.py.
+    """
     try:
-        db.session.add(
-            AuditTrail(
-                asset_id=None,
-                action=action,
-                table_name='isms_document',
-                record_id=document.id,
-                old_values=None,
-                new_values=details,
-                changed_by=_current_actor_username(),
-            )
+        actor_id = getattr(current_user, 'id', None)
+        payload = {'document': document.slug or document.id,
+                   'title': document.title, 'detail': details,
+                   'actor': _current_actor_username()}
+        entry = AuditTrail(
+            entity_type='ISMSDocument',
+            entity_id=document.id,
+            action=action,
+            changes=json.dumps(payload),
+            user_id=int(actor_id) if actor_id else 1,
         )
+        # Scripts and background jobs run outside a request context.
+        if has_request_context():
+            entry.ip_address = request.remote_addr
+            entry.user_agent = (request.user_agent.string or '')[:500]
+        db.session.add(entry)
     except Exception:
-        pass
+        logger.warning('ISMS audit log failed for document %s', getattr(document, 'id', '?'),
+                       exc_info=True)
 
 
 def _download_filename(document, version_number, extension):
@@ -314,13 +335,20 @@ def _is_horizontal_rule(line):
     return bool(re.fullmatch(r'(-{3,}|\*{3,}|_{3,})', line.strip()))
 
 
+# Numbered clauses ("1. ", "2) "). Policy documents cite clause numbers, so the
+# AUTHORED marker is preserved verbatim rather than auto-renumbered on export --
+# renumbering would silently break cross-references between documents.
+_ORDERED_ITEM_RE = re.compile(r'^\d+[.)]\s+\S')
+
+
 def _is_block_boundary(line):
     """A line that begins a new block, i.e. cannot be a soft-wrapped continuation
     of the paragraph above it."""
     s = line.strip()
     return (not s) or _is_table_row(s) or _is_horizontal_rule(s) \
         or s.startswith('### ') or s.startswith('## ') or s.startswith('# ') \
-        or s.startswith('- ') or s.startswith('> ')
+        or s.startswith('- ') or s.startswith('> ') \
+        or bool(_ORDERED_ITEM_RE.match(s))
 
 
 def _docx_add_inline(paragraph, text_value):
@@ -355,7 +383,9 @@ def _iter_markdown_blocks(markdown_body):
     lines = markdown_body.replace('\r\n', '\n').split('\n')
     i, n = 0, len(lines)
     while i < n:
-        line = lines[i].strip()
+        raw_line = lines[i]
+        line = raw_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip(' \t'))
         if _is_table_row(line):
             rows = []
             while i < n and _is_table_row(lines[i].strip()):
@@ -377,12 +407,28 @@ def _iter_markdown_blocks(markdown_body):
         if line.startswith('# '):
             yield ('heading1', line[2:].strip()); i += 1; continue
         if line.startswith('- '):
+            # An indented '- ' is a sub-bullet. `line` is already stripped, so the
+            # nesting is only visible in the raw line -- without this every nested
+            # list flattened to one level on export.
+            kind = 'bullet2' if indent >= 2 else 'bullet'
             bullet_parts = [line[2:].strip()]
             i += 1
             while i < n and lines[i].strip() and not _is_block_boundary(lines[i]):
                 bullet_parts.append(lines[i].strip())
                 i += 1
-            yield ('bullet', ' '.join(bullet_parts))
+            yield (kind, ' '.join(bullet_parts))
+            continue
+        if _ORDERED_ITEM_RE.match(line):
+            # Keep the marker inside the text so the exported number is the
+            # authored one. Previously these fell through to the paragraph
+            # branch and consecutive items were joined into a single run-on
+            # paragraph ("1. A 2. B 3. C").
+            ordered_parts = [line]
+            i += 1
+            while i < n and lines[i].strip() and not _is_block_boundary(lines[i]):
+                ordered_parts.append(lines[i].strip())
+                i += 1
+            yield ('ordered', ' '.join(ordered_parts))
             continue
         if line.startswith('> '):
             quote = []
@@ -747,6 +793,18 @@ def _build_docx_export(document, version):
             doc.add_heading(text_value, level=3)
         elif block_type == 'bullet':
             _docx_add_inline(doc.add_paragraph(style='List Bullet'), text_value)
+        elif block_type == 'bullet2':
+            try:
+                sub = doc.add_paragraph(style='List Bullet 2')
+            except KeyError:
+                # Not every template carries the level-2 style; indent manually.
+                sub = doc.add_paragraph(style='List Bullet')
+                sub.paragraph_format.left_indent = Inches(0.6)
+            _docx_add_inline(sub, text_value)
+        elif block_type == 'ordered':
+            num = doc.add_paragraph()
+            num.paragraph_format.left_indent = Inches(0.35)
+            _docx_add_inline(num, text_value)
         elif block_type == 'quote':
             p = doc.add_paragraph()
             p.paragraph_format.left_indent = Inches(0.3)
@@ -821,6 +879,12 @@ def _build_pdf_export(document, version):
     )
     bullet_style = ParagraphStyle(
         'ISMSExportBullet', parent=body_style, leftIndent=18, firstLineIndent=-8, spaceAfter=5,
+    )
+    bullet2_style = ParagraphStyle(
+        'ISMSExportBullet2', parent=bullet_style, leftIndent=36,
+    )
+    ordered_style = ParagraphStyle(
+        'ISMSExportOrdered', parent=body_style, leftIndent=26, firstLineIndent=-16, spaceAfter=5,
     )
     table_cell_style = ParagraphStyle(
         'ISMSExportTableCell', parent=body_style, fontSize=8.5, leading=11, spaceAfter=0,
@@ -914,6 +978,10 @@ def _build_pdf_export(document, version):
             story.append(Paragraph(_render_inline_export(text_value), heading3_style))
         elif block_type == 'bullet':
             story.append(Paragraph(f'&bull;&nbsp; {_render_inline_export(text_value)}', bullet_style))
+        elif block_type == 'bullet2':
+            story.append(Paragraph(f'&ndash;&nbsp; {_render_inline_export(text_value)}', bullet2_style))
+        elif block_type == 'ordered':
+            story.append(Paragraph(_render_inline_export(text_value), ordered_style))
         elif block_type == 'quote':
             story.append(Paragraph(_render_inline_export(text_value), quote_style))
         elif block_type == 'rule':

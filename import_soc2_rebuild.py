@@ -8,7 +8,7 @@ Single source of truth:
   - Risks     -> Risk                    (models.py)
   - Risk<->Control links -> ControlRiskMapping (control_id now FKs soc2_control.id)
 
-Sources (templates/ISMS-MANUAL/):
+Sources (archive/isms-manual-preimport-2026-09-10/):
   - cirque_corporation-controls-6-4-2026-sg (1).csv   (55 controls)
   - Cirque-Control-Descriptions-v3-2026-05-08.xlsx     (33 Cirque descriptions, header row 4)
   - cirque_corporation-evidence-6-4-2026-sg (1).csv   (93 evidence)
@@ -32,7 +32,7 @@ from models import Risk, ControlRiskMapping, ISMSDocument
 # resolves to a control that actually exists in the current catalog (no guessing).
 from load_strikegraph_evidence import get_control_mappings
 
-SRC = "/var/www/tracker/templates/ISMS-MANUAL"
+SRC = "/var/www/tracker/archive/isms-manual-preimport-2026-09-10"
 CONTROLS_CSV = os.path.join(SRC, "cirque_corporation-controls-6-4-2026-sg (1).csv")
 CIRQUE_XLSX = os.path.join(SRC, "Cirque-Control-Descriptions-v3-2026-05-08.xlsx")
 EVIDENCE_CSV = os.path.join(SRC, "cirque_corporation-evidence-6-4-2026-sg (1).csv")

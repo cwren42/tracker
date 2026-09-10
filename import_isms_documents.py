@@ -12,6 +12,13 @@ from models import ISMSDocument, ISMSDocumentVersion
 
 ISMS_DIR = os.environ.get('ISMS_IMPORT_DIR', '/var/www/tracker/content/isms/incoming')
 
+# Optional regex on the FILENAME, so a directory can be imported selectively.
+# archive/isms-manual-preimport-2026-09-10 holds policies, procedures, registers (D-) and blank
+# forms (F-) side by side; only the first two belong in the policy library, and
+# importing empty form templates into it would be worse than leaving them out.
+ISMS_PATTERN = os.environ.get('ISMS_IMPORT_PATTERN', '')
+_PATTERN_RE = re.compile(ISMS_PATTERN) if ISMS_PATTERN else None
+
 
 def parse_front_matter(content):
     if not content.startswith('---\n'):
@@ -126,7 +133,25 @@ def parse_policy_file(filepath):
 
         title = title_match.group(1).strip() if title_match else (heading_match.group(1).strip() if heading_match else base_name.replace('-', ' ').replace('_', ' ').title())
         category = category_match.group(1).strip() if category_match else 'General'
-        doc_type = type_match.group(1).strip().lower() if type_match else ('procedure' if 'procedure' in filename.lower() else 'manual')
+        # "Standard Type" is the SCOPE (Global / US / Asia), not the document
+        # type -- reading it as the type filed every global policy as
+        # doc_type='global'. "Division" is the authored type; the document code
+        # is the reliable fallback (PR- before P-, since P- is a prefix of it).
+        division_match = re.search(r'\*\*Division:\s*([^\*]+)\*\*', content)
+        division = (division_match.group(1).strip().lower() if division_match else '')
+        code = (doc_id_match.group(1).strip().upper() if doc_id_match else base_name.upper())
+        if division in ('policy', 'procedure', 'form', 'record', 'document', 'manual'):
+            doc_type = division
+        elif re.search(r'IS-CIRQ-PR-', code):
+            doc_type = 'procedure'
+        elif re.search(r'IS-CIRQ-P-', code):
+            doc_type = 'policy'
+        elif re.search(r'IS-CIRQ-F-', code):
+            doc_type = 'form'
+        elif re.search(r'IS-CIRQ-D-', code):
+            doc_type = 'document'
+        else:
+            doc_type = 'procedure' if 'procedure' in filename.lower() else 'manual'
         slug = slugify(doc_id_match.group(1).strip() if doc_id_match else base_name)
         version_label = version_match.group(1).strip() if version_match else '1.0'
 
@@ -147,6 +172,8 @@ def import_documents():
 
         count = 0
         for filename in sorted(os.listdir(ISMS_DIR)):
+            if _PATTERN_RE and not _PATTERN_RE.search(filename):
+                continue
             if not filename.endswith('.md'):
                 continue
             if filename.lower() == 'readme.md':

@@ -10,7 +10,7 @@ from app import app, db
 from sqlalchemy import text
 from datetime import datetime
 
-ISMS_DIR = "/var/www/tracker/templates/ISMS-MANUAL"
+ISMS_DIR = "/var/www/tracker/archive/isms-manual-preimport-2026-09-10"
 
 def parse_policy_file(filepath):
     """Parse a single policy markdown file"""

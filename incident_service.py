@@ -1240,7 +1240,7 @@ def _signal_still_present(con, signal_type, agent_id, asset_id, dedup_key=None):
 # ─────────────────────────────────────────────────────────────────────────────
 # Learning loop (Feature 3) — record the OUTCOME of a remediation attempt so we
 # can surface "this fix resolved N/M past cases" and nudge AI confidence.
-# Fail-safe + idempotent (one row per incident via uq_incident_fix_outcome_incident).
+# Fail-safe + idempotent (one row per incident via uq_agent_incident_fix_outcome_incident).
 # ─────────────────────────────────────────────────────────────────────────────
 def _record_fix_outcome(con, *, incident_id, asset_id, signal_type,
                         chosen_action, success, detail=None):
@@ -1250,11 +1250,11 @@ def _record_fix_outcome(con, *, incident_id, asset_id, signal_type,
         return
     try:
         con.execute(
-            """INSERT INTO incident_fix_outcome
-                 (incident_id, asset_id, signal_type, chosen_action, success,
+            """INSERT INTO agent_incident_fix_outcome
+                 (agent_incident_id, asset_id, signal_type, chosen_action, success,
                   detail, created_at)
                VALUES (%s,%s,%s,%s,%s,%s,NOW())
-               ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
+               ON CONFLICT (agent_incident_id) WHERE agent_incident_id IS NOT NULL
                DO NOTHING""",
             (incident_id, asset_id, signal_type, chosen_action, bool(success),
              (detail or '')[:300]))
@@ -1277,13 +1277,13 @@ def fix_success_stats(con, signal_type, chosen_action=None):
         if chosen_action:
             r = con.execute(
                 """SELECT COUNT(*) FILTER (WHERE success) AS ok, COUNT(*) AS n
-                   FROM incident_fix_outcome
+                   FROM agent_incident_fix_outcome
                    WHERE signal_type=%s AND chosen_action=%s""",
                 (signal_type, chosen_action)).fetchone()
         else:
             r = con.execute(
                 """SELECT COUNT(*) FILTER (WHERE success) AS ok, COUNT(*) AS n
-                   FROM incident_fix_outcome WHERE signal_type=%s""",
+                   FROM agent_incident_fix_outcome WHERE signal_type=%s""",
                 (signal_type,)).fetchone()
         ok = (r['ok'] if r else 0) or 0
         n = (r['n'] if r else 0) or 0

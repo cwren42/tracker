@@ -26,7 +26,7 @@ DESIGN / SAFETY
       IMPOSSIBLE to run a mutating command "as a diagnostic".
     * Hard caps: <=6 iterations, a token budget, per-tool timeouts. Any AI/tool
       error degrades to a plain assistant message — it NEVER crashes the feed.
-    * Every tool call + result + the AI reasoning is persisted to incident_message
+    * Every tool call + result + the AI reasoning is persisted to agent_incident_message
       (full audit trail).
     * GUARD: never touches ai_engine's ticket_note.created_by path.
 """
@@ -397,7 +397,7 @@ def tool_get_similar_past_fixes(con, signal_type):
             """SELECT chosen_action,
                       COUNT(*) FILTER (WHERE success) AS resolved,
                       COUNT(*) AS total
-               FROM incident_fix_outcome
+               FROM agent_incident_fix_outcome
                WHERE signal_type=%s AND chosen_action IS NOT NULL
                GROUP BY chosen_action ORDER BY total DESC""",
             (signal_type,)).fetchall()
@@ -480,8 +480,8 @@ def post_message(con, incident_id, role, content=None, *, tool_name=None,
                  tool_call=None, tool_result=None, proposed_fix=None, meta=None,
                  created_by=None, commit=True):
     row = con.execute(
-        """INSERT INTO incident_message
-             (incident_id, role, content, tool_name, tool_call, tool_result,
+        """INSERT INTO agent_incident_message
+             (agent_incident_id, role, content, tool_name, tool_call, tool_result,
               proposed_fix, meta, created_by, created_at)
            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING id""",
         (incident_id, role, content, tool_name,
@@ -499,7 +499,7 @@ def get_thread(con, incident_id):
     rows = con.execute(
         """SELECT id, role, content, tool_name, tool_call, tool_result,
                   proposed_fix, meta, created_by, created_at
-           FROM incident_message WHERE incident_id=%s ORDER BY id""",
+           FROM agent_incident_message WHERE agent_incident_id=%s ORDER BY id""",
         (incident_id,)).fetchall()
     out = []
     for r in rows:
@@ -641,7 +641,7 @@ def _learning_note(con, signal_type):
 def _run_loop(con, incident, seed_messages, created_by=None, max_iters=_MAX_ITERS):
     """Core tool-calling loop. seed_messages is the OpenAI message list (system +
     prior turns + the new user turn). Persists assistant/tool turns to
-    incident_message. Returns dict(summary, proposal_posted, iterations, error)."""
+    agent_incident_message. Returns dict(summary, proposal_posted, iterations, error)."""
     import ai_engine
     asset_id = incident.get('asset_id')
     agent_id = incident.get('agent_id')

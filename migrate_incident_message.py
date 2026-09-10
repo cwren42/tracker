@@ -1,5 +1,5 @@
 """
-Migration: add incident_message table — the per-incident CHAT thread behind the
+Migration: add agent_incident_message table — the per-incident CHAT thread behind the
 AI Triage Chat layer (Phase 2 of Proactive AI Remediation).
 
 Each row is one turn in a conversation: the AI's triage reasoning, the read-only
@@ -14,7 +14,13 @@ auditable:
 Additive + idempotent (safe to re-run). Postgres via psycopg2 (mirrors
 migrate_agent_incident.py).
 
-Run once: venv/bin/python migrate_incident_message.py
+Run once: venv/bin/python migrate_agent_incident_message.py
+
+RENAMED 2026-09-10: this table is now agent_incident_message /
+agent_incident_fix_outcome, with the FK column agent_incident_id, so it
+cannot be confused with the SOC 2 incident-response tables (incidents,
+incident_timeline, ...). See migrate_rename_agent_incident_tables.py.
+This script is kept for history; re-running it is a harmless no-op.
 """
 import os
 import psycopg2
@@ -37,9 +43,9 @@ def migrate():
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS incident_message (
+        CREATE TABLE IF NOT EXISTS agent_incident_message (
             id            BIGSERIAL PRIMARY KEY,
-            incident_id   BIGINT NOT NULL REFERENCES agent_incident(id) ON DELETE CASCADE,
+            agent_incident_id   BIGINT NOT NULL REFERENCES agent_incident(id) ON DELETE CASCADE,
             role          TEXT NOT NULL,    -- user | assistant | tool | system
             content       TEXT,             -- rendered text (assistant prose, user reply, tool summary)
             tool_name     TEXT,             -- for role='assistant' tool requests / role='tool' results
@@ -52,8 +58,8 @@ def migrate():
         )
     """)
     cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_incident_message_incident
-            ON incident_message (incident_id, created_at)
+        CREATE INDEX IF NOT EXISTS idx_agent_incident_message_incident
+            ON agent_incident_message (agent_incident_id, created_at)
     """)
 
     # agent_incident augmentations (idempotent ADD COLUMN IF NOT EXISTS).
@@ -66,7 +72,7 @@ def migrate():
     conn.commit()
     cur.close()
     conn.close()
-    print("Migration complete: incident_message table + agent_incident.triage_state/proposed_fix.")
+    print("Migration complete: agent_incident_message table + agent_incident.triage_state/proposed_fix.")
 
 
 if __name__ == "__main__":

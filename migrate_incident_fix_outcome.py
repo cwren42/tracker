@@ -1,5 +1,5 @@
 """
-Migration: add incident_fix_outcome table — the lightweight LEARNING LOOP behind
+Migration: add agent_incident_fix_outcome table — the lightweight LEARNING LOOP behind
 Proactive AI Remediation (Feature 3).
 
 Each row records the OUTCOME of a remediation attempt: which action was applied to
@@ -15,7 +15,13 @@ Used to:
 Additive + idempotent (safe to re-run). Postgres via psycopg2 (mirrors
 migrate_agent_incident.py).
 
-Run once: venv/bin/python migrate_incident_fix_outcome.py
+Run once: venv/bin/python migrate_agent_incident_fix_outcome.py
+
+RENAMED 2026-09-10: this table is now agent_incident_message /
+agent_incident_fix_outcome, with the FK column agent_incident_id, so it
+cannot be confused with the SOC 2 incident-response tables (incidents,
+incident_timeline, ...). See migrate_rename_agent_incident_tables.py.
+This script is kept for history; re-running it is a harmless no-op.
 """
 import os
 import psycopg2
@@ -37,9 +43,9 @@ def migrate():
     conn = psycopg2.connect(_dsn())
     cur = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS incident_fix_outcome (
+        CREATE TABLE IF NOT EXISTS agent_incident_fix_outcome (
             id            BIGSERIAL PRIMARY KEY,
-            incident_id   BIGINT,        -- source incident (no FK: keep rows if incident purged)
+            agent_incident_id   BIGINT,        -- source incident (no FK: keep rows if incident purged)
             asset_id      BIGINT,
             signal_type   TEXT NOT NULL,
             chosen_action TEXT,          -- the action key that was applied (e.g. clear_caches)
@@ -50,21 +56,21 @@ def migrate():
     """)
     # Aggregate lookups: success rate per (signal, action).
     cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_incident_fix_outcome_signal_action
-            ON incident_fix_outcome (signal_type, chosen_action)
+        CREATE INDEX IF NOT EXISTS idx_agent_incident_fix_outcome_signal_action
+            ON agent_incident_fix_outcome (signal_type, chosen_action)
     """)
     # Idempotency guard: one outcome row per incident (the verify pass may pass the
     # same incident more than once across runs — write once).
     cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_incident_fix_outcome_incident
-            ON incident_fix_outcome (incident_id)
-            WHERE incident_id IS NOT NULL
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_incident_fix_outcome_incident
+            ON agent_incident_fix_outcome (agent_incident_id)
+            WHERE agent_incident_id IS NOT NULL
     """)
 
     conn.commit()
     cur.close()
     conn.close()
-    print("Migration complete: incident_fix_outcome table + indexes created.")
+    print("Migration complete: agent_incident_fix_outcome table + indexes created.")
 
 
 if __name__ == "__main__":
